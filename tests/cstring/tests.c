@@ -11,9 +11,18 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 #include <unistd.h>
 
 TAU_MAIN()
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
 
 // Same value as the static constant in cstring.c
 #define CSTRING_MIN_CAPACITY 16
@@ -1947,6 +1956,7 @@ static bool run_forked(void (*fn)(void), int *out_status) {
   pid_t pid = fork();
   if (pid < 0) return false;
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1954,7 +1964,7 @@ static bool run_forked(void (*fn)(void), int *out_status) {
       close(dn);
     }
     fn();
-    _exit(0); /* not reachable when the assert aborts, as it should */
+    test_child_exit(0); /* not reachable when the assert aborts, as it should */
   }
   int status = 0;
   if (waitpid(pid, &status, 0) != pid) return false;
@@ -2660,11 +2670,12 @@ static bool run_forked_capture_stderr(void (*fn)(void), char *out,
     return false;
   }
   if (pid == 0) {
+    test_child_no_core();
     close(fds[0]);
     dup2(fds[1], STDERR_FILENO);
     close(fds[1]);
     fn();
-    _exit(0);
+    test_child_exit(0);
   }
   close(fds[1]);
   size_t used = 0;
@@ -2684,7 +2695,7 @@ static bool run_forked_capture_stderr(void (*fn)(void), char *out,
 static void substring_failure_message_thunk(void) {
   g_cstr_oom_budget = 2;
   cstr s = cstring_create_full("hello world", &g_cstr_oom_procs, NULL);
-  if (!s) _exit(3);
+  if (!s) test_child_exit(3);
   g_cstr_oom_budget = 0;
   size_t start = 2, len = 3;
   cstr sub = cstr_substring(s, start++, len++);
@@ -2817,9 +2828,10 @@ static bool cstr_set_turkish_ctype(const char *dir) {
  * functions instead of the ASCII folding, "iI" converts to "\xDD" "I" and to
  * "i\xFD", and the bytes above 0x7F change. */
 TEST(cstring_case, folds_ascii_letters_only_under_a_turkish_locale) {
-  char dir[64];
-  snprintf(dir, sizeof(dir), "cstr_tr_locale_%ld", (long)getpid());
-  if (mkdir(dir, 0700) != 0) {
+  /* mkdtemp() picks a name no other run uses, so a directory that a killed
+   * run left behind can't make this test skip. */
+  char dir[64] = "cstr_tr_locale_XXXXXX";
+  if (mkdtemp(dir) == NULL) {
     fprintf(stderr, "SKIP: cannot create the locale directory %s\n", dir);
     return;
   }
@@ -2930,9 +2942,10 @@ static bool cstr_set_wide_space_ctype(const char *dir) {
  * byte. */
 TEST(cstring_trim,
      keeps_bytes_above_0x7f_under_a_locale_that_calls_them_space) {
-  char dir[64];
-  snprintf(dir, sizeof(dir), "cstr_sp_locale_%ld", (long)getpid());
-  if (mkdir(dir, 0700) != 0) {
+  /* mkdtemp() picks a name no other run uses, so a directory that a killed
+   * run left behind can't make this test skip. */
+  char dir[64] = "cstr_sp_locale_XXXXXX";
+  if (mkdtemp(dir) == NULL) {
     fprintf(stderr, "SKIP: cannot create the locale directory %s\n", dir);
     return;
   }

@@ -218,7 +218,7 @@ to 0. The request has to stay valid while `chttpclient_do()` runs, and you
 free it after the call.
 
 `chttpclient_destroy()` waits for requests that are running on other
-threads, then frees the client and sets `cli` to `CHTTPCLI_INVALID`. Never
+threads, then frees the client and sets `cli` to `CHTTPCLI_NULL`. Never
 call it from the write callback of a request of the same client: it would be
 waiting for itself, so the library stops the process instead. The write
 callback of an asynchronous request (Tiers 2 and 3) runs on a thread of the
@@ -240,7 +240,7 @@ chttpclient_resp_free(resp);
 ```
 
 A `chttpcli` is a *value handle* (a 64-bit number) and not a pointer.
-Compare it with `CHTTPCLI_INVALID`, which is 0, so `if (!cli)` works too.
+Compare it with `CHTTPCLI_NULL`, which is 0, so `if (!cli)` works too.
 Never cast the handle to a pointer.
 
 ## Errors
@@ -426,7 +426,7 @@ the engine, and `chttpcli_engine_wait()` blocks until it's complete. If you
 installed an engine allocator with `chttpcli_set_engine_mem_mgmt_procs()` or
 an engine logger with `chttpcli_set_engine_logger()` and want to release
 them, call it after you destroy your clients: once it returns, the engine
-uses neither of them. `chttpcli_set_engine_logger(CLOG_INVALID)` then
+uses neither of them. `chttpcli_set_engine_logger(CLOG_NULL)` then
 releases the logger. Passing a logger handle that's already closed gives
 `ccol_invalid_args` and the engine keeps the logger it had.
 

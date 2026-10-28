@@ -344,7 +344,7 @@ TEST(chttpcli_sigpipe, a_sync_write_to_a_refusing_server_raises_no_sigpipe) {
   /* The refusing server takes one connection and its listener stays open
      until the end of the test, so a request it never accepted would wait for
      ever; the timeout makes that a failure. */
-  if (cli != CHTTPCLI_INVALID)
+  if (cli != CHTTPCLI_NULL)
     (void)chttpclient_set_request_timeout(cli, 30000000);
   char *body = NULL;
   chttp_request_t *req = server_up ? _large_post(srv.url, &body) : NULL;
@@ -354,14 +354,14 @@ TEST(chttpcli_sigpipe, a_sync_write_to_a_refusing_server_raises_no_sigpipe) {
   _block_sigpipe(&old);
   chttpcli_response *resp = NULL;
   ccol_retval_t rv = ccol_unexpected_failure;
-  if (req && cli != CHTTPCLI_INVALID) rv = chttpclient_do(cli, req, &resp);
+  if (req && cli != CHTTPCLI_NULL) rv = chttpclient_do(cli, req, &resp);
   bool raised = _take_pending_sigpipe();
   pthread_sigmask(SIG_SETMASK, &old, NULL);
 
   chttpclient_resp_free(resp);
   chttp_request_free(req);
   free(body);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   _refusing_server_stop(&srv);
 
   REQUIRE_TRUE(server_up);
@@ -386,7 +386,7 @@ TEST(chttpcli_sigpipe,
   /* The refusing server takes one connection and its listener stays open
      until the end of the test, so a request it never accepted would wait for
      ever; the timeout makes that a failure. */
-  if (cli != CHTTPCLI_INVALID)
+  if (cli != CHTTPCLI_NULL)
     (void)chttpclient_set_request_timeout(cli, 30000000);
   char *body = NULL;
   chttp_request_t *req =
@@ -400,7 +400,7 @@ TEST(chttpcli_sigpipe,
   sigset_t old;
   _block_sigpipe(&old);
   ctpool_future *hold_f = NULL;
-  if (hold_req && cli != CHTTPCLI_INVALID)
+  if (hold_req && cli != CHTTPCLI_NULL)
     hold_f = chttpclient_do_async(cli, hold_req);
   bool default_after_engine_start = _sigpipe_has_default_disposition();
   for (int i = 0; hold_f && i < 10000 && !atomic_load(&holder.accepted); ++i) {
@@ -439,7 +439,7 @@ TEST(chttpcli_sigpipe,
   chttp_request_free(hold_req);
   chttp_request_free(req);
   free(body);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   _refusing_server_stop(&holder);
   _refusing_server_stop(&srv);
   bool engine_stopped = _wait_for_engine_stop();

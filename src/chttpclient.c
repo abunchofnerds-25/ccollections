@@ -527,8 +527,12 @@ struct chttpclient {
   ctls_ctx_t *tls_ctx; /* Rebuilt on every chttpclient_set_tls
                           call. */
   bool tls_ctx_usable; /* false when we couldn't read the configured
-                          cert, key or ca paths (see
-                          _rebuild_tls_ctx_locked). */
+                          cert, key or ca paths, or the last rebuild ran
+                          out of memory (see _rebuild_tls_ctx_locked). */
+  bool tls_ctx_oom;    /* the last rebuild ran out of memory, so the next
+                          request tries it again, since even a plain http
+                          request can be redirected to https
+                          (_tls_ctx_retry_if_oom_locked). */
 
   ccol_memmgmt_procs_t *m_procs;
 
@@ -680,7 +684,7 @@ static chttpcli _chttpcli_handle_slot_acquire(struct chttpclient *cli) {
   slot->generation++;
   if (slot->generation == 0)
     slot->generation++; /* Skip the one value that would collide with
-                         * CHTTPCLI_INVALID after about 2^32 reuses of
+                         * CHTTPCLI_NULL after about 2^32 reuses of
                          * this exact slot index, so that case can't
                          * happen at all. */
   chttpcli h = ((chttpcli)idx << 32) | (chttpcli)slot->generation;
@@ -5318,6 +5322,12 @@ unsigned long _chttp_tier1_reads_for_tests(void) {
 unsigned long _chttp_tier1_read_waits_for_tests(void) {
   return __atomic_load_n(&_chttp_tier1_read_waits, __ATOMIC_RELAXED);
 }
+/* Counts the Tier 1 hops that open a 100-continue window, so a test can check
+ * that a request which must not wait never opens one. */
+static unsigned long _chttp_tier1_continue_waits;
+unsigned long _chttp_tier1_continue_waits_for_tests(void) {
+  return __atomic_load_n(&_chttp_tier1_continue_waits, __ATOMIC_RELAXED);
+}
 #endif
 
 static ccol_retval_t _chttp_read_message_with(
@@ -5608,8 +5618,9 @@ static bool _file_readable(const char *path) {
 
 /*
  * Builds (or rebuilds) cli->tls_ctx from cli->tls. It runs when a client is
- * constructed, with the default configuration, and from
- * chttpclient_set_tls.
+ * constructed, with the default configuration, from chttpclient_set_tls,
+ * and at each request after a rebuild that ran out of memory
+ * (_tls_ctx_retry_if_oom_locked).
  *
  * ctls_ctx_cert_add and ctls_ctx_trust report a failure as an ordinary
  * ccol_retval_t and never end the process, so a missing or unreadable file
@@ -5621,11 +5632,14 @@ static bool _file_readable(const char *path) {
  * check we build no context and the failure waits until connection time, in
  * chttp_do_internal, where it shows up as an ordinary ccol_retval_t.
  *
- * That check up front is what gives this function its contract (it always
- * returns ccol_success and a failure always waits). The graceful failure of
- * ctls_ctx_cert_add alone would not give us that.
+ * That check up front is what gives this function its contract: a file that
+ * is missing, unreadable or refused never fails the call, and its failure
+ * waits. An allocation that fails is different, because nothing about the
+ * configuration is wrong and the next request could not tell the two apart,
+ * so it returns ccol_not_enough_memory with no context built, and
+ * chttpclient_set_tls then puts the defaults back as its man page says.
  */
-static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
+static ccol_retval_t _rebuild_tls_ctx_body_locked(struct chttpclient *cli) {
   /* We bump the generation before anything else, and the bump holds on every
    * way out of this function, the deferred-failure returns below included. A
    * pooled connection only cares that a new configuration replaced the one
@@ -5656,19 +5670,21 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
   if (!ctx) return ccol_not_enough_memory;
 
   if (have_cert_pair) {
-    if (ctls_ctx_cert_add(ctx, NULL, cli->tls.cert_path, cli->tls.key_path,
-                          NULL, NULL) != ccol_success) {
+    ccol_retval_t crv = ctls_ctx_cert_add(ctx, NULL, cli->tls.cert_path,
+                                          cli->tls.key_path, NULL, NULL);
+    if (crv != ccol_success) {
       ctls_ctx_release(ctx);
-      /* The failure waits. See the comment above. */
-      return ccol_success;
+      /* Any other failure waits. See the comment above. */
+      return crv == ccol_not_enough_memory ? crv : ccol_success;
     }
   }
 
   if (cli->tls.ca_bundle_path) {
-    if (ctls_ctx_trust(ctx, cli->tls.ca_bundle_path, NULL) != ccol_success) {
+    ccol_retval_t trv = ctls_ctx_trust(ctx, cli->tls.ca_bundle_path, NULL);
+    if (trv != ccol_success) {
       ctls_ctx_release(ctx);
-      /* The failure waits. See the comment above. */
-      return ccol_success;
+      /* Any other failure waits. See the comment above. */
+      return trv == ccol_not_enough_memory ? trv : ccol_success;
     }
   } else if (!cli->tls.insecure_skip_verify) {
     /* No explicit bundle and the caller didn't opt out, so we verify the
@@ -5677,7 +5693,8 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
      * insecure_skip_verify. The chain check and the hostname check share one
      * switch, because matching a hostname against a certificate whose chain
      * nobody validated gives no security at all. */
-    if (ctls_ctx_trust_system(ctx) != ccol_success) {
+    ccol_retval_t srv = ctls_ctx_trust_system(ctx);
+    if (srv != ccol_success) {
       /* No check up front can catch this one: ctls couldn't load the
        * platform's default CA store. A missing or unreadable CA-bundle file
        * is a different case, and the access() call above catches it before
@@ -5693,14 +5710,36 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
        * at all. Every other failure in this function drops ctx for the same
        * reason. */
       ctls_ctx_release(ctx);
-      /* The failure waits. See the comment above. */
-      return ccol_success;
+      /* Any other failure waits. See the comment above. */
+      return srv == ccol_not_enough_memory ? srv : ccol_success;
     }
   }
 
   cli->tls_ctx = ctx;
   cli->tls_ctx_usable = true;
   return ccol_success;
+}
+
+static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
+  ccol_retval_t rv = _rebuild_tls_ctx_body_locked(cli);
+  cli->tls_ctx_oom = rv == ccol_not_enough_memory;
+  return rv;
+}
+
+/* A client whose last rebuild ran out of memory has no TLS context, although
+ * nothing about its configuration is wrong, so the snapshot a request takes
+ * under cli->lock first tries the rebuild once more: the client recovers on
+ * its own once memory comes back. The caller holds cli->lock. */
+static void _tls_ctx_retry_if_oom_locked(struct chttpclient *cli) {
+  if (!cli->tls_ctx_usable && cli->tls_ctx_oom)
+    (void)_rebuild_tls_ctx_locked(cli);
+}
+
+/* What a request that needs TLS reports when the client has no usable
+ * context: a configured file that couldn't be read or loaded, or a rebuild
+ * that ran out of memory. */
+static ccol_retval_t _tls_ctx_unusable_code(bool oom) {
+  return oom ? ccol_not_enough_memory : ccol_http_tls_cert_load_failed;
 }
 
 /* ========================================================================== */
@@ -5770,7 +5809,7 @@ static struct {
    * handle. */
   clog logger;
 
-  /* The logger that chttpcli_set_engine_logger derived, or CLOG_INVALID.
+  /* The logger that chttpcli_set_engine_logger derived, or CLOG_NULL.
    * The engine owns it for the rest of the process, through every stop and
    * restart, until a later chttpcli_set_engine_logger call replaces it.
    * Stopping the engine never closes it; only that replacement in
@@ -5981,11 +6020,11 @@ static void _client_engine_forget_inherited_locked(void) {
     return;
   if (atomic_load(&g_client_engine_pid) == getpid()) return;
   clog inherited_logger = cli_engine_bundler.logger;
-  cli_engine_bundler.logger = CLOG_INVALID;
+  cli_engine_bundler.logger = CLOG_NULL;
   if (inherited_logger && inherited_logger != cli_engine_bundler.user_logger)
     clog_close(inherited_logger);
-  cli_engine_bundler.reactor = CCOL_EVENT_LOOP_INVALID;
-  cli_engine_bundler.dns_pool = CTPOOL_INVALID;
+  cli_engine_bundler.reactor = CCOL_EVENT_LOOP_NULL;
+  cli_engine_bundler.dns_pool = CTPOOL_NULL;
   cli_engine_bundler.reactor_refs = 0;
   cli_engine_bundler.stopping = false;
   cli_engine_bundler.reaper_joinable = false;
@@ -6080,8 +6119,8 @@ static void *_client_engine_reaper_fn(void *arg) {
 #ifdef RUNNING_UNIT_TESTS
   _reaper_final_hold_for_tests();
 #endif
-  cli_engine_bundler.dns_pool = CTPOOL_INVALID;
-  cli_engine_bundler.reactor = CCOL_EVENT_LOOP_INVALID;
+  cli_engine_bundler.dns_pool = CTPOOL_NULL;
+  cli_engine_bundler.reactor = CCOL_EVENT_LOOP_NULL;
   cli_engine_bundler.stopping = false;
   /* logger may legitimately be NULL here. The fallback-logger allocation in
    * _client_engine_acquire can fail, and that function then reaps the engine
@@ -6097,8 +6136,8 @@ static void *_client_engine_reaper_fn(void *arg) {
    * caller's logger stays in user_logger for the next start. */
   clog old_logger = cli_engine_bundler.logger != cli_engine_bundler.user_logger
                         ? cli_engine_bundler.logger
-                        : CLOG_INVALID;
-  cli_engine_bundler.logger = CLOG_INVALID;
+                        : CLOG_NULL;
+  cli_engine_bundler.logger = CLOG_NULL;
   _ccol_cond_var_broadcast(cli_engine_bundler.stopped_cv);
   _ccol_mutex_unlock(cli_engine_bundler.mutex);
   if (old_logger) clog_close(old_logger);
@@ -6322,7 +6361,7 @@ static ccol_retval_t _client_engine_acquire_impl(bool for_chain) {
        * and would only block every thread that wants to acquire, release or
        * reconfigure the engine for the whole join. */
       ccol_event_loop stale_reactor = cli_engine_bundler.reactor;
-      cli_engine_bundler.reactor = CCOL_EVENT_LOOP_INVALID;
+      cli_engine_bundler.reactor = CCOL_EVENT_LOOP_NULL;
       _ccol_mutex_unlock(cli_engine_bundler.mutex);
       __ccol_event_loop_destroy(stale_reactor);
       return ccol_not_enough_memory;
@@ -6336,8 +6375,8 @@ static ccol_retval_t _client_engine_acquire_impl(bool for_chain) {
        * story, because there a sweep thread is already running. */
       ctpool stale_dns_pool = cli_engine_bundler.dns_pool;
       ccol_event_loop stale_reactor = cli_engine_bundler.reactor;
-      cli_engine_bundler.dns_pool = CTPOOL_INVALID;
-      cli_engine_bundler.reactor = CCOL_EVENT_LOOP_INVALID;
+      cli_engine_bundler.dns_pool = CTPOOL_NULL;
+      cli_engine_bundler.reactor = CCOL_EVENT_LOOP_NULL;
       _ccol_mutex_unlock(cli_engine_bundler.mutex);
       __ctpool_destroy(stale_dns_pool);
       __ccol_event_loop_destroy(stale_reactor);
@@ -6590,7 +6629,7 @@ ccol_retval_t chttpcli_set_engine_logger(clog cl) {
       return ccol_not_permitted;
     }
     clog old_user = cli_engine_bundler.user_logger;
-    cli_engine_bundler.user_logger = CLOG_INVALID;
+    cli_engine_bundler.user_logger = CLOG_NULL;
     _ccol_mutex_unlock(cli_engine_bundler.mutex);
     if (old_user) clog_close(old_user);
     return ccol_success;
@@ -6631,11 +6670,11 @@ __attribute__((destructor)) static void _cleanup_engine_user_logger(void) {
   if (!atomic_load(&g_engine_globals_entered)) return;
   _ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
   _ccol_mutex_lock(cli_engine_bundler.mutex);
-  clog user = CLOG_INVALID;
+  clog user = CLOG_NULL;
   if (!cli_engine_bundler.reactor && !cli_engine_bundler.stopping &&
       cli_engine_bundler.logger != cli_engine_bundler.user_logger) {
     user = cli_engine_bundler.user_logger;
-    cli_engine_bundler.user_logger = CLOG_INVALID;
+    cli_engine_bundler.user_logger = CLOG_NULL;
   }
   _ccol_mutex_unlock(cli_engine_bundler.mutex);
   if (user) clog_close(user);
@@ -6707,7 +6746,7 @@ ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads) {
  *
  * A connection is identified by its raw fd plus the ccol_event_reg handle
  * that ccol_event_loop_add returned for its current registration. The
- * handle is CCOL_EVENT_REG_INVALID while no registration is active, for
+ * handle is CCOL_EVENT_REG_NULL while no registration is active, for
  * example for a connection in the middle of its connect in the DNS and
  * connect pool, or for an idle pooled one. ccol_event_loop has its own
  * generation counter too, ccol_event_loop_reg_generation, which we could use
@@ -6910,6 +6949,7 @@ typedef struct {
                         * gets one ctls_ctx_release when the chain is
                         * freed. */
   bool tls_ctx_usable;
+  bool tls_ctx_oom; /* cli->tls_ctx_oom with the same snapshot */
   bool verify_host;
   /* cli->tls_generation as it was when we pinned tls_ctx above, so the two
    * describe one configuration for this chain's whole lifetime. Every ctx
@@ -7072,7 +7112,7 @@ typedef struct chttp_async_ctx_s {
   _Atomic int fd; /* -1 until the connect task has a real fd. */
   _Atomic(ccol_event_reg)
       reg; /* The current ccol_event_loop registration, or
-            * CCOL_EVENT_REG_INVALID while none is active, as for a
+            * CCOL_EVENT_REG_NULL while none is active, as for a
             * mid-connect ctx in the DNS and connect pool or an idle pooled
             * ctx that has no direction of interest yet.
             * _async_connect_task sets it exactly once, right after
@@ -8248,6 +8288,10 @@ unsigned _chttp_offer_done_count_for_tests(void) {
  * snapshots a ctx in CHTTP_ASYNC_AWAITING_CONTINUE park right after its
  * critical section under deadline_lock, before it judges the continue
  * window. It stays parked until the test releases it, 10 s at the most.
+ * A release bumps g_continue_sweep_release_gen_for_tests, and the arm only
+ * records the value that a release has to move it past, so a later arm can
+ * never take back a release that a parked sweep hasn't seen yet, and a
+ * release that comes between the arm and the park still counts.
  * g_continue_deadline_stores_for_tests counts the stores of
  * continue_deadline and is relaxed on both sides on purpose: a test waiting
  * on it learns that a store happened but gets no ordering with the storing
@@ -8255,15 +8299,19 @@ unsigned _chttp_offer_done_count_for_tests(void) {
  * on their own. */
 static _Atomic bool g_continue_sweep_armed_for_tests = false;
 static _Atomic bool g_continue_sweep_parked_for_tests = false;
-static _Atomic bool g_continue_sweep_release_for_tests = false;
+static _Atomic unsigned g_continue_sweep_release_gen_for_tests = 0;
+static _Atomic unsigned g_continue_sweep_armed_gen_for_tests = 0;
 static _Atomic unsigned g_continue_deadline_stores_for_tests = 0;
 
 static void _continue_sweep_park_for_tests(void) {
   if (!atomic_exchange(&g_continue_sweep_armed_for_tests, false)) return;
+  unsigned armed_gen = atomic_load(&g_continue_sweep_armed_gen_for_tests);
   atomic_store(&g_continue_sweep_parked_for_tests, true);
   struct timespec ts = {0, 1000000};
   for (int i = 0;
-       i < 10000 && !atomic_load(&g_continue_sweep_release_for_tests); i++)
+       i < 10000 &&
+       atomic_load(&g_continue_sweep_release_gen_for_tests) == armed_gen;
+       i++)
     nanosleep(&ts, NULL);
   atomic_store(&g_continue_sweep_parked_for_tests, false);
 }
@@ -8274,8 +8322,8 @@ static void _continue_deadline_stored_for_tests(void) {
 }
 
 void _chttp_continue_sweep_arm_for_tests(void) {
-  atomic_store(&g_continue_sweep_release_for_tests, false);
-  atomic_store(&g_continue_sweep_parked_for_tests, false);
+  atomic_store(&g_continue_sweep_armed_gen_for_tests,
+               atomic_load(&g_continue_sweep_release_gen_for_tests));
   atomic_store(&g_continue_sweep_armed_for_tests, true);
 }
 
@@ -8285,7 +8333,7 @@ bool _chttp_continue_sweep_parked_for_tests(void) {
 
 void _chttp_continue_sweep_release_for_tests(void) {
   atomic_store(&g_continue_sweep_armed_for_tests, false);
-  atomic_store(&g_continue_sweep_release_for_tests, true);
+  atomic_fetch_add(&g_continue_sweep_release_gen_for_tests, 1);
 }
 
 unsigned _chttp_continue_deadline_stores_for_tests(void) {
@@ -9163,7 +9211,7 @@ static void _async_ctx_destroy_now(chttp_async_ctx_t *ctx) {
   _async_race_detach(ctx); /* Must come after the unregister, since the
                             * sweep reads the race of a registered ctx. */
   if (ctx->reg) ccol_event_loop_remove(cli_engine_bundler.reactor, ctx->reg);
-  ccol_event_reg room = atomic_exchange(&ctx->room_reg, CCOL_EVENT_REG_INVALID);
+  ccol_event_reg room = atomic_exchange(&ctx->room_reg, CCOL_EVENT_REG_NULL);
   if (room) ccol_event_loop_remove(cli_engine_bundler.reactor, room);
   if (ctx->tls) ctls_conn_destroy(ctx->tls);
   if (ctx->fd >= 0) close(ctx->fd);
@@ -10344,7 +10392,7 @@ static bool _async_input_pending(chttp_async_ctx_t *ctx) {
 
 /* Stops the room watch of ctx, if it has one; see ctx->room_reg. */
 static void _async_room_watch_stop(chttp_async_ctx_t *ctx) {
-  ccol_event_reg room = atomic_exchange(&ctx->room_reg, CCOL_EVENT_REG_INVALID);
+  ccol_event_reg room = atomic_exchange(&ctx->room_reg, CCOL_EVENT_REG_NULL);
   if (room) ccol_event_loop_remove(cli_engine_bundler.reactor, room);
 }
 
@@ -10361,17 +10409,17 @@ static void _async_room_watch_stop(chttp_async_ctx_t *ctx) {
  * _chttp_stalled_read_resume_for_tests after it has seen what it waits
  * for. */
 static _Atomic bool g_stall_next_read_for_tests = false;
-static _Atomic ccol_event_reg g_stalled_reg_for_tests = CCOL_EVENT_REG_INVALID;
+static _Atomic ccol_event_reg g_stalled_reg_for_tests = CCOL_EVENT_REG_NULL;
 
 void _chttp_stall_next_read_for_tests(void) {
-  atomic_store(&g_stalled_reg_for_tests, CCOL_EVENT_REG_INVALID);
+  atomic_store(&g_stalled_reg_for_tests, CCOL_EVENT_REG_NULL);
   atomic_store(&g_stall_next_read_for_tests, true);
 }
 
 /* Returns true when there was a paused registration and it got resumed. */
 bool _chttp_stalled_read_resume_for_tests(void) {
   ccol_event_reg reg =
-      atomic_exchange(&g_stalled_reg_for_tests, CCOL_EVENT_REG_INVALID);
+      atomic_exchange(&g_stalled_reg_for_tests, CCOL_EVENT_REG_NULL);
   if (!reg) return false;
   return ccol_event_loop_resume(cli_engine_bundler.reactor, reg) ==
          ccol_success;
@@ -10427,7 +10475,7 @@ static void _async_on_room(ccol_event_loop loop, ccol_event_reg reg,
   atomic_store(&ctx->last_io_ns, _monotonic_now_ns());
   ccol_event_reg expected = reg;
   if (!atomic_compare_exchange_strong(&ctx->room_reg, &expected,
-                                      CCOL_EVENT_REG_INVALID))
+                                      CCOL_EVENT_REG_NULL))
     return;
   ccol_event_loop_remove(cli_engine_bundler.reactor, reg);
   if (ctx->hop_completed) {
@@ -10950,7 +10998,7 @@ static void _async_ctx_handle_if_abandoned(chttp_async_ctx_t *ctx) {
 }
 
 /* Publishes reg, the handle ccol_event_loop passes to every dispatch of this
- * ctx, into ctx->reg while ctx->reg is CCOL_EVENT_REG_INVALID. A dispatch can
+ * ctx, into ctx->reg while ctx->reg is CCOL_EVENT_REG_NULL. A dispatch can
  * run before the `ctx->reg = ccol_event_loop_add(...)` in
  * _async_connect_task has finished, and every path below reads ctx->reg to
  * modify or remove the registration. A ctx has exactly one registration in
@@ -10959,7 +11007,7 @@ static void _async_ctx_handle_if_abandoned(chttp_async_ctx_t *ctx) {
  * alone. */
 static inline void _async_adopt_reg(chttp_async_ctx_t *ctx,
                                     ccol_event_reg reg) {
-  ccol_event_reg expected = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg expected = CCOL_EVENT_REG_NULL;
   atomic_compare_exchange_strong(&ctx->reg, &expected, reg);
 }
 
@@ -12297,7 +12345,7 @@ typedef struct chttp_connect_race_s chttp_connect_race_t;
 typedef struct {
   chttp_connect_race_t *race;
   int fd;             /* -1 when the attempt is not running. */
-  ccol_event_reg reg; /* CCOL_EVENT_REG_INVALID when the attempt is not
+  ccol_event_reg reg; /* CCOL_EVENT_REG_NULL when the attempt is not
                        * registered. */
 } chttp_connect_attempt_t;
 
@@ -12340,7 +12388,7 @@ static void _async_race_close_attempt_locked(chttp_connect_race_t *r,
                                              chttp_connect_attempt_t *a) {
   if (a->reg) {
     ccol_event_loop_remove(cli_engine_bundler.reactor, a->reg);
-    a->reg = CCOL_EVENT_REG_INVALID;
+    a->reg = CCOL_EVENT_REG_NULL;
   }
   if (a->fd >= 0) {
     close(a->fd);
@@ -12427,7 +12475,7 @@ static void _async_race_on_event(ccol_event_loop loop, ccol_event_reg reg,
     int fd = a->fd;
     /* The fd goes over to the ctx, so only the attempt's registration goes. */
     ccol_event_loop_remove(cli_engine_bundler.reactor, a->reg);
-    a->reg = CCOL_EVENT_REG_INVALID;
+    a->reg = CCOL_EVENT_REG_NULL;
     a->fd = -1;
     r->pending--;
     chttp_async_ctx_t *ctx = _async_race_decide_locked(r, a);
@@ -13026,9 +13074,11 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
     /* Same per-hop check as in Tier 1: the configured cert, key or CA path
      * couldn't be read at the set_tls call, or it failed to load or parse
      * there. The same check in chttp_do_internal explains why
-     * ccol_http_tls_cert_load_failed is the right code. */
+     * ccol_http_tls_cert_load_failed is the right code, and when it is
+     * ccol_not_enough_memory instead. */
     _url_free(chain->mp, &url);
-    _async_fulfill_chain(chain, ccol_http_tls_cert_load_failed, NULL);
+    _async_fulfill_chain(chain, _tls_ctx_unusable_code(chain->tls_ctx_oom),
+                         NULL);
     _async_chain_release(chain);
     return false;
   }
@@ -13593,7 +13643,9 @@ static ccol_retval_t _chttp_async_preflight_check(struct chttpclient *cli,
   if (prv != ccol_success) return prv;
 
   _ccol_mutex_lock(cli->lock);
+  if (url_out->is_https) _tls_ctx_retry_if_oom_locked(cli);
   bool tls_ctx_usable = cli->tls_ctx_usable;
+  bool tls_ctx_oom = cli->tls_ctx_oom;
   _ccol_mutex_unlock(cli->lock);
 
   if (url_out->is_https && !tls_ctx_usable) {
@@ -13602,9 +13654,10 @@ static ccol_retval_t _chttp_async_preflight_check(struct chttpclient *cli,
      * process we report it here (see _rebuild_tls_ctx_locked). Same check
      * and same error code as in Tier 1; the comment on that check in
      * chttp_do_internal explains why it's ccol_http_tls_cert_load_failed and
-     * not ccol_http_tls_handshake_failed. */
+     * not ccol_http_tls_handshake_failed. A rebuild that ran out of memory
+     * and still can't build the context is ccol_not_enough_memory. */
     _url_free(cli->m_procs, url_out);
-    return ccol_http_tls_cert_load_failed;
+    return _tls_ctx_unusable_code(tls_ctx_oom);
   }
   return ccol_success;
 }
@@ -13676,8 +13729,10 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
   uint64_t inactivity_timeout_us;
   size_t max_response_body_size;
   _ccol_mutex_lock(cli->lock);
+  _tls_ctx_retry_if_oom_locked(cli);
   tls_ctx = cli->tls_ctx;
   tls_ctx_usable = cli->tls_ctx_usable;
+  bool tls_ctx_oom = cli->tls_ctx_oom;
   /* The hostname is matched only when the chain is verified at all, since
    * matching against a certificate nobody validated proves nothing (see
    * the field comments of chttp_tls_config_t). */
@@ -13731,7 +13786,10 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
       verify_host, tls_generation, connect_timeout_us, request_timeout_us,
       max_response_body_size, write_fn, write_ctx, req->expect_continue,
       req->prevent_tls_downgrade_on_redirect);
-  if (chain) chain->inactivity_timeout_us = inactivity_timeout_us;
+  if (chain) {
+    chain->inactivity_timeout_us = inactivity_timeout_us;
+    chain->tls_ctx_oom = tls_ctx_oom;
+  }
   /* _async_chain_create deep-copies initial_origin_key, like req_headers,
    * body_data and body_content_type, so our local copy never outlives this
    * call, whether the chain was created or not. */
@@ -13802,9 +13860,8 @@ void _chttpclient_clear_engine_user_logger_for_tests(void) {
   _ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
   _ccol_mutex_lock(cli_engine_bundler.mutex);
   clog user = cli_engine_bundler.user_logger;
-  cli_engine_bundler.user_logger = CLOG_INVALID;
-  if (cli_engine_bundler.logger == user)
-    cli_engine_bundler.logger = CLOG_INVALID;
+  cli_engine_bundler.user_logger = CLOG_NULL;
+  if (cli_engine_bundler.logger == user) cli_engine_bundler.logger = CLOG_NULL;
   _ccol_mutex_unlock(cli_engine_bundler.mutex);
   if (user) clog_close(user);
 }
@@ -13812,7 +13869,7 @@ void _chttpclient_clear_engine_user_logger_for_tests(void) {
 bool _chttpclient_engine_running_for_tests(void) {
   _ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
   _ccol_mutex_lock(cli_engine_bundler.mutex);
-  bool running = (cli_engine_bundler.reactor != CCOL_EVENT_LOOP_INVALID);
+  bool running = (cli_engine_bundler.reactor != CCOL_EVENT_LOOP_NULL);
   _ccol_mutex_unlock(cli_engine_bundler.mutex);
   return running;
 }
@@ -13832,7 +13889,7 @@ bool _chttpclient_engine_globals_entered_for_tests(void) {
   return atomic_load(&g_engine_globals_entered);
 }
 
-/* The DNS pool of the running engine, or CTPOOL_INVALID when there's no
+/* The DNS pool of the running engine, or CTPOOL_NULL when there's no
  * engine. */
 ctpool _chttpclient_engine_dns_pool_for_tests(void) {
   _ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
@@ -14422,16 +14479,37 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli h,
 /*                         CLIENT CONSTRUCTORS                                */
 /* ========================================================================== */
 
+#ifdef RUNNING_UNIT_TESTS
+/* The step that _chttpclient_arm_create_fault_for_tests armed, or
+ * _CHTTPCLI_FAULT_NONE. */
+static atomic_int g_chttpcli_create_fault;
+
+void _chttpclient_arm_create_fault_for_tests(_chttpcli_fault_t step) {
+  atomic_store(&g_chttpcli_create_fault, (int)step);
+}
+
+/* True once for the armed step, on the first create that reaches it. */
+static bool _chttpcli_create_fault_fires(_chttpcli_fault_t step) {
+  int expected = (int)step;
+  return atomic_compare_exchange_strong(&g_chttpcli_create_fault, &expected,
+                                        (int)_CHTTPCLI_FAULT_NONE);
+}
+#define _CHTTPCLI_CREATE_FAULT(step) _chttpcli_create_fault_fires(step)
+#else
+/* A build without the test hooks never takes a failure that no call made. */
+#define _CHTTPCLI_CREATE_FAULT(step) false
+#endif
+
 chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
   if (mprocs && !_ccol_verify_memmgmt_procs(mprocs, err_str))
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
 
   ccol_memmgmt_procs_t *mp = NULL;
   if (mprocs) {
     mp = (ccol_memmgmt_procs_t *)mprocs->malloc(sizeof(ccol_memmgmt_procs_t));
     if (!mp) {
       if (err_str) *err_str = _CCOL_ERR_STR("failed to allocate mprocs");
-      return CHTTPCLI_INVALID;
+      return CHTTPCLI_NULL;
     }
     memcpy(mp, mprocs, sizeof(ccol_memmgmt_procs_t));
   }
@@ -14441,50 +14519,55 @@ chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
   if (!cli) {
     if (err_str) *err_str = _CCOL_ERR_STR("failed to allocate client");
     if (mp) mp->free(mp);
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
   }
 
   cli->m_procs = mp;
   cli->tls = CHTTP_TLS_DEFAULT;
   cli->connect_timeout_us = CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US;
   cli->inactivity_timeout_us = CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US;
-  if (_ccol_mutex_init(cli->lock) != 0) {
+  if (_CHTTPCLI_CREATE_FAULT(_CHTTPCLI_FAULT_LOCK) ||
+      _ccol_mutex_init(cli->lock) != 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("failed to initialize mutex");
     _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
   }
   /* CLOCK_MONOTONIC, because _slot_acquire waits on this condition variable
    * through _ccol_cond_var_timedwait with a timespec from that clock, built
    * by _deadline_make. The comment of _ccol_cond_var_init_monotonic says
    * why the two clocks must match. */
-  if (_ccol_cond_var_init_monotonic(&cli->available) != 0) {
+  if (_CHTTPCLI_CREATE_FAULT(_CHTTPCLI_FAULT_AVAILABLE_CV) ||
+      _ccol_cond_var_init_monotonic(&cli->available) != 0) {
     if (err_str)
       *err_str = _CCOL_ERR_STR("failed to initialize condition variable");
     _ccol_mutex_destroy(cli->lock);
     _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
   }
-  if (_ccol_cond_var_init(cli->idle_async_drained) != 0) {
+  if (_CHTTPCLI_CREATE_FAULT(_CHTTPCLI_FAULT_IDLE_ASYNC_DRAINED_CV) ||
+      _ccol_cond_var_init(cli->idle_async_drained) != 0) {
     if (err_str)
       *err_str = _CCOL_ERR_STR("failed to initialize condition variable");
     _ccol_mutex_destroy(cli->lock);
     _ccol_cond_var_destroy(cli->available);
     _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
   }
-  if (_ccol_mutex_init(cli->async_count_lock) != 0) {
+  if (_CHTTPCLI_CREATE_FAULT(_CHTTPCLI_FAULT_ASYNC_COUNT_LOCK) ||
+      _ccol_mutex_init(cli->async_count_lock) != 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("failed to initialize mutex");
     _ccol_mutex_destroy(cli->lock);
     _ccol_cond_var_destroy(cli->available);
     _ccol_cond_var_destroy(cli->idle_async_drained);
     _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
   }
-  if (_ccol_cond_var_init(cli->async_count_drained) != 0) {
+  if (_CHTTPCLI_CREATE_FAULT(_CHTTPCLI_FAULT_ASYNC_COUNT_DRAINED_CV) ||
+      _ccol_cond_var_init(cli->async_count_drained) != 0) {
     if (err_str)
       *err_str = _CCOL_ERR_STR("failed to initialize condition variable");
     _ccol_mutex_destroy(cli->lock);
@@ -14493,7 +14576,7 @@ chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     _ccol_mutex_destroy(cli->async_count_lock);
     _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
   }
 
   char *herr = NULL;
@@ -14509,7 +14592,7 @@ chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     _ccol_cond_var_destroy(cli->async_count_drained);
     _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
   }
 
   cli->idle_pools_async =
@@ -14526,7 +14609,7 @@ chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     _ccol_cond_var_destroy(cli->async_count_drained);
     _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
   }
 
   if (_rebuild_tls_ctx_locked(cli) != ccol_success) {
@@ -14541,7 +14624,7 @@ chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     _ccol_cond_var_destroy(cli->async_count_drained);
     _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
   }
 
   chttpcli h = _chttpcli_handle_slot_acquire(cli);
@@ -14557,7 +14640,7 @@ chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     _ccol_cond_var_destroy(cli->async_count_drained);
     _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
-    return CHTTPCLI_INVALID;
+    return CHTTPCLI_NULL;
   }
   return h;
 }
@@ -14698,10 +14781,13 @@ ccol_retval_t chttpclient_set_tls(chttpcli h, const chttp_tls_config_t *tls) {
   cli->tls.ca_bundle_path = cli->owned_ca_bundle_path;
 
   {
-    ccol_retval_t rv = _rebuild_tls_ctx_locked(cli);
+    /* The rebuild fails only when an allocation fails, and then the client
+     * must not keep the configuration it couldn't build: the oom path puts
+     * the defaults back. */
+    if (_rebuild_tls_ctx_locked(cli) != ccol_success) goto oom;
     _ccol_mutex_unlock(cli->lock);
     _chttpcli_resolve_unpin(cli); /* Exit 2 of 4. */
-    return rv;
+    return ccol_success;
   }
 
 oom:
@@ -14710,22 +14796,23 @@ oom:
   _ccol_mem_free(cli->m_procs, cli->owned_ca_bundle_path);
   cli->owned_cert_path = cli->owned_key_path = cli->owned_ca_bundle_path = NULL;
   cli->tls = CHTTP_TLS_DEFAULT;
-  /* At this point cli->tls_ctx and cli->tls_ctx_usable describe the
-   * configuration that was in force before this call, built by an earlier
-   * successful chttpclient_set_tls, while the code above has reset cli->tls
-   * to the default. Leaving tls_ctx and tls_ctx_usable alone would split
-   * what the client says it is configured with from how it really does TLS,
-   * and nothing would report it: requests would keep using the OLD
-   * certificate and CA material forever and cli->tls wouldn't show it.
+  /* After a failed strdup, cli->tls_ctx and cli->tls_ctx_usable still
+   * describe the configuration that was in force before this call, built by
+   * an earlier successful chttpclient_set_tls, while the code above has
+   * reset cli->tls to the default. Leaving tls_ctx and tls_ctx_usable alone
+   * would split what the client says it is configured with from how it
+   * really does TLS, and nothing would report it: requests would keep using
+   * the OLD certificate and CA material forever and cli->tls wouldn't show
+   * it. After a failed rebuild there is no context at all.
    *
    * The rebuild puts tls_ctx back in step with the default configuration
    * that this call really leaves behind. We don't return its result, because
-   * the failure the caller needs to hear about is the strdup above, not
-   * whatever a rebuild of a plain default configuration allocates. */
+   * the failure the caller needs to hear about is the one that sent us here,
+   * not whatever a rebuild of a plain default configuration allocates. */
   _rebuild_tls_ctx_locked(cli);
   _ccol_mutex_unlock(cli->lock);
-  _chttpcli_resolve_unpin(cli); /* Exit 3 of 4, where all three failed strdup
-                                   checks above end up. */
+  _chttpcli_resolve_unpin(cli); /* Exit 3 of 4, where the three failed strdup
+                                   checks and a failed rebuild end up. */
   return ccol_not_enough_memory;
 }
 
@@ -15408,6 +15495,9 @@ static ccol_retval_t _chttp_send_and_read(
   prv = _chttp_send_all(conn, wire, header_len, overall);
   if (prv != ccol_success) return prv;
 
+#ifdef RUNNING_UNIT_TESTS
+  __atomic_add_fetch(&_chttp_tier1_continue_waits, 1, __ATOMIC_RELAXED);
+#endif
   chttp_deadline_t continue_dl = _deadline_make(CHTTP_100_CONTINUE_WAIT_US);
   chttp_deadline_t wait_dl = _deadline_earlier(continue_dl, *overall);
 
@@ -15563,10 +15653,12 @@ static ccol_retval_t chttp_do_internal(
    * client's current value before reusing a pooled connection. */
   uint64_t tls_generation;
   _ccol_mutex_lock(cli->lock);
+  _tls_ctx_retry_if_oom_locked(cli);
   connect_timeout_us = cli->connect_timeout_us;
   inactivity_timeout_us = cli->inactivity_timeout_us;
   tls_ctx = cli->tls_ctx;
   tls_ctx_usable = cli->tls_ctx_usable;
+  bool tls_ctx_oom = cli->tls_ctx_oom;
   tls_generation = cli->tls_generation;
   max_response_body_size = cli->max_response_body_size;
   /* Matching the hostname means nothing once the chain check is skipped, so
@@ -15648,9 +15740,12 @@ static ccol_retval_t chttp_do_internal(
        * exact failure with this exact code (see ctls.h). Reusing it instead
        * of a generic handshake failure lets a caller tell apart "my local
        * cert, key or CA file is bad", "the peer failed the handshake" and
-       * "the peer's certificate did not verify". */
+       * "the peer's certificate did not verify". A client whose last
+       * rebuild ran out of memory, and whose retry of it under the snapshot
+       * failed too, has nothing wrong with its files, so it reports
+       * ccol_not_enough_memory. */
       _url_free(mp, &url);
-      result = ccol_http_tls_cert_load_failed;
+      result = _tls_ctx_unusable_code(tls_ctx_oom);
       break;
     }
 
@@ -15985,7 +16080,7 @@ static void _init_default_client(void) {
 /* Called from _client_at_exit to destroy the default client, except when a
  * Tier 1 call is running on it. That call may be the one that called
  * exit() from inside its write_fn, and a destroy would wait for it. After
- * this, chttp_default_client() gives CHTTPCLI_INVALID, the same as after
+ * this, chttp_default_client() gives CHTTPCLI_NULL, the same as after
  * the library's destructor has run. */
 static void _default_client_destroy_if_idle(void) {
   chttpcli h = atomic_load(&default_client_bundler.client);

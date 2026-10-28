@@ -26,7 +26,7 @@ CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG.
 .nf
 Thread-safe, because the mutex of the shared backing store protects the
 call.
-Asserts when logger is CLOG_INVALID, stale or already closed.
+Asserts when logger is CLOG_NULL, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_set_format (3),

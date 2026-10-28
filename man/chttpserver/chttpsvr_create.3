@@ -14,19 +14,19 @@ chttpsvr chttpsvr_create(clog cl, char **err_str);
 An inline wrapper around chttpsvr_create_mp that passes NULL as
 mprocs.
 
-cl may be CLOG_INVALID.  The rules for the logger are on the
+cl may be CLOG_NULL.  The rules for the logger are on the
 chttpsvr_create_mp page.
 .fi
 .SH RETURN VALUE
 .nf
-A valid chttpsvr handle on success, or CHTTPSVR_INVALID on failure.
+A valid chttpsvr handle on success, or CHTTPSVR_NULL on failure.
 .fi
 .SH NOTES
 .nf
 At exit, the library's destructor releases its table of server
 handles once no server is left.  A call made after that point, for
 example from a later destructor or atexit handler of the
-application, returns CHTTPSVR_INVALID with an error string, and every
+application, returns CHTTPSVR_NULL with an error string, and every
 other function treats any handle it receives as invalid.
 .fi
 .SH "SEE ALSO"

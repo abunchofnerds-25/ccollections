@@ -47,7 +47,7 @@ SRC_OBJS = $(notdir $(SRC_FILES:.c=.o))
 TSAN_CFLAGS_NO_DEFINITIONS = $(INCLUDES) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1 $(EXTRA_CFLAGS)
 TSAN_CFLAGS = $(TSAN_CFLAGS_NO_DEFINITIONS) $(DEFINITIONS)
 COVERAGE_FLAGS =
-COVERAGE_ON = -fprofile-arcs -ftest-coverage
+COVERAGE_ON = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 # -rdynamic exports the main binary's symbols to the dynamic linker, so that
 # backtrace_symbols() can resolve function names inside the test binary.
 LFLAGS = -lpthread -lz -rdynamic $(CCOL_PLATFORM_LIBS)

@@ -7,10 +7,26 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 #include <time.h>
 #include <unistd.h>
 
 TAU_MAIN()  // sets up Tau (+ main function)
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
+
+/* Seeds rand() and prints the seed, so a failure can be replayed by putting
+ * the printed value in place of time(NULL). */
+static void csort_test_seed(unsigned int seed) {
+  fprintf(stderr, "[csort] seed = %u\n", seed);
+  srand(seed);
+}
 
 #define define_integer_type_test(name, type, modulus_value)     \
   TEST(csort, cvector_##name##_sort) {                          \
@@ -19,7 +35,7 @@ TAU_MAIN()  // sets up Tau (+ main function)
                                                                 \
     int i;                                                      \
                                                                 \
-    srand(seed);                                                \
+    csort_test_seed(seed);                                      \
     cvec_declare(cvec, type);                                   \
     cvec_init(cvec);                                            \
                                                                 \
@@ -50,7 +66,7 @@ TEST(csort, cvector_integer_sort) {
 
   int i;
 
-  srand(seed);
+  csort_test_seed(seed);
   cvec_declare(cvec, int);
   cvec_init(cvec);
 
@@ -95,7 +111,7 @@ define_integer_type_test(char, char, 100)
 
   int i;
 
-  srand(seed);
+  csort_test_seed(seed);
   cvec_declare(cvec, double);
   cvec_init(cvec);
 
@@ -124,7 +140,7 @@ TEST(csort, cvector_float_sort) {
 
   int i;
 
-  srand(seed);
+  csort_test_seed(seed);
   cvec_declare(cvec, float);
   cvec_init(cvec);
 
@@ -153,7 +169,7 @@ TEST(csort, cvector_long_double_sort) {
 
   int i;
 
-  srand(seed);
+  csort_test_seed(seed);
   cvec_declare(cvec, long double);
   cvec_init(cvec);
 
@@ -302,7 +318,7 @@ TEST(csort, cvector_custom_test_struct_sort) {
 
   int i;
 
-  srand(seed);
+  csort_test_seed(seed);
   cvec_declare(cvec, custom_test_struct);
   cvec_init(cvec);
 
@@ -379,7 +395,7 @@ TEST(csort, c_int_array_sort) {
   int test_array[10];
   int i;
 
-  srand(seed);
+  csort_test_seed(seed);
 
   for (i = 0; i < num_sample; i++) {
     test_array[i] = rand();
@@ -1189,7 +1205,7 @@ TEST(csort, cvector_unsigned_long_long_sort) {
    * ordering check as REQUIRE_TRUE with an explicit <= comparison. */
   const int num_sample = 10;
 
-  srand((unsigned int)time(NULL));
+  csort_test_seed((unsigned int)time(NULL));
   cvec_declare(cvec, unsigned long long);
   cvec_init(cvec);
 
@@ -1329,6 +1345,7 @@ TEST(csort,
 TEST(csort, csort_sort_null_getter_proc_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1338,7 +1355,8 @@ TEST(csort, csort_sort_null_getter_proc_is_fatal) {
     int arr[] = {2, 1};
     csort_sort(arr, (size_t)2, sizeof(int), NULL,
                csort_get_default_comparison_proc(arr[0]), NULL);
-    _exit(0); /* unreachable if _ccol_assert(false) aborted as expected */
+    /* unreachable if _ccol_assert(false) aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -1352,6 +1370,7 @@ TEST(csort, csort_sort_null_getter_proc_is_fatal) {
 TEST(csort, csort_sort_null_comparison_proc_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1361,7 +1380,8 @@ TEST(csort, csort_sort_null_comparison_proc_is_fatal) {
     int arr[] = {2, 1};
     csort_sort(arr, (size_t)2, sizeof(int), c_int_array_getter_proc_t, NULL,
                NULL);
-    _exit(0); /* unreachable if _ccol_assert(false) aborted as expected */
+    /* unreachable if _ccol_assert(false) aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -1390,6 +1410,7 @@ TEST(
     csort_sort_null_procs_with_zero_elem_size_is_still_fatal_for_non_trivial_length) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1398,7 +1419,8 @@ TEST(
     }
     int dummy_collection;  // address only; never dereferenced by this test
     csort_sort(&dummy_collection, (size_t)5, (size_t)0, NULL, NULL, NULL);
-    _exit(0); /* unreachable if _ccol_assert(false) aborted as expected */
+    /* unreachable if _ccol_assert(false) aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;

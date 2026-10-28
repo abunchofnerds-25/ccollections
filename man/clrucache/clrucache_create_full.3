@@ -82,12 +82,12 @@ err          An optional pointer that gets an error string on failure.
 .SH RETURN VALUE
 .nf
 Returns a new cache handle on success.
-Returns CLRU_CACHE_INVALID on failure, and sets *err when err is not
+Returns CLRU_CACHE_NULL on failure, and sets *err when err is not
 NULL.
 A create from a destructor that runs after the library's destructor
 fails as well, because by then the library has released its table of
 cache handles for the end of the process.
-CLRU_CACHE_INVALID is ((clru_cache)0), and it plays the same role for
+CLRU_CACHE_NULL is ((clru_cache)0), and it plays the same role for
 a clru_cache as NULL does for a pointer. Compare a handle directly
 against it, or use the handle as a condition: if (!cache) is a correct
 test for an invalid handle.

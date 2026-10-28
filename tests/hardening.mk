@@ -20,9 +20,13 @@ include $(dir $(lastword $(MAKEFILE_LIST)))../platform.mk
 # The root Makefile has the same probe for the library itself. Keep the two in
 # step, because a suite that hardens less than the library it tests is
 # measuring a different binary from the one that ships.
-ccol-cc-option = $(shell printf 'int main(void){return 0;}' > .ccol_probe.c 2>/dev/null && \
-	if $(CC) $(EXTRA_CFLAGS) $(1) -Werror -c .ccol_probe.c -o .ccol_probe.o >/dev/null 2>&1; \
-	then printf '%s' '$(1)'; fi; rm -f .ccol_probe.c .ccol_probe.o)
+# The probe works in a directory of its own, so two makes that read this file
+# at the same time never delete each other's probe, and a read-only checkout
+# still gets its flags.
+ccol-cc-option = $(shell d=$$(mktemp -d 2>/dev/null) && \
+	printf 'int main(void){return 0;}' > "$$d/probe.c" && \
+	if $(CC) $(EXTRA_CFLAGS) $(1) -Werror -c "$$d/probe.c" -o "$$d/probe.o" >/dev/null 2>&1; \
+	then printf '%s' '$(1)'; fi; [ -z "$$d" ] || rm -rf "$$d")
 
 # The fortify level depends on what the compiler predefines when it optimizes,
 # and a probe without -O can't see that. Alpine's GCC predefines
@@ -39,6 +43,11 @@ else
   CCOL_FORTIFY_CFLAGS := $(call ccol-cc-option,-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3)
 endif
 
+# Every probe answers "no" when mktemp can't make its directory, which would
+# drop all of the hardening without a word, so say so once.
+ifneq ($(shell d=$$(mktemp -d 2>/dev/null) && rm -rf "$$d" && echo ok),ok)
+  $(warning mktemp -d fails (check TMPDIR); the suite gets no hardening flags)
+endif
 CCOL_HARDENING_CFLAGS := $(call ccol-cc-option,-fstack-protector-strong) \
 	$(call ccol-cc-option,-fstack-clash-protection) \
 	$(CCOL_FORTIFY_CFLAGS)

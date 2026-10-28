@@ -30,7 +30,7 @@ a connecting socket, which wants write interest until the connect
 finishes and read interest after that), use one registration and
 ccol_event_loop_modify(3). The function refuses a second selectable for
 a direction that is already in use on the same fd, such as two read
-registrations on one fd; the call then returns CCOL_EVENT_REG_INVALID
+registrations on one fd; the call then returns CCOL_EVENT_REG_NULL
 and err_str names that cause (see RETURN VALUE).
 
 A queue selectable and a ccol_channel selectable have no such
@@ -268,8 +268,8 @@ err_str   Optional pointer that gets an error string on failure, and
 .nf
 A new registration handle on success.
 
-CCOL_EVENT_REG_INVALID on failure. The call fails when loop is
-CCOL_EVENT_LOOP_INVALID, a stale handle or a handle that has already
+CCOL_EVENT_REG_NULL on failure. The call fails when loop is
+CCOL_EVENT_LOOP_NULL, a stale handle or a handle that has already
 been destroyed; when sel is malformed because its type or dir is not
 valid, its queue pointer is NULL or its fd is negative; when loop is
 shut down (ccol_event_loop_shutdown(3)) and nothing of it dispatches
@@ -293,8 +293,8 @@ system call one containing "a system call failed".
 Like ccol_event_loop itself, ccol_event_reg is an opaque VALUE handle
 and not a pointer. Never cast it to or from void*, never compare it
 through a pointer cast, and never treat it as an address. Compare it
-with CCOL_EVENT_REG_INVALID, or test it for truth, since
-CCOL_EVENT_REG_INVALID is 0. Every use of a ccol_event_reg is resolved
+with CCOL_EVENT_REG_NULL, or test it for truth, since
+CCOL_EVENT_REG_NULL is 0. Every use of a ccol_event_reg is resolved
 against its loop's registration table before anything is dereferenced,
 so a stale or removed handle is always caught and refused cleanly,
 never turned into a use-after-free. That holds even while another

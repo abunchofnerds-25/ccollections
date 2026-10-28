@@ -30,7 +30,7 @@ For a short single-threaded tool that prints a handful of messages,
 int main(void) {
     /* A logger that writes to stderr (fd 2), synchronously. */
     clog lg = clog_create_from_fd(2, CLOG_INFO, NULL);
-    if (lg == CLOG_INVALID)
+    if (lg == CLOG_NULL)
         return 1;
 
     /* Fields that every later record of this logger carries. */
@@ -64,7 +64,7 @@ ts=2026-10-06T16:24:43.551276Z level=ERROR proc=first(2741242):first(2741242) sr
 	...
 ```
 
-`clog` is a handle, a plain number and not a pointer, and `CLOG_INVALID`
+`clog` is a handle, a plain number and not a pointer, and `CLOG_NULL`
 (zero) means "no logger". Never cast a `clog` to `void *` or back: it's a
 64-bit number, and on a 32-bit system a pointer can't even hold it.
 
@@ -137,7 +137,7 @@ a service name, a request ID or a user.
 
 int main(void) {
     clog lg = clog_create_from_fd(1, CLOG_INFO, NULL);
-    if (lg == CLOG_INVALID)
+    if (lg == CLOG_NULL)
         return 1;
 
     clog_set_field(lg, "request_id", "abc-123");
@@ -191,7 +191,7 @@ one order, without touching the fields that the rest of the program uses.
 
 ```c
 clog req_log = clog_derive(app_log);      /* fragment */
-if (req_log == CLOG_INVALID)
+if (req_log == CLOG_NULL)
     return;                               /* no memory */
 clog_set_field(req_log, "request_id", id);
 clog_info(req_log, "handling %s", path);
@@ -249,12 +249,12 @@ int main(void) {
         return 1;
     struct sockaddr_un sa = { .sun_family = AF_UNIX };
     strncpy(sa.sun_path, "/dev/log", sizeof(sa.sun_path) - 1);
-    clog lg = CLOG_INVALID;
+    clog lg = CLOG_NULL;
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0)
         perror("connect /dev/log");
     else
         lg = clog_create_from_fd(fd, CLOG_INFO, NULL);
-    if (lg == CLOG_INVALID) {
+    if (lg == CLOG_NULL) {
         close(fd);
         return 1;
     }
@@ -347,7 +347,7 @@ The rotation example below shows all of this on a real directory.
 **One file, one logger.** If two parts of your program call
 `clog_create_from_file` on the same rotating file, the second call joins the
 first logger the way `clog_derive` does, so the two never both rename the
-file. The second call fails with `CLOG_INVALID` if its rotation, async or
+file. The second call fails with `CLOG_NULL` if its rotation, async or
 allocator settings differ from the first one. Open a rotating file under one
 name only (a symbolic link to it counts as a second file), and never let two
 processes rotate the same file, because each would rename and delete files
@@ -509,7 +509,7 @@ static int ship_item(const char *item) {
 static void process_order(const char *order_id, const char *customer,
                           const char *item) {
     clog order_log = clog_derive(g_log);
-    if (order_log == CLOG_INVALID)
+    if (order_log == CLOG_NULL)
         return;
 
     clog_set_field(order_log, "order_id", order_id);
@@ -557,7 +557,7 @@ int main(void) {
         .max_rotated_files     = 14,
     };
     g_log = clog_create_from_file(path, CLOG_INFO, &rot, NULL);
-    if (g_log == CLOG_INVALID) {
+    if (g_log == CLOG_NULL) {
         remove_dir(dir);
         return 1;
     }
@@ -628,7 +628,7 @@ static void *worker(void *p) {
 
     /* A private logger with its own fields; it shares the async writer. */
     clog wlog = clog_derive(g_log);
-    if (wlog == CLOG_INVALID)
+    if (wlog == CLOG_NULL)
         return NULL;
     char id[16];
     snprintf(id, sizeof(id), "%d", arg->id);
@@ -648,7 +648,7 @@ int main(void) {
         .flush_interval_us = 100000,      /* 100 ms */
     };
     g_log = clog_create_from_fd(1, CLOG_INFO, &acfg);
-    if (g_log == CLOG_INVALID)
+    if (g_log == CLOG_NULL)
         return 1;
     clog_set_format(g_log, CLOG_FMT_JSON);
 
@@ -740,7 +740,7 @@ int main(void) {
         .compress_rotated      = true,   /* gzip each rotated file */
     };
     clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
-    if (lg == CLOG_INVALID) {
+    if (lg == CLOG_NULL) {
         rmdir(dir);
         return 1;
     }
@@ -794,7 +794,7 @@ level to `DEBUG`, `-q` raises it to `ERROR`, and a usage error is fatal.
 
 int main(int argc, char **argv) {
     clog lg = clog_create_from_fd(2, CLOG_INFO, NULL);
-    if (lg == CLOG_INVALID)
+    if (lg == CLOG_NULL)
         return 1;
 
     int first = 1;
@@ -834,8 +834,8 @@ missing file and the `INFO` summary. `./lsize` with no file writes one
 
 ## Good to know
 
-A handle is a number, so compare it with `CLOG_INVALID`. Passing
-`CLOG_INVALID` or a closed handle to a function stops the program with a
+A handle is a number, so compare it with `CLOG_NULL`. Passing
+`CLOG_NULL` or a closed handle to a function stops the program with a
 message, which means a use after close shows up immediately instead of
 corrupting memory.
 
@@ -852,7 +852,7 @@ Values outside an enum are refused. `clog_set_level`, `clog_set_format` and
 `clog_set_facility` return `ccol_invalid_args` for a value that their enum
 doesn't name (a level of `-3`, a format of `9`, a facility of `99`) and keep
 the current setting, and `clog_create_from_file` and `clog_create_from_fd`
-return `CLOG_INVALID` for such a minimum level.
+return `CLOG_NULL` for such a minimum level.
 
 A bad field key never shows up in the log, and nothing in the log says so;
 `clog_set_field` tells you through its return value (`ccol_invalid_args`).

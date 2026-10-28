@@ -18,16 +18,26 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
 #include <test_connect.h>
+#include <test_coverage.h>
 #include <test_fds.h>
 #include <test_sanitizer.h>
+#include <test_signals.h>
 #include <time.h>
 #include <unistd.h>
 
 TAU_MAIN()
+
+/* The fork tests read the wait status of their children, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void tests_default_sigchld(void) {
+  test_reset_inherited_signals();
+}
 
 /* Every write(2) call in this file writes a small signal of a few bytes into
  * a pipe that the same test already owns (a result fd or a notify fd). Each
@@ -340,9 +350,36 @@ TEST(circular_queues, try_send_and_try_receive) {
   ccol_circular_queue_destroy(cq);
 }
 
-#define getWallTime(A) clock_gettime(CLOCK_REALTIME, &A);
+/* Elapsed times come from CLOCK_MONOTONIC, the clock every timed call of
+ * this module waits on. A step of the wall clock during a measurement (NTP
+ * or a VM syncing its time) would move a CLOCK_REALTIME difference past
+ * the bounds below in either direction. */
+#define getMonoTime(A) clock_gettime(CLOCK_MONOTONIC, &A);
 #define diffTimeUSec(A, B) \
   (B.tv_sec - A.tv_sec) * 1000000 + (B.tv_nsec - A.tv_nsec) / 1000
+
+static long long mono_now_us(void) {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (long long)t.tv_sec * 1000000LL + t.tv_nsec / 1000;
+}
+
+/* The hang guards of the helpers below poll on CLOCK_MONOTONIC with a 1 ms
+ * sleep and never wait on a condition variable with an absolute deadline.
+ * Such a deadline is on CLOCK_REALTIME unless the condition variable was
+ * created for another clock, which macOS can't do, and a step of the wall
+ * clock then cuts a guard short or stretches it by the size of the step. */
+static void mono_poll_pause(void) {
+  struct timespec ts = {0, 1000000L};
+  nanosleep(&ts, NULL);
+}
+
+/* The bound, in milliseconds, of a wait for something that a correct build
+ * does within microseconds: a dispatch, a callback, a wake. It only stops a
+ * hang, since every such wait returns as soon as the thing happens, so it is
+ * sized for a loaded VM under valgrind and not for a fast machine. A wait
+ * that checks that something does NOT happen keeps its own short window. */
+#define EVL_WAIT_MS 10000
 
 TEST(circular_queues, timed_send_and_timed_receive) {
   ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, NULL);
@@ -356,9 +393,9 @@ TEST(circular_queues, timed_send_and_timed_receive) {
   struct timespec before;
   struct timespec after;
 
-  getWallTime(before);
+  getMonoTime(before);
   REQUIRE_EQ(ccol_circq_timed_send_zc(cq, &m1, timeout), ccol_success);
-  getWallTime(after);
+  getMonoTime(after);
   /* The call doesn't wait. The bound is loose for a loaded or emulated
    * machine, and a call that waits for the timeout fails the result check. */
   REQUIRE_LT(diffTimeUSec(before, after), 1000000);
@@ -366,9 +403,9 @@ TEST(circular_queues, timed_send_and_timed_receive) {
 
   m1.data = malloc(sizeof(char));
   m1.size = 1;
-  getWallTime(before);
+  getMonoTime(before);
   REQUIRE_EQ(ccol_circq_timed_send_zc(cq, &m1, timeout), ccol_timed_out);
-  getWallTime(after);
+  getMonoTime(after);
   REQUIRE_GE(diffTimeUSec(before, after), 100000);
   REQUIRE_NE(m1.data, NULL);
   free(m1.data);
@@ -376,9 +413,9 @@ TEST(circular_queues, timed_send_and_timed_receive) {
 
   c_message_t m2 = {.data = NULL, .size = 0};
 
-  getWallTime(before);
+  getMonoTime(before);
   REQUIRE_EQ(ccol_circq_timed_recv_zc(cq, &m2, timeout), ccol_success);
-  getWallTime(after);
+  getMonoTime(after);
   /* The call doesn't wait. The bound is loose for a loaded or emulated
    * machine, and a call that waits for the timeout fails the result check. */
   REQUIRE_LT(diffTimeUSec(before, after), 1000000);
@@ -386,9 +423,9 @@ TEST(circular_queues, timed_send_and_timed_receive) {
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
-  getWallTime(before);
+  getMonoTime(before);
   REQUIRE_EQ(ccol_circq_timed_recv_zc(cq, &m1, timeout), ccol_timed_out);
-  getWallTime(after);
+  getMonoTime(after);
   REQUIRE_GE(diffTimeUSec(before, after), 100000);
   REQUIRE_EQ(m1.data, NULL);
 
@@ -463,7 +500,7 @@ TEST(circular_queues, timed_calls_with_a_zero_timeout_are_the_try_variants) {
   ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, NULL);
 
   struct timespec before, after;
-  getWallTime(before);
+  getMonoTime(before);
   c_message_t recv_m = {.data = NULL, .size = 0};
   ccol_retval_t empty_rv = ccol_circq_timed_recv_zc(cq, &recv_m, 0);
 
@@ -472,7 +509,7 @@ TEST(circular_queues, timed_calls_with_a_zero_timeout_are_the_try_variants) {
   c_message_t m2 = {.data = malloc(sizeof(char)), .size = 1};
   ccol_retval_t full_rv = ccol_circq_timed_send_zc(cq, &m2, 0);
   void *kept = m2.data;
-  getWallTime(after);
+  getMonoTime(after);
 
   c_message_t got = {.data = NULL, .size = 0};
   ccol_retval_t got_rv = ccol_circq_timed_recv_zc(cq, &got, 0);
@@ -510,11 +547,11 @@ TEST(circular_queues, timed_send_reports_unexpected_failure_on_condvar_error) {
   c_message_t m = {.data = malloc(1), .size = 1};
   uint64_t timeout = 5000000;
   struct timespec before, after;
-  getWallTime(before);
+  getMonoTime(before);
   errno = 0;
   ccol_retval_t send_rv = ccol_circq_timed_send_zc(cq, &m, timeout);
   int send_errno = errno;
-  getWallTime(after);
+  getMonoTime(after);
   REQUIRE_EQ(send_rv, ccol_unexpected_failure);
   /* The forced wait error is EINVAL and errno carries it to the caller. */
   REQUIRE_EQ(send_errno, EINVAL);
@@ -576,11 +613,11 @@ TEST(circular_queues, timed_recv_reports_unexpected_failure_on_condvar_error) {
   c_message_t m = {.data = NULL, .size = 0};
   uint64_t timeout = 5000000;
   struct timespec before, after;
-  getWallTime(before);
+  getMonoTime(before);
   errno = 0;
   ccol_retval_t recv_rv = ccol_circq_timed_recv_zc(cq, &m, timeout);
   int recv_errno = errno;
-  getWallTime(after);
+  getMonoTime(after);
   REQUIRE_EQ(recv_rv, ccol_unexpected_failure);
   /* The forced wait error is EINVAL and errno carries it to the caller. */
   REQUIRE_EQ(recv_errno, EINVAL);
@@ -677,10 +714,10 @@ static void _wake_poll_pause(void) {
 
 static bool _wake_await_circq_readers(ccol_circular_queue *cq) {
   struct timespec start, now;
-  getWallTime(start);
+  getMonoTime(start);
   for (;;) {
     if (_ccol_circq_waiting_readers_for_tests(cq) >= 1) return true;
-    getWallTime(now);
+    getMonoTime(now);
     if (diffTimeUSec(start, now) > CCOL_WAKE_PARK_BOUND_US) return false;
     _wake_poll_pause();
   }
@@ -688,10 +725,10 @@ static bool _wake_await_circq_readers(ccol_circular_queue *cq) {
 
 static bool _wake_await_circq_writers(ccol_circular_queue *cq) {
   struct timespec start, now;
-  getWallTime(start);
+  getMonoTime(start);
   for (;;) {
     if (_ccol_circq_waiting_writers_for_tests(cq) >= 1) return true;
-    getWallTime(now);
+    getMonoTime(now);
     if (diffTimeUSec(start, now) > CCOL_WAKE_PARK_BOUND_US) return false;
     _wake_poll_pause();
   }
@@ -699,10 +736,10 @@ static bool _wake_await_circq_writers(ccol_circular_queue *cq) {
 
 static bool _wake_await_dynmq_readers(ccol_dynamic_queue *dq) {
   struct timespec start, now;
-  getWallTime(start);
+  getMonoTime(start);
   for (;;) {
     if (_ccol_dynmq_waiting_readers_for_tests(dq) >= 1) return true;
-    getWallTime(now);
+    getMonoTime(now);
     if (diffTimeUSec(start, now) > CCOL_WAKE_PARK_BOUND_US) return false;
     _wake_poll_pause();
   }
@@ -710,10 +747,10 @@ static bool _wake_await_dynmq_readers(ccol_dynamic_queue *dq) {
 
 static bool _wake_await_finished(ccol_wake_args *a) {
   struct timespec start, now;
-  getWallTime(start);
+  getMonoTime(start);
   for (;;) {
     if (atomic_load(&a->finished)) return true;
-    getWallTime(now);
+    getMonoTime(now);
     if (diffTimeUSec(start, now) > CCOL_WAKE_WAKE_BOUND_US) return false;
     _wake_poll_pause();
   }
@@ -958,9 +995,9 @@ TEST(circular_queues, timed_recv_times_out_when_disabled) {
   struct timespec before, after;
   c_message_t m = {.data = NULL, .size = 0};
 
-  getWallTime(before);
+  getMonoTime(before);
   REQUIRE_EQ(ccol_circq_timed_recv_zc(cq, &m, timeout), ccol_timed_out);
-  getWallTime(after);
+  getMonoTime(after);
   REQUIRE_GE(diffTimeUSec(before, after), 100000);  // must wait out the timeout
 
   ccol_circular_queue_destroy(cq);
@@ -1203,6 +1240,7 @@ TEST(circular_queues, destroy_with_live_event_loop_registration_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1216,19 +1254,19 @@ TEST(circular_queues, destroy_with_live_event_loop_registration_is_fatal) {
      * bound below. */
     alarm(10);
     ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
-    if (!cq) _exit(2);
+    if (!cq) test_child_exit(2);
     ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_INVALID) _exit(2);
+    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
     ccol_event_handlers_t handlers = {0};
     char *err = NULL;
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, NULL,
         &err);
-    if (reg == CCOL_EVENT_REG_INVALID) _exit(2);
+    if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
     /* The misuse under test: nothing removes the registration above and
      * nothing destroys the loop before this call. */
     ccol_circular_queue_destroy(cq);
-    _exit(0); /* not reachable when the assert fires, as it must */
+    test_child_exit(0); /* not reachable when the assert fires, as it must */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -1262,6 +1300,7 @@ TEST(ccol_event_loop,
   for (int kind = 0; kind < 2; kind++) {
     pid_t pid = fork();
     if (pid == 0) {
+      test_child_no_core();
       int dn = open("/dev/null", O_WRONLY);
       if (dn >= 0) {
         dup2(dn, STDOUT_FILENO);
@@ -1275,21 +1314,21 @@ TEST(ccol_event_loop,
         cq = ccol_circular_queue_create(4, NULL);
       else
         dq = ccol_dynamic_queue_create(NULL);
-      if (!cq && !dq) _exit(2);
+      if (!cq && !dq) test_child_exit(2);
       ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-      if (loop == CCOL_EVENT_LOOP_INVALID) _exit(2);
+      if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
       ccol_event_handlers_t handlers = {0};
       ccol_selectable sel =
           cq ? ccol_selectable_from_circq(cq, ccol_select_read)
              : ccol_selectable_from_dynq(dq, ccol_select_read);
       ccol_event_reg reg = ccol_event_loop_add(loop, sel, handlers, NULL, NULL);
-      if (reg == CCOL_EVENT_REG_INVALID) _exit(2);
-      if (ccol_event_loop_shutdown(loop) != ccol_success) _exit(2);
+      if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
+      if (ccol_event_loop_shutdown(loop) != ccol_success) test_child_exit(2);
       if (cq)
         ccol_circular_queue_destroy(cq);
       else
         ccol_dynamic_queue_destroy(dq);
-      _exit(0); /* not reachable when the assert fires, as it must */
+      test_child_exit(0); /* not reachable when the assert fires, as it must */
     }
     if (pid == -1) {
       reaped_all = false;
@@ -1327,6 +1366,7 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     /* Bounds this child's lifetime so an unexpected hang here fails this one
      * test loudly and fast, where without the bound it would stop the whole
      * test binary, and the CI job running it, for ever. The same alarm in the
@@ -1335,7 +1375,7 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
      * own independent bound. */
     alarm(10);
     ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
-    if (!cq) _exit(2);
+    if (!cq) test_child_exit(2);
 
     cq_select_waiter_args wargs = {.cq = cq};
     pthread_t waiter;
@@ -1350,10 +1390,11 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
      * down in this file, explain the reasoning. The poll loop below already
      * bounds a failed create here, since linked never becomes true when no
      * thread links it, but exiting at once with a distinct code puts the
-     * real cause in the exit status. Otherwise it shows up 2 seconds later as
-     * a REQUIRE_TRUE(linked) failure you can't tell from any other. */
+     * real cause in the exit status. Otherwise it shows up 8 seconds later as
+     * exit code 3, which the parent's SIGABRT check reports like any other
+     * wrong exit. */
     if (pthread_create(&waiter, NULL, cq_select_waiter_thread, &wargs) != 0)
-      _exit(4);
+      test_child_exit(4);
 
     /* Polls until the waiter thread has REALLY linked itself into cq's
      * read-waiter list, which is real synchronization on the condition this
@@ -1368,25 +1409,25 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
      * memory as soon as the scheduler runs it. That's a real use-after-free
      * whose undefined behaviour shows up as a child that hangs for ever,
      * which a waitpid below without a bound could never see. The bound is
-     * 200 iterations of 10ms, so 2s, well above any realistic scheduling
-     * delay and still a hard bound. If the condition never becomes true the
-     * REQUIRE_TRUE below fails this test cleanly instead of going on into the
-     * same race. */
+     * 800 iterations of 10ms, so 8s, sized for a loaded VM under valgrind
+     * and still inside the alarm(10) of this child. If the condition never
+     * becomes true the child exits with code 3 instead of going on into the
+     * same race, and the parent's check that it died by SIGABRT fails. */
     bool linked = false;
-    for (int i = 0; i < 200 && !linked; i++) {
+    for (int i = 0; i < 800 && !linked; i++) {
       linked = _ccol_circq_test_has_sel_read_waiter_for_tests(cq);
       if (!linked) {
         struct timespec ts = {0, 10000000}; /* 10ms */
         nanosleep(&ts, NULL);
       }
     }
-    /* not reachable in practice; see the REQUIRE_TRUE below. */
-    if (!linked) _exit(3);
+    /* Not reachable in practice; see the comment above the loop. */
+    if (!linked) test_child_exit(3);
 
     /* The misuse under test: the waiter thread above is confirmed to be
      * linked into cq's waiter list when this destroys cq. */
     ccol_circular_queue_destroy(cq);
-    _exit(0); /* not reachable when the assert fires, as it must */
+    test_child_exit(0); /* not reachable when the assert fires, as it must */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -1600,9 +1641,9 @@ TEST(dynamic_queues, send_and_timed_receive) {
 
   c_message_t m2 = {.data = NULL, .size = 0};
 
-  getWallTime(before);
+  getMonoTime(before);
   REQUIRE_EQ(ccol_dynmq_timed_recv_zc(dq, &m2, timeout), ccol_success);
-  getWallTime(after);
+  getMonoTime(after);
   /* The call doesn't wait. The bound is loose for a loaded or emulated
    * machine, and a call that waits for the timeout fails the result check. */
   REQUIRE_LT(diffTimeUSec(before, after), 1000000);
@@ -1610,9 +1651,9 @@ TEST(dynamic_queues, send_and_timed_receive) {
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
-  getWallTime(before);
+  getMonoTime(before);
   REQUIRE_EQ(ccol_dynmq_timed_recv_zc(dq, &m1, timeout), ccol_timed_out);
-  getWallTime(after);
+  getMonoTime(after);
   REQUIRE_GE(diffTimeUSec(before, after), 100000);
   REQUIRE_EQ(m1.data, NULL);
 
@@ -1631,11 +1672,11 @@ TEST(dynamic_queues, timed_recv_reports_unexpected_failure_on_condvar_error) {
   c_message_t m = {.data = NULL, .size = 0};
   uint64_t timeout = 5000000;
   struct timespec before, after;
-  getWallTime(before);
+  getMonoTime(before);
   errno = 0;
   ccol_retval_t recv_rv = ccol_dynmq_timed_recv_zc(dq, &m, timeout);
   int recv_errno = errno;
-  getWallTime(after);
+  getMonoTime(after);
   REQUIRE_EQ(recv_rv, ccol_unexpected_failure);
   /* The forced wait error is EINVAL and errno carries it to the caller. */
   REQUIRE_EQ(recv_errno, EINVAL);
@@ -1703,10 +1744,10 @@ TEST(dynamic_queues, timed_recv_with_a_zero_timeout_is_the_try_variant) {
   ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
 
   struct timespec before, after;
-  getWallTime(before);
+  getMonoTime(before);
   c_message_t m = {.data = NULL, .size = 0};
   ccol_retval_t empty_rv = ccol_dynmq_timed_recv_zc(dq, &m, 0);
-  getWallTime(after);
+  getMonoTime(after);
   c_message_t sent = {.data = NULL, .size = 0};
   ccol_retval_t send_rv = ccol_dynmq_send_zc(dq, &sent);
   ccol_retval_t got_rv = ccol_dynmq_timed_recv_zc(dq, &m, 0);
@@ -1794,9 +1835,9 @@ TEST(dynamic_queues, timed_recv_times_out_when_disabled) {
   struct timespec before, after;
   c_message_t m = {.data = NULL, .size = 0};
 
-  getWallTime(before);
+  getMonoTime(before);
   REQUIRE_EQ(ccol_dynmq_timed_recv_zc(dq, &m, timeout), ccol_timed_out);
-  getWallTime(after);
+  getMonoTime(after);
   REQUIRE_GE(diffTimeUSec(before, after), 100000);  // must wait out the timeout
 
   ccol_dynamic_queue_destroy(dq);
@@ -1842,6 +1883,7 @@ TEST(dynamic_queues, destroy_with_live_event_loop_registration_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1849,19 +1891,19 @@ TEST(dynamic_queues, destroy_with_live_event_loop_registration_is_fatal) {
       close(dn);
     }
     ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
-    if (!dq) _exit(2);
+    if (!dq) test_child_exit(2);
     ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_INVALID) _exit(2);
+    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
     ccol_event_handlers_t handlers = {0};
     char *err = NULL;
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_dynq(dq, ccol_select_read), handlers, NULL,
         &err);
-    if (reg == CCOL_EVENT_REG_INVALID) _exit(2);
+    if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
     /* The misuse under test: nothing removes the registration above and
      * nothing destroys the loop before this call. */
     ccol_dynamic_queue_destroy(dq);
-    _exit(0); /* not reachable when the assert fires, as it must */
+    test_child_exit(0); /* not reachable when the assert fires, as it must */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -2166,37 +2208,37 @@ void *thr_for_channels_timed_send_and_timed_receive(void *args) {
   struct timespec after;
 
   c_message_t msg = {.data = NULL, .size = 0};
-  getWallTime(before);
+  getMonoTime(before);
   CHAN_CHECK(
       t, ccol_chan_timed_recv_zc(t->ch, &msg, CHAN_LONG_US) == ccol_success);
-  getWallTime(after);
+  getMonoTime(after);
   CHAN_CHECK(t, diffTimeUSec(before, after) < CHAN_AT_ONCE_US);
   CHAN_CHECK(t, msg.data != NULL && *((char *)msg.data) == 'A');
   if (msg.data) *((char *)msg.data) = 'B';
 
   c_message_t m2 = {.data = NULL, .size = 0};
-  getWallTime(before);
+  getMonoTime(before);
   CHAN_CHECK(
       t, ccol_chan_timed_recv_zc(t->ch, &m2, CHAN_SHORT_US) == ccol_timed_out);
-  getWallTime(after);
+  getMonoTime(after);
   CHAN_CHECK(t, diffTimeUSec(before, after) >= CHAN_SHORT_US);
   CHAN_CHECK(t, m2.data == NULL);
 
   if (msg.data) {
-    getWallTime(before);
+    getMonoTime(before);
     CHAN_CHECK(
         t, ccol_chan_timed_send_zc(t->ch, &msg, CHAN_LONG_US) == ccol_success);
-    getWallTime(after);
+    getMonoTime(after);
     CHAN_CHECK(t, diffTimeUSec(before, after) < CHAN_AT_ONCE_US);
     CHAN_CHECK(t, msg.data == NULL);
     free(msg.data);
   }
 
   m2 = (c_message_t){.data = malloc(sizeof(char)), .size = 1};
-  getWallTime(before);
+  getMonoTime(before);
   CHAN_CHECK(
       t, ccol_chan_timed_send_zc(t->ch, &m2, CHAN_SHORT_US) == ccol_timed_out);
-  getWallTime(after);
+  getMonoTime(after);
   CHAN_CHECK(t, diffTimeUSec(before, after) >= CHAN_SHORT_US);
   CHAN_CHECK(t, m2.data != NULL);
   free(m2.data);
@@ -2219,17 +2261,17 @@ TEST(channels, timed_send_and_timed_receive) {
 
   c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   *(char *)m1.data = 'A';
-  getWallTime(before);
+  getMonoTime(before);
   ccol_retval_t first_send = ccol_chan_timed_send_zc(t.ch, &m1, CHAN_LONG_US);
-  getWallTime(after);
+  getMonoTime(after);
   long first_us = diffTimeUSec(before, after);
   bool first_taken = m1.data == NULL;
   free(m1.data);
 
   m1 = (c_message_t){.data = malloc(sizeof(char)), .size = 1};
-  getWallTime(before);
+  getMonoTime(before);
   ccol_retval_t full_send = ccol_chan_timed_send_zc(t.ch, &m1, CHAN_SHORT_US);
-  getWallTime(after);
+  getMonoTime(after);
   long full_us = diffTimeUSec(before, after);
   bool full_kept = m1.data != NULL;
   free(m1.data);
@@ -2239,15 +2281,15 @@ TEST(channels, timed_send_and_timed_receive) {
   bool worker_done = chan_wait_phase(&t, 2);
 
   c_message_t m2 = {.data = NULL, .size = 0};
-  getWallTime(before);
+  getMonoTime(before);
   ccol_retval_t got = ccol_chan_timed_recv_zc(t.ch, &m2, CHAN_LONG_US);
-  getWallTime(after);
+  getMonoTime(after);
   long got_us = diffTimeUSec(before, after);
   char got_char = m2.data ? *(char *)m2.data : 0;
 
-  getWallTime(before);
+  getMonoTime(before);
   ccol_retval_t empty = ccol_chan_timed_recv_zc(t.ch, &m1, CHAN_SHORT_US);
-  getWallTime(after);
+  getMonoTime(after);
   long empty_us = diffTimeUSec(before, after);
   bool empty_left_null = m1.data == NULL;
 
@@ -2332,6 +2374,7 @@ TEST(channels, destroy_with_live_event_loop_registration_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -2339,9 +2382,9 @@ TEST(channels, destroy_with_live_event_loop_registration_is_fatal) {
       close(dn);
     }
     ccol_channel *ch = ccol_channel_create(4, NULL);
-    if (!ch) _exit(2);
+    if (!ch) test_child_exit(2);
     ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_INVALID) _exit(2);
+    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
     ccol_event_handlers_t handlers = {0};
     char *err = NULL;
     /* This thread owns the ccol_channel, so ccol_select_read here resolves
@@ -2350,11 +2393,11 @@ TEST(channels, destroy_with_live_event_loop_registration_is_fatal) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_chan(ch, ccol_select_read), handlers, NULL,
         &err);
-    if (reg == CCOL_EVENT_REG_INVALID) _exit(2);
+    if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
     /* The misuse under test: nothing removes the registration above and
      * nothing destroys the loop before this call. */
     ccol_channel_destroy(ch);
-    _exit(0); /* not reachable when the assert fires, as it must */
+    test_child_exit(0); /* not reachable when the assert fires, as it must */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -2935,27 +2978,72 @@ TEST(ccol_select, fd_readable_immediately) {
   close(pfd[1]);
 }
 
+typedef struct {
+  int write_fd;
+  uint64_t sets_before;
+  bool saw_waits;
+} sel_capped_writer_arg;
+
+/* Writes one byte once the waiting call has built its poll set and used up
+ * every armed short capped wait, so the byte can only reach a call that took
+ * those waits and waited again. The wait is bounded on CLOCK_MONOTONIC and
+ * only stops a hang; a call that ended at its first capped wait never uses
+ * up the counts, and saw_waits stays false. */
+static void *sel_capped_writer_thread(void *arg) {
+  sel_capped_writer_arg *a = (sel_capped_writer_arg *)arg;
+  struct timespec start, now;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (;;) {
+    if (_ccol_select_test_poll_sets_created() > a->sets_before &&
+        _ccol_select_test_short_capped_waits_left() == 0) {
+      a->saw_waits = true;
+      break;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (now.tv_sec - start.tv_sec >= 10) break;
+    struct timespec nap = {0, 1000000L};
+    nanosleep(&nap, NULL);
+  }
+  char byte = 'x';
+  ssize_t wrote = write(a->write_fd, &byte, 1);
+  (void)wrote;
+  return NULL;
+}
+
 TEST(ccol_select, fd_wait_capped_below_a_long_timeout_waits_again) {
   /* A timeout of 30 days is longer than the INT_MAX milliseconds one kernel
    * wait can take. The hook ends the first three such capped waits at once
    * with no event, as the real wait does when the capped time runs out, and
-   * the call has to wait again and report the fd, which is already readable,
-   * instead of a timeout 30 days early. */
+   * the call has to wait again and report the fd once the thread writes,
+   * instead of a timeout 30 days early. The fd is idle when the call starts,
+   * so it gets past its first phase and into the capped waits; a call that
+   * took a capped wait with no event for a timeout returns ccol_timed_out. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  char byte = 'x';
-  ssize_t wrote = write(pfd[1], &byte, 1);
+  sel_capped_writer_arg arg = {
+      .write_fd = pfd[1],
+      .sets_before = _ccol_select_test_poll_sets_created(),
+      .saw_waits = false};
+  /* Armed before the writer starts, so the writer can't see the counts at 0
+   * before the call has run. */
+  _ccol_select_test_short_next_capped_waits(3);
+  pthread_t tid;
+  bool created =
+      pthread_create(&tid, NULL, sel_capped_writer_thread, &arg) == 0;
 
   ccol_selectable sels[1] = {ccol_selectable_from_fd(pfd[0], ccol_select_read)};
   size_t idx = 99;
-  _ccol_select_test_short_next_capped_waits(3);
-  ccol_retval_t rv =
-      ccol_select_timed(&idx, 1, sels, 30ULL * 86400ULL * 1000000ULL);
+  ccol_retval_t rv = ccol_unexpected_failure;
+  if (created) {
+    rv = ccol_select_timed(&idx, 1, sels, 30ULL * 86400ULL * 1000000ULL);
+    pthread_join(tid, NULL);
+  }
   _ccol_select_test_short_next_capped_waits(0);
   close(pfd[0]);
   close(pfd[1]);
 
-  REQUIRE_EQ(wrote, (ssize_t)1);
+  REQUIRE_TRUE(created);
+  REQUIRE_TRUE(arg.saw_waits);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_EQ(idx, (size_t)0);
 }
@@ -2974,14 +3062,14 @@ TEST(ccol_select, fd_blocks_until_data_arrives) {
    * without data measures less unless this thread is descheduled, and that
    * can't make a correct build fail. */
   struct timespec before, after;
-  getWallTime(before);
+  getMonoTime(before);
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_write_to_fd, &args), 0);
 
   size_t idx = 99;
   ccol_retval_t sel_rv =
       ccol_select_va(&idx, ccol_selectable_from_fd(pfd[0], ccol_select_read));
-  getWallTime(after);
+  getMonoTime(after);
   /* The writer only sleeps and writes once, so this join can't hang. */
   pthread_join(tid, NULL);
   REQUIRE_EQ(sel_rv, ccol_success);
@@ -3233,12 +3321,12 @@ TEST(ccol_select, timed_wait_reports_unexpected_failure_on_condvar_error) {
 
   size_t idx = 99;
   struct timespec before, after;
-  getWallTime(before);
+  getMonoTime(before);
   REQUIRE_EQ(
       ccol_select_timed_va(&idx, 5000000 /* us */,
                            ccol_selectable_from_circq(cq, ccol_select_read)),
       ccol_unexpected_failure);
-  getWallTime(after);
+  getMonoTime(after);
   REQUIRE_LT(diffTimeUSec(before, after), 500000);
   REQUIRE_EQ(idx, (size_t)99);
 
@@ -3754,6 +3842,28 @@ TEST(ccol_select, two_always_readable_fds_share_the_calls) {
   REQUIRE_GE(wins[1], (size_t)400);
 }
 
+typedef struct {
+  ccol_circular_queue *cq;
+  uint64_t sets_before;
+} sel_set_waker_arg;
+
+static char sel_set_waker_token;
+
+/* Sends one message once the waiting call has built its poll set, so that
+ * call ends on the message and never on its deadline. A call whose deadline
+ * passes before it gets to build the set builds none, which a slow runner
+ * can do to any short timeout. The wait is bounded and only stops a hang. */
+static void *sel_set_waker_thread(void *arg) {
+  sel_set_waker_arg *a = (sel_set_waker_arg *)arg;
+  long long end = mono_now_us() + 10000000LL;
+  while (_ccol_select_test_poll_sets_created() <= a->sets_before &&
+         mono_now_us() < end)
+    mono_poll_pause();
+  c_message_t m = {.data = &sel_set_waker_token, .size = 1};
+  (void)ccol_circq_try_send_zc(a->cq, &m);
+  return NULL;
+}
+
 /* A call that a ready queue answers at once builds no epoll set for the idle
  * fd next to it, and neither does a call that its ready fd answers or that
  * a timeout of 0 ends; only a call that has to wait builds one. A call that
@@ -3773,7 +3883,9 @@ TEST(ccol_select, a_call_that_returns_at_once_creates_no_poll_set) {
   uint64_t ready_queue_sets = UINT64_MAX, ready_fd_sets = UINT64_MAX;
   uint64_t zero_timeout_sets = UINT64_MAX, waiting_sets = UINT64_MAX;
   size_t failures = 0;
-  ccol_retval_t rv_zero = ccol_success, rv_wait = ccol_success;
+  ccol_retval_t rv_zero = ccol_success, rv_wait = ccol_timed_out;
+  size_t wait_idx = 99;
+  bool waker_started = false;
   if (setup) {
     ccol_selectable mixed[2] = {
         ccol_selectable_from_fd(pfd[0], ccol_select_read),
@@ -3807,11 +3919,19 @@ TEST(ccol_select, a_call_that_returns_at_once_creates_no_poll_set) {
     rv_zero = ccol_select_timed(&idx, 2, idle, 0);
     zero_timeout_sets = _ccol_select_test_poll_sets_created() - before;
     before = _ccol_select_test_poll_sets_created();
-    rv_wait = ccol_select_timed(&idx, 2, idle, 20000);
-    waiting_sets = _ccol_select_test_poll_sets_created() - before;
+    sel_set_waker_arg wa = {.cq = cq, .sets_before = before};
+    pthread_t waker;
+    waker_started =
+        pthread_create(&waker, NULL, sel_set_waker_thread, &wa) == 0;
+    if (waker_started) {
+      rv_wait = ccol_select_timed(&wait_idx, 2, idle, 10000000);
+      waiting_sets = _ccol_select_test_poll_sets_created() - before;
+      pthread_join(waker, NULL);
+    }
 
     c_message_t out;
     if (ccol_dynmq_try_recv_zc(dq, &out) == ccol_success) free(out.data);
+    (void)ccol_circq_try_recv_zc(cq, &out);
   }
   if (dq) ccol_dynamic_queue_destroy(dq);
   if (cq) ccol_circular_queue_destroy(cq);
@@ -3824,7 +3944,9 @@ TEST(ccol_select, a_call_that_returns_at_once_creates_no_poll_set) {
   REQUIRE_EQ(ready_fd_sets, (uint64_t)0);
   REQUIRE_EQ(rv_zero, ccol_timed_out);
   REQUIRE_EQ(zero_timeout_sets, (uint64_t)0);
-  REQUIRE_EQ(rv_wait, ccol_timed_out);
+  REQUIRE_TRUE(waker_started);
+  REQUIRE_EQ(rv_wait, ccol_success);
+  REQUIRE_EQ(wait_idx, (size_t)1);
   REQUIRE_EQ(waiting_sets, (uint64_t)1);
 }
 
@@ -3894,10 +4016,15 @@ TEST(ccol_select, a_failed_allocation_reports_not_enough_memory) {
         ccol_selectable_from_fd(pfd[0], ccol_select_read),
         ccol_selectable_from_circq(cq, ccol_select_read),
     };
+    /* The event buffer is allocated only by a call that gets ready to wait,
+     * and a call whose deadline has passed by then never does. So the calls
+     * whose allocation fails get a timeout no slow runner can use up, and
+     * they return at once on the failure anyway. Only the last call, where
+     * nothing fails, waits out its 10 ms. */
     for (uint32_t k = 0; k < 4; k++) {
       size_t idx = 99;
       _ccol_select_test_fail_alloc(k + 1);
-      rv[k] = ccol_select_timed(&idx, 2, sels, 10000);
+      rv[k] = ccol_select_timed(&idx, 2, sels, k < 3 ? 10000000 : 10000);
       _ccol_select_test_fail_alloc(0);
     }
     waiters_left = _ccol_circq_test_sel_read_waiter_count_for_tests(cq);
@@ -3984,8 +4111,8 @@ static void evl_sync_ctx_init(evl_sync_ctx *c) {
   c->error_count = 0;
   c->last_msg = (c_message_t){.data = NULL, .size = 0};
   c->last_msg_valid = false;
-  c->self_reg = CCOL_EVENT_REG_INVALID;
-  c->self_loop = CCOL_EVENT_LOOP_INVALID;
+  c->self_reg = CCOL_EVENT_REG_NULL;
+  c->self_loop = CCOL_EVENT_LOOP_NULL;
 }
 
 static void evl_sync_ctx_destroy(evl_sync_ctx *c) {
@@ -4078,22 +4205,15 @@ static void evl_on_readable_self_remove(ccol_event_loop loop,
  * returns true if *counter_field got to the target before the deadline. */
 static bool evl_wait_for(evl_sync_ctx *c, int *counter_field, int target,
                          int timeout_ms) {
-  struct timespec deadline;
-  clock_gettime(CLOCK_REALTIME, &deadline);
-  deadline.tv_sec += timeout_ms / 1000;
-  deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
-  if (deadline.tv_nsec >= 1000000000L) {
-    deadline.tv_sec++;
-    deadline.tv_nsec -= 1000000000L;
+  long long deadline = mono_now_us() + (long long)timeout_ms * 1000LL;
+  for (;;) {
+    pthread_mutex_lock(&c->mtx);
+    bool ok = (*counter_field >= target);
+    pthread_mutex_unlock(&c->mtx);
+    if (ok) return true;
+    if (mono_now_us() >= deadline) return false;
+    mono_poll_pause();
   }
-  pthread_mutex_lock(&c->mtx);
-  while (*counter_field < target) {
-    int r = pthread_cond_timedwait(&c->cond, &c->mtx, &deadline);
-    if (r == ETIMEDOUT) break;
-  }
-  bool ok = (*counter_field >= target);
-  pthread_mutex_unlock(&c->mtx);
-  return ok;
 }
 
 /* Several of the multi-thread tests below let their on_readable callback
@@ -4120,16 +4240,16 @@ static void evl_set_nonblocking(int fd) {
 TEST(ccol_event_loop, create_destroy) {
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
   REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
   ccol_event_loop_destroy(loop);
-  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_NULL);
 }
 
 TEST(ccol_event_loop, create_destroy_scoped) {
   {
     ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-    REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+    REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
   }
   /* The scope exit destroyed loop. There's nothing more to assert than "no
    * crash, and a clean run under valgrind", which the memtest target
@@ -4162,13 +4282,13 @@ TEST(ccol_event_loop, fd_on_readable_fires) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
         &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
     REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
 
     int val = 42;
     REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
 
-    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
     /* This read happens under ctx.mtx, so it isn't unprotected; the same
      * last_dir_seen handling in fd_modify_flips_direction_and_updates_sel
      * explains why. */
@@ -4215,10 +4335,10 @@ TEST(ccol_event_loop, fd_on_writable_fires) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[1], ccol_select_write), handlers,
         &ctx, &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
     /* A new pipe write end is always writable from the start. */
-    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, EVL_WAIT_MS));
 
     ccol_event_loop_remove(loop, reg);
   }
@@ -4257,15 +4377,16 @@ TEST(ccol_event_loop, fd_both_directions_combine_and_recombine) {
     ccol_event_reg rreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
         &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
     ccol_event_reg wreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
         &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
     REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)2);
 
     /* sv[0] is writable right away because its send buffer is empty. */
-    REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
+    REQUIRE_TRUE(
+        evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, EVL_WAIT_MS));
 
     /* Removes the write direction, which is the MOD back down path, and the
      * read direction keeps working after it. */
@@ -4274,7 +4395,8 @@ TEST(ccol_event_loop, fd_both_directions_combine_and_recombine) {
 
     int val = 7;
     REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
-    REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
+    REQUIRE_TRUE(
+        evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, EVL_WAIT_MS));
 
     ccol_event_loop_remove(loop, rreg);
   }
@@ -4311,23 +4433,26 @@ TEST(ccol_event_loop, fd_simultaneous_readable_and_writable) {
     ccol_event_reg rreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
         &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
     ccol_event_reg wreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
         &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
 
     /* Drains the initial "already writable" dispatch before the test writes
      * data, so the later wait sees the combined batch without any doubt. */
-    REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
+    REQUIRE_TRUE(
+        evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, EVL_WAIT_MS));
 
     int val = 99;
     REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
 
-    REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
+    REQUIRE_TRUE(
+        evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, EVL_WAIT_MS));
     /* sv[0] stays writable the whole time since nothing fills its send
      * buffer, so the writable callback fires again too. */
-    REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 2, 2000));
+    REQUIRE_TRUE(
+        evl_wait_for(&write_ctx, &write_ctx.writable_count, 2, EVL_WAIT_MS));
 
     ccol_event_loop_remove(loop, rreg);
     ccol_event_loop_remove(loop, wreg);
@@ -4363,16 +4488,18 @@ TEST(ccol_event_loop, fd_on_error_fires_for_both_directions) {
     ccol_event_reg rreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
         &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
     ccol_event_reg wreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
         &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
 
     close(sv[1]); /* peer hangs up */
 
-    REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.error_count, 1, 2000));
-    REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.error_count, 1, 2000));
+    REQUIRE_TRUE(
+        evl_wait_for(&read_ctx, &read_ctx.error_count, 1, EVL_WAIT_MS));
+    REQUIRE_TRUE(
+        evl_wait_for(&write_ctx, &write_ctx.error_count, 1, EVL_WAIT_MS));
 
     ccol_event_loop_remove(loop, rreg);
     ccol_event_loop_remove(loop, wreg);
@@ -4423,11 +4550,11 @@ TEST(ccol_event_loop,
     ccol_event_reg wreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &ctx,
         &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
 
     close(sv[1]); /* peer hangs up: sv[0] becomes both EPOLLOUT and EPOLLHUP */
 
-    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, EVL_WAIT_MS));
 
     pthread_mutex_lock(&ctx.mtx);
     error_count_seen = ctx.error_count;
@@ -4473,11 +4600,11 @@ TEST(
     ccol_event_reg wreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &ctx,
         &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
 
     close(sv[1]);
 
-    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, EVL_WAIT_MS));
 
     pthread_mutex_lock(&ctx.mtx);
     error_count_seen = ctx.error_count;
@@ -4573,14 +4700,14 @@ static int evl_readd_run(size_t num_threads, evl_readd_mode mode) {
 
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, num_threads, &err);
-  if (loop == CCOL_EVENT_LOOP_INVALID) {
+  if (loop == CCOL_EVENT_LOOP_NULL) {
     fail |= 1 << 1;
   } else {
     ccol_event_handlers_t h = {.on_readable = evl_readd_on_readable};
     int fd = sv[0];
     ccol_event_reg r1 = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(fd, ccol_select_read), h, &old_ctx, &err);
-    if (r1 == CCOL_EVENT_REG_INVALID) fail |= 1 << 2;
+    if (r1 == CCOL_EVENT_REG_NULL) fail |= 1 << 2;
     if (mode == EVL_READD_PAUSED &&
         ccol_event_loop_pause(loop, r1) != ccol_success)
       fail |= 1 << 3;
@@ -4611,17 +4738,17 @@ static int evl_readd_run(size_t num_threads, evl_readd_mode mode) {
       }
     }
 
-    ccol_event_reg r2 = CCOL_EVENT_REG_INVALID;
+    ccol_event_reg r2 = CCOL_EVENT_REG_NULL;
     if (sv[0] >= 0) {
       r2 = ccol_event_loop_add(loop,
                                ccol_selectable_from_fd(sv[0], ccol_select_read),
                                h, &new_ctx, &err);
     }
-    if (r2 == CCOL_EVENT_REG_INVALID) fail |= 1 << 6;
+    if (r2 == CCOL_EVENT_REG_NULL) fail |= 1 << 6;
     /* r1's entry is freed only here, after r2 owns the fd. */
     if (!evl_readd_wait_reclaimed(loop, base, 5000)) fail |= 1 << 7;
 
-    if (r2 != CCOL_EVENT_REG_INVALID && sv[1] >= 0) {
+    if (r2 != CCOL_EVENT_REG_NULL && sv[1] >= 0) {
       test_write_retry_eintr(sv[1], "x", 1);
       if (!evl_wait_for(&new_ctx, &new_ctx.readable_count, 1, 5000))
         fail |= 1 << 8;
@@ -4631,7 +4758,7 @@ static int evl_readd_run(size_t num_threads, evl_readd_mode mode) {
       if (!evl_wait_for(&new_ctx, &new_ctx.readable_count, 2, 5000))
         fail |= 1 << 9;
     }
-    if (r2 != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r2);
+    if (r2 != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r2);
     ccol_event_loop_destroy(loop);
   }
   if (evl_readd_count(&old_ctx) != 0) fail |= 1 << 10;
@@ -4674,14 +4801,14 @@ static int evl_readd_inflight_run(size_t num_threads) {
 
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, num_threads, &err);
-  if (loop == CCOL_EVENT_LOOP_INVALID) {
+  if (loop == CCOL_EVENT_LOOP_NULL) {
     fail |= 1 << 1;
   } else {
     ccol_event_handlers_t h = {.on_readable = evl_readd_on_readable};
     ccol_event_reg r1 = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), h, &old_ctx,
         &err);
-    if (r1 == CCOL_EVENT_REG_INVALID) fail |= 1 << 2;
+    if (r1 == CCOL_EVENT_REG_NULL) fail |= 1 << 2;
     test_write_retry_eintr(sv[1], "a", 1);
     bool entered = false;
     for (int i = 0; i < 5000 && !entered; i++) {
@@ -4698,7 +4825,7 @@ static int evl_readd_inflight_run(size_t num_threads) {
     ccol_event_reg r2 = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), h, &new_ctx,
         &err);
-    if (r2 == CCOL_EVENT_REG_INVALID) fail |= 1 << 5;
+    if (r2 == CCOL_EVENT_REG_NULL) fail |= 1 << 5;
 
     /* r1's callback drains the byte "a" at this point and returns. */
     atomic_store(&evl_readd_gate_closed, false);
@@ -4706,7 +4833,7 @@ static int evl_readd_inflight_run(size_t num_threads) {
       fail |= 1 << 6;
     if (!evl_readd_wait_reclaimed(loop, base, 5000)) fail |= 1 << 7;
 
-    if (r2 != CCOL_EVENT_REG_INVALID) {
+    if (r2 != CCOL_EVENT_REG_NULL) {
       int before = evl_readd_count(&new_ctx);
       test_write_retry_eintr(sv[1], "b", 1);
       if (!evl_wait_for(&new_ctx, &new_ctx.readable_count, before + 1, 5000))
@@ -4742,13 +4869,13 @@ TEST(ccol_event_loop, fd_duplicate_direction_rejected) {
   ccol_event_reg reg1 = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg1, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg1, CCOL_EVENT_REG_NULL);
 
   err = NULL;
   ccol_event_reg reg2 = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_EQ(reg2, CCOL_EVENT_REG_INVALID);
+  REQUIRE_EQ(reg2, CCOL_EVENT_REG_NULL);
   REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
 
   ccol_event_loop_remove(loop, reg1);
@@ -4767,11 +4894,11 @@ TEST(ccol_event_loop, fd_modify_rejects_occupied_direction) {
   ccol_event_reg rreg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(sv[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(rreg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
   ccol_event_reg wreg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(sv[0], ccol_select_write), handlers, NULL,
       &err);
-  REQUIRE_NE(wreg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
 
   /* Flipping rreg to the write direction collides with wreg. */
   REQUIRE_EQ(ccol_event_loop_modify(loop, rreg, ccol_select_write),
@@ -4809,15 +4936,15 @@ TEST(ccol_event_loop, fd_modify_flips_direction_and_updates_sel) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), handlers, &ctx,
         &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
-    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, EVL_WAIT_MS));
 
     REQUIRE_EQ(ccol_event_loop_modify(loop, reg, ccol_select_read),
                ccol_success);
 
     int val = 5;
     REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
-    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
     /* Reads under ctx.mtx directly instead of going through evl_wait_for,
      * whose contract only covers the counter. evl_on_readable keeps writing
@@ -4856,7 +4983,7 @@ TEST(ccol_event_loop, fd_modify_after_remove_returns_invalid_args) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
   REQUIRE_EQ(ccol_event_loop_modify(loop, reg, ccol_select_write),
@@ -4887,7 +5014,7 @@ TEST(ccol_event_loop, fd_modify_rejects_queue_selectable) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_modify(loop, reg, ccol_select_write),
              ccol_invalid_args);
@@ -4912,14 +5039,14 @@ TEST(ccol_event_loop, queue_circq_readable_delivers_message) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   int *payload = malloc(sizeof(int));
   *payload = 123;
   c_message_t msg = {.data = payload, .size = sizeof(int)};
   REQUIRE_EQ(ccol_circq_send_zc(cq, &msg), ccol_success);
 
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
   REQUIRE_TRUE(ctx.last_msg_valid);
   REQUIRE_EQ(ctx.last_msg.size, sizeof(int));
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 123);
@@ -4973,7 +5100,7 @@ TEST(ccol_event_loop, queue_circq_writable_fires_without_consuming) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_circq(cq, ccol_select_write), handlers, &ctx,
         &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
     /* Frees the slot, so on_writable fires and must NOT consume
      * anything: the queue has room and holds no message, and the callback
@@ -4982,7 +5109,7 @@ TEST(ccol_event_loop, queue_circq_writable_fires_without_consuming) {
     REQUIRE_EQ(ccol_circq_recv_zc(cq, &recvd), ccol_success);
     free(recvd.data);
 
-    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, EVL_WAIT_MS));
 
     int *payload = malloc(sizeof(int));
     *payload = 55;
@@ -5017,14 +5144,14 @@ TEST(ccol_event_loop, queue_dynq_readable_delivers_message) {
   ccol_event_reg reg =
       ccol_event_loop_add(loop, ccol_selectable_from_dynq(dq, ccol_select_read),
                           handlers, &ctx, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   int *payload = malloc(sizeof(int));
   *payload = 321;
   c_message_t msg = {.data = payload, .size = sizeof(int)};
   REQUIRE_EQ(ccol_dynmq_send_zc(dq, &msg), ccol_success);
 
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
   REQUIRE_TRUE(ctx.last_msg_valid);
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 321);
 
@@ -5071,14 +5198,14 @@ TEST(ccol_event_loop, queue_channel_selectable) {
   ccol_event_reg reg =
       ccol_event_loop_add(loop, ccol_selectable_from_chan(ch, ccol_select_read),
                           handlers, &ctx, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   evl_chan_sender_args sargs = {.ch = ch, .value = 88};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, evl_chan_sender_thread, &sargs), 0);
   pthread_join(tid, NULL);
 
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
   REQUIRE_TRUE(ctx.last_msg_valid);
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 88);
 
@@ -5107,14 +5234,14 @@ TEST(ccol_event_loop, queue_persistent_across_multiple_cycles) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   for (int i = 0; i < 5; i++) {
     int *payload = malloc(sizeof(int));
     *payload = i;
     c_message_t msg = {.data = payload, .size = sizeof(int)};
     REQUIRE_EQ(ccol_circq_send_zc(cq, &msg), ccol_success);
-    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, i + 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, i + 1, EVL_WAIT_MS));
     REQUIRE_EQ(*(int *)ctx.last_msg.data, i);
   }
 
@@ -5149,9 +5276,9 @@ TEST(ccol_event_loop, queue_already_pending_message_at_registration_time) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 999);
 
   ccol_event_loop_remove(loop, reg);
@@ -5252,7 +5379,7 @@ TEST(ccol_event_loop, queue_second_registration_on_same_queue_is_not_starved) {
     ccol_event_reg r1 = ccol_event_loop_add(
         loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers1,
         &ctx1, &err);
-    REQUIRE_NE(r1, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(r1, CCOL_EVENT_REG_NULL);
 
     /* The test adds r2 second, so r2 becomes the new head of the list. Its
      * callback is slow on purpose, which lets a backlog build up that r2
@@ -5264,7 +5391,7 @@ TEST(ccol_event_loop, queue_second_registration_on_same_queue_is_not_starved) {
     ccol_event_reg r2 = ccol_event_loop_add(
         loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers2,
         &ctx2, &err);
-    REQUIRE_NE(r2, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(r2, CCOL_EVENT_REG_NULL);
 
     evl_two_readers_feeder_args feeder_args = {.cq = cq, .iterations = 300};
     pthread_t feeder;
@@ -5275,17 +5402,10 @@ TEST(ccol_event_loop, queue_second_registration_on_same_queue_is_not_starved) {
 
     /* A bounded wait. r2, the slow head, gets most of the count, and what
      * we test is that r1, the tail, gets ANY turn at all. */
-    struct timespec deadline;
-    clock_gettime(CLOCK_REALTIME, &deadline);
-    deadline.tv_sec += 3;
+    long long deadline = mono_now_us() + EVL_WAIT_MS * 1000LL;
     for (;;) {
       if (atomic_load(&ctx1.calls) > 0 && atomic_load(&ctx2.calls) > 0) break;
-      struct timespec now;
-      clock_gettime(CLOCK_REALTIME, &now);
-      if (now.tv_sec > deadline.tv_sec ||
-          (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) {
-        break;
-      }
+      if (mono_now_us() >= deadline) break;
       struct timespec ts = {0, 2000000}; /* 2ms */
       nanosleep(&ts, NULL);
     }
@@ -5382,7 +5502,7 @@ TEST(ccol_event_loop, queue_multiple_registrations_share_traffic_fairly) {
     ccol_event_reg r1 = ccol_event_loop_add(
         loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers1,
         &ctx1, &err);
-    REQUIRE_NE(r1, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(r1, CCOL_EVENT_REG_NULL);
 
     ccol_event_handlers_t handlers2 = {
         .on_readable = evl_two_readers_fast_on_readable,
@@ -5391,7 +5511,7 @@ TEST(ccol_event_loop, queue_multiple_registrations_share_traffic_fairly) {
     ccol_event_reg r2 = ccol_event_loop_add(
         loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers2,
         &ctx2, &err);
-    REQUIRE_NE(r2, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(r2, CCOL_EVENT_REG_NULL);
 
     evl_two_readers_feeder_args feeder_args = {.cq = cq, .iterations = 400};
     pthread_t feeder;
@@ -5491,7 +5611,7 @@ TEST(ccol_event_loop, dynq_multiple_registrations_share_traffic_fairly) {
     ccol_event_reg r1 = ccol_event_loop_add(
         loop, ccol_selectable_from_dynq(dq, ccol_select_read), handlers1, &ctx1,
         &err);
-    REQUIRE_NE(r1, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(r1, CCOL_EVENT_REG_NULL);
 
     ccol_event_handlers_t handlers2 = {
         .on_readable = evl_dynq_two_readers_on_readable,
@@ -5500,7 +5620,7 @@ TEST(ccol_event_loop, dynq_multiple_registrations_share_traffic_fairly) {
     ccol_event_reg r2 = ccol_event_loop_add(
         loop, ccol_selectable_from_dynq(dq, ccol_select_read), handlers2, &ctx2,
         &err);
-    REQUIRE_NE(r2, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(r2, CCOL_EVENT_REG_NULL);
 
     evl_dynq_feeder_args feeder_args = {.dq = dq, .iterations = 400};
     pthread_t feeder;
@@ -5550,7 +5670,7 @@ TEST(ccol_event_loop, remove_from_within_callback) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
   ctx.self_reg = reg;
 
   int *payload = malloc(sizeof(int));
@@ -5558,7 +5678,7 @@ TEST(ccol_event_loop, remove_from_within_callback) {
   c_message_t msg = {.data = payload, .size = sizeof(int)};
   REQUIRE_EQ(ccol_circq_send_zc(cq, &msg), ccol_success);
 
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
   REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
 
   /* The loop must NOT deliver a second message, since the registration
@@ -5639,7 +5759,7 @@ TEST(ccol_event_loop, remove_from_different_thread_concurrent_with_dispatch) {
       ccol_event_reg reg = ccol_event_loop_add(
           loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, ctx,
           &err);
-      REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+      REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
       evl_remover_args rargs = {.loop = loop, .reg = reg, .delay_us = 0};
       pthread_t rtid;
@@ -5717,22 +5837,16 @@ static void evl_slow_cb_ctx_destroy(evl_slow_cb_ctx *c) {
  * only works on evl_sync_ctx's int counters. */
 static bool evl_wait_bool(pthread_mutex_t *mtx, pthread_cond_t *cond,
                           bool *flag, int timeout_ms) {
-  struct timespec deadline;
-  clock_gettime(CLOCK_REALTIME, &deadline);
-  deadline.tv_sec += timeout_ms / 1000;
-  deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
-  if (deadline.tv_nsec >= 1000000000L) {
-    deadline.tv_sec++;
-    deadline.tv_nsec -= 1000000000L;
+  (void)cond; /* the wait polls, see mono_poll_pause */
+  long long deadline = mono_now_us() + (long long)timeout_ms * 1000LL;
+  for (;;) {
+    pthread_mutex_lock(mtx);
+    bool ok = *flag;
+    pthread_mutex_unlock(mtx);
+    if (ok) return true;
+    if (mono_now_us() >= deadline) return false;
+    mono_poll_pause();
   }
-  pthread_mutex_lock(mtx);
-  while (!*flag) {
-    int r = pthread_cond_timedwait(cond, mtx, &deadline);
-    if (r == ETIMEDOUT) break;
-  }
-  bool ok = *flag;
-  pthread_mutex_unlock(mtx);
-  return ok;
 }
 
 /* An on_readable handler that blocks on the reactor thread until the test's
@@ -5753,17 +5867,16 @@ static void evl_on_readable_slow(ccol_event_loop loop, ccol_event_reg reg,
     (void)n; /* this test only needs the drain, and not the content */
   }
 
-  struct timespec deadline;
-  clock_gettime(CLOCK_REALTIME, &deadline);
-  deadline.tv_sec += 2;
-
+  /* Only a bound against a hang. The test asserts that on_removed hasn't
+   * fired while this callback still holds, so a deadline a stalled test
+   * thread can outlast would release the callback early and fail a correct
+   * build. */
   pthread_mutex_lock(&c->mtx);
   c->callback_started = true;
   pthread_cond_broadcast(&c->cond);
-  while (!c->release_callback) {
-    int r = pthread_cond_timedwait(&c->cond, &c->mtx, &deadline);
-    if (r == ETIMEDOUT) break;
-  }
+  pthread_mutex_unlock(&c->mtx);
+  (void)evl_wait_bool(&c->mtx, &c->cond, &c->release_callback, 20000);
+  pthread_mutex_lock(&c->mtx);
   c->callback_finished = true;
   pthread_cond_broadcast(&c->cond);
   pthread_mutex_unlock(&c->mtx);
@@ -5800,11 +5913,12 @@ TEST(ccol_event_loop, on_removed_fires_only_after_in_flight_callback_finishes) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   char b = 1;
   REQUIRE_EQ(write(pfd[1], &b, 1), (ssize_t)1);
-  REQUIRE_TRUE(evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.callback_started, 2000));
+  REQUIRE_TRUE(
+      evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.callback_started, EVL_WAIT_MS));
 
   /* At this point the one reactor thread is blocked inside
    * evl_on_readable_slow, holding this registration's entry->dispatch_lock,
@@ -5827,7 +5941,7 @@ TEST(ccol_event_loop, on_removed_fires_only_after_in_flight_callback_finishes) {
   pthread_mutex_unlock(&ctx.mtx);
 
   REQUIRE_TRUE(
-      evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, 2000));
+      evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, EVL_WAIT_MS));
   pthread_mutex_lock(&ctx.mtx);
   REQUIRE_TRUE(ctx.on_removed_saw_finished);
   REQUIRE_EQ(ctx.on_removed_arg_seen, (void *)&ctx);
@@ -5855,11 +5969,11 @@ TEST(ccol_event_loop, on_removed_fires_for_an_ordinary_removal) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
   REQUIRE_TRUE(
-      evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, 2000));
+      evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, EVL_WAIT_MS));
   pthread_mutex_lock(&ctx.mtx);
   REQUIRE_EQ(ctx.on_removed_arg_seen, (void *)&ctx);
   pthread_mutex_unlock(&ctx.mtx);
@@ -5884,7 +5998,7 @@ TEST(ccol_event_loop, on_removed_null_is_harmless) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
   close(pfd[0]);
@@ -5910,7 +6024,7 @@ TEST(ccol_event_loop, on_removed_fires_on_destroy_for_a_still_registered_reg) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
         &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
     /* Nothing removes this registration. The scoped loop's destructor, at
      * the closing brace of this block, tears it down while it's registered,
      * which covers the direct walk in _ccol_event_loop_teardown_raw rather
@@ -5976,7 +6090,7 @@ TEST(ccol_event_loop,
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   /* Arms a one-shot delay for the next resolve-unpin in the whole process
    * (see the doc comment of that function), which the background thread
@@ -6017,7 +6131,7 @@ TEST(ccol_event_loop,
   _ccol_event_loop_test_delay_next_reg_resolve_unpin_ms(0);
 
   bool on_removed_fired =
-      evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, 2000);
+      evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, EVL_WAIT_MS);
   pthread_mutex_lock(&ctx.mtx);
   void *on_removed_arg_seen = ctx.on_removed_arg_seen;
   pthread_mutex_unlock(&ctx.mtx);
@@ -6043,14 +6157,14 @@ TEST(ccol_event_loop, shutdown_with_pending_registrations) {
   REQUIRE_EQ(pipe(pfd), 0);
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
   ccol_event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_shutdown(loop), ccol_success);
   /* Idempotent, so calling again must not hang or join twice. */
@@ -6100,14 +6214,14 @@ TEST(ccol_event_loop, a_shut_down_loop_takes_no_wake_from_its_peers) {
         a ? ccol_event_loop_add(a,
                                 ccol_selectable_from_circq(q, ccol_select_read),
                                 h, NULL, NULL)
-          : CCOL_EVENT_REG_INVALID;
+          : CCOL_EVENT_REG_NULL;
     ccol_event_reg rb =
         b ? ccol_event_loop_add(b,
                                 ccol_selectable_from_circq(q, ccol_select_read),
                                 h, NULL, NULL)
-          : CCOL_EVENT_REG_INVALID;
-    if (!q || !a || !b || ra == CCOL_EVENT_REG_INVALID ||
-        rb == CCOL_EVENT_REG_INVALID ||
+          : CCOL_EVENT_REG_NULL;
+    if (!q || !a || !b || ra == CCOL_EVENT_REG_NULL ||
+        rb == CCOL_EVENT_REG_NULL ||
         ccol_event_loop_shutdown(a) != ccol_success) {
       setup_failed++;
     } else {
@@ -6121,16 +6235,16 @@ TEST(ccol_event_loop, a_shut_down_loop_takes_no_wake_from_its_peers) {
         /* Only a bound against a hang, a delivery takes microseconds. */
         int waited_ms = 0;
         while (atomic_load(&evl_shutdown_peer_got) < i + 1 &&
-               waited_ms < 2000) {
+               waited_ms < EVL_WAIT_MS) {
           struct timespec ts = {0, 1000000L};
           nanosleep(&ts, NULL);
           waited_ms++;
         }
-        if (waited_ms >= 2000) stuck[pass]++;
+        if (waited_ms >= EVL_WAIT_MS) stuck[pass]++;
       }
     }
-    if (ra != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(a, ra);
-    if (rb != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(b, rb);
+    if (ra != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(a, ra);
+    if (rb != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(b, rb);
     if (a) ccol_event_loop_destroy(a);
     if (b) ccol_event_loop_destroy(b);
     if (q) {
@@ -6166,15 +6280,15 @@ TEST(ccol_event_loop, add_to_a_shut_down_loop_is_refused) {
       &err_fd);
   bool named_q = err_q && strstr(err_q, "shut down") != NULL;
   bool named_fd = err_fd && strstr(err_fd, "shut down") != NULL;
-  if (rq != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, rq);
-  if (rf != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, rf);
+  if (rq != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, rq);
+  if (rf != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, rf);
   ccol_event_loop_destroy(loop);
   ccol_circular_queue_destroy(q);
   close(pfd[0]);
   close(pfd[1]);
   REQUIRE_EQ(shut, ccol_success);
-  REQUIRE_EQ(rq, CCOL_EVENT_REG_INVALID);
-  REQUIRE_EQ(rf, CCOL_EVENT_REG_INVALID);
+  REQUIRE_EQ(rq, CCOL_EVENT_REG_NULL);
+  REQUIRE_EQ(rf, CCOL_EVENT_REG_NULL);
   REQUIRE_TRUE(named_q);
   REQUIRE_TRUE(named_fd);
 }
@@ -6191,14 +6305,14 @@ TEST(ccol_event_loop,
 
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
   ccol_event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   /* Destroys the loop while the registration is pending, so the library has
    * to unlink from cq's waiter list before it frees, not after. */
@@ -6229,7 +6343,7 @@ TEST(ccol_event_loop, reg_count_tracks_add_remove) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
   REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
   REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
   REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
@@ -6245,7 +6359,7 @@ TEST(ccol_event_loop, reg_count_tracks_add_remove) {
  * fully live and dispatchable through the raw ccol_event_reg_s* the
  * registry stores. _ccol_event_reg_slot_acquire mints the handle, and its
  * only failure mode is a failed allocation that grows loop->reg_slots. On
- * that failure ccol_event_loop_add reports CCOL_EVENT_REG_INVALID to the
+ * that failure ccol_event_loop_add reports CCOL_EVENT_REG_NULL to the
  * caller, who then believes the library never created a registration and
  * has no reason to think a callback could already be running against the
  * arg pointer it passed (with num_reactor_threads > 1 that callback can also
@@ -6309,7 +6423,7 @@ TEST(ccol_event_loop,
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
         &err);
-    REQUIRE_EQ(reg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_EQ(reg, CCOL_EVENT_REG_NULL);
     REQUIRE_NE((void *)err, NULL);
     REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
 
@@ -6337,9 +6451,9 @@ TEST(ccol_event_loop,
     ccol_event_reg reg2 = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
         &err);
-    REQUIRE_NE(reg2, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg2, CCOL_EVENT_REG_NULL);
     REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
-    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
     ccol_event_loop_remove(loop, reg2);
 
@@ -6352,9 +6466,32 @@ TEST(ccol_event_loop,
   close(pfd[1]);
 }
 
+/* Raises the soft descriptor limit to at least want and stores the limit it
+ * found in *saved so the caller can put it back. It returns false when the
+ * hard limit is lower than want. The default soft limit of macOS is 256, and
+ * a CI runner or valgrind can leave even less room than that, while the hard
+ * limit is usually much higher. */
+static bool evl_raise_nofile(rlim_t want, struct rlimit *saved) {
+  if (getrlimit(RLIMIT_NOFILE, saved) != 0) return false;
+  if (saved->rlim_cur != RLIM_INFINITY && saved->rlim_cur < want) {
+    struct rlimit raised = *saved;
+    raised.rlim_cur = want;
+    if (setrlimit(RLIMIT_NOFILE, &raised) != 0) return false;
+  }
+  return true;
+}
+
 TEST(ccol_event_loop, high_add_remove_churn_stress) {
-  ccol_event_loop_construct_scoped(loop, 32, 1, 1);
   const int n = 200;
+  /* Two descriptors per pipe, the ones the process already holds, and room
+   * for the loop's own epoll and wake descriptors. */
+  struct rlimit saved_nofile;
+  if (!evl_raise_nofile((rlim_t)(2 * n + test_count_open_fds() + 64),
+                        &saved_nofile)) {
+    fprintf(stderr, "SKIP: the hard descriptor limit can't hold %d pipes\n", n);
+    return;
+  }
+  ccol_event_loop_construct_scoped(loop, 32, 1, 1);
   int pfds[200][2];
   ccol_event_reg regs[200];
 
@@ -6362,8 +6499,7 @@ TEST(ccol_event_loop, high_add_remove_churn_stress) {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
 
   /* Every pipe that was opened is closed before an assertion can return, so
-   * a process with fewer than 400 descriptors fails only this test and the
-   * tests after it keep their descriptors. */
+   * a failure here leaves the tests after this one their descriptors. */
   int opened = 0;
   bool added = true;
   for (; opened < n; opened++) {
@@ -6372,30 +6508,29 @@ TEST(ccol_event_loop, high_add_remove_churn_stress) {
     regs[opened] = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfds[opened][0], ccol_select_read),
         handlers, NULL, &err);
-    if (regs[opened] == CCOL_EVENT_REG_INVALID) {
+    if (regs[opened] == CCOL_EVENT_REG_NULL) {
       added = false;
       close(pfds[opened][0]);
       close(pfds[opened][1]);
       break;
     }
   }
-  if (opened < n || !added) {
-    for (int i = 0; i < opened; i++) {
-      ccol_event_loop_remove(loop, regs[i]);
-      close(pfds[i][0]);
-      close(pfds[i][1]);
-    }
-  }
-  REQUIRE_EQ(opened, n);
-  REQUIRE_TRUE(added);
-  REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)n);
-
-  for (int i = 0; i < n; i++) {
-    REQUIRE_EQ(ccol_event_loop_remove(loop, regs[i]), ccol_success);
+  size_t count_full = ccol_event_loop_reg_count(loop);
+  int removed = 0;
+  for (int i = 0; i < opened; i++) {
+    if (ccol_event_loop_remove(loop, regs[i]) == ccol_success) removed++;
     close(pfds[i][0]);
     close(pfds[i][1]);
   }
-  REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
+  size_t count_empty = ccol_event_loop_reg_count(loop);
+  bool restored = setrlimit(RLIMIT_NOFILE, &saved_nofile) == 0;
+
+  REQUIRE_TRUE(restored);
+  REQUIRE_EQ(opened, n);
+  REQUIRE_TRUE(added);
+  REQUIRE_EQ(count_full, (size_t)n);
+  REQUIRE_EQ(removed, n);
+  REQUIRE_EQ(count_empty, (size_t)0);
 }
 
 TEST(ccol_event_loop, multiple_independent_instances) {
@@ -6427,15 +6562,15 @@ TEST(ccol_event_loop, multiple_independent_instances) {
     ccol_event_reg reg_a = ccol_event_loop_add(
         loop_a, ccol_selectable_from_fd(pfd_a[0], ccol_select_read), handlers,
         &ctx_a, &err);
-    REQUIRE_NE(reg_a, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg_a, CCOL_EVENT_REG_NULL);
     ccol_event_reg reg_b = ccol_event_loop_add(
         loop_b, ccol_selectable_from_fd(pfd_b[0], ccol_select_read), handlers,
         &ctx_b, &err);
-    REQUIRE_NE(reg_b, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg_b, CCOL_EVENT_REG_NULL);
 
     int val_a = 1, val_b = 2;
     REQUIRE_EQ((ssize_t)sizeof(val_a), write(pfd_a[1], &val_a, sizeof(val_a)));
-    REQUIRE_TRUE(evl_wait_for(&ctx_a, &ctx_a.readable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx_a, &ctx_a.readable_count, 1, EVL_WAIT_MS));
     /* loop_b's registration must not fire for loop_a's fd, and that's the
      * property under test. The read takes ctx_b's lock because its callback
      * writes the count under that lock once pfd_b is written below, and only
@@ -6448,7 +6583,7 @@ TEST(ccol_event_loop, multiple_independent_instances) {
     REQUIRE_EQ(b_count_before, 0);
 
     REQUIRE_EQ((ssize_t)sizeof(val_b), write(pfd_b[1], &val_b, sizeof(val_b)));
-    REQUIRE_TRUE(evl_wait_for(&ctx_b, &ctx_b.readable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx_b, &ctx_b.readable_count, 1, EVL_WAIT_MS));
 
     ccol_event_loop_remove(loop_a, reg_a);
     ccol_event_loop_remove(loop_b, reg_b);
@@ -6469,7 +6604,7 @@ TEST(ccol_event_loop, multiple_independent_instances) {
 TEST(ccol_event_loop, num_lock_stripes_zero_returns_null) {
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create(8, 0, 1, &err);
-  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_NULL);
 }
 
 /* _ccol_event_loop_thread_fn narrows max_events_per_wait to a plain `int`
@@ -6493,7 +6628,7 @@ TEST(ccol_event_loop, create_rejects_max_events_per_wait_exceeding_int_max) {
   char *err = NULL;
   ccol_event_loop loop =
       ccol_event_loop_create((size_t)INT_MAX + 1, 1, 1, &err);
-  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
@@ -6504,7 +6639,7 @@ TEST(
   size_t smallest_overflowing = SIZE_MAX / sizeof(ccol_poll_event) + 1;
   ccol_event_loop loop =
       ccol_event_loop_create(smallest_overflowing, 1, 1, &err);
-  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
@@ -6517,7 +6652,7 @@ TEST(ccol_event_loop,
   REQUIRE_EQ(pipe(pfd), 0);
 
   ccol_event_loop loop = ccol_event_loop_create(4096, 1, 1, NULL);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
@@ -6527,11 +6662,11 @@ TEST(ccol_event_loop,
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   int val = 1;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
   ccol_event_loop_remove(loop, reg);
   ccol_event_loop_destroy(loop);
@@ -6567,21 +6702,23 @@ TEST(ccol_event_loop, fd_both_directions_combine_and_recombine_multi_stripe) {
     ccol_event_reg rreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
         &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
     ccol_event_reg wreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
         &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
     REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)2);
 
-    REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
+    REQUIRE_TRUE(
+        evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, EVL_WAIT_MS));
 
     REQUIRE_EQ(ccol_event_loop_remove(loop, wreg), ccol_success);
     REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
 
     int val = 7;
     REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
-    REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
+    REQUIRE_TRUE(
+        evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, EVL_WAIT_MS));
 
     ccol_event_loop_remove(loop, rreg);
   }
@@ -6621,7 +6758,7 @@ TEST(ccol_event_loop,
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
   REQUIRE_EQ(ccol_event_loop_modify(loop, reg, ccol_select_write),
@@ -6659,7 +6796,7 @@ TEST(ccol_event_loop, pause_stops_delivery_then_resume_restores_it) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
 
@@ -6671,7 +6808,7 @@ TEST(ccol_event_loop, pause_stops_delivery_then_resume_restores_it) {
   REQUIRE_FALSE(evl_wait_for(&ctx, &ctx.readable_count, 1, 300));
 
   REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_success);
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
   ccol_event_loop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
@@ -6717,7 +6854,7 @@ TEST(ccol_event_loop, pause_write_direction) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[1], ccol_select_write), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
 
@@ -6727,7 +6864,8 @@ TEST(ccol_event_loop, pause_write_direction) {
   REQUIRE_FALSE(evl_wait_for(&ctx, &ctx.writable_count, baseline + 1, 300));
 
   REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_success);
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, baseline + 1, 2000));
+  REQUIRE_TRUE(
+      evl_wait_for(&ctx, &ctx.writable_count, baseline + 1, EVL_WAIT_MS));
 
   ccol_event_loop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
@@ -6751,7 +6889,7 @@ TEST(ccol_event_loop, pause_is_idempotent) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
   REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
@@ -6774,7 +6912,7 @@ TEST(ccol_event_loop, resume_never_paused_is_idempotent_and_harmless) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   /* Nothing paused this registration, so the call succeeds, does
    * nothing and leaves delivery alone. */
@@ -6782,7 +6920,7 @@ TEST(ccol_event_loop, resume_never_paused_is_idempotent_and_harmless) {
 
   int val = 1;
   REQUIRE_EQ(write(pfd[1], &val, sizeof(val)), (ssize_t)sizeof(val));
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
   ccol_event_loop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
@@ -6805,7 +6943,7 @@ TEST(ccol_event_loop, pause_and_resume_reject_queue_selectable) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   /* The same fd-only restriction ccol_event_loop_modify has. The bridge
    * eventfd of a queue registration or a ccol_channel registration has no use
@@ -6829,15 +6967,15 @@ TEST(ccol_event_loop, pause_and_resume_null_args_rejected) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_pause(CCOL_EVENT_LOOP_INVALID, reg),
+  REQUIRE_EQ(ccol_event_loop_pause(CCOL_EVENT_LOOP_NULL, reg),
              ccol_invalid_args);
-  REQUIRE_EQ(ccol_event_loop_pause(loop, CCOL_EVENT_REG_INVALID),
+  REQUIRE_EQ(ccol_event_loop_pause(loop, CCOL_EVENT_REG_NULL),
              ccol_invalid_args);
-  REQUIRE_EQ(ccol_event_loop_resume(CCOL_EVENT_LOOP_INVALID, reg),
+  REQUIRE_EQ(ccol_event_loop_resume(CCOL_EVENT_LOOP_NULL, reg),
              ccol_invalid_args);
-  REQUIRE_EQ(ccol_event_loop_resume(loop, CCOL_EVENT_REG_INVALID),
+  REQUIRE_EQ(ccol_event_loop_resume(loop, CCOL_EVENT_REG_NULL),
              ccol_invalid_args);
 
   ccol_event_loop_remove(loop, reg);
@@ -6863,7 +7001,7 @@ TEST(ccol_event_loop, resume_after_remove_returns_invalid_args) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
   REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
@@ -6898,7 +7036,7 @@ TEST(ccol_event_loop,
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
   REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_invalid_args);
@@ -6922,7 +7060,7 @@ TEST(ccol_event_loop, pause_resume_preserve_reg_count_and_generation) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   size_t count_before = ccol_event_loop_reg_count(loop);
   uint64_t gen_before = ccol_event_loop_reg_generation(loop, reg);
@@ -7019,11 +7157,11 @@ TEST(fd_half_close, a_writer_on_a_full_half_closed_socket_does_not_spin) {
   uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
   usleep(150000);
   uint64_t after = _ccol_event_loop_poller_iterations_for_tests(loop);
-  if (reg != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, reg);
+  if (reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, reg);
   ccol_event_loop_destroy(loop);
   close(sv[0]);
   close(sv[1]);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
   REQUIRE_LT(after - before, (uint64_t)20);
 }
 
@@ -7042,7 +7180,7 @@ TEST(ccol_event_loop,
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
 
@@ -7099,7 +7237,7 @@ TEST(ccol_event_loop,
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
 
@@ -7150,7 +7288,7 @@ TEST(ccol_event_loop, resume_after_hangup_while_paused_delivers_dispatch) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
   close(pfd[1]);
@@ -7166,7 +7304,7 @@ TEST(ccol_event_loop, resume_after_hangup_while_paused_delivers_dispatch) {
    * where the peer writes and then closes is different, and the has_reader
    * comment of _ccol_event_loop_handle_event documents it. So this one is
    * dispatched as an error event rather than a readable event. */
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.error_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.error_count, 1, EVL_WAIT_MS));
 
   ccol_event_loop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
@@ -7235,12 +7373,12 @@ TEST(ccol_event_loop,
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers,
       &cb_args, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
   atomic_store(&cb_args.reg, reg);
 
   int val = 1;
   REQUIRE_EQ(write(pfd[1], &val, sizeof(val)), (ssize_t)sizeof(val));
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
   /* The callback above paused this registration. The test drains the fd and
    * writes to it again, which proves nothing more is delivered while the
@@ -7253,7 +7391,7 @@ TEST(ccol_event_loop,
   /* This resume runs on the TEST's own thread, not on an internal thread of
    * ccol_event_loop (the poller or a dispatch_pool worker). */
   REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_success);
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 2, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 2, EVL_WAIT_MS));
 
   ccol_event_loop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
@@ -7317,17 +7455,17 @@ TEST(ccol_event_loop, callback_before_add_returns_removes_itself_by_reg) {
   ssize_t wrote = write(pfd[1], &byte, 1);
 
   evl_early_reg_ctx ctx;
-  atomic_init(&ctx.returned_reg, CCOL_EVENT_REG_INVALID);
-  atomic_init(&ctx.reg_seen, CCOL_EVENT_REG_INVALID);
-  atomic_init(&ctx.stored_seen, CCOL_EVENT_REG_INVALID);
+  atomic_init(&ctx.returned_reg, CCOL_EVENT_REG_NULL);
+  atomic_init(&ctx.reg_seen, CCOL_EVENT_REG_NULL);
+  atomic_init(&ctx.stored_seen, CCOL_EVENT_REG_NULL);
   atomic_init(&ctx.dispatch_count, 0);
   atomic_init(&ctx.remove_rv, -1);
   atomic_init(&ctx.first_dispatch_done, false);
   atomic_init(&ctx.removed_count, 0);
 
   ccol_event_loop loop = ccol_event_loop_create(8, 4, 4, NULL);
-  ccol_event_reg reg = CCOL_EVENT_REG_INVALID;
-  if (loop != CCOL_EVENT_LOOP_INVALID && wrote == 1) {
+  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
+  if (loop != CCOL_EVENT_LOOP_NULL && wrote == 1) {
     atomic_store(&g_evl_early_reg_ctx, &ctx);
     _ccol_event_loop_test_set_add_before_return_hook(evl_early_reg_add_hook);
     reg = ccol_event_loop_add(
@@ -7345,16 +7483,16 @@ TEST(ccol_event_loop, callback_before_add_returns_removes_itself_by_reg) {
       nanosleep(&ts, NULL);
   }
   int removed_before_destroy = atomic_load(&ctx.removed_count);
-  if (loop != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(loop);
+  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
   close(pfd[0]);
   close(pfd[1]);
 
   REQUIRE_EQ(wrote, (ssize_t)1);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
   REQUIRE_TRUE(atomic_load(&ctx.first_dispatch_done));
   /* The dispatch ran before ccol_event_loop_add returned, so the handle the
    * adding thread stores afterwards was still unset at that moment. */
-  REQUIRE_EQ(atomic_load(&ctx.stored_seen), CCOL_EVENT_REG_INVALID);
+  REQUIRE_EQ(atomic_load(&ctx.stored_seen), CCOL_EVENT_REG_NULL);
   REQUIRE_EQ(atomic_load(&ctx.reg_seen), reg);
   REQUIRE_EQ(atomic_load(&ctx.remove_rv), (int)ccol_success);
   REQUIRE_EQ(atomic_load(&ctx.dispatch_count), 1);
@@ -7409,7 +7547,7 @@ static void *evl_stripe_stress_fd_worker(void *arg) {
       a->ctx_log[a->ctx_log_count++] = ctx;
       int val = a->thread_id;
       test_write_retry_eintr(a->pfd[1], &val, sizeof(val));
-      evl_wait_for(ctx, &ctx->readable_count, 1, 2000);
+      evl_wait_for(ctx, &ctx->readable_count, 1, EVL_WAIT_MS);
       ccol_event_loop_remove(a->loop, reg);
     } else {
       evl_sync_ctx_destroy(ctx);
@@ -7521,7 +7659,7 @@ static void *evl_stripe_stress_queue_worker(void *arg) {
       *payload = a->thread_id;
       c_message_t msg = {.data = payload, .size = sizeof(int)};
       ccol_circq_send_zc(cq, &msg);
-      evl_wait_for(ctx, &ctx->readable_count, 1, 2000);
+      evl_wait_for(ctx, &ctx->readable_count, 1, EVL_WAIT_MS);
       ccol_event_loop_remove(a->loop, reg);
     } else {
       evl_sync_ctx_destroy(ctx);
@@ -7585,10 +7723,21 @@ TEST(ccol_event_loop, multi_threaded_multi_queue_stress_with_stripes) {
     residual_regs = ccol_event_loop_reg_count(loop);
   }
 
+  size_t undelivered = 0;
   for (int i = 0; i < n_threads; i++) {
     for (int j = 0; j < args[i].ctx_log_count; j++) {
       evl_sync_ctx_destroy(args[i].ctx_log[j]);
       free(args[i].ctx_log[j]);
+      /* A message still in a queue here is a dispatch that never came, so
+       * the test counts it and fails below. It is drained first because a
+       * destroy of a queue that holds a message ends the process, and that
+       * would hide every other result of the run. */
+      c_message_t left = {.data = NULL, .size = 0};
+      while (ccol_circq_try_recv_zc(args[i].cq_log[j], &left) == ccol_success) {
+        free(left.data);
+        left = (c_message_t){.data = NULL, .size = 0};
+        undelivered++;
+      }
       ccol_circular_queue_destroy(args[i].cq_log[j]);
     }
     free(args[i].ctx_log);
@@ -7597,6 +7746,7 @@ TEST(ccol_event_loop, multi_threaded_multi_queue_stress_with_stripes) {
 
   REQUIRE_TRUE(all_started);
   REQUIRE_EQ(residual_regs, (size_t)0);
+  REQUIRE_EQ(undelivered, (size_t)0);
 }
 
 TEST(ccol_event_loop, destroy_frees_registrations_across_multiple_stripes) {
@@ -7621,13 +7771,13 @@ TEST(ccol_event_loop, destroy_frees_registrations_across_multiple_stripes) {
       ccol_event_reg reg = ccol_event_loop_add(
           loop, ccol_selectable_from_fd(pfds[i][0], ccol_select_read), handlers,
           NULL, &err);
-      REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+      REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
       queues[i] = ccol_circular_queue_create(4, NULL);
       ccol_event_reg qreg = ccol_event_loop_add(
           loop, ccol_selectable_from_circq(queues[i], ccol_select_read),
           handlers, NULL, &err);
-      REQUIRE_NE(qreg, CCOL_EVENT_REG_INVALID);
+      REQUIRE_NE(qreg, CCOL_EVENT_REG_NULL);
     }
     REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)(2 * n));
 
@@ -7674,11 +7824,11 @@ TEST(ccol_event_loop, multi_thread_basic_smoke) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
         &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
     int val = 7;
     REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
-    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
     ccol_event_loop_remove(loop, reg);
   }
@@ -7783,7 +7933,7 @@ TEST(ccol_event_loop, multi_thread_no_double_dispatch_same_fd) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
         &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
     evl_feeder_args feeder_args = {.write_fd = pfd[1], .iterations = 4000};
     pthread_t feeder;
@@ -7912,11 +8062,11 @@ TEST(ccol_event_loop, multi_thread_cross_direction_serialization) {
     ccol_event_reg rreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), read_handlers,
         &ctx, &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
     ccol_event_reg wreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), write_handlers,
         &ctx, &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
 
     evl_feeder_args feeder_args = {.write_fd = sv[1], .iterations = 4000};
     pthread_t feeder;
@@ -8033,8 +8183,15 @@ static void *evl_reuse_driver_thread(void *arg) {
     ssize_t wn = write(a->pfd[1], &val, sizeof(val));
     (void)wn;
 
-    for (int spins = 0; spins < 500 && atomic_load(&ctx->call_count) == 0;
-         spins++) {
+    /* The remove waits for the dispatch, because a callback that has
+     * started and not yet read the generation when the remove runs gets 0
+     * for a handle that no longer resolves, and counts a mismatch on a
+     * correct library. A reactor thread that a loaded runner
+     * keeps off the CPU for a while is all that takes. The callback counts
+     * its call as its last step, so once the count moves this registration
+     * has no callback left that reads it. The bound only stops a hang. */
+    long long deadline = mono_now_us() + EVL_WAIT_MS * 1000LL;
+    while (atomic_load(&ctx->call_count) == 0 && mono_now_us() < deadline) {
       struct timespec ts = {0, 500000};
       nanosleep(&ts, NULL);
     }
@@ -8144,7 +8301,7 @@ TEST(ccol_event_loop, multi_thread_shutdown_joins_poller_promptly) {
    * pass. */
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create(8, 4, 16, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
   struct timespec start, end;
   clock_gettime(CLOCK_MONOTONIC, &start);
@@ -8170,7 +8327,7 @@ TEST(ccol_event_loop,
    * worker unwoken shows up here as a slow or hung test. */
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create(8, 4, 16, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
   struct timespec start, end;
   clock_gettime(CLOCK_MONOTONIC, &start);
@@ -8241,7 +8398,7 @@ TEST(ccol_event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
   assert(pthread_cond_init(&ctx.cond, NULL) == 0);
 
   ccol_event_loop loop = ccol_event_loop_create(8, 4, 4, NULL);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
   ccol_event_handlers_t handlers = {
       .on_readable = evl_shutdown_drain_on_readable,
@@ -8251,21 +8408,12 @@ TEST(ccol_event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   int val = 7;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
 
-  struct timespec deadline;
-  clock_gettime(CLOCK_REALTIME, &deadline);
-  deadline.tv_sec += 2;
-  pthread_mutex_lock(&ctx.mtx);
-  while (!ctx.started) {
-    if (pthread_cond_timedwait(&ctx.cond, &ctx.mtx, &deadline) == ETIMEDOUT)
-      break;
-  }
-  bool started = ctx.started;
-  pthread_mutex_unlock(&ctx.mtx);
+  bool started = evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.started, EVL_WAIT_MS);
   REQUIRE_TRUE(started);
 
   REQUIRE_EQ(ccol_event_loop_shutdown(loop), ccol_success);
@@ -8285,9 +8433,9 @@ TEST(ccol_event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
 TEST(ccol_event_loop, reg_generation_semantics) {
   /* A NULL reg reads as generation 0, a reserved value the library never
    * mints for a real registration. */
-  REQUIRE_EQ(ccol_event_loop_reg_generation(CCOL_EVENT_LOOP_INVALID,
-                                            CCOL_EVENT_REG_INVALID),
-             (uint64_t)0);
+  REQUIRE_EQ(
+      ccol_event_loop_reg_generation(CCOL_EVENT_LOOP_NULL, CCOL_EVENT_REG_NULL),
+      (uint64_t)0);
 
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -8314,7 +8462,7 @@ TEST(ccol_event_loop, reg_generation_semantics) {
     ccol_event_reg rreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
         &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
     uint64_t rgen = ccol_event_loop_reg_generation(loop, rreg);
     REQUIRE_GT(rgen, (uint64_t)0);
 
@@ -8323,7 +8471,7 @@ TEST(ccol_event_loop, reg_generation_semantics) {
     ccol_event_reg wreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_write),
         write_handlers, &ctx, &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
     REQUIRE_EQ(ccol_event_loop_reg_generation(loop, wreg), rgen);
 
     /* Flipping the direction with ccol_event_loop_modify keeps the same
@@ -8340,7 +8488,7 @@ TEST(ccol_event_loop, reg_generation_semantics) {
     ccol_event_reg reg2 = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd2[0], ccol_select_read), handlers,
         &ctx, &err);
-    REQUIRE_NE(reg2, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg2, CCOL_EVENT_REG_NULL);
     REQUIRE_NE(ccol_event_loop_reg_generation(loop, reg2), rgen);
 
     ccol_event_loop_remove(loop, rreg);
@@ -8438,7 +8586,7 @@ TEST(ccol_event_loop, reg_handle_survives_concurrent_remove_vs_accessor_race) {
     hot_reg[i] = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(hot_pfd[i][1], ccol_select_write),
         hot_handlers, NULL, &err);
-    REQUIRE_NE(hot_reg[i], CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(hot_reg[i], CCOL_EVENT_REG_NULL);
   }
 
   const int iterations = 300;
@@ -8450,7 +8598,7 @@ TEST(ccol_event_loop, reg_handle_survives_concurrent_remove_vs_accessor_race) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), reg_handlers,
         NULL, &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
     evl_reg_race_args shared = {loop, reg};
     pthread_t remover, accessor;
@@ -8541,7 +8689,7 @@ TEST(ccol_event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
         &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
     /* This count is modest on purpose. At about 0.5ms per dispatch it drains
      * completely inside the grace period below, the same pattern as
@@ -8642,7 +8790,7 @@ TEST(ccol_event_loop,
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
         &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
     evl_bounded_queue_feeder_args feeder_args = {.cq = cq, .iterations = 1000};
     pthread_t feeder;
@@ -8732,7 +8880,7 @@ TEST(ccol_event_loop,
   atomic_init(&ctx.observed_rv, (int)ccol_unexpected_failure);
 
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
   ctx.loop = loop;
 
   ccol_event_handlers_t handlers = {
@@ -8743,26 +8891,28 @@ TEST(ccol_event_loop,
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   int val = 7;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
 
   /* A bounded poll instead of evl_wait_for, because this ctx has no mutex
    * and no condition variable of its own on purpose. The test waits on the
-   * default sentinel value of observed_rv instead. */
-  for (int i = 0;
-       i < 500 && atomic_load(&ctx.observed_rv) == (int)ccol_unexpected_failure;
-       i++) {
-    struct timespec ts = {0, 2000000}; /* 2ms */
-    nanosleep(&ts, NULL);
-  }
-  REQUIRE_EQ(atomic_load(&ctx.observed_rv), (int)ccol_not_permitted);
+   * default sentinel value of observed_rv instead. The bound of about 10 s
+   * only stops a hang. The callback writes to ctx on this stack, so the loop
+   * is destroyed, which joins every thread that can run it, before any
+   * assertion can return. */
+  long long end = mono_now_us() + (long long)EVL_WAIT_MS * 1000;
+  while (atomic_load(&ctx.observed_rv) == (int)ccol_unexpected_failure &&
+         mono_now_us() < end)
+    mono_poll_pause();
+  int observed = atomic_load(&ctx.observed_rv);
 
   ccol_event_loop_remove(loop, reg);
   ccol_event_loop_destroy(loop);
   close(pfd[0]);
   close(pfd[1]);
+  REQUIRE_EQ(observed, (int)ccol_not_permitted);
 }
 
 TEST(ccol_event_loop,
@@ -8779,7 +8929,7 @@ TEST(ccol_event_loop,
   atomic_init(&ctx.observed_rv, (int)ccol_unexpected_failure);
 
   ccol_event_loop loop = ccol_event_loop_create(8, 4, 4, NULL);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
   ctx.loop = loop;
 
   ccol_event_handlers_t handlers = {
@@ -8790,23 +8940,24 @@ TEST(ccol_event_loop,
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
       &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   int val = 7;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
 
-  for (int i = 0;
-       i < 500 && atomic_load(&ctx.observed_rv) == (int)ccol_unexpected_failure;
-       i++) {
-    struct timespec ts = {0, 2000000}; /* 2ms */
-    nanosleep(&ts, NULL);
-  }
-  REQUIRE_EQ(atomic_load(&ctx.observed_rv), (int)ccol_not_permitted);
+  /* See the single-thread version above for this bound and for why the
+   * assertion comes after the destroy. */
+  long long end = mono_now_us() + (long long)EVL_WAIT_MS * 1000;
+  while (atomic_load(&ctx.observed_rv) == (int)ccol_unexpected_failure &&
+         mono_now_us() < end)
+    mono_poll_pause();
+  int observed = atomic_load(&ctx.observed_rv);
 
   ccol_event_loop_remove(loop, reg);
   ccol_event_loop_destroy(loop);
   close(pfd[0]);
   close(pfd[1]);
+  REQUIRE_EQ(observed, (int)ccol_not_permitted);
 }
 
 /* ========================================================================== */
@@ -8830,6 +8981,7 @@ TEST(ccol_event_loop_handle_lifecycle, sequential_double_destroy_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -8837,17 +8989,18 @@ TEST(ccol_event_loop_handle_lifecycle, sequential_double_destroy_is_fatal) {
       close(dn);
     }
     ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_INVALID) _exit(2);
+    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
     ccol_event_loop stale = loop;     /* This is a copy of the handle value that
             the caller holds on its own. It differs from the local variable that
             the macro below invalidates. */
     ccol_event_loop_destroy(loop);    /* This completes normally. The local
-           `loop` is now CCOL_EVENT_LOOP_INVALID, but `stale` still holds the
+           `loop` is now CCOL_EVENT_LOOP_NULL, but `stale` still holds the
            original value. */
     __ccol_event_loop_destroy(stale); /* This is the misuse under test. It is
         a second, purely sequential destroy of a handle that is already fully
         torn down. */
-    _exit(0); /* not reachable when _ccol_fatal_err() aborts, as it must */
+    /* not reachable when _ccol_fatal_err() aborts, as it must */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -8886,6 +9039,7 @@ TEST(ccol_event_loop_handle_lifecycle,
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -8893,11 +9047,11 @@ TEST(ccol_event_loop_handle_lifecycle,
       close(dn);
     }
     int pfd[2];
-    if (pipe(pfd) != 0) _exit(2);
+    if (pipe(pfd) != 0) test_child_exit(2);
     evl_set_nonblocking(pfd[0]);
 
     ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_INVALID) _exit(2);
+    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
 
     ccol_event_handlers_t handlers = {
         .on_readable = evl_self_destroy_on_readable,
@@ -8906,10 +9060,11 @@ TEST(ccol_event_loop_handle_lifecycle,
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
         NULL);
-    if (reg == CCOL_EVENT_REG_INVALID) _exit(2);
+    if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
 
     int val = 7;
-    if (write(pfd[1], &val, sizeof(val)) != (ssize_t)sizeof(val)) _exit(2);
+    if (write(pfd[1], &val, sizeof(val)) != (ssize_t)sizeof(val))
+      test_child_exit(2);
 
     /* Bounds this child's lifetime in case _ccol_fatal_err somehow doesn't
      * fire, which would hang the whole suite otherwise. The abort ends the
@@ -8919,7 +9074,8 @@ TEST(ccol_event_loop_handle_lifecycle,
      * instead of the reap. */
     struct timespec ts = {15, 0};
     nanosleep(&ts, NULL);
-    _exit(0); /* not reachable when _ccol_fatal_err() aborts, as it must */
+    /* not reachable when _ccol_fatal_err() aborts, as it must */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -8935,6 +9091,7 @@ TEST(ccol_event_loop_handle_lifecycle,
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -8942,11 +9099,11 @@ TEST(ccol_event_loop_handle_lifecycle,
       close(dn);
     }
     int pfd[2];
-    if (pipe(pfd) != 0) _exit(2);
+    if (pipe(pfd) != 0) test_child_exit(2);
     evl_set_nonblocking(pfd[0]);
 
     ccol_event_loop loop = ccol_event_loop_create(8, 4, 4, NULL);
-    if (loop == CCOL_EVENT_LOOP_INVALID) _exit(2);
+    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
 
     ccol_event_handlers_t handlers = {
         .on_readable = evl_self_destroy_on_readable,
@@ -8955,15 +9112,17 @@ TEST(ccol_event_loop_handle_lifecycle,
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
         NULL);
-    if (reg == CCOL_EVENT_REG_INVALID) _exit(2);
+    if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
 
     int val = 7;
-    if (write(pfd[1], &val, sizeof(val)) != (ssize_t)sizeof(val)) _exit(2);
+    if (write(pfd[1], &val, sizeof(val)) != (ssize_t)sizeof(val))
+      test_child_exit(2);
 
     /* See the single-thread version above for this bound. */
     struct timespec ts = {15, 0};
     nanosleep(&ts, NULL);
-    _exit(0); /* not reachable when _ccol_fatal_err() aborts, as it must */
+    /* not reachable when _ccol_fatal_err() aborts, as it must */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -8993,6 +9152,7 @@ TEST(ccol_event_loop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -9000,7 +9160,7 @@ TEST(ccol_event_loop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
       close(dn);
     }
     ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_INVALID) _exit(2);
+    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
     evl_concurrent_destroy_arg_t a1 = {.h = loop};
     evl_concurrent_destroy_arg_t a2 = {.h = loop};
     pthread_t t1, t2;
@@ -9015,13 +9175,13 @@ TEST(ccol_event_loop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
      * create is reported as what it is and nobody mistakes it for the
      * _ccol_fatal_err() this test expects. */
     if (pthread_create(&t1, NULL, evl_concurrent_destroy_thread, &a1) != 0)
-      _exit(3);
+      test_child_exit(3);
     if (pthread_create(&t2, NULL, evl_concurrent_destroy_thread, &a2) != 0)
-      _exit(3);
+      test_child_exit(3);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
-    _exit(0); /* not reachable: whichever of the two destroy calls loses the
-                  race must hit _ccol_fatal_err() */
+    test_child_exit(0); /* not reachable: whichever of the two destroy calls
+                  loses the race must hit _ccol_fatal_err() */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -9075,7 +9235,7 @@ static void *evl_destroy_thread(void *arg) {
  * wait for pins enough time to return, and the test then fails. */
 TEST(ccol_event_loop_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
   evl_pin_hold_arg_t pin_arg = {.h = loop, .resolved = false};
   atomic_init(&pin_arg.pinned, 0);
@@ -9149,7 +9309,7 @@ TEST(ccol_event_loop_handle_lifecycle, resolve_unpin_race_stress) {
   enum { ITERATIONS = 25 };
   for (int i = 0; i < ITERATIONS; i++) {
     ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+    REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
     evl_reg_count_arg_t reg_count_arg = {.h = loop};
     evl_concurrent_destroy_arg_t destroy_arg = {.h = loop};
@@ -9173,12 +9333,12 @@ TEST(ccol_event_loop_handle_lifecycle, resolve_unpin_race_stress) {
 TEST(ccol_event_loop_handle_lifecycle,
      legitimate_slot_reuse_not_confused_with_stale_handle) {
   ccol_event_loop a = ccol_event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE(a, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(a, CCOL_EVENT_LOOP_NULL);
   ccol_event_loop stale_a = a;
   ccol_event_loop_destroy(a);
 
   ccol_event_loop b = ccol_event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE(b, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(b, CCOL_EVENT_LOOP_NULL);
 
   /* B's operations must succeed normally whether or not the allocator
    * reused A's exact address for B. */
@@ -9203,14 +9363,14 @@ TEST(ccol_event_loop_handle_lifecycle, bounded_slot_reuse_under_churn) {
   enum { ITERATIONS = 25 };
 
   ccol_event_loop loop0 = ccol_event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE(loop0, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop0, CCOL_EVENT_LOOP_NULL);
   ccol_event_loop_destroy(loop0);
   size_t capacity_after_first =
       _ccol_event_loop_slot_table_capacity_for_tests();
 
   for (int i = 1; i < ITERATIONS; i++) {
     ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+    REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
     ccol_event_loop_destroy(loop);
   }
 
@@ -9268,7 +9428,7 @@ static void *fork_safety_churn_thread(void *arg) {
   while (!atomic_load(&a->stop)) {
     char *err = NULL;
     ccol_event_loop l = ccol_event_loop_create_mp(4, 1, 1, NULL, &err);
-    if (l != CCOL_EVENT_LOOP_INVALID) {
+    if (l != CCOL_EVENT_LOOP_NULL) {
       int pfd[2];
       if (pipe(pfd) == 0) {
         ccol_event_handlers_t h = {0};
@@ -9325,7 +9485,7 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
 
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create_mp(16, 1, 3, NULL, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
   int hotfd[2];
   REQUIRE_EQ(pipe(hotfd), 0);
@@ -9335,7 +9495,7 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
                              .on_error = NULL};
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(hotfd[0], ccol_select_read), h, NULL, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   enum { TRIALS = 30 };
   int hangs = 0;
@@ -9353,15 +9513,15 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
       alarm(30);
 
       int fd2[2];
-      if (pipe(fd2) != 0) _exit(2);
+      if (pipe(fd2) != 0) test_child_exit(2);
       evl_set_nonblocking(fd2[0]);
       ccol_event_handlers_t h2 = {0};
       ccol_event_reg r2 = ccol_event_loop_add(
           loop, ccol_selectable_from_fd(fd2[0], ccol_select_read), h2, NULL,
           NULL);
       int rc = r2 ? 0 : 1;
-      if (r2 != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r2);
-      _exit(rc);
+      if (r2 != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r2);
+      test_child_exit(rc);
     }
 
     int status = 0;
@@ -9525,7 +9685,7 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
     char byte = (rv == ccol_success) ? 1 : 0;
     test_write_retry_eintr(result_pipe[1], &byte, 1);
     close(result_pipe[1]);
-    _exit(0);
+    test_child_exit(0);
   }
   if (pipe_ok) {
     /* This proves that the blocking behaviour of the atfork prepare handler
@@ -9615,7 +9775,7 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create_mp(4, 1, 1, NULL, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -9625,7 +9785,7 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
                              .on_error = NULL};
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h, NULL, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   enum { HOLD_MS = 300 };
   reg_slot_fork_lock_arg_t arg = {
@@ -9672,7 +9832,7 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
     char byte = (gen != 0) ? 1 : 0;
     test_write_retry_eintr(result_pipe[1], &byte, 1);
     close(result_pipe[1]);
-    _exit(0);
+    test_child_exit(0);
   }
   if (pipe_ok) {
     /* This proves that the blocking behaviour of the atfork prepare handler
@@ -9823,11 +9983,11 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
       alarm(30);
       char *err = NULL;
       ccol_event_loop l = ccol_event_loop_create(4, 1, 1, &err);
-      char b = (l != CCOL_EVENT_LOOP_INVALID) ? 1 : 0;
-      if (l != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(l);
+      char b = (l != CCOL_EVENT_LOOP_NULL) ? 1 : 0;
+      if (l != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(l);
       test_write_retry_eintr(result_pipe[1], &b, 1);
       close(result_pipe[1]);
-      _exit(0);
+      test_child_exit(0);
     }
 
     if (pid > 0) {
@@ -9884,7 +10044,7 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
    * is exactly what needs to work. */
   char *err2 = NULL;
   ccol_event_loop l2 = ccol_event_loop_create(4, 1, 1, &err2);
-  REQUIRE_NE(l2, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(l2, CCOL_EVENT_LOOP_NULL);
   ccol_event_loop_destroy(l2);
 }
 
@@ -10001,8 +10161,8 @@ TEST(fork_safety,
     char *err = NULL;
     ccol_circular_queue *cq = ccol_circular_queue_create(4, &err);
     ccol_event_loop loop =
-        cq ? ccol_event_loop_create(16, 1, 1, &err) : CCOL_EVENT_LOOP_INVALID;
-    ccol_event_reg reg = CCOL_EVENT_REG_INVALID;
+        cq ? ccol_event_loop_create(16, 1, 1, &err) : CCOL_EVENT_LOOP_NULL;
+    ccol_event_reg reg = CCOL_EVENT_REG_NULL;
     if (cq && loop) {
       ccol_event_handlers_t h = {.on_readable = fork_safety2_noop_readable};
       reg = ccol_event_loop_add(
@@ -10023,7 +10183,8 @@ TEST(fork_safety,
        * path of REQUIRE_EQ is an early `return` out of this Tau test
        * function, which there lands safely back in the harness that called
        * it. Here the same early `return` leaves THIS test function while the
-       * process is still the forked child, so it skips the _exit(0) below
+       * process is still the forked child, so it skips the
+       * test_child_exit(0) below
        * and falls into the harness's test-running loop a second time,
        * although this process was only ever meant to run this one
        * child-side branch and exit. So a failed create is handled exactly
@@ -10061,7 +10222,7 @@ TEST(fork_safety,
 
         pid_t inner_pid = fork();
         if (inner_pid == 0) {
-          _exit(0);
+          test_child_exit(0);
         } else if (inner_pid > 0) {
           /* What we test is that control reaches this point at all, since a
            * regression hangs until the alarm(180) above kills this process.
@@ -10083,14 +10244,14 @@ TEST(fork_safety,
     test_write_retry_eintr(result_pipe[1], &byte, 1);
     close(result_pipe[1]);
 
-    if (reg != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, reg);
+    if (reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, reg);
     if (cq) {
       c_message_t drain = {0};
       ccol_circq_try_recv_zc(cq, &drain);
       ccol_circular_queue_destroy(cq);
     }
-    if (loop != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(loop);
-    _exit(0);
+    if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
+    test_child_exit(0);
   }
 
   close(result_pipe[1]);
@@ -10148,7 +10309,7 @@ TEST(fork_safety, ccol_event_loop_destroy_of_inherited_loop_in_child_is_safe) {
 
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create_mp(8, 2, 3, NULL, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
 
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -10159,7 +10320,7 @@ TEST(fork_safety, ccol_event_loop_destroy_of_inherited_loop_in_child_is_safe) {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   ccol_event_reg reg = ccol_event_loop_add(
       loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h, &ctx, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
 
   pid_t pid = fork();
   REQUIRE_NE(pid, -1);
@@ -10188,7 +10349,7 @@ TEST(fork_safety, ccol_event_loop_destroy_of_inherited_loop_in_child_is_safe) {
     char byte = 1;
     test_write_retry_eintr(result_pipe[1], &byte, 1);
     close(result_pipe[1]);
-    _exit(0);
+    test_child_exit(0);
   }
 
   close(result_pipe[1]);
@@ -10232,7 +10393,7 @@ TEST(fork_safety, ccol_event_loop_destroy_of_inherited_loop_in_child_is_safe) {
    * any other way. */
   char val = 'x';
   REQUIRE_EQ(write(pfd[1], &val, 1), 1);
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
   ccol_event_loop_remove(loop, reg);
   ccol_event_loop_destroy(loop);
@@ -10288,12 +10449,12 @@ TEST(ccol_event_loop, queue_cascade_finishes_before_remove_returns) {
                                     .on_error = NULL,
                                     .on_removed = NULL};
   char *err = NULL;
-  ccol_event_reg reg = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
   if (queue_created)
     reg = ccol_event_loop_add(loop,
                               ccol_selectable_from_circq(cq, ccol_select_read),
                               handlers, &ctx, &err);
-  bool registered = (reg != CCOL_EVENT_REG_INVALID);
+  bool registered = (reg != CCOL_EVENT_REG_NULL);
 
   uint64_t begun_before = 0, finished_before = 0;
   _ccol_event_loop_test_queue_cascade_counts(&begun_before, &finished_before);
@@ -10404,13 +10565,13 @@ TEST(ccol_event_loop,
                                          .on_error = NULL,
                                          .on_removed = NULL};
   char *err = NULL;
-  ccol_event_reg warm = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg warm = CCOL_EVENT_REG_NULL;
   if (queue_created)
     warm = ccol_event_loop_add(loop,
                                ccol_selectable_from_circq(cq, ccol_select_read),
                                warm_handlers, &ctx, &err);
   bool warmed = false, warm_removed = false;
-  if (warm != CCOL_EVENT_REG_INVALID) {
+  if (warm != CCOL_EVENT_REG_NULL) {
     char *payload = (char *)malloc(4);
     if (payload) {
       memcpy(payload, "abc", 4);
@@ -10441,7 +10602,7 @@ TEST(ccol_event_loop,
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, NULL,
         &cycle_err);
-    if (reg == CCOL_EVENT_REG_INVALID) {
+    if (reg == CCOL_EVENT_REG_NULL) {
       all_cycles_ok = false;
       break;
     }
@@ -10453,12 +10614,14 @@ TEST(ccol_event_loop,
    * this loop normally exits on its first or second sample. */
   bool reclaimed = false;
   size_t observed = baseline;
-  for (int i = 0; i < 3000 && !reclaimed; i++) {
+  long long end = mono_now_us() + (long long)EVL_WAIT_MS * 1000;
+  while (!reclaimed) {
     observed = evl_count_open_fds();
     if (observed <= baseline) {
       reclaimed = true;
       break;
     }
+    if (mono_now_us() >= end) break;
     evl_sleep_ms(1);
   }
 
@@ -10467,7 +10630,7 @@ TEST(ccol_event_loop,
   evl_sync_ctx_destroy(&ctx);
 
   REQUIRE_TRUE(queue_created);
-  REQUIRE_NE(warm, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(warm, CCOL_EVENT_REG_NULL);
   REQUIRE_TRUE(warmed);
   REQUIRE_TRUE(warm_removed);
   REQUIRE_TRUE(parked);
@@ -10501,13 +10664,13 @@ TEST(ccol_event_loop,
                                       .on_removed = evl_on_removed_slow};
     char *err = NULL;
     read_registered =
-        (ccol_event_loop_add(
-             loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers,
-             &read_ctx, &err) != CCOL_EVENT_REG_INVALID);
+        (ccol_event_loop_add(loop,
+                             ccol_selectable_from_circq(cq, ccol_select_read),
+                             handlers, &read_ctx, &err) != CCOL_EVENT_REG_NULL);
     write_registered =
         (ccol_event_loop_add(
              loop, ccol_selectable_from_circq(cq, ccol_select_write), handlers,
-             &write_ctx, &err) != CCOL_EVENT_REG_INVALID);
+             &write_ctx, &err) != CCOL_EVENT_REG_NULL);
     /* Nothing ever removes these two. The destructor of the scoped loop, at
      * the closing brace of this block, tears both of them down while they
      * are registered. */
@@ -10569,7 +10732,7 @@ TEST(ccol_event_loop, a_free_list_push_failure_does_not_strand_a_reg_slot) {
     ccol_event_reg warm = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
         &err);
-    if (warm == CCOL_EVENT_REG_INVALID) all_ok = false;
+    if (warm == CCOL_EVENT_REG_NULL) all_ok = false;
     if (all_ok && ccol_event_loop_remove(loop, warm) != ccol_success)
       all_ok = false;
 
@@ -10580,7 +10743,7 @@ TEST(ccol_event_loop, a_free_list_push_failure_does_not_strand_a_reg_slot) {
       ccol_event_reg reg = ccol_event_loop_add(
           loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers,
           &ctx, &err);
-      if (reg == CCOL_EVENT_REG_INVALID) {
+      if (reg == CCOL_EVENT_REG_NULL) {
         all_ok = false;
         break;
       }
@@ -10594,7 +10757,7 @@ TEST(ccol_event_loop, a_free_list_push_failure_does_not_strand_a_reg_slot) {
     ccol_event_reg revived = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
         &err);
-    reusable = (revived != CCOL_EVENT_REG_INVALID) &&
+    reusable = (revived != CCOL_EVENT_REG_NULL) &&
                (ccol_event_loop_reg_generation(loop, revived) > 0);
     if (reusable && ccol_event_loop_remove(loop, revived) != ccol_success)
       reusable = false;
@@ -10632,14 +10795,14 @@ TEST(ccol_event_loop_slot_table,
      a_lost_free_index_is_reclaimed_rather_than_growing) {
   {
     ccol_event_loop warm = ccol_event_loop_create(8, 1, 1, NULL);
-    if (warm != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(warm);
+    if (warm != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(warm);
   }
   size_t before = _ccol_event_loop_slot_table_capacity_for_tests();
 
   bool all_built = true;
   for (int i = 0; i < 4; i++) {
     ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_INVALID) {
+    if (loop == CCOL_EVENT_LOOP_NULL) {
       all_built = false;
       continue;
     }
@@ -10653,7 +10816,7 @@ TEST(ccol_event_loop_slot_table,
   bool works = false;
   {
     ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop != CCOL_EVENT_LOOP_INVALID) {
+    if (loop != CCOL_EVENT_LOOP_NULL) {
       works = (ccol_event_loop_reg_count(loop) == (size_t)0);
       ccol_event_loop_destroy(loop);
     }
@@ -10757,7 +10920,7 @@ TEST(ccol_event_loop, queue_destroy_waits_for_an_already_collected_dispatch) {
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
         &err);
-    registered = (reg != CCOL_EVENT_REG_INVALID);
+    registered = (reg != CCOL_EVENT_REG_NULL);
 
     if (registered) {
       c_message_t m = {.data = malloc(4), .size = 4};
@@ -10975,7 +11138,7 @@ TEST(ccol_event_loop,
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), handlers, &ctx,
         &err);
-    registered = (reg != CCOL_EVENT_REG_INVALID);
+    registered = (reg != CCOL_EVENT_REG_NULL);
     if (registered) {
       shutdown(sv[1], SHUT_WR);
       fired = evl_wait_for(&ctx, &ctx.error_count, 1, 3000);
@@ -11016,7 +11179,7 @@ TEST(ccol_event_loop,
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), handlers, &ctx,
         &err);
-    registered = (reg != CCOL_EVENT_REG_INVALID);
+    registered = (reg != CCOL_EVENT_REG_NULL);
     if (registered) {
       shutdown(sv[1], SHUT_WR);
       fired = evl_wait_for(&ctx, &ctx.error_count, 1, 3000);
@@ -11069,7 +11232,7 @@ TEST(ccol_event_loop,
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), handlers, &ctx,
         &err);
-    registered = (reg != CCOL_EVENT_REG_INVALID);
+    registered = (reg != CCOL_EVENT_REG_NULL);
     if (registered) {
       /* Gives a runaway loop a real chance to start before the first sample,
        * and then the test measures the delta across another wide
@@ -11122,7 +11285,7 @@ TEST(ccol_event_loop,
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), handlers, &ctx,
         &err);
-    registered = (reg != CCOL_EVENT_REG_INVALID);
+    registered = (reg != CCOL_EVENT_REG_NULL);
     if (registered) {
       usleep(50000);
       uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
@@ -11531,7 +11694,7 @@ static bool xqd_wait_count(_Atomic int *counter, int target) {
 static bool xqd_teardown(xqd_scenario *sc) {
   atomic_store(&sc->gate, true);
   if (!xqd_wait_count(&sc->done, atomic_load(&sc->entered))) return false;
-  if (sc->loop != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(sc->loop);
+  if (sc->loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(sc->loop);
   for (size_t i = 0; i < sc->built; i++) {
     xqd_slot *s = &sc->slots[i];
     c_message_t m = {.data = NULL, .size = 0};
@@ -11593,7 +11756,7 @@ static int xqd_run_scenario(size_t num_reactor_threads, int kind) {
     return 10;
   }
   sc->loop = ccol_event_loop_create(8, 1, num_reactor_threads, NULL);
-  if (sc->loop == CCOL_EVENT_LOOP_INVALID) {
+  if (sc->loop == CCOL_EVENT_LOOP_NULL) {
     free(sc);
     return 11;
   }
@@ -11613,7 +11776,7 @@ static int xqd_run_scenario(size_t num_reactor_threads, int kind) {
     ccol_event_reg tr = ccol_event_loop_add(
         sc->loop, ccol_selectable_from_circq(s->trigger, ccol_select_read),
         trig_h, s, NULL);
-    if (s->victim_reg == CCOL_EVENT_REG_INVALID || tr == CCOL_EVENT_REG_INVALID)
+    if (s->victim_reg == CCOL_EVENT_REG_NULL || tr == CCOL_EVENT_REG_NULL)
       rc = 13;
   }
 
@@ -11784,14 +11947,14 @@ static long nwk_burst_wakes(size_t num_reactor_threads, int kind, long burst,
   if (!nwk_setup(&c, kind)) return -1;
   ccol_event_loop loop =
       ccol_event_loop_create(8, 1, num_reactor_threads, NULL);
-  if (loop == CCOL_EVENT_LOOP_INVALID) {
+  if (loop == CCOL_EVENT_LOOP_NULL) {
     nwk_teardown(&c);
     return -1;
   }
   ccol_event_handlers_t h = {.on_readable = nwk_on_readable};
   ccol_event_reg reg = ccol_event_loop_add(loop, c.sel, h, &c, NULL);
   long wakes = -1;
-  if (reg != CCOL_EVENT_REG_INVALID) {
+  if (reg != CCOL_EVENT_REG_NULL) {
     bool entered = nwk_send(&c);
     for (int waited_ms = 0; entered && !atomic_load(&c.first_entered);
          waited_ms++) {
@@ -11871,10 +12034,10 @@ static bool nwk_stress_listener(size_t num_reactor_threads, int kind,
   bool ok = false;
   ccol_event_loop loop =
       ccol_event_loop_create(8, 1, num_reactor_threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_readable = nwk_on_readable};
     ccol_event_reg reg = ccol_event_loop_add(loop, c.sel, h, &c, NULL);
-    if (reg != CCOL_EVENT_REG_INVALID) {
+    if (reg != CCOL_EVENT_REG_NULL) {
       nwk_producer_arg pa = {.c = &c, .count = count, .ok = false};
       pthread_t tid;
       if (pthread_create(&tid, NULL, nwk_producer_thread, &pa) == 0) {
@@ -12446,7 +12609,7 @@ TEST(ccol_select, timed_fd_wait_never_ends_before_its_deadline) {
  * the poller would wake for it, and on the add that fails it could hold the
  * entry pointer while the add frees the entry, so the poller must stay
  * asleep during every refusal. */
-static ccol_event_loop g_afi_loop = CCOL_EVENT_LOOP_INVALID;
+static ccol_event_loop g_afi_loop = CCOL_EVENT_LOOP_NULL;
 static _Atomic bool g_afi_armed = false;
 static _Atomic int g_afi_refusals = 0;
 static _Atomic uint64_t g_afi_poller_delta = 0;
@@ -12492,7 +12655,7 @@ TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
   int expected_readable = 0;
   bool dispatch_timed_out = false;
   char *fail_err = NULL;
-  ccol_event_reg retry_reg = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg retry_reg = CCOL_EVENT_REG_NULL;
   bool dispatched_after_retry = false;
 
   atomic_store(&g_afi_refusals, 0);
@@ -12500,7 +12663,7 @@ TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
   atomic_store(&g_afi_poller_delta, 0);
   ccol_memmgmt_procs_t mp = {afi_malloc, afi_free, afi_calloc, afi_realloc};
   g_afi_loop = ccol_event_loop_create_mp(8, 1, 1, &mp, NULL);
-  bool created = (g_afi_loop != CCOL_EVENT_LOOP_INVALID);
+  bool created = (g_afi_loop != CCOL_EVENT_LOOP_NULL);
   ccol_event_handlers_t h = {.on_readable = afi_on_readable};
 
   while (created && n_fds < AFI_MAX_FDS && failed_at < 0) {
@@ -12516,7 +12679,7 @@ TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
         g_afi_loop, ccol_selectable_from_fd(p[0], ccol_select_read), h, NULL,
         &err);
     atomic_store(&g_afi_armed, false);
-    if (regs[n_fds] == CCOL_EVENT_REG_INVALID) {
+    if (regs[n_fds] == CCOL_EVENT_REG_NULL) {
       failed_at = n_fds;
       fail_err = err;
     } else if (atomic_load(&g_afi_refusals) != refusals_before) {
@@ -12526,7 +12689,7 @@ TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
       expected_readable++;
       int waited = 0;
       while (atomic_load(&g_afi_readable) < expected_readable &&
-             waited < 2000) {
+             waited < EVL_WAIT_MS) {
         evl_sleep_ms(5);
         waited += 5;
       }
@@ -12555,9 +12718,9 @@ TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
       fail_err != NULL && strstr(fail_err, "allocate") != NULL;
   if (created) {
     for (int i = 0; i < n_fds; i++)
-      if (regs[i] != CCOL_EVENT_REG_INVALID)
+      if (regs[i] != CCOL_EVENT_REG_NULL)
         ccol_event_loop_remove(g_afi_loop, regs[i]);
-    if (retry_reg != CCOL_EVENT_REG_INVALID)
+    if (retry_reg != CCOL_EVENT_REG_NULL)
       ccol_event_loop_remove(g_afi_loop, retry_reg);
     ccol_event_loop_destroy(g_afi_loop);
   }
@@ -12572,7 +12735,7 @@ TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
   REQUIRE_FALSE(dispatch_timed_out);
   REQUIRE_EQ(atomic_load(&g_afi_poller_delta), (uint64_t)0);
   REQUIRE_TRUE(err_names_allocation);
-  REQUIRE_NE(retry_reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(retry_reg, CCOL_EVENT_REG_NULL);
   REQUIRE_TRUE(dispatched_after_retry);
 }
 
@@ -12586,24 +12749,24 @@ TEST(ccol_event_loop, add_reports_a_direction_already_in_use_by_its_err_str) {
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
   ccol_event_handlers_t h = {.on_error = evl_on_error};
   char *err1 = NULL, *err2 = NULL;
-  ccol_event_reg r1 = CCOL_EVENT_REG_INVALID, r2 = CCOL_EVENT_REG_INVALID;
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  ccol_event_reg r1 = CCOL_EVENT_REG_NULL, r2 = CCOL_EVENT_REG_NULL;
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     r1 = ccol_event_loop_add(loop,
                              ccol_selectable_from_fd(pfd[0], ccol_select_read),
                              h, NULL, &err1);
     r2 = ccol_event_loop_add(loop,
                              ccol_selectable_from_fd(pfd[0], ccol_select_read),
                              h, NULL, &err2);
-    if (r1 != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r1);
-    if (r2 != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r2);
+    if (r1 != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r1);
+    if (r2 != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r2);
     ccol_event_loop_destroy(loop);
   }
   close(pfd[0]);
   close(pfd[1]);
   bool in_use = err2 != NULL && strstr(err2, "already in use") != NULL;
-  REQUIRE_NE(r1, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(r1, CCOL_EVENT_REG_NULL);
   REQUIRE_TRUE(err1 == NULL);
-  REQUIRE_EQ(r2, CCOL_EVENT_REG_INVALID);
+  REQUIRE_EQ(r2, CCOL_EVENT_REG_NULL);
   REQUIRE_TRUE(in_use);
 }
 
@@ -12623,8 +12786,8 @@ static void unh_on_error_remove_self(ccol_event_loop loop, ccol_event_reg reg,
   (void)sel;
   unh_ctx *c = (unh_ctx *)arg;
   atomic_fetch_add(&c->error_count, 1);
-  ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_INVALID);
-  if (r != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r);
+  ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_NULL);
+  if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
 }
 
 /* Counts the epoll_wait calls the poller completes in a 150 ms window, after
@@ -12647,12 +12810,12 @@ static void unh_run_no_handler_case(size_t threads, uint64_t *iterations,
   int sv[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t none = {0};
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), none, NULL,
         NULL);
-    if (reg != CCOL_EVENT_REG_INVALID) {
+    if (reg != CCOL_EVENT_REG_NULL) {
       close(sv[1]);
       sv[1] = -1;
       *iterations = unh_poller_iterations_in_window(loop);
@@ -12686,8 +12849,8 @@ static void unh_on_readable_remove_at_eof(ccol_event_loop loop,
   ssize_t n = read(sel->fd, buf, sizeof(buf));
   if (n == 0) {
     atomic_fetch_add(&c->eof_count, 1);
-    ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_INVALID);
-    if (r != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r);
+    ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_NULL);
+    if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
   }
 }
 
@@ -12708,13 +12871,13 @@ static void unh_run_reader_without_on_error_case(size_t threads,
   unh_eof_ctx ctx;
   atomic_init(&ctx.readable_count, 0);
   atomic_init(&ctx.eof_count, 0);
-  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_INVALID);
+  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_NULL);
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_readable = unh_on_readable_remove_at_eof};
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h, &ctx, NULL);
-    if (reg != CCOL_EVENT_REG_INVALID) {
+    if (reg != CCOL_EVENT_REG_NULL) {
       atomic_store(&ctx.self_reg, reg);
       close(pfd[1]);
       pfd[1] = -1;
@@ -12743,10 +12906,10 @@ static void unh_run_sibling_case(size_t threads, uint64_t *iterations,
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return;
   unh_ctx ctx;
   atomic_init(&ctx.error_count, 0);
-  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_INVALID);
+  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_NULL);
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
   ctx.loop = loop;
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t none = {0};
     ccol_event_handlers_t err_only = {.on_error = unh_on_error_remove_self};
     ccol_event_reg rreg = ccol_event_loop_add(
@@ -12755,7 +12918,7 @@ static void unh_run_sibling_case(size_t threads, uint64_t *iterations,
     ccol_event_reg wreg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), err_only, &ctx,
         NULL);
-    if (rreg != CCOL_EVENT_REG_INVALID && wreg != CCOL_EVENT_REG_INVALID) {
+    if (rreg != CCOL_EVENT_REG_NULL && wreg != CCOL_EVENT_REG_NULL) {
       atomic_store(&ctx.self_reg, wreg);
       close(sv[1]);
       sv[1] = -1;
@@ -12868,6 +13031,36 @@ static bool derr_wait_count(_Atomic int *counter, int want, int max_ms) {
   return atomic_load(counter) >= want;
 }
 
+/* Makes a non-blocking UDP client bound to a loopback port, and fills
+ * *free_port with another loopback port that had a socket a moment ago and
+ * has none now. The client is bound first, so the port it sends from can
+ * never be the free one: a client that the kernel binds at connect() can get
+ * the port that was just freed, about once in 60000 tries on Linux, and then
+ * its datagram comes back to itself instead of making an ICMP error. */
+static int derr_udp_client_and_free_port(struct sockaddr_in *free_port) {
+  struct sockaddr_in lo = {.sin_family = AF_INET,
+                           .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+  int cli = ccol_socket_nb(AF_INET, SOCK_DGRAM, 0);
+  if (cli < 0) return -1;
+  if (bind(cli, (struct sockaddr *)&lo, sizeof(lo)) != 0) {
+    close(cli);
+    return -1;
+  }
+  *free_port = lo;
+  socklen_t alen = sizeof(*free_port);
+  int probe = socket(AF_INET, SOCK_DGRAM, 0);
+  bool have_port =
+      probe >= 0 &&
+      bind(probe, (struct sockaddr *)free_port, sizeof(*free_port)) == 0 &&
+      getsockname(probe, (struct sockaddr *)free_port, &alen) == 0;
+  if (probe >= 0) close(probe);
+  if (!have_port) {
+    close(cli);
+    return -1;
+  }
+  return cli;
+}
+
 /* A connected UDP socket with on_readable and no on_error. Sending a
  * datagram to a port with no socket makes the kernel queue an ICMP port
  * unreachable on the socket, which epoll reports as EPOLLERR without
@@ -12879,23 +13072,14 @@ static void derr_run_udp_case(size_t threads, int *refused, int *data,
   *data = 0;
   struct sockaddr_in srv_addr = {.sin_family = AF_INET,
                                  .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
-  socklen_t alen = sizeof(srv_addr);
-  int probe = socket(AF_INET, SOCK_DGRAM, 0);
-  if (probe < 0) return;
-  bool have_port =
-      bind(probe, (struct sockaddr *)&srv_addr, sizeof(srv_addr)) == 0 &&
-      getsockname(probe, (struct sockaddr *)&srv_addr, &alen) == 0;
-  close(probe);
-  if (!have_port) return;
-
-  int cli = ccol_socket_nb(AF_INET, SOCK_DGRAM, 0);
+  int cli = derr_udp_client_and_free_port(&srv_addr);
   if (cli < 0) return;
   if (test_connect(cli, (struct sockaddr *)&srv_addr, sizeof(srv_addr)) != 0) {
     close(cli);
     return;
   }
   struct sockaddr_in cli_addr;
-  alen = sizeof(cli_addr);
+  socklen_t alen = sizeof(cli_addr);
   if (getsockname(cli, (struct sockaddr *)&cli_addr, &alen) != 0) {
     close(cli);
     return;
@@ -12907,13 +13091,14 @@ static void derr_run_udp_case(size_t threads, int *refused, int *data,
   atomic_init(&ctx.data_count, 0);
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
   int srv = -1;
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_readable = derr_on_udp_readable};
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(cli, ccol_select_read), h, &ctx, NULL);
-    if (reg != CCOL_EVENT_REG_INVALID) {
+    if (reg != CCOL_EVENT_REG_NULL) {
       bool sent = send(cli, "q", 1, 0) == 1;
-      bool saw_error = sent && derr_wait_count(&ctx.refused_count, 1, 2000);
+      bool saw_error =
+          sent && derr_wait_count(&ctx.refused_count, 1, EVL_WAIT_MS);
       srv = socket(AF_INET, SOCK_DGRAM, 0);
       bool bound = srv >= 0 && bind(srv, (struct sockaddr *)&srv_addr,
                                     sizeof(srv_addr)) == 0;
@@ -12921,7 +13106,8 @@ static void derr_run_udp_case(size_t threads, int *refused, int *data,
       for (int i = 0; replied && i < 3; i++)
         replied = sendto(srv, "hello", 5, 0, (struct sockaddr *)&cli_addr,
                          sizeof(cli_addr)) == 5;
-      bool got_data = replied && derr_wait_count(&ctx.data_count, 3, 2000);
+      bool got_data =
+          replied && derr_wait_count(&ctx.data_count, 3, EVL_WAIT_MS);
       *ok = saw_error && got_data &&
             ccol_event_loop_remove(loop, reg) == ccol_success;
     }
@@ -12975,15 +13161,7 @@ static void derr_on_error_count(ccol_event_loop loop, ccol_event_reg reg,
 static int derr_run_udp_error_only_case(size_t threads) {
   struct sockaddr_in srv_addr = {.sin_family = AF_INET,
                                  .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
-  socklen_t alen = sizeof(srv_addr);
-  int probe = socket(AF_INET, SOCK_DGRAM, 0);
-  if (probe < 0) return -1;
-  bool have_port =
-      bind(probe, (struct sockaddr *)&srv_addr, sizeof(srv_addr)) == 0 &&
-      getsockname(probe, (struct sockaddr *)&srv_addr, &alen) == 0;
-  close(probe);
-  if (!have_port) return -1;
-  int cli = ccol_socket_nb(AF_INET, SOCK_DGRAM, 0);
+  int cli = derr_udp_client_and_free_port(&srv_addr);
   if (cli < 0) return -1;
   if (test_connect(cli, (struct sockaddr *)&srv_addr, sizeof(srv_addr)) != 0) {
     close(cli);
@@ -12991,13 +13169,14 @@ static int derr_run_udp_error_only_case(size_t threads) {
   }
   _Atomic int errors = 0;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_error = derr_on_error_count};
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(cli, ccol_select_read), h,
         (void *)&errors, NULL);
-    if (reg != CCOL_EVENT_REG_INVALID) {
-      if (send(cli, "q", 1, 0) == 1) (void)derr_wait_count(&errors, 1, 2000);
+    if (reg != CCOL_EVENT_REG_NULL) {
+      if (send(cli, "q", 1, 0) == 1)
+        (void)derr_wait_count(&errors, 1, EVL_WAIT_MS);
       ccol_event_loop_remove(loop, reg);
     }
     /* The destroy joins every thread, so no callback runs with &errors
@@ -13048,7 +13227,7 @@ static int derr_run_mode_change_case(size_t threads) {
   atomic_init(&ctx.reads, 0);
   _Atomic int errors = 0;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t wh = {.on_error = derr_on_error_count};
     ccol_event_reg w = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh,
@@ -13056,11 +13235,11 @@ static int derr_run_mode_change_case(size_t threads) {
     ccol_event_handlers_t rh = {.on_readable = derr_read_one_byte};
     ccol_event_reg r = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), rh, &ctx, NULL);
-    if (w != CCOL_EVENT_REG_INVALID && r != CCOL_EVENT_REG_INVALID &&
+    if (w != CCOL_EVENT_REG_NULL && r != CCOL_EVENT_REG_NULL &&
         send(sv[1], "0123456789", 10, 0) == 10)
-      (void)derr_wait_count(&ctx.reads, 10, 2000);
-    if (r != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r);
-    if (w != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, w);
+      (void)derr_wait_count(&ctx.reads, 10, EVL_WAIT_MS);
+    if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
+    if (w != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, w);
     ccol_event_loop_destroy(loop);
   }
   close(sv[0]);
@@ -13127,9 +13306,9 @@ TEST(fd_stale_report, a_data_report_after_a_pause_is_no_error) {
   atomic_store(&derr_stale_paused, 0);
   _Atomic int reads = 0, writer_errors = 0;
   ccol_event_loop loop =
-      pairs ? ccol_event_loop_create(64, 1, 1, NULL) : CCOL_EVENT_LOOP_INVALID;
+      pairs ? ccol_event_loop_create(64, 1, 1, NULL) : CCOL_EVENT_LOOP_NULL;
   bool sent = false;
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t hh = {.on_readable = derr_hold};
     ccol_event_loop_add(loop,
                         ccol_selectable_from_fd(hold[0], ccol_select_read), hh,
@@ -13152,7 +13331,7 @@ TEST(fd_stale_report, a_data_report_after_a_pause_is_no_error) {
     evl_sleep_ms(30);
     sent = sent && send(pauser[1], "p", 1, 0) == 1 &&
            send(target[1], "t", 1, 0) == 1;
-    (void)derr_wait_count(&derr_stale_paused, 1, 2000);
+    (void)derr_wait_count(&derr_stale_paused, 1, EVL_WAIT_MS);
     evl_sleep_ms(100);
     ccol_event_loop_destroy(loop);
   }
@@ -13214,28 +13393,29 @@ static void derr_run_listener_case(size_t threads, bool listen_late,
   _Atomic int errs = 0;
   int cs[3] = {-1, -1, -1};
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_error = derr_on_error_count};
-    ccol_event_reg reg = CCOL_EVENT_REG_INVALID;
+    ccol_event_reg reg = CCOL_EVENT_REG_NULL;
     if (listen_late) {
       derr_late_listen_ctx c = {.loop = loop, .ls = ls, .errs = &errs};
       int trig[2] = {-1, -1};
       bool ok = pipe(trig) == 0;
-      ccol_event_reg treg = CCOL_EVENT_REG_INVALID;
+      ccol_event_reg treg = CCOL_EVENT_REG_NULL;
       if (ok)
         treg = ccol_event_loop_add(
             loop, ccol_selectable_from_fd(trig[0], ccol_select_read),
             (ccol_event_handlers_t){.on_readable = derr_late_listen_cb}, &c,
             NULL);
-      ok = ok && treg != CCOL_EVENT_REG_INVALID && write(trig[1], "x", 1) == 1;
-      for (int w = 0; ok && w < 2000 && !atomic_load(&c.done); w++)
+      ok = ok && treg != CCOL_EVENT_REG_NULL && write(trig[1], "x", 1) == 1;
+      long long end = mono_now_us() + (long long)EVL_WAIT_MS * 1000;
+      while (ok && !atomic_load(&c.done) && mono_now_us() < end)
         evl_sleep_ms(1);
-      if (treg != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, treg);
+      if (treg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, treg);
       if (trig[0] >= 0) close(trig[0]);
       if (trig[1] >= 0) close(trig[1]);
       reg = atomic_load(&c.reg);
       if (!atomic_load(&c.listened)) {
-        if (reg != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, reg);
+        if (reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, reg);
         ccol_event_loop_destroy(loop);
         close(ls);
         return;
@@ -13254,7 +13434,7 @@ static void derr_run_listener_case(size_t threads, bool listen_late,
     uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
     evl_sleep_ms(150);
     *iterations = _ccol_event_loop_poller_iterations_for_tests(loop) - before;
-    if (reg != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, reg);
+    if (reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, reg);
     ccol_event_loop_destroy(loop);
     *errors = atomic_load(&errs);
   }
@@ -13304,8 +13484,8 @@ static int derr_run_close_after_half_close(bool with_reader) {
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return -1;
   _Atomic int errors = 0, reads = 0;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 4, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
-    ccol_event_reg r = CCOL_EVENT_REG_INVALID;
+  if (loop != CCOL_EVENT_LOOP_NULL) {
+    ccol_event_reg r = CCOL_EVENT_REG_NULL;
     if (with_reader) {
       ccol_event_handlers_t rh = {.on_readable = derr_count_reads};
       r = ccol_event_loop_add(loop,
@@ -13316,16 +13496,16 @@ static int derr_run_close_after_half_close(bool with_reader) {
     ccol_event_reg w = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh,
         (void *)&errors, NULL);
-    if (r != CCOL_EVENT_REG_INVALID) ccol_event_loop_pause(loop, r);
+    if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_pause(loop, r);
     evl_sleep_ms(30);
     if (shutdown(sv[1], SHUT_WR) == 0) {
       evl_sleep_ms(100);
       close(sv[1]);
       sv[1] = -1;
-      (void)derr_wait_count(&errors, 1, 2000);
+      (void)derr_wait_count(&errors, 1, EVL_WAIT_MS);
     }
-    if (r != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r);
-    if (w != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, w);
+    if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
+    if (w != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, w);
     ccol_event_loop_destroy(loop);
   }
   close(sv[0]);
@@ -13392,7 +13572,7 @@ static void mark_probe_run(size_t threads, int *fd_calls, int *fd_marked,
   _ccol_event_loop_test_fail_next_marks(UINT32_MAX);
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
   ctx.loop = loop;
-  if (loop != CCOL_EVENT_LOOP_INVALID && ctx.dq) {
+  if (loop != CCOL_EVENT_LOOP_NULL && ctx.dq) {
     ccol_event_handlers_t fh = {.on_readable = mark_probe_on_fd};
     ccol_event_handlers_t qh = {.on_readable = mark_probe_on_queue};
     ccol_event_reg fr = ccol_event_loop_add(
@@ -13404,16 +13584,16 @@ static void mark_probe_run(size_t threads, int *fd_calls, int *fd_marked,
     static int payload = 3;
     c_message_t m = {.data = &payload, .size = sizeof(int)};
     char byte = 'x';
-    if (fr != CCOL_EVENT_REG_INVALID && qr != CCOL_EVENT_REG_INVALID &&
+    if (fr != CCOL_EVENT_REG_NULL && qr != CCOL_EVENT_REG_NULL &&
         write(pfd[1], &byte, 1) == 1 &&
         ccol_dynmq_send_zc(ctx.dq, &m) == ccol_success) {
-      (void)derr_wait_count(&ctx.fd_calls, 1, 2000);
-      (void)derr_wait_count(&ctx.queue_calls, 1, 2000);
+      (void)derr_wait_count(&ctx.fd_calls, 1, EVL_WAIT_MS);
+      (void)derr_wait_count(&ctx.queue_calls, 1, EVL_WAIT_MS);
     }
-    if (fr != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, fr);
-    if (qr != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, qr);
+    if (fr != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, fr);
+    if (qr != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, qr);
   }
-  if (loop != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(loop);
+  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
   _ccol_event_loop_test_fail_next_marks(0);
   if (ctx.dq) {
     c_message_t out;
@@ -13460,8 +13640,8 @@ static void derr_pipe_on_error(ccol_event_loop loop, ccol_event_reg reg,
   (void)sel;
   derr_pipe_ctx *c = (derr_pipe_ctx *)arg;
   atomic_fetch_add(&c->errors, 1);
-  ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_INVALID);
-  if (r != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r);
+  ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_NULL);
+  if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
 }
 
 /* An error-only registration on one end of a pipe whose other end closes.
@@ -13481,9 +13661,9 @@ static void derr_run_pipe_case(bool read_end, size_t threads,
   if (pipe(pfd) != 0) return;
   derr_pipe_ctx ctx;
   atomic_init(&ctx.errors, 0);
-  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_INVALID);
+  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_NULL);
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_error = derr_pipe_on_error};
     int watched = read_end ? pfd[0] : pfd[1];
     ccol_event_reg reg = ccol_event_loop_add(
@@ -13491,7 +13671,7 @@ static void derr_run_pipe_case(bool read_end, size_t threads,
         ccol_selectable_from_fd(
             watched, read_end ? ccol_select_read : ccol_select_write),
         h, &ctx, NULL);
-    if (reg != CCOL_EVENT_REG_INVALID) {
+    if (reg != CCOL_EVENT_REG_NULL) {
       atomic_store(&ctx.self_reg, reg);
       bool wrote = true;
       for (int k = 0; k < 3 && wrote; k++) {
@@ -13503,11 +13683,11 @@ static void derr_run_pipe_case(bool read_end, size_t threads,
       int other = read_end ? 1 : 0;
       close(pfd[other]);
       pfd[other] = -1;
-      (void)derr_wait_count(&ctx.errors, 1, 2000);
+      (void)derr_wait_count(&ctx.errors, 1, EVL_WAIT_MS);
       /* A second dispatch would show up here. */
       evl_sleep_ms(50);
-      ccol_event_reg r = atomic_exchange(&ctx.self_reg, CCOL_EVENT_REG_INVALID);
-      if (r != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r);
+      ccol_event_reg r = atomic_exchange(&ctx.self_reg, CCOL_EVENT_REG_NULL);
+      if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
     }
     ccol_event_loop_destroy(loop);
     *errors = atomic_load(&ctx.errors);
@@ -13562,8 +13742,8 @@ static void derr_on_writable_remove_self(ccol_event_loop loop,
   (void)sel;
   derr_writer_ctx *c = (derr_writer_ctx *)arg;
   atomic_fetch_add(&c->writable_count, 1);
-  ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_INVALID);
-  if (r != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, r);
+  ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_NULL);
+  if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
 }
 
 /* A write registration with on_writable and no on_error, on a full pipe
@@ -13587,18 +13767,18 @@ static void derr_run_writer_case(size_t threads, int *writable,
   }
   derr_writer_ctx ctx;
   atomic_init(&ctx.writable_count, 0);
-  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_INVALID);
+  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_NULL);
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_writable = derr_on_writable_remove_self};
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[1], ccol_select_write), h, &ctx,
         NULL);
-    if (reg != CCOL_EVENT_REG_INVALID) {
+    if (reg != CCOL_EVENT_REG_NULL) {
       atomic_store(&ctx.self_reg, reg);
       close(pfd[0]);
       pfd[0] = -1;
-      bool delivered = derr_wait_count(&ctx.writable_count, 1, 2000);
+      bool delivered = derr_wait_count(&ctx.writable_count, 1, EVL_WAIT_MS);
       *iterations = unh_poller_iterations_in_window(loop);
       *ok = delivered;
     }
@@ -13656,13 +13836,13 @@ TEST(ccol_event_loop,
   uint64_t idle_iterations = UINT64_MAX;
   bool added = false, removed = false, notified = false;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_error = bgen_on_error,
                                .on_removed = bgen_on_removed};
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h,
         (void *)&removed_calls, NULL);
-    added = reg != CCOL_EVENT_REG_INVALID;
+    added = reg != CCOL_EVENT_REG_NULL;
     if (added) {
       /* Let the poller settle in an epoll_wait with no timeout, so the value
        * below is the one the removal stamps. */
@@ -13670,7 +13850,7 @@ TEST(ccol_event_loop,
       _ccol_event_loop_set_poller_batch_gen_for_tests(loop,
                                                       (uint64_t)UINT32_MAX);
       removed = ccol_event_loop_remove(loop, reg) == ccol_success;
-      notified = derr_wait_count(&removed_calls, 1, 2000);
+      notified = derr_wait_count(&removed_calls, 1, EVL_WAIT_MS);
       evl_sleep_ms(100);
       uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
       evl_sleep_ms(500);
@@ -13854,11 +14034,11 @@ TEST(ccol_event_loop, a_destroy_without_memory_still_calls_on_removed) {
   fa_reset();
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create_mp(8, 4, 1, &fa_procs, &err);
-  bool created = loop != CCOL_EVENT_LOOP_INVALID;
+  bool created = loop != CCOL_EVENT_LOOP_NULL;
   int sv[2] = {-1, -1};
   bool have_pair = socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0;
   _Atomic int removed = 0;
-  ccol_event_reg reg = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
   if (created && have_pair) {
     ccol_event_handlers_t h = {.on_readable = fa_noop_readable,
                                .on_removed = fa_count_removed};
@@ -13876,7 +14056,7 @@ TEST(ccol_event_loop, a_destroy_without_memory_still_calls_on_removed) {
   int removed_calls = atomic_load(&removed);
   REQUIRE_TRUE(created);
   REQUIRE_TRUE(have_pair);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
   REQUIRE_EQ(removed_calls, 1);
 }
 
@@ -13915,7 +14095,7 @@ static bool fa_loop_dispatches(ccol_event_loop l) {
   ccol_event_reg r = ccol_event_loop_add(
       l, ccol_selectable_from_fd(efd, ccol_select_read), h, (void *)&got, NULL);
   bool ok = false;
-  if (r != CCOL_EVENT_REG_INVALID) {
+  if (r != CCOL_EVENT_REG_NULL) {
     uint64_t one = 1;
     test_write_retry_eintr(wfd, &one, sizeof(one));
     ok = derr_wait_count(&got, 1, 5000);
@@ -13944,7 +14124,7 @@ TEST(ccol_event_loop, create_under_allocation_failure_never_returns_dead_loop) {
         ccol_event_loop_create_mp(37, 2, threads, &fa_procs, &err);
     evl_sleep_ms(50);
     fa_reset();
-    if (l == CCOL_EVENT_LOOP_INVALID) {
+    if (l == CCOL_EVENT_LOOP_NULL) {
       refused++;
       if (err == NULL) dead++;
       continue;
@@ -13958,7 +14138,7 @@ TEST(ccol_event_loop, create_under_allocation_failure_never_returns_dead_loop) {
   fa_reset();
   ccol_event_loop probe = ccol_event_loop_create_mp(16, 2, 3, &fa_procs, NULL);
   long total = atomic_load(&fa_count);
-  if (probe != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(probe);
+  if (probe != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(probe);
   for (size_t threads = 1; threads <= 3; threads += 2) {
     for (long n = 1; n <= total + 4; n++) {
       fa_reset();
@@ -13968,7 +14148,7 @@ TEST(ccol_event_loop, create_under_allocation_failure_never_returns_dead_loop) {
           ccol_event_loop_create_mp(16, 2, threads, &fa_procs, &err);
       evl_sleep_ms(5);
       fa_reset();
-      if (l == CCOL_EVENT_LOOP_INVALID) {
+      if (l == CCOL_EVENT_LOOP_NULL) {
         if (err == NULL) dead++;
         continue;
       }
@@ -13994,7 +14174,7 @@ static int fa_add_outcome(ccol_event_loop l, ccol_selectable sel,
   ccol_event_handlers_t h = {.on_readable = fa_noop_readable};
   ccol_event_reg r = ccol_event_loop_add(l, sel, h, NULL, &err);
   fa_reset();
-  if (r != CCOL_EVENT_REG_INVALID) {
+  if (r != CCOL_EVENT_REG_NULL) {
     ccol_event_loop_remove(l, r);
     return 1;
   }
@@ -14011,7 +14191,7 @@ static int fa_add_outcome(ccol_event_loop l, ccol_selectable sel,
 TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
   fa_reset();
   ccol_event_loop l = ccol_event_loop_create_mp(8, 1, 1, &fa_procs, NULL);
-  REQUIRE_NE(l, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(l, CCOL_EVENT_LOOP_NULL);
   int sv[2] = {-1, -1};
   bool have_pair = socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0;
   ccol_circular_queue *cq = ccol_circular_queue_create_mp(8, NULL, NULL);
@@ -14029,7 +14209,7 @@ TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
       ccol_event_reg r = ccol_event_loop_add(l, sels[k], h, NULL, NULL);
       long total = atomic_load(&fa_count);
       fa_reset();
-      if (r != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(l, r);
+      if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(l, r);
       if (k == 0)
         total_fd = (int)total;
       else
@@ -14043,14 +14223,14 @@ TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
   }
 
   char *sync_err = NULL;
-  ccol_event_reg sync_reg = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg sync_reg = CCOL_EVENT_REG_NULL;
   if (have_cq) {
     _ccol_event_loop_test_fail_next_reg_sync_init();
     ccol_event_handlers_t h = {.on_readable = fa_noop_readable};
     sync_reg =
         ccol_event_loop_add(l, ccol_selectable_from_circq(cq, ccol_select_read),
                             h, NULL, &sync_err);
-    if (sync_reg != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(l, sync_reg);
+    if (sync_reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(l, sync_reg);
   }
   bool sync_message_ok =
       sync_err && strstr(sync_err, "a system call failed") != NULL;
@@ -14058,14 +14238,14 @@ TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
   /* The handle slot table grows when the loop is created, so only the hook
    * can reach the failure of that growth. */
   char *slot_err = NULL;
-  ccol_event_reg slot_reg = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg slot_reg = CCOL_EVENT_REG_NULL;
   if (have_pair) {
     _ccol_event_loop_test_force_next_reg_slot_acquire_failure();
     ccol_event_handlers_t h = {.on_readable = fa_noop_readable};
     slot_reg =
         ccol_event_loop_add(l, ccol_selectable_from_fd(sv[0], ccol_select_read),
                             h, NULL, &slot_err);
-    if (slot_reg != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(l, slot_reg);
+    if (slot_reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(l, slot_reg);
   }
   bool slot_message_ok =
       slot_err && strstr(slot_err, "failed to allocate") != NULL;
@@ -14083,9 +14263,9 @@ TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
   REQUIRE_GT(total_q, 0);
   REQUIRE_GT(refusals, 0);
   REQUIRE_EQ(wrong_messages, 0);
-  REQUIRE_EQ(sync_reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_EQ(sync_reg, CCOL_EVENT_REG_NULL);
   REQUIRE_TRUE(sync_message_ok);
-  REQUIRE_EQ(slot_reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_EQ(slot_reg, CCOL_EVENT_REG_NULL);
   REQUIRE_TRUE(slot_message_ok);
 }
 
@@ -14098,14 +14278,14 @@ TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
 TEST(ccol_event_loop, failed_dispatch_submit_backs_off_instead_of_spinning) {
   fa_reset();
   ccol_event_loop l = ccol_event_loop_create_mp(8, 1, 3, &fa_procs, NULL);
-  REQUIRE_NE(l, CCOL_EVENT_LOOP_INVALID);
+  REQUIRE_NE(l, CCOL_EVENT_LOOP_NULL);
   int wfd = -1;
   int efd = fa_wake_pipe(&wfd);
   _Atomic int got = 0;
   ccol_event_handlers_t h = {.on_readable = fa_on_readable};
   ccol_event_reg r = ccol_event_loop_add(
       l, ccol_selectable_from_fd(efd, ccol_select_read), h, (void *)&got, NULL);
-  bool added = r != CCOL_EVENT_REG_INVALID;
+  bool added = r != CCOL_EVENT_REG_NULL;
   uint64_t spins = 0;
   int got_while_failing = 0;
   bool recovered = false;
@@ -14219,7 +14399,7 @@ static void tidr_run_body(size_t threads, tidr_ctx *c) {
   for (int attempt = 0; attempt < TIDR_LOOPS && !atomic_load(&c->matched);
        attempt++) {
     c->loop = ccol_event_loop_create(8, 1, threads, NULL);
-    c->created = c->loop != CCOL_EVENT_LOOP_INVALID;
+    c->created = c->loop != CCOL_EVENT_LOOP_NULL;
     if (!c->created) return;
     c->poller = _ccol_event_loop_poller_thread_for_tests(c->loop);
     if (ccol_event_loop_shutdown(c->loop) == ccol_success) {
@@ -14285,11 +14465,11 @@ static void orsd_run(size_t threads, orsd_ctx *c) {
   int pfd[2];
   if (pipe(pfd) != 0) return;
   c->loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (c->loop != CCOL_EVENT_LOOP_INVALID) {
+  if (c->loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_removed = orsd_on_removed};
     ccol_event_reg reg = ccol_event_loop_add(
         c->loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h, c, NULL);
-    if (reg != CCOL_EVENT_REG_INVALID &&
+    if (reg != CCOL_EVENT_REG_NULL &&
         ccol_event_loop_remove(c->loop, reg) == ccol_success) {
       for (int i = 0; i < 5000 && !atomic_load(&c->done); i++) evl_sleep_ms(1);
     }
@@ -14398,16 +14578,16 @@ static void bkl_run_read(size_t threads, bool dynq, int mode, long count,
              ccol_success;
   }
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  ccol_event_reg regs[4] = {CCOL_EVENT_REG_INVALID, CCOL_EVENT_REG_INVALID,
-                            CCOL_EVENT_REG_INVALID, CCOL_EVENT_REG_INVALID};
-  bool added = filled && loop != CCOL_EVENT_LOOP_INVALID;
+  ccol_event_reg regs[4] = {CCOL_EVENT_REG_NULL, CCOL_EVENT_REG_NULL,
+                            CCOL_EVENT_REG_NULL, CCOL_EVENT_REG_NULL};
+  bool added = filled && loop != CCOL_EVENT_LOOP_NULL;
   for (int i = 0; i < nregs && added; i++) {
     ccol_selectable sel =
         dynq ? ccol_selectable_from_dynq(dq, ccol_select_read)
              : ccol_selectable_from_circq(cq, ccol_select_read);
     ccol_event_handlers_t h = {.on_readable = bkl_on_readable};
     regs[i] = ccol_event_loop_add(loop, sel, h, &c, NULL);
-    added = regs[i] != CCOL_EVENT_REG_INVALID;
+    added = regs[i] != CCOL_EVENT_REG_NULL;
   }
   if (added) {
     if (mode == BKL_RECV_ONE) bkl_wait_moved(&c, count);
@@ -14418,9 +14598,8 @@ static void bkl_run_read(size_t threads, bool dynq, int mode, long count,
     r->dispatches_later = atomic_load(&c.dispatches);
   }
   for (int i = 0; i < nregs; i++)
-    if (regs[i] != CCOL_EVENT_REG_INVALID)
-      ccol_event_loop_remove(loop, regs[i]);
-  if (loop != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(loop);
+    if (regs[i] != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, regs[i]);
+  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
   r->moved = atomic_load(&c.moved);
   r->left_in_queue = dynq ? ccol_dynmq_msg_count(dq) : ccol_circq_msg_count(cq);
   c_message_t m;
@@ -14495,13 +14674,13 @@ static void bkl_run_write(size_t threads, int mode, long capacity,
   ccol_circular_queue *cq = ccol_circular_queue_create((size_t)capacity, NULL);
   if (!cq) return;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  ccol_event_reg reg = CCOL_EVENT_REG_INVALID;
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_writable = bkl_on_writable};
     reg = ccol_event_loop_add(
         loop, ccol_selectable_from_circq(cq, ccol_select_write), h, &c, NULL);
   }
-  if (reg != CCOL_EVENT_REG_INVALID) {
+  if (reg != CCOL_EVENT_REG_NULL) {
     if (mode == BKL_SEND_ONE) bkl_wait_moved(&c, capacity);
     if (mode == BKL_NOTHING) bkl_wait_dispatches(&c, 1);
     evl_sleep_ms(200);
@@ -14510,14 +14689,14 @@ static void bkl_run_write(size_t threads, int mode, long capacity,
     r->dispatches_later = atomic_load(&c.dispatches);
     ccol_event_loop_remove(loop, reg);
   }
-  if (loop != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(loop);
+  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
   r->moved = atomic_load(&c.moved);
   r->left_in_queue = ccol_circq_msg_count(cq);
   c_message_t m;
   while (ccol_circq_try_recv_zc(cq, &m) == ccol_success) {
   }
   ccol_circular_queue_destroy(cq);
-  r->ok = reg != CCOL_EVENT_REG_INVALID;
+  r->ok = reg != CCOL_EVENT_REG_NULL;
 }
 
 /* Without the re-wake after a dispatch that sent a message, the listener
@@ -14583,13 +14762,13 @@ static void dsw_run(size_t threads, bool add_after_disable, dsw_result *r) {
   c_message_t fill = {.data = &bkl_token, .size = 1};
   bool filled = ccol_circq_try_send_zc(cq, &fill) == ccol_success;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  ccol_event_reg reg = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
   ccol_event_handlers_t h = {.on_writable = dsw_on_writable};
   ccol_selectable sel = ccol_selectable_from_circq(cq, ccol_select_write);
   if (add_after_disable) ccol_circq_disable_sending(cq);
-  if (loop != CCOL_EVENT_LOOP_INVALID)
+  if (loop != CCOL_EVENT_LOOP_NULL)
     reg = ccol_event_loop_add(loop, sel, h, &c, NULL);
-  if (reg != CCOL_EVENT_REG_INVALID) {
+  if (reg != CCOL_EVENT_REG_NULL) {
     if (!add_after_disable) {
       evl_sleep_ms(100);
       r->before_disable = atomic_load(&c.dispatches);
@@ -14603,14 +14782,14 @@ static void dsw_run(size_t threads, bool add_after_disable, dsw_result *r) {
     r->later = atomic_load(&c.dispatches);
     ccol_event_loop_remove(loop, reg);
   }
-  if (loop != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(loop);
+  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
   r->refused = atomic_load(&c.refused);
   r->left_in_queue = ccol_circq_msg_count(cq);
   c_message_t m;
   while (ccol_circq_try_recv_zc(cq, &m) == ccol_success) {
   }
   ccol_circular_queue_destroy(cq);
-  r->ok = filled && reg != CCOL_EVENT_REG_INVALID;
+  r->ok = filled && reg != CCOL_EVENT_REG_NULL;
 }
 
 /* A queue with sends off has to count as ready for the write direction;
@@ -14645,9 +14824,9 @@ TEST(ccol_event_loop, add_sets_err_str_to_null_on_success) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  bool created = loop != CCOL_EVENT_LOOP_INVALID;
+  bool created = loop != CCOL_EVENT_LOOP_NULL;
   char *err = (char *)"poison";
-  ccol_event_reg reg = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
   if (created) {
     ccol_event_handlers_t none = {0};
     reg = ccol_event_loop_add(loop,
@@ -14658,7 +14837,7 @@ TEST(ccol_event_loop, add_sets_err_str_to_null_on_success) {
   close(pfd[0]);
   close(pfd[1]);
   REQUIRE_TRUE(created);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
   REQUIRE_EQ((void *)err, NULL);
 }
 
@@ -14674,12 +14853,12 @@ static void msd_run(size_t threads, uint64_t *advanced, uint64_t *window,
   int sv[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t none = {0};
     ccol_event_reg reg = ccol_event_loop_add(
         loop, ccol_selectable_from_fd(sv[0], ccol_select_read), none, NULL,
         NULL);
-    if (reg != CCOL_EVENT_REG_INVALID) {
+    if (reg != CCOL_EVENT_REG_NULL) {
       close(sv[1]);
       sv[1] = -1;
       /* Gives the hang-up time to arrive and mute the registration. */
@@ -14865,8 +15044,8 @@ static void sib_run(size_t threads, bool dynq, ccol_select_dir dir,
              ccol_success;
   }
   ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  ccol_event_reg regs[2] = {CCOL_EVENT_REG_INVALID, CCOL_EVENT_REG_INVALID};
-  bool added = filled && loop != CCOL_EVENT_LOOP_INVALID;
+  ccol_event_reg regs[2] = {CCOL_EVENT_REG_NULL, CCOL_EVENT_REG_NULL};
+  bool added = filled && loop != CCOL_EVENT_LOOP_NULL;
   for (int i = 0; i < 2 && added; i++) {
     bool idle_now = (i == 0) == idle_first;
     ccol_selectable sel = dynq ? ccol_selectable_from_dynq(dq, dir)
@@ -14878,7 +15057,7 @@ static void sib_run(size_t threads, bool dynq, ccol_select_dir dir,
       h.on_writable = sib_on_writable;
     regs[i] =
         ccol_event_loop_add(loop, sel, h, idle_now ? &idle_c : &act_c, NULL);
-    added = regs[i] != CCOL_EVENT_REG_INVALID;
+    added = regs[i] != CCOL_EVENT_REG_NULL;
   }
   if (added) {
     for (int i = 0; i < 10000 && atomic_load(&act_c.moved) < count; i++)
@@ -14889,9 +15068,8 @@ static void sib_run(size_t threads, bool dynq, ccol_select_dir dir,
     r->idle_later = atomic_load(&idle_c.dispatches);
   }
   for (int i = 0; i < 2; i++)
-    if (regs[i] != CCOL_EVENT_REG_INVALID)
-      ccol_event_loop_remove(loop, regs[i]);
-  if (loop != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(loop);
+    if (regs[i] != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, regs[i]);
+  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
   r->active_moved = atomic_load(&act_c.moved);
   r->left_in_queue = dynq ? ccol_dynmq_msg_count(dq) : ccol_circq_msg_count(cq);
   c_message_t m;
@@ -15039,19 +15217,19 @@ static bool rlw_run(bool use_select, bool by_destroy, bool *setup_ok) {
   if (pipe(c.pfd) != 0) return false;
   c.cq = ccol_circular_queue_create(8, NULL);
   c.l1 = ccol_event_loop_create(8, 1, 1, NULL);
-  ccol_event_loop l2 = CCOL_EVENT_LOOP_INVALID;
-  ccol_event_reg r2 = CCOL_EVENT_REG_INVALID;
-  bool ok = c.cq && c.l1 != CCOL_EVENT_LOOP_INVALID;
+  ccol_event_loop l2 = CCOL_EVENT_LOOP_NULL;
+  ccol_event_reg r2 = CCOL_EVENT_REG_NULL;
+  bool ok = c.cq && c.l1 != CCOL_EVENT_LOOP_NULL;
   pthread_t st;
   bool st_started = false;
   if (ok && !use_select) {
     l2 = ccol_event_loop_create(8, 1, 1, NULL);
-    ok = l2 != CCOL_EVENT_LOOP_INVALID;
+    ok = l2 != CCOL_EVENT_LOOP_NULL;
     if (ok) {
       ccol_event_handlers_t h = {.on_readable = rlw_on_staying};
       r2 = ccol_event_loop_add(
           l2, ccol_selectable_from_circq(c.cq, ccol_select_read), h, &c, NULL);
-      ok = r2 != CCOL_EVENT_REG_INVALID;
+      ok = r2 != CCOL_EVENT_REG_NULL;
     }
   } else if (ok) {
     st_started = pthread_create(&st, NULL, rlw_select_thread, &c) == 0;
@@ -15062,7 +15240,7 @@ static bool rlw_run(bool use_select, bool by_destroy, bool *setup_ok) {
       evl_sleep_ms(1);
     ok = ok && _ccol_circq_test_has_sel_read_waiter_for_tests(c.cq);
   }
-  ccol_event_reg rb = CCOL_EVENT_REG_INVALID, r1 = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg rb = CCOL_EVENT_REG_NULL, r1 = CCOL_EVENT_REG_NULL;
   if (ok) {
     ccol_event_handlers_t hb = {.on_readable = rlw_on_block};
     rb = ccol_event_loop_add(
@@ -15071,7 +15249,7 @@ static bool rlw_run(bool use_select, bool by_destroy, bool *setup_ok) {
     ccol_event_handlers_t h1 = {.on_readable = rlw_on_leaving};
     r1 = ccol_event_loop_add(
         c.l1, ccol_selectable_from_circq(c.cq, ccol_select_read), h1, &c, NULL);
-    ok = rb != CCOL_EVENT_REG_INVALID && r1 != CCOL_EVENT_REG_INVALID;
+    ok = rb != CCOL_EVENT_REG_NULL && r1 != CCOL_EVENT_REG_NULL;
   }
   if (ok) {
     ssize_t wr = write(c.pfd[1], "x", 1);
@@ -15112,10 +15290,10 @@ static bool rlw_run(bool use_select, bool by_destroy, bool *setup_ok) {
     }
   }
   if (st_started) pthread_join(st, NULL);
-  if (r2 != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(l2, r2);
-  if (l2 != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(l2);
-  if (c.l1 != CCOL_EVENT_LOOP_INVALID && !(by_destroy && dt_started)) {
-    if (rb != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(c.l1, rb);
+  if (r2 != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(l2, r2);
+  if (l2 != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(l2);
+  if (c.l1 != CCOL_EVENT_LOOP_NULL && !(by_destroy && dt_started)) {
+    if (rb != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(c.l1, rb);
     ccol_event_loop_destroy(c.l1);
   }
   if (c.cq) {
@@ -15182,8 +15360,9 @@ static void *ifs_open_gate(void *arg) {
 
 /* Runs in a forked child. A write callback that is already running when its
  * registration is removed sends one message while its queue's destroy waits
- * for it. Returns only if the destroy didn't assert. */
-static void ifs_child(bool dynq) {
+ * for it. It never returns: it exits 0 when the destroy didn't assert. */
+static __attribute__((noreturn)) void ifs_child(bool dynq) {
+  test_child_no_core();
   int dn = open("/dev/null", O_WRONLY);
   if (dn >= 0) {
     dup2(dn, STDOUT_FILENO);
@@ -15196,27 +15375,27 @@ static void ifs_child(bool dynq) {
   atomic_init(&c.gate, false);
   ccol_circular_queue *cq = dynq ? NULL : ccol_circular_queue_create(4, NULL);
   ccol_dynamic_queue *dq = dynq ? ccol_dynamic_queue_create(NULL) : NULL;
-  if (!cq && !dq) _exit(2);
+  if (!cq && !dq) test_child_exit(2);
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  if (loop == CCOL_EVENT_LOOP_INVALID) _exit(2);
+  if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
   ccol_event_handlers_t h = {.on_writable = ifs_on_writable};
   ccol_selectable sel = dynq
                             ? ccol_selectable_from_dynq(dq, ccol_select_write)
                             : ccol_selectable_from_circq(cq, ccol_select_write);
   ccol_event_reg reg = ccol_event_loop_add(loop, sel, h, &c, NULL);
-  if (reg == CCOL_EVENT_REG_INVALID) _exit(2);
+  if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
   for (int i = 0; i < 5000 && !atomic_load(&c.entered); i++) evl_sleep_ms(1);
-  if (!atomic_load(&c.entered)) _exit(2);
-  if (ccol_event_loop_remove(loop, reg) != ccol_success) _exit(2);
+  if (!atomic_load(&c.entered)) test_child_exit(2);
+  if (ccol_event_loop_remove(loop, reg) != ccol_success) test_child_exit(2);
   pthread_t gt;
-  if (pthread_create(&gt, NULL, ifs_open_gate, &c) != 0) _exit(2);
+  if (pthread_create(&gt, NULL, ifs_open_gate, &c) != 0) test_child_exit(2);
   /* The queue is empty at this point, and the running callback sends one
    * message before this destroy is allowed to free the queue. */
   if (dynq)
     ccol_dynamic_queue_destroy(dq);
   else
     ccol_circular_queue_destroy(cq);
-  _exit(0);
+  test_child_exit(0);
 }
 
 /* A destroy that counts the messages before it waits for the running
@@ -15321,19 +15500,19 @@ TEST(ccol_select, a_regular_file_fd_is_refused) {
   ccol_retval_t rv_select = ccol_select_timed(&idx, 1, &sel, 0);
   ccol_retval_t rv_select_block = ccol_select(&idx, 1, &sel);
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  ccol_event_reg reg = CCOL_EVENT_REG_INVALID;
+  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
   char *err = NULL;
-  if (loop != CCOL_EVENT_LOOP_INVALID) {
+  if (loop != CCOL_EVENT_LOOP_NULL) {
     ccol_event_handlers_t h = {.on_readable = rlw_on_leaving};
     reg = ccol_event_loop_add(loop, sel, h, NULL, &err);
-    if (reg != CCOL_EVENT_REG_INVALID) ccol_event_loop_remove(loop, reg);
+    if (reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, reg);
     ccol_event_loop_destroy(loop);
   }
   close(fd);
   REQUIRE_EQ(rv_select, ccol_unexpected_failure);
   REQUIRE_EQ(rv_select_block, ccol_unexpected_failure);
   REQUIRE_EQ(idx, (size_t)12345);
-  REQUIRE_EQ(reg, CCOL_EVENT_REG_INVALID);
+  REQUIRE_EQ(reg, CCOL_EVENT_REG_NULL);
   REQUIRE_NE((void *)err, NULL);
   if (err) REQUIRE_NE((void *)strstr(err, "a system call failed"), NULL);
 }

@@ -230,8 +230,8 @@ TEST(chttpsvr_sigpipe,
   sigset_t old;
   _block_sigpipe(&old);
 
-  chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-  bool created = srv != CHTTPSVR_INVALID;
+  chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+  bool created = srv != CHTTPSVR_NULL;
   bool default_after_create = _sigpipe_has_default_disposition();
   bool registered =
       created &&

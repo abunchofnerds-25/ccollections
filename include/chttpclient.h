@@ -138,7 +138,7 @@ SOFTWARE.
  * chttpcli is an opaque VALUE handle that packs a slot index and a
  * generation into one value. Never cast it to or from void*, never compare it
  * through a pointer cast, and never treat it as an address. Compare it
- * directly against CHTTPCLI_INVALID, or test it for truth: CHTTPCLI_INVALID
+ * directly against CHTTPCLI_NULL, or test it for truth: CHTTPCLI_NULL
  * is 0, so `if (!cli)` asks the same question (is there a client here?).
  * Inside the library every use of a chttpcli goes through a slot table that
  * the library owns before anything touches the client object behind the
@@ -152,7 +152,7 @@ typedef uint64_t chttpcli;
 
 /** @brief The sentinel value for "no client", which plays the role of NULL
  *  for a chttpcli. */
-#define CHTTPCLI_INVALID ((chttpcli)0)
+#define CHTTPCLI_NULL ((chttpcli)0)
 
 /** The connect timeout of a new client: 30 s, in microseconds (see
  *  chttpclient_set_connect_timeout). */
@@ -454,14 +454,14 @@ void chttp_request_free(chttp_request_t *req);
  * @param mprocs   A custom allocator, or NULL for malloc/free.
  * @param err_str  Optional; receives a static error string when the call
  *                 fails.
- * @return A new client handle, or CHTTPCLI_INVALID on failure.
+ * @return A new client handle, or CHTTPCLI_NULL on failure.
  */
 chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str);
 
 /**
  * @brief Create an HTTP client with the default allocator.
  *
- * @return A new client handle, or CHTTPCLI_INVALID on failure.
+ * @return A new client handle, or CHTTPCLI_NULL on failure.
  */
 static inline __attribute__((always_inline)) chttpcli
 chttpclient_create(char **err_str) {
@@ -498,7 +498,7 @@ chttpclient_create(char **err_str) {
  *
  * @param cli  The client handle.
  * @param n    The pool size. 0 means the CPU count.
- * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_INVALID
+ * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_NULL
  *         or a stale handle of a client that has been destroyed.
  */
 ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
@@ -537,7 +537,7 @@ ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
  *
  * @param cli  The client handle.
  * @param us   The timeout in microseconds. 0 means no timeout.
- * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_INVALID
+ * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_NULL
  *         or a stale handle of a client that has been destroyed.
  */
 ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, uint64_t us);
@@ -582,7 +582,7 @@ ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, uint64_t us);
  *
  * @param cli  The client handle.
  * @param us   The timeout in microseconds. 0 means no timeout.
- * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_INVALID
+ * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_NULL
  *         or a stale handle of a client that has been destroyed.
  */
 ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, uint64_t us);
@@ -618,7 +618,7 @@ ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, uint64_t us);
  *
  * @param cli  The client handle.
  * @param us   The timeout in microseconds. 0 means no timeout.
- * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_INVALID
+ * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_NULL
  *         or a stale handle of a client that has been destroyed.
  */
 ccol_retval_t chttpclient_set_inactivity_timeout(chttpcli cli, uint64_t us);
@@ -661,7 +661,7 @@ ccol_retval_t chttpclient_set_inactivity_timeout(chttpcli cli, uint64_t us);
  * @param cli        The client handle.
  * @param max_bytes  The largest buffered response body in bytes. 0 means no
  *                   limit.
- * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_INVALID
+ * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_NULL
  *         or a stale handle of a client that has been destroyed.
  */
 ccol_retval_t chttpclient_set_max_response_body_size(chttpcli cli,
@@ -707,7 +707,7 @@ ccol_retval_t chttpclient_set_max_response_body_size(chttpcli cli,
  * @param tls  The TLS configuration to copy, or NULL to put the defaults
  *             back.
  * @return ccol_success, ccol_invalid_args or ccol_not_enough_memory.
- *         ccol_invalid_args is returned for a cli of CHTTPCLI_INVALID, a
+ *         ccol_invalid_args is returned for a cli of CHTTPCLI_NULL, a
  *         stale cli of a client that has been destroyed, exactly one of
  *         cert_path and key_path set, and insecure_skip_verify set together
  *         with a ca_bundle_path.
@@ -758,7 +758,7 @@ ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
  * function replaces or releases the engine logger, or until the process
  * exits.
  *
- * Calling it with cl == CLOG_INVALID releases the installed engine logger:
+ * Calling it with cl == CLOG_NULL releases the installed engine logger:
  * the engine closes its derived logger and every later engine start uses
  * the fallback logger again. While the engine runs the release is refused
  * with ccol_not_permitted, since the engine logs through that logger, so
@@ -767,11 +767,11 @@ ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
  * through that logger, and its destination, its file descriptor and cl's
  * allocator may go away.
  *
- * A cl other than CLOG_INVALID that names no open logger (it's closed or
+ * A cl other than CLOG_NULL that names no open logger (it's closed or
  * stale) gives ccol_invalid_args and changes nothing, and the engine keeps
  * the logger it had.
  *
- * @param cl  The parent logger to derive from, or CLOG_INVALID to release
+ * @param cl  The parent logger to derive from, or CLOG_NULL to release
  *            the installed engine logger.
  * @return ccol_success, ccol_invalid_args when cl is closed or stale,
  *         ccol_not_enough_memory when the derived logger can't be
@@ -912,7 +912,7 @@ void chttpcli_engine_wait(void);
  * _ccol_fatal_err(), which calls abort() and raises SIGABRT, since that is
  * safer than risking a use-after-free or a double free, and it does so
  * whether the two destroy calls come one after the other or overlap in
- * time. The one exception is CHTTPCLI_INVALID (0), which is a silent
+ * time. The one exception is CHTTPCLI_NULL (0), which is a silent
  * no-op, so it fits the idiom of chttpclient_destroy where a destroy sets
  * the handle to NULL.
  *
@@ -938,8 +938,8 @@ void __chttpclient_destroy(chttpcli cli);
 /**
  * @brief The RAII cleanup helper, used with _ccol_destructor.
  *
- * Calling it on a *pp that is already CHTTPCLI_INVALID is a safe no-op.
- * Calling it on a stale handle that isn't CHTTPCLI_INVALID, one whose
+ * Calling it on a *pp that is already CHTTPCLI_NULL is a safe no-op.
+ * Calling it on a stale handle that isn't CHTTPCLI_NULL, one whose
  * client something else has already destroyed, is the same fatal misuse
  * that __chttpclient_destroy describes.
  */
@@ -947,12 +947,12 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
     chttpcli *pp) {
   if (pp && *pp) {
     __chttpclient_destroy(*pp);
-    *pp = CHTTPCLI_INVALID;
+    *pp = CHTTPCLI_NULL;
   }
 }
 
 /**
- * @brief Destroy an HTTP client and set the handle to CHTTPCLI_INVALID.
+ * @brief Destroy an HTTP client and set the handle to CHTTPCLI_NULL.
  *
  * The macro blocks until every request in flight has finished. Another
  * thread may be running a request at the same time as this call, and the
@@ -976,7 +976,7 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
   do {                                            \
     __typeof__(cli) *slot = &(cli);               \
     __chttpclient_destroy(*slot);                 \
-    *slot = CHTTPCLI_INVALID;                     \
+    *slot = CHTTPCLI_NULL;                        \
   } while (0)
 
 /* ========================================================================== */
@@ -990,7 +990,7 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *  when the scope ends.
  */
 #define chttpcli_declare_scoped(name) \
-  chttpcli name _ccol_destructor(___chttpclient_destroy) = CHTTPCLI_INVALID;
+  chttpcli name _ccol_destructor(___chttpclient_destroy) = CHTTPCLI_NULL;
 
 /**
  * @brief Declare and initialize an HTTP client, and call _ccol_fatal_err
@@ -1010,7 +1010,7 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * @endcode
  */
 #define chttpcli_construct(name)                                \
-  chttpcli name = CHTTPCLI_INVALID;                             \
+  chttpcli name = CHTTPCLI_NULL;                                \
   do {                                                          \
     char *_clic_err = NULL;                                     \
     (name) = chttpclient_create(&_clic_err);                    \
@@ -1025,15 +1025,15 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *        on its own when the scope ends, and call _ccol_fatal_err if the
  *        creation fails.
  */
-#define chttpcli_construct_scoped(name)                                      \
-  chttpcli name _ccol_destructor(___chttpclient_destroy) = CHTTPCLI_INVALID; \
-  do {                                                                       \
-    char *_clic_err = NULL;                                                  \
-    (name) = chttpclient_create(&_clic_err);                                 \
-    if (!(name)) {                                                           \
-      _ccol_fatal_err("chttpcli_construct_scoped('%s'): %s", #name,          \
-                      _clic_err ? _clic_err : "unknown error");              \
-    }                                                                        \
+#define chttpcli_construct_scoped(name)                                   \
+  chttpcli name _ccol_destructor(___chttpclient_destroy) = CHTTPCLI_NULL; \
+  do {                                                                    \
+    char *_clic_err = NULL;                                               \
+    (name) = chttpclient_create(&_clic_err);                              \
+    if (!(name)) {                                                        \
+      _ccol_fatal_err("chttpcli_construct_scoped('%s'): %s", #name,       \
+                      _clic_err ? _clic_err : "unknown error");           \
+    }                                                                     \
   } while (0)
 
 /* ========================================================================== */
@@ -1207,7 +1207,7 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * @return ccol_success
  *             The request finished and *resp_out is valid.
  *         ccol_invalid_args
- *             An argument is NULL; or cli is CHTTPCLI_INVALID, or a stale
+ *             An argument is NULL; or cli is CHTTPCLI_NULL, or a stale
  *             handle of a client that has been destroyed; or req sets a
  *             "Transfer-Encoding" header (the doc comment of
  *             chttp_request_set_header explains why the client always
@@ -1373,7 +1373,7 @@ typedef struct chttpcli_async_result {
  *            library copies or serializes everything it needs before
  *            returning.
  * @return A future, or NULL if the request can't even be queued: when req
- *         is NULL, when cli is CHTTPCLI_INVALID or a stale handle of a
+ *         is NULL, when cli is CHTTPCLI_NULL or a stale handle of a
  *         client that has been destroyed, for a malformed URL, for TLS
  *         that can't be used, when memory runs out, and when the engine
  *         fails to start. On success the caller owns the future and must
@@ -1575,7 +1575,7 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
  * default client and destroys it on its own when the process exits, from a
  * handler that it registers with atexit(3) the first time it builds the
  * default client; calling this function from an exit handler that runs
- * after that one gives CHTTPCLI_INVALID. If you destroy it anyway this
+ * after that one gives CHTTPCLI_NULL. If you destroy it anyway this
  * function doesn't crash, since the module knows the handle and clears its
  * own reference to it. But every later call to chttp_default_client,
  * chttp_do, chttp_get and the other wrappers then finds no default client
@@ -1584,7 +1584,7 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
  * client whose lifetime you bound and control yourself, make your own with
  * chttpclient_create or chttpclient_create_mp.
  *
- * @return The handle of the default client, or CHTTPCLI_INVALID if its
+ * @return The handle of the default client, or CHTTPCLI_NULL if its
  *         initialization fails.
  */
 chttpcli chttp_default_client(void);

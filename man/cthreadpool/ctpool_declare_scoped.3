@@ -16,7 +16,7 @@ destroyed when the variable leaves scope, exactly as ctpool_destroy()
 would destroy it.
 
 You must still assign the variable before you use it. If it is still
-CTPOOL_INVALID at the end of scope, the cleanup does nothing.
+CTPOOL_NULL at the end of scope, the cleanup does nothing.
 .fi
 .SH PARAMETERS
 .nf

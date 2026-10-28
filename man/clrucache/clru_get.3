@@ -72,7 +72,7 @@ val_ptr  A pointer to the value type, NOT a cmap_pair *.
 ccol_success           The macro delivered the value through val_ptr.
 ccol_key_not_found     The key is absent and there is no getter, or
                        the getter failed.
-ccol_invalid_args      cache is CLRU_CACHE_INVALID, or cache is a
+ccol_invalid_args      cache is CLRU_CACHE_NULL, or cache is a
                        stale handle that a call already destroyed, or
                        key is a NULL character pointer, which is not a
                        string.

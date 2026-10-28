@@ -525,6 +525,16 @@ typedef struct clog_shared {
   /* Flushes of this target's async writer thread that were started by an
    * interval running out, with or without a timed wait before them. */
   _Atomic size_t test_writer_interval_flushes;
+  /* Synchronous, non-fatal records that wait for the mutex of this target
+   * right now. */
+  _Atomic size_t test_sync_lock_waiters;
+  /* Synchronous, non-fatal records that got the mutex of this target and
+   * passed the locked level check, so their write follows under the mutex. */
+  _Atomic size_t test_sync_records_locked;
+  /* The mask of this target's async writer thread as it was the last time
+   * the thread brought it in line with the policy: bit 0 SIGPIPE blocked,
+   * bit 1 SIGXFSZ blocked, bit 2 set once the thread has recorded it. */
+  _Atomic unsigned test_writer_blocked_signals;
 #endif
 } clog_shared_t;
 
@@ -730,20 +740,30 @@ void _clog_test_force_next_fresh_slot_registration_failure(bool force) {
   atomic_store(&_clog_test_force_next_fresh_slot_reg_failure, force);
 }
 
-/* See the doc comment of _clog_test_set_close_finalize_delay_us() in
- * clogger.h. Unlike the hook just above, this one does NOT disarm itself on
- * purpose, because a test needs it armed across the whole clog_close() call
- * under test and not just for its first use. */
-static _Atomic unsigned int _clog_test_close_finalize_delay_us = 0;
-static _Atomic bool _clog_test_close_finalize_delay_entered_state = false;
+/* See the doc comment of _clog_test_hold_close_finalize() in
+ * test_helpers/clogger.h. Unlike the hook just above, this gate doesn't
+ * disarm itself: a close waits at it until the test releases it, or until
+ * CLOG_TEST_CLOSE_HOLD_MAX_US has passed, so a test that never gets to its
+ * release fails instead of hanging. */
+#define CLOG_TEST_CLOSE_HOLD_MAX_US 30000000U
+static _Atomic bool _clog_test_close_finalize_hold = false;
+static _Atomic bool _clog_test_close_finalize_entered_state = false;
 
-void _clog_test_set_close_finalize_delay_us(unsigned int delay_us) {
-  atomic_store(&_clog_test_close_finalize_delay_entered_state, false);
-  atomic_store(&_clog_test_close_finalize_delay_us, delay_us);
+void _clog_test_hold_close_finalize(bool hold) {
+  if (hold) atomic_store(&_clog_test_close_finalize_entered_state, false);
+  atomic_store(&_clog_test_close_finalize_hold, hold);
 }
 
-bool _clog_test_close_finalize_delay_entered(void) {
-  return atomic_load(&_clog_test_close_finalize_delay_entered_state);
+bool _clog_test_close_finalize_entered(void) {
+  return atomic_load(&_clog_test_close_finalize_entered_state);
+}
+
+/* How many closes have found a call still pinning their handle and started
+ * to wait for it (step 3 of clog_close). */
+static _Atomic size_t _clog_test_close_pin_waits_state = 0;
+
+size_t _clog_test_close_pin_waits(void) {
+  return atomic_load(&_clog_test_close_pin_waits_state);
 }
 
 /* See the doc comment of _clog_test_set_close_release_window_us() in
@@ -878,7 +898,7 @@ static void _clog_resolve_unpin(struct clogger *raw) {
 /*
  * Makes a fresh handle for a fully constructed lg. It's called once from the
  * constructor path, after lg and sh are otherwise completely built, and also
- * from clog_derive(). It gives CLOG_INVALID when the slot table runs out of
+ * from clog_derive(). It gives CLOG_NULL when the slot table runs out of
  * memory, which is an ordinary failure and not a fatal one. It also
  * registers lg->shared in clog_slot_table.live_shareds (see "Fork safety"
  * below) without adding an entry that is already there: a brand new root
@@ -888,7 +908,7 @@ static void _clog_resolve_unpin(struct clogger *raw) {
  * It closely follows _chttpsvr_handle_slot_acquire (in src/chttpserver.c).
  * Index and generation encode as (idx << 32) | generation, and the
  * generation wraps around and skips 0, which is reserved: it means "never
- * used yet" and tells CLOG_INVALID apart from a real handle. One thing is
+ * used yet" and tells CLOG_NULL apart from a real handle. One thing is
  * added to that shape, which is that every acquire sets slot->freed = false
  * unconditionally. A slot reused from free_indices has freed == true from
  * its previous occupant's close, so without this reset a handle born from
@@ -905,7 +925,7 @@ static clog _clog_handle_acquire(struct clogger *lg) {
    * table's vectors are gone. */
   if (__builtin_expect(clog_slot_table.slots == NULL, 0)) {
     _ccol_rw_lock_unlock(clog_slot_table.rwlock);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
 
   /* Outside RUNNING_UNIT_TESTS this disappears completely: in a non-test
@@ -929,12 +949,12 @@ static clog _clog_handle_acquire(struct clogger *lg) {
      * like a table that can't grow. */
     if (cvector_elem_count(clog_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
       _ccol_rw_lock_unlock(clog_slot_table.rwlock);
-      return CLOG_INVALID;
+      return CLOG_NULL;
     }
     clog_slot_t fresh = {0};
     if (cvector_push_back(clog_slot_table.slots, &fresh) != ccol_success) {
       _ccol_rw_lock_unlock(clog_slot_table.rwlock);
-      return CLOG_INVALID;
+      return CLOG_NULL;
     }
     idx = (uint32_t)cvector_elem_count(clog_slot_table.slots) - 1;
     slot = (clog_slot_t *)cvector_at(clog_slot_table.slots, idx);
@@ -997,7 +1017,7 @@ static clog _clog_handle_acquire(struct clogger *lg) {
     slot->ptr = NULL;
     cvector_push_back(clog_slot_table.free_indices, &idx);
     _ccol_rw_lock_unlock(clog_slot_table.rwlock);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
 
   slot->generation++;
@@ -1017,7 +1037,7 @@ static clog _clog_handle_acquire(struct clogger *lg) {
     /* The one failure that can happen after lg->shared has already been
      * registered, so that registration is undone here. Otherwise a
      * pointer to a shared object stays in the set _clog_atfork_prepare walks
-     * and locks while the caller gets CLOG_INVALID and goes on to free that
+     * and locks while the caller gets CLOG_NULL and goes on to free that
      * object, and the process's next fork() locks a mutex inside freed
      * memory.
      *
@@ -1039,7 +1059,7 @@ static clog _clog_handle_acquire(struct clogger *lg) {
     slot->ptr = NULL;
     cvector_push_back(clog_slot_table.free_indices, &idx);
     _ccol_rw_lock_unlock(clog_slot_table.rwlock);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
 
   slot->ptr = lg;
@@ -1514,7 +1534,7 @@ __attribute__((destructor)) static void _cleanup_clog_slot_table(void) {
      entry points taking a lock on a destroyed object, which is undefined;
      without the destroy those entry points reach a defined outcome. An open
      or a derive after the table's release finds its vectors gone and fails
-     with CLOG_INVALID, a fork() then locks and unlocks nothing else, and a
+     with CLOG_NULL, a fork() then locks and unlocks nothing else, and a
      call on a stale handle stops at this module's _ccol_fatal_err. The order
      of destructors across translation units isn't ours to decide, so no
      arrangement of who runs first rules out either outcome. */
@@ -2968,7 +2988,42 @@ static short _clog_pollout_events(int fd) {
  * because it is the only part of the write loop that needs an object in
  * memory, and that way the loop itself keeps no stack canary on its
  * one-write-per-record path. */
+#ifdef RUNNING_UNIT_TESTS
+/* How many times a write to the watched output has met a full output and
+ * started to wait for room in _clog_wait_writable. The output is named by
+ * device and inode, so a descriptor that the logger made of its own for
+ * the same pipe counts too, and the waits of other outputs never do. */
+static _Atomic size_t _clog_test_writable_waits_state = 0;
+static _Atomic bool _clog_test_writable_watch_set = false;
+static _Atomic uint64_t _clog_test_writable_watch_dev = 0;
+static _Atomic uint64_t _clog_test_writable_watch_ino = 0;
+
+void _clog_test_watch_writable(int fd) {
+  struct stat st;
+  if (fd < 0 || fstat(fd, &st) != 0) {
+    atomic_store(&_clog_test_writable_watch_set, false);
+    return;
+  }
+  atomic_store(&_clog_test_writable_watch_dev, (uint64_t)st.st_dev);
+  atomic_store(&_clog_test_writable_watch_ino, (uint64_t)st.st_ino);
+  atomic_store(&_clog_test_writable_watch_set, true);
+}
+
+size_t _clog_test_writable_waits(void) {
+  return atomic_load(&_clog_test_writable_waits_state);
+}
+#endif /* RUNNING_UNIT_TESTS */
+
 static __attribute__((noinline)) bool _clog_wait_writable(int fd) {
+#ifdef RUNNING_UNIT_TESTS
+  {
+    struct stat st;
+    if (atomic_load(&_clog_test_writable_watch_set) && fstat(fd, &st) == 0 &&
+        (uint64_t)st.st_dev == atomic_load(&_clog_test_writable_watch_dev) &&
+        (uint64_t)st.st_ino == atomic_load(&_clog_test_writable_watch_ino))
+      atomic_fetch_add(&_clog_test_writable_waits_state, 1);
+  }
+#endif /* RUNNING_UNIT_TESTS */
   struct pollfd pfd = {
       .fd = fd, .events = _clog_pollout_events(fd), .revents = 0};
   int pr = poll(&pfd, 1, -1);
@@ -3834,10 +3889,28 @@ bool _clog_test_gz_dest_opened(void) {
 #define CLOG_TEST_COMPRESS_HOLD_MAX_US 30000000U
 static _Atomic bool _clog_test_compress_hold = false;
 static _Atomic size_t _clog_test_compressions_finished_state = 0;
+/* Set by a close that has asked a running compressor thread to stop and is
+ * about to wait for it; holding the gate clears it. */
+static _Atomic bool _clog_test_compressor_teardown_entered_state = false;
 
 void _clog_test_hold_compressions(bool hold) {
-  if (hold) atomic_store(&_clog_test_gz_dest_opened_state, false);
+  if (hold) {
+    atomic_store(&_clog_test_gz_dest_opened_state, false);
+    atomic_store(&_clog_test_compressor_teardown_entered_state, false);
+  }
   atomic_store(&_clog_test_compress_hold, hold);
+}
+
+bool _clog_test_compressor_teardown_entered(void) {
+  return atomic_load(&_clog_test_compressor_teardown_entered_state);
+}
+
+/* How many times an open has backed off from a target of the same file
+ * whose last close is still running. */
+static _Atomic size_t _clog_test_closing_target_waits_state = 0;
+
+size_t _clog_test_closing_target_waits(void) {
+  return atomic_load(&_clog_test_closing_target_waits_state);
 }
 
 size_t _clog_test_compressions_finished(void) {
@@ -3891,6 +3964,19 @@ static void _clog_test_recover_gate(void) {
     usleep(1000);
 }
 
+/* Whether the writer thread of the target behind logger had SIGPIPE and
+ * SIGXFSZ blocked when it last synced its mask; see the test helper header. */
+bool _clog_test_writer_blocked_signals(clog logger, bool *pipe_blocked,
+                                       bool *xfsz_blocked) {
+  struct clogger *lg = _clog_resolve(logger);
+  if (!lg) return false;
+  unsigned bits = atomic_load(&lg->shared->test_writer_blocked_signals);
+  _clog_resolve_unpin(lg);
+  *pipe_blocked = (bits & 1u) != 0;
+  *xfsz_blocked = (bits & 2u) != 0;
+  return (bits & 4u) != 0;
+}
+
 /* Timeouts of the timed wait of the async writer thread of the target behind
  * logger, or 0 for a handle that doesn't resolve. The count belongs to the
  * target, so the writer threads of other loggers in the process don't add to
@@ -3910,6 +3996,26 @@ size_t _clog_test_writer_interval_flushes(clog logger) {
   struct clogger *lg = _clog_resolve(logger);
   if (!lg) return 0;
   size_t n = atomic_load(&lg->shared->test_writer_interval_flushes);
+  _clog_resolve_unpin(lg);
+  return n;
+}
+
+/* Synchronous records of the target behind logger that wait for its mutex
+ * right now, or 0 for a handle that doesn't resolve. */
+size_t _clog_test_sync_lock_waiters(clog logger) {
+  struct clogger *lg = _clog_resolve(logger);
+  if (!lg) return 0;
+  size_t n = atomic_load(&lg->shared->test_sync_lock_waiters);
+  _clog_resolve_unpin(lg);
+  return n;
+}
+
+/* Synchronous records of the target behind logger that got as far as their
+ * write under its mutex, or 0 for a handle that doesn't resolve. */
+size_t _clog_test_sync_records_locked(clog logger) {
+  struct clogger *lg = _clog_resolve(logger);
+  if (!lg) return 0;
+  size_t n = atomic_load(&lg->shared->test_sync_records_locked);
   _clog_resolve_unpin(lg);
   return n;
 }
@@ -5120,6 +5226,9 @@ static void _shared_compressor_teardown(clog_shared_t *sh) {
   }
   _ccol_mutex_unlock(sh->mutex);
   if (!live) return;
+#ifdef RUNNING_UNIT_TESTS
+  atomic_store(&_clog_test_compressor_teardown_entered_state, true);
+#endif
   _ccol_thread_join(sh->compressor_thread);
   _ccol_cond_var_destroy(sh->compress_cv);
   sh->compressor_live = false;
@@ -7507,6 +7616,16 @@ static __attribute__((noinline, cold)) void _clog_writer_yield_to_fatal(
  * is. */
 static inline void _clog_writer_lock(clog_shared_t *sh) {
   _clog_thread_sync_signal_mask();
+#ifdef RUNNING_UNIT_TESTS
+  {
+    sigset_t cur;
+    sigemptyset(&cur);
+    if (_ccol_thread_sigmask(SIG_BLOCK, NULL, &cur) == 0)
+      atomic_store(&sh->test_writer_blocked_signals,
+                   4u | (sigismember(&cur, SIGPIPE) == 1 ? 1u : 0u) |
+                       (sigismember(&cur, SIGXFSZ) == 1 ? 2u : 0u));
+  }
+#endif /* RUNNING_UNIT_TESTS */
   if (__builtin_expect(
           atomic_load_explicit(&sh->fatal_waiters, memory_order_relaxed) != 0,
           0))
@@ -8066,14 +8185,14 @@ static bool _clog_facility_is_valid(clog_syslog_facility_t facility) {
 clog clog_create_from_fd_mp(int fd, clog_level_t min_level,
                             const clog_async_cfg_t *async_cfg,
                             ccol_memmgmt_procs_t *mprocs) {
-  if (fd < 0 || !_clog_level_is_valid(min_level)) return CLOG_INVALID;
+  if (fd < 0 || !_clog_level_is_valid(min_level)) return CLOG_NULL;
   int _fd_flags = fcntl(fd, F_GETFL);
-  if (_fd_flags == -1) return CLOG_INVALID;
+  if (_fd_flags == -1) return CLOG_NULL;
   int _accmode = _fd_flags & O_ACCMODE;
-  if (_accmode != O_WRONLY && _accmode != O_RDWR) return CLOG_INVALID;
-  if (!_ccol_verify_memmgmt_procs(mprocs, (char **)NULL)) return CLOG_INVALID;
+  if (_accmode != O_WRONLY && _accmode != O_RDWR) return CLOG_NULL;
+  if (!_ccol_verify_memmgmt_procs(mprocs, (char **)NULL)) return CLOG_NULL;
   struct clogger *lg = _alloc(fd, false, NULL, -1, min_level, mprocs);
-  if (!lg) return CLOG_INVALID;
+  if (!lg) return CLOG_NULL;
 
   if (async_cfg && !_shared_async_init(lg->shared, async_cfg)) {
     /* Copy this pointer before _logger_free(lg) below frees `lg` itself,
@@ -8084,11 +8203,11 @@ clog clog_create_from_fd_mp(int fd, clog_level_t min_level,
     _ccol_mutex_destroy(sh->mutex);
     _logger_free(lg);
     _shared_free_partial(sh);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
 
   clog h = _clog_handle_acquire(lg);
-  if (h == CLOG_INVALID) {
+  if (h == CLOG_NULL) {
     clog_shared_t *sh = lg->shared; /* see the identical note above */
     if (sh->async_enabled) _shared_async_teardown(sh);
     _shared_compressor_teardown(sh);
@@ -8096,7 +8215,7 @@ clog clog_create_from_fd_mp(int fd, clog_level_t min_level,
     _ccol_mutex_destroy(sh->mutex);
     _logger_free(lg);
     _shared_free_partial(sh);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
   return h;
 }
@@ -8166,8 +8285,8 @@ clog clog_create_from_file_mp(const char *path, clog_level_t min_level,
                               const clog_rotation_cfg_t *cfg,
                               const clog_async_cfg_t *async_cfg,
                               ccol_memmgmt_procs_t *mprocs) {
-  if (!path || !_clog_level_is_valid(min_level)) return CLOG_INVALID;
-  if (!_ccol_verify_memmgmt_procs(mprocs, (char **)NULL)) return CLOG_INVALID;
+  if (!path || !_clog_level_is_valid(min_level)) return CLOG_NULL;
+  if (!_ccol_verify_memmgmt_procs(mprocs, (char **)NULL)) return CLOG_NULL;
 
   /* A rotating logger opens the file's directory first and then the file
    * relative to it, keeps that directory open for its whole life, and every
@@ -8178,7 +8297,7 @@ clog clog_create_from_file_mp(const char *path, clog_level_t min_level,
   int fd;
   if (cfg && (cfg->size_rotation_enabled || cfg->time_rotation_enabled)) {
     dir_fd = _clog_open_log_dir(path);
-    if (dir_fd < 0) return CLOG_INVALID;
+    if (dir_fd < 0) return CLOG_NULL;
     fd = openat(dir_fd, _path_base(path),
                 O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
   } else {
@@ -8186,14 +8305,14 @@ clog clog_create_from_file_mp(const char *path, clog_level_t min_level,
   }
   if (fd < 0) {
     if (dir_fd >= 0) close(dir_fd);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
 
   struct clogger *lg = _alloc(fd, true, path, dir_fd, min_level, mprocs);
   if (!lg) {
     close(fd);
     if (dir_fd >= 0) close(dir_fd);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
 
   /* Identity of the directory entry this target writes; see
@@ -8266,7 +8385,7 @@ clog clog_create_from_file_mp(const char *path, clog_level_t min_level,
       _ccol_mutex_destroy(sh->mutex);
       _logger_free(lg);
       _shared_free_partial(sh);
-      return CLOG_INVALID;
+      return CLOG_NULL;
     }
   }
 
@@ -8283,11 +8402,11 @@ clog clog_create_from_file_mp(const char *path, clog_level_t min_level,
     _ccol_mutex_destroy(sh->mutex);
     _logger_free(lg);
     _shared_free_partial(sh);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
 
   clog h = _clog_handle_acquire(lg);
-  if (h == CLOG_INVALID) {
+  if (h == CLOG_NULL) {
     clog_shared_t *sh = lg->shared; /* see the identical note above */
     if (sh->async_enabled) _shared_async_teardown(sh);
     _shared_compressor_teardown(sh);
@@ -8295,7 +8414,7 @@ clog clog_create_from_file_mp(const char *path, clog_level_t min_level,
     _ccol_mutex_destroy(sh->mutex);
     _logger_free(lg);
     _shared_free_partial(sh);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
   return _clog_file_register_or_attach(h, lg->shared, min_level);
 }
@@ -8419,7 +8538,7 @@ static void _clog_shared_unref(clog_shared_t *sh) {
  * target with a new logger at its own level, exactly as clog_derive() joins
  * a target, if the two configurations match (see
  * _clog_file_targets_compatible()); if they differ it fails with
- * CLOG_INVALID. Two targets that both don't rotate stay independent: each
+ * CLOG_NULL. Two targets that both don't rotate stay independent: each
  * appends whole records to the file and neither renames it. An existing
  * target whose last close is still running gets waited for, since it can
  * still rotate and compress.
@@ -8468,7 +8587,7 @@ static clog _clog_file_register_or_attach(clog h, clog_shared_t *sh,
       _ccol_rw_lock_unlock(clog_slot_table.rwlock);
       if (!ok) {
         clog_close(h);
-        return CLOG_INVALID;
+        return CLOG_NULL;
       }
       return h;
     }
@@ -8481,6 +8600,9 @@ static clog _clog_file_register_or_attach(clog h, clog_shared_t *sh,
     _ccol_mutex_unlock(match->mutex);
     _ccol_rw_lock_unlock(clog_slot_table.rwlock);
     if (refs == 0) {
+#ifdef RUNNING_UNIT_TESTS
+      atomic_fetch_add(&_clog_test_closing_target_waits_state, 1);
+#endif /* RUNNING_UNIT_TESTS */
       /* usleep() isn't a pthread or sem primitive, so it needs no wrapper in
        * common.h; clog_close() waits the same way. */
       usleep(delay_us);
@@ -8488,14 +8610,14 @@ static clog _clog_file_register_or_attach(clog h, clog_shared_t *sh,
       continue;
     }
     clog_close(h);
-    if (!compatible) return CLOG_INVALID;
+    if (!compatible) return CLOG_NULL;
     struct clogger *joined = _logger_alloc(match, min_level);
     if (!joined) {
       _clog_shared_unref(match);
-      return CLOG_INVALID;
+      return CLOG_NULL;
     }
     clog jh = _clog_handle_acquire(joined);
-    if (jh == CLOG_INVALID) {
+    if (jh == CLOG_NULL) {
       _logger_free(joined);
       _clog_shared_unref(match);
     }
@@ -8582,6 +8704,10 @@ void clog_close(clog h) {
   {
     uint32_t idx = (uint32_t)(h >> 32);
     unsigned int delay_us = 1;
+#ifdef RUNNING_UNIT_TESTS
+    if (ccol_pintable_pins(&clog_pintable, idx) > 0)
+      atomic_fetch_add(&_clog_test_close_pin_waits_state, 1);
+#endif /* RUNNING_UNIT_TESTS */
     while (ccol_pintable_pins(&clog_pintable, idx) > 0) {
       usleep(delay_us);
       if (delay_us < 1000) delay_us *= 2;
@@ -8589,16 +8715,17 @@ void clog_close(clog h) {
   }
 
 #ifdef RUNNING_UNIT_TESTS
-  /* Widens the window where in_use is false and freed is false, from here to
-   * step 4 below, deterministically and only for a test; see the doc comment
-   * of _clog_test_set_close_finalize_delay_us(). Outside a test that arms it,
-   * it reads a plain 0 and does nothing. */
-  {
-    unsigned int d = atomic_load(&_clog_test_close_finalize_delay_us);
-    if (d) {
-      atomic_store(&_clog_test_close_finalize_delay_entered_state, true);
-      usleep(d);
-    }
+  /* Holds the close in the window where in_use is false and freed is false,
+   * from here to step 4 below, for as long as a test keeps the gate held;
+   * see the doc comment of _clog_test_hold_close_finalize(). Outside a test
+   * that holds it, it reads a plain false and does nothing. */
+  if (atomic_load(&_clog_test_close_finalize_hold)) {
+    atomic_store(&_clog_test_close_finalize_entered_state, true);
+    for (unsigned int waited = 0;
+         atomic_load(&_clog_test_close_finalize_hold) &&
+         waited < CLOG_TEST_CLOSE_HOLD_MAX_US;
+         waited += 1000)
+      usleep(1000);
   }
 #endif
 
@@ -8694,7 +8821,7 @@ clog clog_derive(clog parent_h) {
 clog _clog_derive_checked(clog parent_h, ccol_retval_t *rv) {
   *rv = ccol_invalid_args;
   struct clogger *parent = _clog_resolve(parent_h);
-  if (!parent) return CLOG_INVALID;
+  if (!parent) return CLOG_NULL;
   *rv = ccol_not_enough_memory;
 
   /* min_level is _Atomic, so reading it directly here, as _clog_write()'s
@@ -8702,7 +8829,7 @@ clog _clog_derive_checked(clog parent_h, ccol_retval_t *rv) {
   struct clogger *child = _logger_alloc(parent->shared, parent->min_level);
   if (!child) {
     _clog_resolve_unpin(parent);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
 
   /* Copy parent's fields into the child's own field map under
@@ -8731,7 +8858,7 @@ clog _clog_derive_checked(clog parent_h, ccol_retval_t *rv) {
         _ccol_mutex_unlock(parent->fields_mutex);
         _logger_free(child);
         _clog_resolve_unpin(parent);
-        return CLOG_INVALID;
+        return CLOG_NULL;
       }
     }
   }
@@ -8747,7 +8874,7 @@ clog _clog_derive_checked(clog parent_h, ccol_retval_t *rv) {
   _ccol_mutex_unlock(parent->shared->mutex);
 
   clog h = _clog_handle_acquire(child);
-  if (h == CLOG_INVALID) {
+  if (h == CLOG_NULL) {
     /* child->shared == parent->shared, and parent->shared is still fully
      * alive here because parent's pin is held through this whole function,
      * so reading child->shared->m_procs inside _logger_free(child) below is
@@ -8757,7 +8884,7 @@ clog _clog_derive_checked(clog parent_h, ccol_retval_t *rv) {
     _ccol_mutex_unlock(parent->shared->mutex);
     _logger_free(child);
     _clog_resolve_unpin(parent);
-    return CLOG_INVALID;
+    return CLOG_NULL;
   }
 
   _clog_resolve_unpin(parent);
@@ -9058,7 +9185,13 @@ _clog_write_sync_body(struct clogger *lg, clog_level_t level, const char *file,
          !S_ISREG(st.st_mode) && !S_ISBLK(st.st_mode)))
       lg->shared->sink_kind |= CLOG_SINK_FATAL_BOUND;
   } else {
+#ifdef RUNNING_UNIT_TESTS
+    atomic_fetch_add(&lg->shared->test_sync_lock_waiters, 1);
+#endif
     _ccol_mutex_lock(lg->shared->mutex);
+#ifdef RUNNING_UNIT_TESTS
+    atomic_fetch_sub(&lg->shared->test_sync_lock_waiters, 1);
+#endif
   }
 
   /* CLOG_FATAL skips the level filter, because the reason for a stop must
@@ -9079,6 +9212,9 @@ _clog_write_sync_body(struct clogger *lg, clog_level_t level, const char *file,
     _ccol_mutex_unlock(lg->shared->mutex);
     return false;
   }
+#ifdef RUNNING_UNIT_TESTS
+  if (!fatal) atomic_fetch_add(&lg->shared->test_sync_records_locked, 1);
+#endif
 
   const clog_format_t log_fmt = lg->shared->format;
 

@@ -49,7 +49,7 @@ SOFTWARE.
  * ccol_event_loop_add makes a public ccol_event_reg handle for a new
  * registration, that step fails exactly as a failed growth allocation of the
  * slot table would, whatever allocator the target loop uses, and
- * ccol_event_loop_add returns CCOL_EVENT_REG_INVALID with nothing put into
+ * ccol_event_loop_add returns CCOL_EVENT_REG_NULL with nothing put into
  * the registry.
  *
  * A test can hit that failure every time this way, which fault injection
@@ -70,7 +70,7 @@ void _ccol_event_loop_test_force_next_reg_slot_acquire_failure(void);
  * every time: reg's handle slot is taken BEFORE reg goes into the registry of
  * fds and queues, not after. Without the value a test can only see the end
  * state, and both orders give the same one, ccol_event_loop_add returning
- * CCOL_EVENT_REG_INVALID and ccol_event_loop_reg_count() back at 0, because
+ * CCOL_EVENT_REG_NULL and ccol_event_loop_reg_count() back at 0, because
  * rolling back a failure after the wiring restores the count too. A snapshot
  * of 0 proves that the loop hadn't counted this call's registration yet, so
  * it hadn't wired it yet when the forced failure happened.
@@ -220,6 +220,10 @@ void _ccol_event_loop_test_fail_next_reg_sync_init(void);
  * disarms the counts that haven't run yet.
  */
 void _ccol_select_test_short_next_capped_waits(uint32_t count);
+
+/* How many of the counts armed by _ccol_select_test_short_next_capped_waits()
+ * haven't ended a capped wait yet. */
+uint32_t _ccol_select_test_short_capped_waits_left(void);
 
 /**
  * @brief For tests only: how many times a thread entered the delay that

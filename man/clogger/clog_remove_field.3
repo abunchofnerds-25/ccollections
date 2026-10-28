@@ -23,7 +23,7 @@ key     Field name to remove. The match is exact and case-sensitive.
 .SH NOTES
 .nf
 Thread-safe, because the mutex of the logger protects the call.
-Asserts when logger is CLOG_INVALID, stale or already closed.
+Asserts when logger is CLOG_NULL, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_set_field (3),

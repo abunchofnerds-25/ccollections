@@ -65,7 +65,7 @@ ccol_success           The function filled val_out. The caller owns
                        val_out->ptr.
 ccol_key_not_found     The key is absent and there is no getter, or
                        the getter failed.
-ccol_invalid_args      cache is CLRU_CACHE_INVALID, or cache is a
+ccol_invalid_args      cache is CLRU_CACHE_NULL, or cache is a
                        stale handle that a call already destroyed, or
                        key_pair is NULL, or val_out is NULL, or
                        key_pair->size does not agree with the width of

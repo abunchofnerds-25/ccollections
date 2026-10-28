@@ -12,7 +12,7 @@ include ../hardening.mk
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict-overflow \
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror $(EXTRA_CFLAGS)
-COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
+COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 # The two wraps send every send(2) and read(2) call of the linked sources
 # through __wrap_send and __wrap_read in tests.c. Both just pass through unless
 # a test arms them to report one EINTR, which no real socket gives you on

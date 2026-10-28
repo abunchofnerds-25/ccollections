@@ -20,7 +20,7 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror $(EXTRA_CFLAGS)
 TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1 $(EXTRA_CFLAGS)
-COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
+COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 LFLAGS = -lpthread $(CCOL_PLATFORM_LIBS)
 
 # tests_keys uses up every thread-specific key of the process before the
@@ -78,9 +78,15 @@ memtest: build
 # isn't real. It happens in more than one module and inside a glibc header as
 # well; it's a limit of the gcov instrumentation, not a bug in the library's
 # logic. tests/chttpclient/Makefile has the same flag with the full reason.
+# Every binary that `test` runs is built and run here too, with the same
+# instrumentation, so the tracefile counts what each of them reaches.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
+	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) tests_exit_order.c $(SRC_FILES) -o tests_exit_order $(LFLAGS) && \
+	./tests_exit_order && \
+	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) tests_keys.c $(SRC_FILES) -o tests_keys $(LFLAGS) && \
+	./tests_keys && \
 	gcov tests-$(SRC_FILE_PREFIX) && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \

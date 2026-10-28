@@ -9,7 +9,7 @@ include ../hardening.mk
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict-overflow \
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror $(EXTRA_CFLAGS)
-COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
+COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 LFLAGS = $(CCOL_PLATFORM_LIBS)
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)

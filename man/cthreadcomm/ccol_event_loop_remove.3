@@ -92,9 +92,9 @@ reg   Registration to remove.
 ccol_success        The registration is removed, by this call or by
                     another call on the same reg running at the same
                     time (see DESCRIPTION).
-ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, a stale handle,
+ccol_invalid_args   loop is CCOL_EVENT_LOOP_NULL, a stale handle,
                     or a handle that has already been destroyed; or
-                    reg is CCOL_EVENT_REG_INVALID or fails to resolve
+                    reg is CCOL_EVENT_REG_NULL or fails to resolve
                     for another reason, such as an earlier
                     ccol_event_loop_remove() call that has already
                     returned.

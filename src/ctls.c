@@ -749,10 +749,11 @@ static char *_ctls_strdup_lower(ccol_memmgmt_procs_t *mp, const char *s) {
  * the comparison involves no signedness conversion. */
 #define CTLS_MAX_PEM_FILE_SIZE ((off_t)16 * 1024 * 1024)
 
-/* Reads a whole file into a new buffer. Returns false on every failure (a
- * missing file, a path that doesn't name a regular file, a read error, or a
- * zero-length file, which is never a meaningful certificate, key or CA
- * bundle) and leaves no partial allocation behind.
+/* Reads a whole file into a new buffer. Returns ccol_not_enough_memory when
+ * the buffer can't be allocated, and ccol_http_tls_cert_load_failed on every
+ * other failure (a missing file, a path that doesn't name a regular file, a
+ * read error, or a zero-length file, which is never a meaningful certificate,
+ * key or CA bundle). It leaves no partial allocation behind.
  *
  * The open never waits. A path naming a FIFO without a writer, a terminal or
  * a device blocks a plain open(2) or its first read forever, and the caller
@@ -764,17 +765,18 @@ static char *_ctls_strdup_lower(ccol_memmgmt_procs_t *mp, const char *s) {
  * open can't sneak past it. O_NOCTTY keeps a terminal from becoming the
  * process's controlling terminal, and O_CLOEXEC keeps a process another
  * thread spawns in the meantime from inheriting the descriptor. */
-static bool _ctls_read_file(ccol_memmgmt_procs_t *mp, const char *path,
-                            char **out_data, size_t *out_len, char **why) {
+static ccol_retval_t _ctls_read_file(ccol_memmgmt_procs_t *mp, const char *path,
+                                     char **out_data, size_t *out_len,
+                                     char **why) {
   *out_data = NULL;
   *out_len = 0;
   /* Every failure below keeps this string when it has nothing more exact to
    * say, so a caller never reports a bare "unreadable" for a file it could
    * read just fine. */
   if (why) *why = "file is missing or unreadable";
-  if (!path) return false;
+  if (!path) return ccol_http_tls_cert_load_failed;
   int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOCTTY);
-  if (fd < 0) return false;
+  if (fd < 0) return ccol_http_tls_cert_load_failed;
   /* Only a regular file has a meaningful size to read, and a certificate or
    * CA-bundle option pointing at a directory, a FIFO or a device is an
    * ordinary configuration slip; OpenSSL itself keeps CAfile apart from
@@ -783,22 +785,23 @@ static bool _ctls_read_file(ccol_memmgmt_procs_t *mp, const char *path,
   if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
     if (why) *why = "path does not name a regular file";
     close(fd);
-    return false;
+    return ccol_http_tls_cert_load_failed;
   }
   if (st.st_size <= 0) {
     close(fd);
-    return false;
+    return ccol_http_tls_cert_load_failed;
   }
   if (st.st_size > CTLS_MAX_PEM_FILE_SIZE) {
     if (why) *why = "file is larger than the 16 MB limit for a PEM artefact";
     close(fd);
-    return false;
+    return ccol_http_tls_cert_load_failed;
   }
   size_t sz = (size_t)st.st_size;
   char *buf = (char *)_ccol_mem_alloc(mp, sz);
   if (!buf) {
+    if (why) *why = "out of memory while reading the file";
     close(fd);
-    return false;
+    return ccol_not_enough_memory;
   }
   size_t got = 0;
   while (got < sz) {
@@ -812,11 +815,11 @@ static bool _ctls_read_file(ccol_memmgmt_procs_t *mp, const char *path,
    * instead of parsing part of it. */
   if (got != sz) {
     _ccol_mem_free(mp, buf);
-    return false;
+    return ccol_http_tls_cert_load_failed;
   }
   *out_data = buf;
   *out_len = sz;
-  return true;
+  return ccol_success;
 }
 
 /* ========================================================================== */
@@ -848,25 +851,101 @@ long _ctls_system_ca_parses_for_tests(void) {
 }
 #endif
 
+/* Parses a PEM buffer into its certificates and CRLs. A parse can lose an
+ * allocation in two ways that OpenSSL 3 often reports with no
+ * ERR_R_MALLOC_FAILURE: it stops part way and leaves an error on the queue,
+ * or it keeps a certificate whose public key failed to decode, and a chain
+ * check that needs that key fails later; it can also give NULL with nothing
+ * on the queue. A block it can't read, or a key
+ * type it can't decode, looks the same, so the buffer is parsed once more
+ * in either case. A buffer that really holds such a thing gives the same
+ * result again, and that result is kept; a parse that lost an allocation
+ * gives the whole list the second time, or, when the second attempt loses
+ * one too, a result that differs from the first, which counts as out of
+ * memory. Sets *oom, and gives NULL, when the buffer for the parse can't be
+ * allocated, the second attempt names a malloc failure, or the two attempts
+ * differ. *complete (when not NULL) tells whether the result kept has no
+ * error behind it and every key decoded, so a caller that keeps a result
+ * for later knows not to keep one that may be short. The thread's error
+ * queue is empty on return. */
+static STACK_OF(X509_INFO) *
+    _ctls_parse_infos(const char *pem, size_t len, bool *oom, bool *complete) {
+  STACK_OF(X509_INFO) *infos = NULL;
+  bool incomplete = false;
+  int first_count = 0, first_undecoded = 0;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    sk_X509_INFO_pop_free(infos, X509_INFO_free);
+    infos = NULL;
+    /* Every buffer here comes from _ctls_read_file, which caps the size at
+     * 16 MB, so the length fits in an int. */
+    BIO *bio = BIO_new_mem_buf(pem, (int)len);
+    if (!bio) {
+      *oom = true;
+      break;
+    }
+    infos = PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL);
+    BIO_free(bio);
+    incomplete = false;
+    bool malloc_failure = false;
+    unsigned long e;
+    while ((e = ERR_get_error()) != 0) {
+      incomplete = true;
+      if (ERR_GET_REASON(e) == ERR_R_MALLOC_FAILURE) malloc_failure = true;
+    }
+    int count = infos ? sk_X509_INFO_num(infos) : -1;
+    int undecoded = 0;
+    for (int i = 0; i < count; ++i) {
+      X509 *x = sk_X509_INFO_value(infos, i)->x509;
+      if (x && !X509_get0_pubkey(x)) undecoded++;
+    }
+    ERR_clear_error();
+    /* A buffer with no PEM block gives an empty list, so NULL always means
+     * the parse failed, and OpenSSL 3 can fail a growth of the list with
+     * nothing on the queue. */
+    if (!infos || undecoded > 0) incomplete = true;
+    if (!incomplete) break;
+    if (attempt == 0) {
+      first_count = count;
+      first_undecoded = undecoded;
+    } else if (malloc_failure || count != first_count ||
+               undecoded != first_undecoded) {
+      *oom = true;
+    }
+  }
+  ERR_clear_error();
+  if (*oom) {
+    sk_X509_INFO_pop_free(infos, X509_INFO_free);
+    return NULL;
+  }
+  if (complete) *complete = !incomplete;
+  return infos;
+}
+
 /* Reads the default CA file (SSL_CERT_FILE when the process may trust its
  * environment, otherwise the file OpenSSL was built with) through
  * _ctls_read_file, so the descriptor is close-on-exec, and parses it. Gives
  * NULL when the file is missing, unreadable, not a regular file, or holds no
- * certificate. */
-static STACK_OF(X509_INFO) * _ctls_system_ca_load(void) {
+ * certificate, and also when an allocation failed while reading or parsing
+ * it, which it tells apart by setting *oom: the file may well hold the trust
+ * anchors, so that failure must not send the caller to the directory.
+ * *cacheable tells whether the result may be kept for the rest of the
+ * process (see _ctls_parse_infos). */
+static STACK_OF(X509_INFO) * _ctls_system_ca_load(bool *oom, bool *cacheable) {
   const char *path = _ctls_trusted_getenv(X509_get_default_cert_file_env());
   if (!path || !*path) path = X509_get_default_cert_file();
   char *pem = NULL;
   size_t len = 0;
-  if (!_ctls_read_file(NULL, path, &pem, &len, NULL)) return NULL;
-  STACK_OF(X509_INFO) *infos = NULL;
-  /* _ctls_read_file caps the size at 16 MB, so the length fits in an int. */
-  BIO *bio = BIO_new_mem_buf(pem, (int)len);
-  if (bio) {
-    infos = PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL);
-    BIO_free(bio);
+  ccol_retval_t read_rv = _ctls_read_file(NULL, path, &pem, &len, NULL);
+  if (read_rv != ccol_success) {
+    if (read_rv == ccol_not_enough_memory) *oom = true;
+    return NULL;
   }
+  STACK_OF(X509_INFO) *infos = _ctls_parse_infos(pem, len, oom, cacheable);
   _ccol_default_mem_free(pem);
+  if (*oom) {
+    sk_X509_INFO_pop_free(infos, X509_INFO_free);
+    return NULL;
+  }
 #ifdef RUNNING_UNIT_TESTS
   atomic_fetch_add(&g_ctls_system_ca_parses_for_tests, 1);
 #endif
@@ -923,15 +1002,23 @@ static bool _ctls_store_add_infos(X509_STORE *store,
 /* Adds the platform's default CA file to store. The file is read and parsed
  * once per process, and a failed load isn't remembered, so the next call
  * reads the file again. Gives 1 when the file's certificates went into
- * store, 0 when there's no usable default file, and -1 when an add failed. */
-static int _ctls_store_add_system_file(X509_STORE *store) {
+ * store, 0 when there's no usable default file, and -1 when an add failed,
+ * or when the load ran out of memory, which also sets *oom. */
+static int _ctls_store_add_system_file(X509_STORE *store, bool *oom) {
   _ccol_call_once(ctls_system_ca_bundle.once, _ctls_system_ca_globals_init);
   _ccol_mutex_lock(ctls_system_ca_bundle.mutex);
   STACK_OF(X509_INFO) *infos = ctls_system_ca_bundle.infos;
   bool owned = false;
   if (!infos) {
-    infos = _ctls_system_ca_load();
-    if (infos && !ctls_system_ca_bundle.finalized) {
+    bool cacheable = false;
+    infos = _ctls_system_ca_load(oom, &cacheable);
+    if (!infos && *oom) {
+      _ccol_mutex_unlock(ctls_system_ca_bundle.mutex);
+      return -1;
+    }
+    /* A parse that may be short serves this store only; the next store
+     * reads the file again. */
+    if (infos && cacheable && !ctls_system_ca_bundle.finalized) {
       ctls_system_ca_bundle.infos = infos;
       _ctls_process_state_exit_arm();
     } else {
@@ -957,6 +1044,34 @@ void _ctls_system_ca_forget_for_tests(void) {
   ctls_system_ca_bundle.infos = NULL;
   _ccol_mutex_unlock(ctls_system_ca_bundle.mutex);
 }
+
+int _ctls_trusted_cert_count_for_tests(ctls_ctx_t *ctx) {
+  if (!ctx) return -1;
+  int n = -1;
+  _ccol_mutex_lock(ctx->lock);
+  X509_STORE *store =
+      ctx->ctx_default ? SSL_CTX_get_cert_store(ctx->ctx_default) : NULL;
+  if (store) {
+    /* OpenSSL 3.3 gives a copy that no concurrent lookup can change, and
+     * older versions and LibreSSL only the store's own stack. */
+#if OPENSSL_VERSION_NUMBER >= 0x30300000L && !defined(LIBRESSL_VERSION_NUMBER)
+    STACK_OF(X509_OBJECT) *objs = X509_STORE_get1_objects(store);
+#else
+    STACK_OF(X509_OBJECT) *objs = X509_STORE_get0_objects(store);
+#endif
+    if (objs) {
+      n = 0;
+      for (int i = 0; i < sk_X509_OBJECT_num(objs); ++i)
+        if (X509_OBJECT_get_type(sk_X509_OBJECT_value(objs, i)) == X509_LU_X509)
+          n++;
+    }
+#if OPENSSL_VERSION_NUMBER >= 0x30300000L && !defined(LIBRESSL_VERSION_NUMBER)
+    sk_X509_OBJECT_pop_free(objs, X509_OBJECT_free);
+#endif
+  }
+  _ccol_mutex_unlock(ctx->lock);
+  return n;
+}
 #endif
 
 /* Installs the platform's trust anchors on store. The default CA file is the
@@ -964,17 +1079,21 @@ void _ctls_system_ca_forget_for_tests(void) {
  * the store get OpenSSL's hashed-directory lookup instead (SSL_CERT_DIR when
  * the process may trust its environment, otherwise the directory OpenSSL was
  * built with), which then opens that directory's files during each
- * handshake that needs them. */
-static bool _ctls_store_add_system_trust(X509_STORE *store) {
-  int from_file = _ctls_store_add_system_file(store);
+ * handshake that needs them. We read SSL_CERT_DIR ourselves, as we read
+ * SSL_CERT_FILE, because LibreSSL's default directory lookup takes only the
+ * built-in directory and never looks at the environment. */
+static bool _ctls_store_add_system_trust(X509_STORE *store, bool *oom) {
+  int from_file = _ctls_store_add_system_file(store, oom);
   if (from_file < 0) return false;
   if (from_file > 0) return true;
   X509_LOOKUP *lookup = X509_STORE_add_lookup(store, X509_LOOKUP_hash_dir());
   if (!lookup) return false;
+  const char *dir = _ctls_trusted_getenv(X509_get_default_cert_dir_env());
+  if (!dir || !*dir) dir = X509_get_default_cert_dir();
   /* A missing directory isn't an error here, exactly as in
    * SSL_CTX_set_default_verify_paths: the store then trusts nothing from it
    * and every verification fails. */
-  (void)X509_LOOKUP_add_dir(lookup, NULL, X509_FILETYPE_DEFAULT);
+  (void)X509_LOOKUP_add_dir(lookup, dir, X509_FILETYPE_PEM);
   return true;
 }
 
@@ -1181,8 +1300,9 @@ static bool _ctls_apply_cert(SSL_CTX *ctx, const char *cert_pem,
  * gives nothing, or an add that fails, is an allocation failure, and it
  * fails the whole build. A context built anyway would verify against a store
  * missing some of the anchors and CRLs the caller configured, and a lost CRL
- * would switch revocation checking off. */
-static bool _ctls_apply_trust(SSL_CTX *ctx, ctls_ctx_t *tls) {
+ * would switch revocation checking off. Sets *oom when the default CA file
+ * could not be read or parsed for lack of memory. */
+static bool _ctls_apply_trust(SSL_CTX *ctx, ctls_ctx_t *tls, bool *oom) {
   if (tls->trust_count == 0 && !tls->verify_default_store) return true;
   X509_STORE *store = X509_STORE_new();
   if (!store) return false;
@@ -1192,14 +1312,12 @@ static bool _ctls_apply_trust(SSL_CTX *ctx, ctls_ctx_t *tls) {
                          ? SSL_VERIFY_PEER
                          : SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
                      NULL);
-  if (tls->verify_default_store && !_ctls_store_add_system_trust(store))
+  if (tls->verify_default_store && !_ctls_store_add_system_trust(store, oom))
     return false;
   bool any_crl = false;
   for (size_t i = 0; i < tls->trust_count; ++i) {
-    BIO *bio = BIO_new_mem_buf(tls->trust_pems[i], (int)tls->trust_lens[i]);
-    if (!bio) return false;
-    STACK_OF(X509_INFO) *inf = PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL);
-    BIO_free(bio);
+    STACK_OF(X509_INFO) *inf =
+        _ctls_parse_infos(tls->trust_pems[i], tls->trust_lens[i], oom, NULL);
     if (!inf) return false;
     for (int j = 0; j < sk_X509_INFO_num(inf); ++j)
       if (sk_X509_INFO_value(inf, j)->crl) any_crl = true;
@@ -1458,11 +1576,29 @@ static SSL_CTX *_ctls_build_one_ctx(ctls_ctx_t *tls, const char *cert_pem,
                                     bool self_signed,
                                     const char *self_signed_name, bool *oom) {
   SSL_CTX *ctx = SSL_CTX_new(TLS_method());
-  if (!ctx) return NULL;
+  if (!ctx) {
+    /* It builds nothing from the caller's data, so it fails for lack of
+     * memory, or in a library left with no usable algorithms, and both are
+     * reported as out of memory; OpenSSL 3 often leaves no
+     * ERR_R_MALLOC_FAILURE to tell the first apart. */
+    *oom = true;
+    return NULL;
+  }
   if (!_ctls_apply_base_settings(ctx) ||
       !_ctls_apply_cert(ctx, cert_pem, cert_len, key_pem, key_len, pk_password,
-                        self_signed, self_signed_name) ||
-      !_ctls_apply_trust(ctx, tls) || !_ctls_apply_alpn(ctx, tls, oom)) {
+                        self_signed, self_signed_name)) {
+    SSL_CTX_free(ctx);
+    return NULL;
+  }
+  /* Every bundle and the default file were accepted before, so a failure to
+   * build the store is an allocation failure even when OpenSSL leaves no
+   * ERR_R_MALLOC_FAILURE behind (OpenSSL 3 often reports none). */
+  if (!_ctls_apply_trust(ctx, tls, oom)) {
+    *oom = true;
+    SSL_CTX_free(ctx);
+    return NULL;
+  }
+  if (!_ctls_apply_alpn(ctx, tls, oom)) {
     SSL_CTX_free(ctx);
     return NULL;
   }
@@ -1715,14 +1851,18 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
   size_t cert_len = 0, key_len = 0;
   if (have_pair) {
     char *why = NULL;
-    if (!_ctls_read_file(ctx->m_procs, cert_path, &cert_pem, &cert_len, &why) ||
-        !_ctls_read_file(ctx->m_procs, key_path, &key_pem, &key_len, &why)) {
+    ccol_retval_t read_rv =
+        _ctls_read_file(ctx->m_procs, cert_path, &cert_pem, &cert_len, &why);
+    if (read_rv == ccol_success)
+      read_rv =
+          _ctls_read_file(ctx->m_procs, key_path, &key_pem, &key_len, &why);
+    if (read_rv != ccol_success) {
       _ccol_mem_free(ctx->m_procs, cert_pem);
       _ccol_mem_free(ctx->m_procs, key_pem);
       if (err_str) {
         *err_str = why ? why : "ctls_ctx_cert_add: cert/key file unreadable";
       }
-      return ccol_http_tls_cert_load_failed;
+      return read_rv;
     }
     /* A certificate and a key that don't belong together are a load failure,
      * not a usable configuration. We reject the pair here before storing
@@ -1954,20 +2094,17 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
  * of nothing but CRLs names no issuer a peer could chain to, and it's
  * refused like an empty one. A bundle holding both certificates and CRLs is
  * accepted and its CRLs are enforced; see _ctls_apply_trust. */
-static bool _ctls_pem_has_certificate(const char *pem, size_t len) {
-  BIO *bio = BIO_new_mem_buf(pem, (int)len);
-  if (!bio) return false;
-  STACK_OF(X509_INFO) *inf = PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL);
+static ccol_retval_t _ctls_pem_has_certificate(const char *pem, size_t len) {
+  bool oom = false;
+  STACK_OF(X509_INFO) *inf = _ctls_parse_infos(pem, len, &oom, NULL);
+  if (oom) return ccol_not_enough_memory;
   bool found = false;
-  if (inf) {
-    for (int i = 0; i < sk_X509_INFO_num(inf) && !found; ++i) {
-      X509_INFO *entry = sk_X509_INFO_value(inf, i);
-      if (entry && entry->x509) found = true;
-    }
-    sk_X509_INFO_pop_free(inf, X509_INFO_free);
+  for (int i = 0; inf && i < sk_X509_INFO_num(inf) && !found; ++i) {
+    X509_INFO *entry = sk_X509_INFO_value(inf, i);
+    if (entry && entry->x509) found = true;
   }
-  BIO_free(bio);
-  return found;
+  sk_X509_INFO_pop_free(inf, X509_INFO_free);
+  return found ? ccol_success : ccol_http_tls_cert_load_failed;
 }
 
 ccol_retval_t ctls_ctx_trust(ctls_ctx_t *ctx, const char *ca_bundle_path,
@@ -1976,23 +2113,29 @@ ccol_retval_t ctls_ctx_trust(ctls_ctx_t *ctx, const char *ca_bundle_path,
   char *pem = NULL;
   size_t len = 0;
   char *why = NULL;
-  if (!_ctls_read_file(ctx->m_procs, ca_bundle_path, &pem, &len, &why)) {
+  ccol_retval_t read_rv =
+      _ctls_read_file(ctx->m_procs, ca_bundle_path, &pem, &len, &why);
+  if (read_rv != ccol_success) {
     if (err_str) {
       *err_str = why ? why : "ctls_ctx_trust: CA bundle file unreadable";
     }
-    return ccol_http_tls_cert_load_failed;
+    return read_rv;
   }
   /* This check runs here, before the entry below is committed, and not in
    * the rebuild step, because a bundle that reaches ctx->trust_pems and only
    * then fails stays registered, and every later rebuild this context runs
    * for some unrelated reason (another certificate or another ALPN protocol)
    * would fail on that bundle again. */
-  if (!_ctls_pem_has_certificate(pem, len)) {
+  ccol_retval_t has_rv = _ctls_pem_has_certificate(pem, len);
+  if (has_rv != ccol_success) {
     _ccol_mem_free(ctx->m_procs, pem);
     if (err_str) {
-      *err_str = "ctls_ctx_trust: CA bundle contains no certificates";
+      *err_str = has_rv == ccol_not_enough_memory
+                     ? "ctls_ctx_trust: out of memory while parsing the CA "
+                       "bundle"
+                     : "ctls_ctx_trust: CA bundle contains no certificates";
     }
-    return ccol_http_tls_cert_load_failed;
+    return has_rv;
   }
 
   _ccol_mutex_lock(ctx->lock);
@@ -2274,14 +2417,19 @@ static void _ctls_conn_release_ssl(ctls_conn_t *conn) {
 
 /* Unwinds a connection that failed halfway through its own construction:
  * everything _ctls_conn_release_ssl covers, plus the ctls_ctx_t reference
- * _ctls_conn_alloc took, and the connection record itself. m_procs is read
- * before the reference on the context is released, because that release
- * may be the last one and free the context, and reading m_procs afterwards
- * would read freed memory. */
+ * _ctls_conn_alloc took, and the connection record itself. The procs are
+ * copied by value before the reference on the context is released, because
+ * that release may be the last one, and it then frees the context together
+ * with the copy of the procs that m_procs points at. */
 static void _ctls_conn_create_unwind(ctls_conn_t *conn) {
   _ctls_conn_release_ssl(conn);
   ctls_ctx_t *ctx = conn->ctx;
-  ccol_memmgmt_procs_t *mp = ctx->m_procs;
+  ccol_memmgmt_procs_t procs;
+  ccol_memmgmt_procs_t *mp = NULL;
+  if (ctx->m_procs) {
+    procs = *ctx->m_procs;
+    mp = &procs;
+  }
   ctls_ctx_release(ctx);
   _ccol_mem_free(mp, conn);
 }
@@ -2815,10 +2963,16 @@ void ctls_conn_destroy(ctls_conn_t *conn) {
    * destruction of that context; the doc comment of _ctls_conn_release_ssl()
    * explains why. */
   _ctls_conn_release_ssl(conn);
-  /* m_procs is read before this connection's reference is released, because
-   * ctls_ctx_release() frees ctx if this is the last reference, and reading
-   * conn->ctx->m_procs after that call would be a use-after-free. */
-  ccol_memmgmt_procs_t *mp = conn->ctx->m_procs;
+  /* ctls_ctx_release() frees ctx, and with it the copy of the procs that
+   * ctx->m_procs points at, when this is the last reference. So the procs
+   * are copied by value here, before the release, for the free of conn
+   * itself after it. */
+  ccol_memmgmt_procs_t procs;
+  ccol_memmgmt_procs_t *mp = NULL;
+  if (conn->ctx->m_procs) {
+    procs = *conn->ctx->m_procs;
+    mp = &procs;
+  }
   _ccol_mem_free(mp, conn->peer_der);
   _ccol_mem_free(mp, conn->peer_subject);
   X509_free(conn->peer_info_cert);

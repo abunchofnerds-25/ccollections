@@ -39,6 +39,10 @@ SOFTWARE.
 
 #include <cthreadpool.h>
 #include <stdatomic.h>
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
+#include <stdbool.h> /* bool, true and false are keywords in C23 */
+#endif
+#include <time.h>
 
 #ifdef RUNNING_UNIT_TESTS
 /* Makes the next push onto the free list of the slot table behave exactly
@@ -56,10 +60,50 @@ void _ctpool_set_task_free_list_window_for_tests(uint32_t idle_points);
 extern atomic_bool _ctpool_fail_next_future_alloc_for_tests;
 extern atomic_long _ctpool_live_futures_for_tests;
 
+/* How many future blocks exist right now, from the calloc of each to its
+ * free, so a future that fails half built is counted too. */
+extern atomic_long _ctpool_future_blocks_for_tests;
+
+/* The steps of pool and future creation that _ctpool_arm_fault_for_tests can
+ * make fail: the five primitive initializations of ctpool_create_mp, and the
+ * allocation and the two primitive initializations of a future, which every
+ * future submit and ctpool_future_create_detached make. */
+typedef enum {
+  _CTPOOL_FAULT_NONE = 0,
+  _CTPOOL_FAULT_POOL_MUTEX,
+  _CTPOOL_FAULT_POOL_NOT_EMPTY,
+  _CTPOOL_FAULT_POOL_NOT_FULL,
+  _CTPOOL_FAULT_POOL_IDLE_CV,
+  _CTPOOL_FAULT_POOL_SHUTDOWN_CV,
+  _CTPOOL_FAULT_FUTURE_ALLOC,
+  _CTPOOL_FAULT_FUTURE_MUTEX,
+  _CTPOOL_FAULT_FUTURE_CV
+} _ctpool_fault_t;
+
+/* Arms one failure of step: the next thread that reaches it sees the call
+ * fail, as calloc or the pthread init would, and the hook disarms itself.
+ * _CTPOOL_FAULT_NONE disarms it. A failing init is skipped, so the failure
+ * path has nothing of it to destroy, exactly as after a real failure. */
+void _ctpool_arm_fault_for_tests(_ctpool_fault_t step);
+
+/* Makes the thread creation of worker index fail once, in the next pool that
+ * gets that far, after workers 0 to index - 1 have started. SIZE_MAX
+ * disarms it. */
+void _ctpool_fail_worker_create_at_for_tests(size_t index);
+
 /* While true, a starting worker skips setting its thread-local mark, as if
  * pthread_setspecific had failed. A test sets it only around the creation of
  * the pool it looks at. */
 extern atomic_bool _ctpool_skip_worker_mark_for_tests;
+
+/* How many worker threads of any pool are running, counted from the thread
+ * create that started a worker to the worker's last statement. When
+ * _ctpool_worker_exit_delay_us_for_tests is not 0, every worker pauses that
+ * many microseconds before its last statement, so a worker that nobody
+ * joined is still counted when the call that should have joined it
+ * returns. */
+extern atomic_long _ctpool_running_workers_for_tests;
+extern atomic_uint _ctpool_worker_exit_delay_us_for_tests;
 
 /* When the first flag is set, the next timed wait for room ignores its
  * deadline, waits for a real wake and then reports ETIMEDOUT. The second
@@ -100,6 +144,25 @@ size_t _ctpool_pending_resolve_count_for_tests(cthread_pool *pool);
  * on whatever clock not_full uses, and returns the status of the wait. */
 int _ctpool_timedwait_not_full_for_tests(cthread_pool *pool,
                                          const struct timespec *abs);
+
+/* What the last timed wait for room on the calling thread did: whether it
+ * waited at all, the absolute CLOCK_MONOTONIC deadline it waited for, the
+ * instant its first wait began, and, when it gave up, whether that was a
+ * timeout and the instant it decided so. Only reading the record through
+ * _ctpool_timed_wait_record_for_tests() clears it. After a clear, a call
+ * that found room without waiting leaves every field zero; one that waited
+ * sets waited, deadline and wait_started even when it then found room. */
+typedef struct {
+  bool waited;
+  bool timed_out;
+  struct timespec deadline;
+  struct timespec wait_started;
+  struct timespec wait_ended;
+} _ctpool_timed_wait_record_t;
+
+/* Gives the record of the calling thread and clears it, so the next timed
+ * submit starts a fresh one. */
+_ctpool_timed_wait_record_t _ctpool_timed_wait_record_for_tests(void);
 
 /* How many times the calling thread has locked the mutex of any pool. A test
  * reads it before and after one call to count its critical sections. */

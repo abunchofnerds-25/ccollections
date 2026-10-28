@@ -15,11 +15,20 @@
 #include <dlfcn.h>
 #endif
 #include <tau/tau.h>
+#include <test_coverage.h>
 #include <test_sanitizer.h>
+#include <test_signals.h>
 #include <time.h>
 #include <unistd.h>
 
 TAU_MAIN()
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
 
 /* Tau's REQUIRE_* macros return from the test function as soon as one fails,
  * so a test that only destroys its pool with a ccol_mempool_destroy() call at
@@ -378,6 +387,7 @@ TEST(cmempools, every_entry_position_round_trips_for_an_awkward_elem_size) {
 TEST(cmempools, freeing_an_interior_pointer_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -386,10 +396,10 @@ TEST(cmempools, freeing_an_interior_pointer_is_fatal) {
     }
     SCOPED_MEMPOOL(mp) = ccol_mempool_create(8, 96, false, true, NULL, NULL);
     void *entry = ccol_mempool_alloc_entry(mp);
-    if (!entry) _exit(2);
+    if (!entry) test_child_exit(2);
     void *interior = (uint8_t *)entry + 8;
     ccol_mempool_free_entry(mp, interior);
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -1114,6 +1124,7 @@ TEST(cmempools, free_null_is_noop) {
 TEST(cmempools, free_with_null_pool_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1124,7 +1135,7 @@ TEST(cmempools, free_with_null_pool_is_fatal) {
         ccol_mempool_create(4, sizeof(int), false, true, NULL, NULL);
     void *e = mp ? ccol_mempool_alloc_entry(mp) : NULL;
     ccol_mempool_free_entry((ccol_mempool *)NULL, e);
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -1147,6 +1158,7 @@ TEST(cmempools, free_with_null_pool_is_fatal) {
 TEST(cmempools, double_free_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1159,8 +1171,8 @@ TEST(cmempools, double_free_is_fatal) {
     void *p_saved = p;
     ccol_mempool_free_entry(mp, p); /* first free: fine */
     _ccol_mempool_free_entry(
-        mp, p_saved); /* second free of the same entry: fatal */
-    _exit(0);         /* unreachable if _ccol_assert() aborted as expected */
+        mp, p_saved);   /* second free of the same entry: fatal */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -1183,6 +1195,7 @@ TEST(cmempools, double_free_is_fatal) {
 TEST(cmempools, free_entry_with_corrupted_status_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1195,7 +1208,7 @@ TEST(cmempools, free_entry_with_corrupted_status_is_fatal) {
     /* Neither of the two states an entry can legitimately be in. */
     _ccol_mempool_corrupt_entry_status_for_tests(mp, p, 0xAB);
     _ccol_mempool_free_entry(mp, p);
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -1237,6 +1250,7 @@ static void no_clobber_free(void *p) {
 TEST(cmempools, double_free_of_dynamic_entry_with_another_still_live_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1259,7 +1273,7 @@ TEST(cmempools, double_free_of_dynamic_entry_with_another_still_live_is_fatal) {
     ccol_mempool_free_entry(mp, d1); /* first free: fine */
     _ccol_mempool_free_entry(mp,
                              d1_saved); /* second free, d2 still live: fatal */
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -1372,18 +1386,19 @@ static void mp_silence_child_output(void) {
 TEST(cmempools, free_of_another_pools_entry_asserts_without_reading_it) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     mp_silence_child_output();
     ccol_mempool *other = NULL;
     void *foreign = mp_guard_first_entry(&other);
     ccol_mempool *mp =
         ccol_mempool_create(2, sizeof(int), true, false, NULL, NULL);
-    if (!foreign || !mp) _exit(2);
+    if (!foreign || !mp) test_child_exit(2);
     ccol_mempool_alloc_entry(mp);
     ccol_mempool_alloc_entry(mp);
     void *dyn = ccol_mempool_alloc_entry(mp); /* a live dynamic entry */
-    if (!dyn || ccol_mempool_dynamic_allocs_count(mp) != 1) _exit(3);
+    if (!dyn || ccol_mempool_dynamic_allocs_count(mp) != 1) test_child_exit(3);
     _ccol_mempool_free_entry(mp, foreign); /* must assert */
-    _exit(0);
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -1397,25 +1412,26 @@ TEST(cmempools, free_of_another_pools_entry_asserts_without_reading_it) {
 // so what's under test is resolving an address that matches no tier.
 static void mp_ranged_foreign_child(ccol_r_memory_fallback_policy_t policy,
                                     bool through_realloc) {
+  test_child_no_core();
   mp_silence_child_output();
   ccol_mempool *other = NULL;
   void *foreign = mp_guard_first_entry(&other);
   /* Tiers of 16 and 32 bytes, with two and one entries. */
   ccol_r_mempool *rmp =
       ccol_r_mempool_create(4, 5, 1, policy, false, NULL, NULL);
-  if (!foreign || !rmp) _exit(2);
+  if (!foreign || !rmp) test_child_exit(2);
   /* Three entries fill both tiers, so the fourth is a dynamic entry, taken
    * from the first tier under the first-exhaustion policy and from the
    * whole pool's fallback under the last-exhaustion policy. */
   void *e = NULL;
   for (int i = 0; i < 4; ++i) e = ccol_r_mempool_alloc_entry(rmp, 16);
-  if (!e) _exit(3);
+  if (!e) test_child_exit(3);
   if (through_realloc) {
     ccol_r_mempool_realloc_entry(rmp, foreign, 16); /* must assert */
   } else {
     _ccol_r_mempool_free_entry(rmp, foreign); /* must assert */
   }
-  _exit(0);
+  test_child_exit(0);
 }
 
 TEST(r_mempools, free_of_another_pools_entry_asserts_without_reading_it) {
@@ -1491,6 +1507,7 @@ TEST(cmempools, many_dynamic_entries_free_in_any_order) {
 TEST(cmempools, destroy_with_leaked_dynamic_entry_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1505,7 +1522,7 @@ TEST(cmempools, destroy_with_leaked_dynamic_entry_is_fatal) {
         ccol_mempool_alloc_entry(mp); /* the pool-owned slots are used up */
     (void)leaked;                     /* never freed, on purpose */
     ccol_mempool_destroy(mp);         /* asserts on the leak */
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -4039,6 +4056,7 @@ TEST(r_mempools, realloc_shrink_with_no_room_keeps_the_entry_it_already_fits) {
 TEST(r_mempools, realloc_foreign_pointer_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -4050,7 +4068,7 @@ TEST(r_mempools, realloc_foreign_pointer_is_fatal) {
     int junk[8] = {0};
     void *foreign_ptr = &junk[2]; /* never came from this ccol_r_mempool */
     ccol_r_mempool_realloc_entry(rmp, foreign_ptr, 16);
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -4072,6 +4090,7 @@ TEST(r_mempools, realloc_foreign_pointer_is_fatal) {
 TEST(r_mempools, realloc_pointer_from_a_different_r_mempool_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -4084,7 +4103,7 @@ TEST(r_mempools, realloc_pointer_from_a_different_r_mempool_is_fatal) {
         4, 6, 7, ccol_fallback_disabled, true, NULL, NULL);
     void *from_rmp2 = ccol_r_mempool_alloc_entry(rmp2, 16);
     ccol_r_mempool_realloc_entry(rmp1, from_rmp2, 16); /* wrong rmp */
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -4107,6 +4126,7 @@ TEST(r_mempools, realloc_pointer_from_a_different_r_mempool_is_fatal) {
 TEST(r_mempools, realloc_already_freed_pointer_same_tier_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -4121,7 +4141,7 @@ TEST(r_mempools, realloc_already_freed_pointer_same_tier_is_fatal) {
     ccol_r_mempool_free_entry(rmp, a); /* a is now free-listed */
     ccol_r_mempool_realloc_entry(rmp, a_saved,
                                  8); /* 8 still maps to the 16B tier */
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -4148,6 +4168,7 @@ TEST(r_mempools, realloc_already_freed_pointer_same_tier_is_fatal) {
 TEST(r_mempools, realloc_address_outside_every_tier_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -4162,13 +4183,13 @@ TEST(r_mempools, realloc_address_outside_every_tier_is_fatal) {
        where it would run every remaining test in the binary next to its
        parent. A distinct exit code makes the parent's WTERMSIG check fail
        instead. */
-    if (!real) _exit(2);
+    if (!real) test_child_exit(2);
 
     _Alignas(_ccol_mempool_entry_align) uint8_t foreign[256];
     memset(foreign, 0, sizeof(foreign));
 
     ccol_r_mempool_realloc_entry(rmp, foreign + 128, 16);
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -4190,6 +4211,7 @@ TEST(r_mempools, realloc_address_outside_every_tier_is_fatal) {
 TEST(r_mempools, realloc_pool_owned_entry_with_corrupted_status_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -4201,12 +4223,12 @@ TEST(r_mempools, realloc_pool_owned_entry_with_corrupted_status_is_fatal) {
     void *pool_owned = ccol_r_mempool_alloc_entry(rmp, 16);
     /* See realloc_address_outside_every_tier_is_fatal for why there's no
        REQUIRE_* inside a forked child. */
-    if (!pool_owned) _exit(2);
+    if (!pool_owned) test_child_exit(2);
 
     _ccol_r_mempool_corrupt_entry_status_for_tests(rmp, pool_owned, 0xAB);
 
     ccol_r_mempool_realloc_entry(rmp, pool_owned, 16);
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -4289,6 +4311,7 @@ TEST(r_mempools,
      double_free_of_pseudo_pool_entry_with_another_still_live_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -4319,7 +4342,7 @@ TEST(r_mempools,
     /* This goes through the ranged entry point, which is what a caller has,
        since the test can't name the sub-pool the entry came from. */
     _ccol_r_mempool_free_entry(rmp, e1_saved); /* second free, e2 live: fatal */
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -4341,6 +4364,7 @@ TEST(r_mempools,
 TEST(r_mempools, destroy_with_leaked_first_exhaustion_entry_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -4354,7 +4378,7 @@ TEST(r_mempools, destroy_with_leaked_first_exhaustion_entry_is_fatal) {
                                                         own fallback */
     (void)leaked;                                       /* never freed */
     ccol_r_mempool_destroy(rmp); /* must assert on the leak */
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -4374,6 +4398,7 @@ TEST(r_mempools,
      destroy_with_leaked_last_exhaustion_pseudo_pool_entry_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -4390,7 +4415,7 @@ TEST(r_mempools,
                                              to the pseudo_pool */
     (void)leaked;                            /* never freed */
     ccol_r_mempool_destroy(rmp);             /* must assert on the leak */
-    _exit(0); /* unreachable if _ccol_assert() aborted as expected */
+    test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -5869,6 +5894,19 @@ static __thread unsigned long mp_test_locks_taken;
 // makes that first access before the wrapper counts anything, and the
 // emulation takes no lock on any later access.
 static atomic_bool mp_test_lock_count_ready;
+// The thread-exit deadlock test watches the locks that one exiting thread
+// takes. That thread stores its own ID and then raises the flag, and the
+// wrapper reads the ID only after it sees the flag. The ID, and not a
+// thread-local mark, says which thread it is, because the locks of interest
+// are taken by a key destructor, and on macOS thread-local storage is gone by
+// then. The lock it looks for is the outer pool's own: the outer pool struct
+// sits at the start of one ARM_INNER_STRIDE entry of the inner pool, and the
+// only mutex inside that entry is the pool's lock.
+#define ARM_INNER_STRIDE 4096
+static ccol_mempool *g_arm_outer, *g_arm_inner;
+static atomic_bool g_arm_b_exiting;
+static pthread_t g_arm_b_self;
+static atomic_bool g_arm_b_wants_outer_lock;
 __attribute__((constructor)) static void mp_test_lock_count_arm(void) {
   mp_test_locks_taken = 0;
   atomic_store(&mp_test_lock_count_ready, true);
@@ -5877,6 +5915,10 @@ int __wrap_pthread_mutex_lock(pthread_mutex_t *m);
 int __wrap_pthread_mutex_lock(pthread_mutex_t *m) {
   if (atomic_load_explicit(&mp_test_lock_count_ready, memory_order_relaxed))
     ++mp_test_locks_taken;
+  if (atomic_load_explicit(&g_arm_b_exiting, memory_order_acquire) &&
+      pthread_equal(pthread_self(), g_arm_b_self) &&
+      (uintptr_t)m - (uintptr_t)g_arm_outer < ARM_INNER_STRIDE)
+    atomic_store(&g_arm_b_wants_outer_lock, true);
   return __real_pthread_mutex_lock(m);
 }
 #if defined(TEST_NO_LD_WRAP)
@@ -6575,6 +6617,7 @@ TEST(cmempools, pools_without_a_thread_cache_carry_no_reserve) {
 TEST(cmempools, double_free_of_a_cached_entry_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -6590,7 +6633,7 @@ TEST(cmempools, double_free_of_a_cached_entry_is_fatal) {
     ccol_mempool_free_entry(mp, p); /* parked in this thread's cache */
     _ccol_mempool_free_entry(mp,
                              saved); /* second free of the same entry: fatal */
-    _exit(0);
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -6795,22 +6838,34 @@ TEST(cmempools, free_and_destroy_macros_evaluate_their_argument_once) {
 
 /* ---- A pool whose allocator is another pool, against a thread exit ---- */
 
-static ccol_mempool *g_arm_outer, *g_arm_inner;
-static atomic_int g_arm_in_outer_lock, g_arm_b_may_exit;
+static atomic_int g_arm_in_outer_lock, g_arm_b_may_exit, g_arm_overlapped;
 static __thread int g_arm_is_a;
 /* Thread B writes these and the child's main thread polls them, so the
  * slots are atomic. */
 static void *_Atomic g_arm_held[8];
 
 /* The outer pool's allocator draws from the inner pool. The first call from
- * thread A runs under the outer pool's lock (its dynamic fallback) and waits
- * there long enough for thread B to start its exit drain. */
+ * thread A runs under the outer pool's lock (its dynamic fallback), lets
+ * thread B exit and waits there until B's exit drain goes for the outer
+ * pool's lock, which A holds, while it holds the registry lock.
+ * Only then does A arm the inner pool, so the two threads meet in the window
+ * the test is about however slowly either of them runs. The wait is bounded;
+ * when it runs out, g_arm_overlapped stays 0 and the test fails. */
 static void *arm_malloc(size_t s) {
   (void)s;
   if (g_arm_is_a && !atomic_load(&g_arm_in_outer_lock)) {
     atomic_store(&g_arm_in_outer_lock, 1);
     atomic_store(&g_arm_b_may_exit, 1);
-    usleep(300000);
+    struct timespec now, end;
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    end.tv_sec += 20;
+    do {
+      if (atomic_load(&g_arm_b_wants_outer_lock)) break;
+      usleep(1000);
+      clock_gettime(CLOCK_MONOTONIC, &now);
+    } while (now.tv_sec < end.tv_sec ||
+             (now.tv_sec == end.tv_sec && now.tv_nsec < end.tv_nsec));
+    atomic_store(&g_arm_overlapped, atomic_load(&g_arm_b_wants_outer_lock));
   }
   return ccol_mempool_alloc_entry(g_arm_inner);
 }
@@ -6835,6 +6890,8 @@ static void *arm_thread_b(void *a) {
   for (int i = 0; i < 8; i++)
     atomic_store(&g_arm_held[i], ccol_mempool_alloc_entry(g_arm_outer));
   while (!atomic_load(&g_arm_b_may_exit)) usleep(1000);
+  g_arm_b_self = pthread_self();
+  atomic_store_explicit(&g_arm_b_exiting, true, memory_order_release);
   return NULL;
 }
 
@@ -6854,7 +6911,9 @@ static void *arm_thread_a(void *a) {
 // pool magazine at the same moment, must not deadlock. Without the leaf
 // lock it would: if the arming took the same lock as the exit drain, which
 // takes the outer pool's lock after it, the two threads would wait for each
-// other for ever and the child would be killed by its alarm.
+// other for ever, and the parent would kill the child once its wait ran out.
+// The verdict is '1' only when A armed while B's drain was waiting for the
+// outer pool's lock; '2' means the two never met, so nothing was tested.
 TEST(cmempools, a_pool_drawing_from_a_pool_does_not_deadlock_a_thread_exit) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   int pfd[2];
@@ -6863,7 +6922,8 @@ TEST(cmempools, a_pool_drawing_from_a_pool_does_not_deadlock_a_thread_exit) {
   if (pid == 0) {
     close(pfd[0]);
     char verdict = '0';
-    g_arm_inner = ccol_mempool_create(1024, 4096, false, false, NULL, NULL);
+    g_arm_inner =
+        ccol_mempool_create(1024, ARM_INNER_STRIDE, false, false, NULL, NULL);
     ccol_memmgmt_procs_t procs = {arm_malloc, arm_free, arm_calloc,
                                   arm_realloc};
     g_arm_outer = ccol_mempool_create(8, 16, true, false, &procs, NULL);
@@ -6873,7 +6933,7 @@ TEST(cmempools, a_pool_drawing_from_a_pool_does_not_deadlock_a_thread_exit) {
       while (!atomic_load(&g_arm_held[7])) usleep(1000);
       if (pthread_create(&ta, NULL, arm_thread_a, NULL) == 0) {
         pthread_join(ta, NULL);
-        verdict = '1';
+        verdict = atomic_load(&g_arm_overlapped) ? '1' : '2';
       }
       atomic_store(&g_arm_b_may_exit, 1);
       pthread_join(b, NULL);
@@ -6882,7 +6942,7 @@ TEST(cmempools, a_pool_drawing_from_a_pool_does_not_deadlock_a_thread_exit) {
     do {
       w = write(pfd[1], &verdict, 1);
     } while (w < 0 && errno == EINTR);
-    _exit(0);
+    test_child_exit(0);
   }
   close(pfd[1]);
   char verdict = 0;
@@ -6892,7 +6952,7 @@ TEST(cmempools, a_pool_drawing_from_a_pool_does_not_deadlock_a_thread_exit) {
     struct pollfd p = {.fd = pfd[0], .events = POLLIN};
     int pr;
     do {
-      pr = poll(&p, 1, 10000);
+      pr = poll(&p, 1, 60000);
     } while (pr < 0 && errno == EINTR);
     if (pr > 0) {
       ssize_t r;

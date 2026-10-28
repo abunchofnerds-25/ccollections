@@ -89,7 +89,7 @@ static void pool_task(void *arg) {
 
 static void pool_teardown(void *state) {
   pool_state_t *st = state;
-  if (st->pool != CTPOOL_INVALID) {
+  if (st->pool != CTPOOL_NULL) {
     ctpool p = st->pool;
     ctpool_destroy(p);
   }
@@ -101,7 +101,7 @@ static void *pool_setup_n(size_t workers) {
   if (!st) return NULL;
   atomic_init(&st->counter, 0);
   st->pool = ctpool_create(workers, 0, NULL);
-  if (st->pool == CTPOOL_INVALID) {
+  if (st->pool == CTPOOL_NULL) {
     free(st);
     return NULL;
   }

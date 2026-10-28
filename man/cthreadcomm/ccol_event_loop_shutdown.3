@@ -44,7 +44,7 @@ loop  ccol_event_loop to shut down.
 .nf
 ccol_success        The loop is shut down, by this call or an earlier
                     one.
-ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, a stale handle,
+ccol_invalid_args   loop is CCOL_EVENT_LOOP_NULL, a stale handle,
                     or a handle that has already been destroyed.
 ccol_not_permitted  The call comes from inside a callback that runs on
                     one of the threads of loop (the poller, or a

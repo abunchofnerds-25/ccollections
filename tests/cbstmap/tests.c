@@ -7,8 +7,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tau/tau.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 
 TAU_MAIN()  // Sets up Tau and gives the main function
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
 
 // BST_MAP TESTS (AVL Tree)
 
@@ -3126,6 +3135,7 @@ static int cbmap_null_run_probe(int (*probe)(void)) {
   if (pipe(fds) != 0) return -1;
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     close(fds[0]);
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
@@ -3135,7 +3145,7 @@ static int cbmap_null_run_probe(int (*probe)(void)) {
     unsigned char byte = (unsigned char)probe();
     ssize_t w = write(fds[1], &byte, 1);
     (void)w;
-    _exit(0);
+    test_child_exit(0);
   }
   close(fds[1]);
   if (pid < 0) {

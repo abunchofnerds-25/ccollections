@@ -167,7 +167,7 @@ until it exits.
 The engine logger of `chttpcli_set_engine_logger()` and the allocator of
 the logger you give it follow the same rule, because the engine writes
 through that logger while it runs. Once `chttpcli_engine_wait()` has
-returned, `chttpcli_set_engine_logger(CLOG_INVALID)` releases it and the
+returned, `chttpcli_set_engine_logger(CLOG_NULL)` releases it and the
 engine makes no more calls through it. While an engine runs, that release is
 refused with `ccol_not_permitted`.
 

@@ -61,7 +61,7 @@ typedef struct {
 
 static void log_teardown(void *state) {
   log_state_t *st = state;
-  if (st->logger != CLOG_INVALID) clog_close(st->logger);
+  if (st->logger != CLOG_NULL) clog_close(st->logger);
   if (st->fd >= 0) close(st->fd);
   free(st);
 }
@@ -75,7 +75,7 @@ static log_state_t *log_make(clog_format_t fmt, const clog_async_cfg_t *async) {
     return NULL;
   }
   st->logger = clog_create_from_fd(st->fd, CLOG_INFO, async);
-  if (st->logger == CLOG_INVALID) {
+  if (st->logger == CLOG_NULL) {
     log_teardown(st);
     return NULL;
   }

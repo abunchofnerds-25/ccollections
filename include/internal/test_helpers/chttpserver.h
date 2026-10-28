@@ -82,6 +82,11 @@ void _chttpsvr_force_watcher_thread_create_fail_for_tests(bool force);
  * had no thread left to give, so chttpsvr_start() fails. */
 void _chttpsvr_force_idle_sweep_thread_create_fail_for_tests(bool force);
 
+/* How many times the idle sweep thread has stopped without sitting out a tick
+ * (a stop woke its wait, or came while it swept), and how many times only
+ * after its wait for the tick ran out. */
+void _chttpsvr_idle_sweep_exits_for_tests(size_t *woken, size_t *timed_out);
+
 /* Locks the engine mutex and then raises sig on the calling thread, so the
  * signal handler runs on a thread that holds that mutex, as a real signal can
  * land. A handler that calls chttpsvr_engine_stop() must not deadlock here. */

@@ -51,7 +51,7 @@ int main(void) {
     printf("size %zu of %zu\n", clrucache_size(cache),
            clrucache_capacity(cache));
 
-    clru_destroy(cache);               /* cache becomes CLRU_CACHE_INVALID */
+    clru_destroy(cache);               /* cache becomes CLRU_CACHE_NULL */
     return 0;
 }
 ```
@@ -77,7 +77,7 @@ process, as it does for any create that fails.
 ## The handle
 
 A `clru_cache` is an opaque value and not a pointer. You can compare it
-with `CLRU_CACHE_INVALID` or test it directly, since `CLRU_CACHE_INVALID` is
+with `CLRU_CACHE_NULL` or test it directly, since `CLRU_CACHE_NULL` is
 0 and `if (!cache)` means "no cache". Never cast it to or from a pointer.
 
 Every handle is checked before it's used. A call on a destroyed handle
@@ -409,7 +409,7 @@ int main(void) {
         NULL, NULL, NULL,                           /* no callbacks */
         NULL,                                       /* default allocator */
         &err);
-    if (prices == CLRU_CACHE_INVALID) {
+    if (prices == CLRU_CACHE_NULL) {
         fprintf(stderr, "cache: %s\n", err);
         return 1;                                   /* no fatal error */
     }
@@ -478,7 +478,7 @@ macros don't compile.
 For a struct key with padding on a compiler other than GCC 11 or later,
 use the raw functions and give them a key whose bytes are all zero.
 
-`clru_destroy` sets your variable to `CLRU_CACHE_INVALID`, so destroying
+`clru_destroy` sets your variable to `CLRU_CACHE_NULL`, so destroying
 that variable again does nothing, but destroying another copy of the same
 handle afterwards stops the program.
 

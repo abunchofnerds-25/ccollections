@@ -52,7 +52,7 @@ out         Receives the future handle on success. The function sets it
 .SH RETURN VALUE
 .nf
 ccol_success            - task enqueued; *out set to the future handle.
-ccol_invalid_args       - pool is CTPOOL_INVALID or a stale/already-
+ccol_invalid_args       - pool is CTPOOL_NULL or a stale/already-
                           destroyed handle, or fn or out is NULL.
 ccol_not_enough_memory  - future or task allocation failed.
 ccol_not_permitted      - pool is shutting down.

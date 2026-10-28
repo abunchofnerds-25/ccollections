@@ -50,7 +50,7 @@ TEST(ccol_event_loop_keys, create_fails_cleanly_when_no_key_is_left) {
 
   char *err = NULL;
   ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, &err);
-  int created = loop != CCOL_EVENT_LOOP_INVALID;
+  int created = loop != CCOL_EVENT_LOOP_NULL;
   if (created) ccol_event_loop_destroy(loop);
 
   /* A queue needs no key, so it works here and its destroy is safe. */
@@ -68,7 +68,7 @@ TEST(ccol_event_loop_keys, create_fails_cleanly_when_no_key_is_left) {
   for (int i = 0; i < n; i++) pthread_key_delete(exhausted[i]);
   char *err_again = NULL;
   ccol_event_loop again = ccol_event_loop_create(8, 1, 1, &err_again);
-  int created_again = again != CCOL_EVENT_LOOP_INVALID;
+  int created_again = again != CCOL_EVENT_LOOP_NULL;
   if (created_again) ccol_event_loop_destroy(again);
 
   REQUIRE_GT(n, 0);

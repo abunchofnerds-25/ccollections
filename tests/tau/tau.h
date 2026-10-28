@@ -1449,7 +1449,10 @@ static tau_bool tauCmdLineRead(const int argc, const char *const *const argv) {
     // Help
     if (strncmp(argv[i], helpStr, strlen(helpStr)) == 0) {
       tau_help_();
-      return tau_false;
+      /* Like --list, it ends the run with a status of 0; only an option
+       * that isn't recognised ends it with 1. */
+      tauDisplayTests = 1;
+      return tau_true;
     }
 
     // Only failed output
@@ -1502,7 +1505,9 @@ static int tauCleanup() {
 
   if (tauTestContext.foutput) fclose(tauTestContext.foutput);
 
-  return TAU_CAST(int, tauStatsNumTestsFailed);
+  /* The exit status keeps only the low 8 bits, so a count of failures
+   * would read as a pass at exactly 256, 512, ... failures. */
+  return tauStatsNumTestsFailed ? 1 : 0;
 }
 
 // Triggers and runs all unit tests
@@ -1591,7 +1596,10 @@ inline int tau_main(const int argc, const char *const *const argv) {
   const tau_bool wasCmdLineReadSuccessful = tauCmdLineRead(argc, argv);
   if (tauDisplayTests) return tauCleanup();
 
-  if (!wasCmdLineReadSuccessful) return tauCleanup();
+  if (!wasCmdLineReadSuccessful) {
+    tauCleanup();
+    return 1;
+  }
 
   for (tau_ull i = 0; i < tauTestContext.numTestSuites; i++) {
     if (tauShouldFilterTest(cmd_filter, tauTestContext.tests[i].name))

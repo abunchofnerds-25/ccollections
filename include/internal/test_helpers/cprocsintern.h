@@ -48,4 +48,10 @@ void _ccol_procs_intern_truncate_for_tests(size_t keep);
  * microseconds before writing the copy, so a test can have other threads run
  * into the slot while it's being written. */
 extern _Atomic unsigned _ccol_procs_intern_claim_delay_us_for_tests;
+/* How many times a lookup met a slot that another thread was still writing. */
+extern _Atomic unsigned _ccol_procs_intern_writing_sightings_for_tests;
+/* While this and the delay are both non-zero, a thread that claims a slot
+ * waits until the sightings reach this count before it writes the copy, and
+ * the delay only bounds that wait. */
+extern _Atomic unsigned _ccol_procs_intern_claim_wait_sightings_for_tests;
 #endif /* RUNNING_UNIT_TESTS */

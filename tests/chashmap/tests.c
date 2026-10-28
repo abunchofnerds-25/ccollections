@@ -9,8 +9,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tau/tau.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 
 TAU_MAIN()  // sets up Tau (+ main function)
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
 
 // HASH_MAP TESTS
 
@@ -6580,12 +6589,19 @@ TEST(hash_seed, every_map_and_ccol_chmap_hash_key_share_one_secret) {
 
 /* The key that stands in for getrandom(2) mixes clocks and addresses, so it
  * isn't a constant, it differs between two calls, and its three words
- * differ from each other. */
+ * differ from each other. The second call waits until CLOCK_MONOTONIC has
+ * moved past a reading taken after the first one returned, so the two calls
+ * read different monotonic times whatever the resolution of the clock. */
 TEST(hash_seed, the_fallback_key_is_not_a_constant) {
   uint64_t s1[4], s2[4];
   chashmap_fallback_hash_key_for_tests(s1);
-  struct timespec ts = {0, 1000};
-  nanosleep(&ts, NULL);
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  do {
+    struct timespec ts = {0, 1000};
+    nanosleep(&ts, NULL);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+  } while (t1.tv_sec == t0.tv_sec && t1.tv_nsec == t0.tv_nsec);
   chashmap_fallback_hash_key_for_tests(s2);
   REQUIRE_NE(s1[0], (uint64_t)0);
   REQUIRE_NE(s1[0], s2[0]);
@@ -7141,6 +7157,7 @@ static int chmap_null_run_probe(int (*probe)(void)) {
   if (pipe(fds) != 0) return -1;
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     close(fds[0]);
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
@@ -7150,7 +7167,7 @@ static int chmap_null_run_probe(int (*probe)(void)) {
     unsigned char byte = (unsigned char)probe();
     ssize_t w = write(fds[1], &byte, 1);
     (void)w;
-    _exit(0);
+    test_child_exit(0);
   }
   close(fds[1]);
   if (pid < 0) {

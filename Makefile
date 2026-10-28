@@ -270,7 +270,10 @@ EXTRA_CFLAGS ?=
 # below prints which flags survived for the current compiler and target. See
 # also check_hardening in ci_scripts, which reads the built artifact instead
 # of the flags, because a flag in the wrong variable disappears silently.
-cc-option = $(shell printf 'int main(void){return 0;}' > .ccol_probe.c 2>/dev/null && 	if $(CC) $(EXTRA_CFLAGS) $(1) -Werror -c .ccol_probe.c -o .ccol_probe.o >/dev/null 2>&1; 	then printf '%s' '$(1)'; fi; rm -f .ccol_probe.c .ccol_probe.o)
+cc-option = $(shell d=$$(mktemp -d 2>/dev/null) && \
+	printf 'int main(void){return 0;}' > "$$d/probe.c" && \
+	if $(CC) $(EXTRA_CFLAGS) $(1) -Werror -c "$$d/probe.c" -o "$$d/probe.o" >/dev/null 2>&1; \
+	then printf '%s' '$(1)'; fi; [ -z "$$d" ] || rm -rf "$$d")
 
 # The fortify level depends on what the compiler predefines when it
 # optimizes, and a probe without -O can't see that. Alpine's GCC predefines
@@ -287,6 +290,11 @@ else
   FORTIFY_CFLAGS := $(call cc-option,-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3)
 endif
 
+# Every probe answers "no" when mktemp can't make its directory, which would
+# drop all of the hardening without a word, so say so once.
+ifneq ($(shell d=$$(mktemp -d 2>/dev/null) && rm -rf "$$d" && echo ok),ok)
+  $(warning mktemp -d fails (check TMPDIR); the build gets no hardening flags)
+endif
 HARDENING_CFLAGS := $(call cc-option,-fstack-protector-strong) \
 	$(call cc-option,-fstack-clash-protection) \
 	$(FORTIFY_CFLAGS)
@@ -415,11 +423,22 @@ hardening_report:
 ccol_suite_var = $(call ccol_shell_quote,$(1)=$(subst $$,$$$$,$($(1))))
 CCOL_SUITE_MAKE_VARS = $(foreach v,$(filter CC EXTRA_CFLAGS,$(CCOL_RESTORED_VARIABLES)),$(call ccol_suite_var,$(v)))
 
+# SUITE_TIMEOUT, in seconds, bounds each module of `make test`, `make
+# memtest` and `make coverage_site` with timeout(1), so a hang fails that
+# module and names it instead of running into the CI job's own timeout. It's
+# empty by default (no bound), and CI sets it. GNU timeout(1) runs the suite
+# in a process group of its own, so a Ctrl-C in the terminal never reaches the
+# suite, and make waits for it before it stops: nothing happens until the
+# suite ends or its bound runs out. Kill the suite's process group (timeout
+# leads it) to get make back.
+SUITE_TIMEOUT ?=
+ccol_suite_run = (cd $(1) && $(if $(strip $(SUITE_TIMEOUT)),timeout -k 30 $(SUITE_TIMEOUT) )$(MAKE) $(2) $(CCOL_SUITE_MAKE_VARS)) || { echo "$(1): $(2) failed$(if $(strip $(SUITE_TIMEOUT)), or ran past $(SUITE_TIMEOUT) s)" >&2; exit 1; }
+
 test:
-	$(foreach folder,$(TEST_FOLDERS),(cd $(folder) && $(MAKE) test $(CCOL_SUITE_MAKE_VARS)) &&) true
+	$(foreach folder,$(TEST_FOLDERS),$(call ccol_suite_run,$(folder),test) &&) true
 
 memtest:
-	$(foreach folder,$(TEST_FOLDERS),(cd $(folder) && $(MAKE) memtest $(CCOL_SUITE_MAKE_VARS)) &&) true
+	$(foreach folder,$(TEST_FOLDERS),$(call ccol_suite_run,$(folder),memtest) &&) true
 
 # Each module runs in its own subshell and && joins the list, so the first
 # failure stops the sweep with a non-zero status. Don't join a
@@ -427,7 +446,7 @@ memtest:
 # in the directory of the module that failed, the relative cd of every later
 # module fails too, and sixteen "can't cd" lines bury the one real error.
 generate_coverage_report:
-	$(foreach folder,$(COVERAGE_TEST_FOLDERS),(cd $(folder) && $(MAKE) generate_coverage_report $(CCOL_SUITE_MAKE_VARS)) &&) true
+	$(foreach folder,$(COVERAGE_TEST_FOLDERS),$(call ccol_suite_run,$(folder),generate_coverage_report) &&) true
 
 # ---------------------------------------------------------------------------
 # Aggregate coverage site
@@ -626,7 +645,7 @@ bench_list: $(SHARED_LIBRARY_NAME)
 
 COVERAGE_SITE_DIR = coverage_site
 
-# Fails when a file in src/ or include/ covers less than 80 percent of its
+# Fails when a file in src/ or include/ covers less than 90 percent of its
 # instrumented lines. It's kept apart from coverage_site so you can rebuild
 # the report and look at it without the check, and so you can rerun the check
 # against an existing report without paying for another instrumented build.
@@ -644,6 +663,7 @@ coverage_site: generate_coverage_report
 	tracefiles=""; \
 	for f in tests/*/coverage/*.info; do \
 		[ -e "$$f" ] || continue; \
+		case "$$f" in tests/mixed/*) continue;; esac; \
 		tracefiles="$$tracefiles --add-tracefile $$f"; \
 	done; \
 	if [ -z "$$tracefiles" ]; then \
@@ -660,7 +680,9 @@ coverage_site: generate_coverage_report
 		--legend --show-details --title "c_collections $(VERSION)" \
 		--output-directory $(COVERAGE_SITE_DIR)/html; \
 	lcov --summary $(COVERAGE_SITE_DIR)/library.info \
-		$(LCOV_QUIRK_FLAGS) 2>&1 | tee $(COVERAGE_SITE_DIR)/summary.txt
+		$(LCOV_QUIRK_FLAGS) > $(COVERAGE_SITE_DIR)/summary.txt 2>&1 || \
+		{ cat $(COVERAGE_SITE_DIR)/summary.txt >&2; exit 1; }; \
+	cat $(COVERAGE_SITE_DIR)/summary.txt
 
 # view_coverage_report:
 # 	firefox $(for i in $(ls -1 ./tests/ | grep -vE 'mixed|tau'); do s=$(basename $i); echo ./tests/$s/coverage/src/$s.c.gcov.html; done | xargs)

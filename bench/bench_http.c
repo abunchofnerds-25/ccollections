@@ -117,11 +117,11 @@ static void bench_hello_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 static void http_teardown(void *state) {
   http_state_t *st = state;
-  if (st->cli != CHTTPCLI_INVALID) {
+  if (st->cli != CHTTPCLI_NULL) {
     chttpcli c = st->cli;
     chttpclient_destroy(c);
   }
-  if (st->srv != CHTTPSVR_INVALID) {
+  if (st->srv != CHTTPSVR_NULL) {
     chttpsvr s = st->srv;
     chttpsvr_stop(s);
     chttpsvr_destroy(s);
@@ -136,10 +136,10 @@ static void *http_setup(size_t n) {
   http_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
   atomic_init(&st->ok, 0);
-  st->srv = CHTTPSVR_INVALID;
-  st->cli = CHTTPCLI_INVALID;
+  st->srv = CHTTPSVR_NULL;
+  st->cli = CHTTPCLI_NULL;
 
-  /* CLOG_INVALID means no logger. A logger here would put the cost of
+  /* CLOG_NULL means no logger. A logger here would put the cost of
    * formatting and writing one line per request inside a measurement that is
    * about the request path. */
   /* Nothing frees this, and nothing may: these two constructors report
@@ -148,8 +148,8 @@ static void *http_setup(size_t n) {
    * waste. The serializers' parse error strings belong to the library in the
    * same way: each thread has its own and the next parse reuses it. */
   char *err = NULL;
-  st->srv = chttpsvr_create(CLOG_INVALID, &err);
-  if (st->srv == CHTTPSVR_INVALID) {
+  st->srv = chttpsvr_create(CLOG_NULL, &err);
+  if (st->srv == CHTTPSVR_NULL) {
     if (err) fprintf(stderr, "bench: chttpsvr creation failed: %s\n", err);
     http_teardown(st);
     return NULL;
@@ -196,7 +196,7 @@ static void *http_setup(size_t n) {
   }
 
   st->cli = chttpclient_create(&err);
-  if (st->cli == CHTTPCLI_INVALID) {
+  if (st->cli == CHTTPCLI_NULL) {
     if (err) fprintf(stderr, "bench: chttpclient creation failed: %s\n", err);
     http_teardown(st);
     return NULL;

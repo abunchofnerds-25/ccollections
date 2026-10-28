@@ -9,8 +9,17 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 #include <unistd.h>
 TAU_MAIN()  // sets up Tau (+ main function)
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
 
 // C_VECTOR TESTS
 
@@ -161,6 +170,7 @@ TEST(cvectors, get_mprocs) {
 TEST(cvectors, get_mprocs_null_vec_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -168,11 +178,11 @@ TEST(cvectors, get_mprocs_null_vec_is_fatal) {
       close(dn);
     }
     (void)cvector_get_mprocs(NULL); /* NULL vector; must _ccol_fatal_err() */
-    _exit(0); /* unreachable if _ccol_fatal_err() aborted */
+    test_child_exit(0); /* unreachable if _ccol_fatal_err() aborted */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -1483,6 +1493,7 @@ TEST(cvectors, type_safe_at_ptr) {
 TEST(cvectors, type_safe_at_out_of_bounds_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1493,11 +1504,12 @@ TEST(cvectors, type_safe_at_out_of_bounds_is_fatal) {
     cvec_push(vec, 1);
     (void)cvec_at(vec,
                   1); /* out of bounds; must _ccol_fatal_err(), not SIGSEGV */
-    _exit(0);         /* unreachable if _ccol_fatal_err() aborted as expected */
+    /* unreachable if _ccol_fatal_err() aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -1829,6 +1841,7 @@ TEST(cvectors, reserve_fatal_err_evaluates_count_argument_exactly_once) {
 
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1837,11 +1850,12 @@ TEST(cvectors, reserve_fatal_err_evaluates_count_argument_exactly_once) {
     }
     cvec_construct(vec, int);
     cvec_reserve(vec, reserve_side_effecting_target());
-    _exit(0); /* unreachable if _ccol_fatal_err() aborted as expected */
+    /* unreachable if _ccol_fatal_err() aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
   REQUIRE_EQ(*call_count, 1);
@@ -1864,6 +1878,7 @@ TEST(cvectors, append_array_fatal_err_evaluates_count_argument_exactly_once) {
 
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -1873,11 +1888,12 @@ TEST(cvectors, append_array_fatal_err_evaluates_count_argument_exactly_once) {
     cvec_construct(vec, int);
     int dummy[1] = {0};
     cvec_append_array(vec, dummy, append_array_side_effecting_count());
-    _exit(0); /* unreachable if _ccol_fatal_err() aborted as expected */
+    /* unreachable if _ccol_fatal_err() aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
   REQUIRE_EQ(*call_count, 1);
@@ -2293,6 +2309,7 @@ static void _sort_oom_free(void *ptr) { free(ptr); }
 TEST(cvectors, sort_out_of_memory_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -2316,11 +2333,12 @@ TEST(cvectors, sort_out_of_memory_is_fatal) {
     cvec_push(vec, 1);
     cvec_push(vec, 2);
     cvec_sort(vec); /* must _ccol_fatal_err(), not return unsorted */
-    _exit(0);       /* unreachable if _ccol_fatal_err() aborted as expected */
+    /* unreachable if _ccol_fatal_err() aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -3514,6 +3532,7 @@ TEST(cvec_at_cost, the_out_of_bounds_diagnostic_still_reports_the_size) {
   REQUIRE_EQ(pipe(fds), 0);
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     close(fds[0]);
     dup2(fds[1], STDERR_FILENO);
     dup2(fds[1], STDOUT_FILENO);
@@ -3523,7 +3542,7 @@ TEST(cvec_at_cost, the_out_of_bounds_diagnostic_still_reports_the_size) {
     cvec_push(vec, 2);
     cvec_push(vec, 3);
     (void)cvec_at(vec, 7);
-    _exit(0);
+    test_child_exit(0);
   }
   close(fds[1]);
   char buf[4096] = {0};
@@ -3924,4 +3943,342 @@ TEST(cvector_procs, a_vector_costs_two_allocations_with_any_procs) {
   REQUIRE_EQ(counts[1], 2L);
   REQUIRE_TRUE(pushed[0]);
   REQUIRE_TRUE(pushed[1]);
+}
+
+/* ========================================================================== */
+/*                     ALLOCATION FAILURES AND NULL VECTORS                   */
+/* ========================================================================== */
+
+/* An allocator that fails the allocation call that g_flaky_fail_at names
+ * (counted from 1 since g_flaky_seen was cleared; 0 never fails) and counts
+ * what it hands out and takes back. */
+static int g_flaky_fail_at = 0;
+static int g_flaky_seen = 0;
+static int g_flaky_allocs = 0;
+static int g_flaky_frees = 0;
+
+static bool _flaky_fails(void) {
+  return g_flaky_fail_at != 0 && ++g_flaky_seen == g_flaky_fail_at;
+}
+static void *_flaky_malloc(size_t n) {
+  if (_flaky_fails()) return NULL;
+  g_flaky_allocs++;
+  return malloc(n);
+}
+static void *_flaky_calloc(size_t a, size_t b) {
+  if (_flaky_fails()) return NULL;
+  g_flaky_allocs++;
+  return calloc(a, b);
+}
+static void *_flaky_realloc(void *p, size_t n) {
+  if (_flaky_fails()) return NULL;
+  if (!p) g_flaky_allocs++;
+  return realloc(p, n);
+}
+static void _flaky_free(void *p) {
+  if (p) g_flaky_frees++;
+  free(p);
+}
+static ccol_memmgmt_procs_t g_flaky = {.malloc = _flaky_malloc,
+                                       .free = _flaky_free,
+                                       .calloc = _flaky_calloc,
+                                       .realloc = _flaky_realloc};
+
+static void _flaky_arm(int nth) {
+  g_flaky_seen = 0;
+  g_flaky_fail_at = nth;
+}
+
+static void _flaky_reset_counts(void) {
+  g_flaky_allocs = 0;
+  g_flaky_frees = 0;
+  _flaky_arm(0);
+}
+
+/* A create whose container or data allocation fails returns NULL with the
+ * err of that allocation and gives back the container it had already made. */
+TEST(alloc_failure, a_failed_create_reports_which_block_and_frees_the_rest) {
+  static const char *const want[] = {"failed to allocate vector container",
+                                     "failed to allocate data container"};
+  for (int n = 1; n <= 2; n++) {
+    _flaky_reset_counts();
+    char *err = NULL;
+    _flaky_arm(n);
+    cvec v = cvector_create_full(sizeof(int), &g_flaky, &err);
+    _flaky_arm(0);
+    bool refused = v == NULL;
+    if (v) cvector_destroy(v);
+    REQUIRE_TRUE(refused);
+    REQUIRE_NE((void *)err, NULL);
+    REQUIRE_NE((void *)strstr(err, want[n - 1]), NULL);
+    REQUIRE_EQ(g_flaky_allocs, g_flaky_frees);
+  }
+}
+
+/* A pop that would shrink the buffer still succeeds when the shrinking
+ * realloc fails: it hands out the element, the capacity stays, every other
+ * element is intact, and the next pop past the threshold shrinks. */
+TEST(alloc_failure, a_pop_whose_shrink_fails_keeps_the_vector_whole) {
+  _flaky_reset_counts();
+  cvec v = cvector_create_full(sizeof(int), &g_flaky, NULL);
+  REQUIRE_NE((void *)v, NULL);
+  bool filled = true;
+  for (int i = 0; i < 64; i++)
+    if (cvector_push_back(v, &i) != ccol_success) filled = false;
+  size_t cap = cvector_get_capacity(v);
+  /* Pop down to the count at which the next pop shrinks the buffer. */
+  int out = -1;
+  bool pops_ok = true;
+  while (cvector_get_capacity(v) == cap && cvector_elem_count(v) > 0) {
+    size_t count = cvector_elem_count(v);
+    _flaky_arm(1);
+    ccol_retval_t r = cvector_pop_back(v, &out);
+    bool fired = g_flaky_seen >= 1;
+    _flaky_arm(0);
+    if (r != ccol_success || out != (int)count - 1) {
+      pops_ok = false;
+      break;
+    }
+    if (fired) break;
+  }
+  size_t count_after = cvector_elem_count(v);
+  size_t cap_after = cvector_get_capacity(v);
+  bool intact = true;
+  for (size_t i = 0; i < count_after; i++)
+    if (*(int *)cvector_at(v, i) != (int)i) intact = false;
+  ccol_retval_t r_next = cvector_pop_back(v, &out);
+  size_t cap_next = cvector_get_capacity(v);
+  cvector_destroy(v);
+
+  REQUIRE_TRUE(filled);
+  REQUIRE_TRUE(pops_ok);
+  REQUIRE_EQ(cap_after, cap);
+  REQUIRE_LT(count_after, cap);
+  REQUIRE_TRUE(intact);
+  REQUIRE_EQ(r_next, ccol_success);
+  REQUIRE_LT(cap_next, cap);
+  REQUIRE_EQ(g_flaky_allocs, g_flaky_frees);
+}
+
+/* A reserve whose realloc fails returns false and changes nothing: count,
+ * capacity and contents stay, and a later reserve with memory works. */
+TEST(alloc_failure, a_failed_reserve_returns_false_and_keeps_the_vector) {
+  _flaky_reset_counts();
+  cvec v = cvector_create_full(sizeof(int), &g_flaky, NULL);
+  REQUIRE_NE((void *)v, NULL);
+  bool filled = true;
+  for (int i = 0; i < 3; i++)
+    if (cvector_push_back(v, &i) != ccol_success) filled = false;
+  size_t cap = cvector_get_capacity(v);
+  _flaky_arm(1);
+  bool reserved = cvector_reserve(v, 1000);
+  _flaky_arm(0);
+  size_t cap_after = cvector_get_capacity(v);
+  size_t count_after = cvector_elem_count(v);
+  bool intact = count_after == 3;
+  for (size_t i = 0; intact && i < count_after; i++)
+    if (*(int *)cvector_at(v, i) != (int)i) intact = false;
+  bool reserved_later = cvector_reserve(v, 1000);
+  size_t cap_later = cvector_get_capacity(v);
+  cvector_destroy(v);
+
+  REQUIRE_TRUE(filled);
+  REQUIRE_FALSE(reserved);
+  REQUIRE_EQ(cap_after, cap);
+  REQUIRE_TRUE(intact);
+  REQUIRE_TRUE(reserved_later);
+  REQUIRE_GE(cap_later, (size_t)1000);
+  REQUIRE_EQ(g_flaky_allocs, g_flaky_frees);
+}
+
+/* An iterator that cannot be allocated is NULL with an err, the vector is
+ * left as it was, and the next begin works. */
+TEST(alloc_failure, a_failed_iterator_allocation_reports_why) {
+  _flaky_reset_counts();
+  cvec v = cvector_create_full(sizeof(int), &g_flaky, NULL);
+  REQUIRE_NE((void *)v, NULL);
+  int x = 5;
+  bool filled = cvector_push_back(v, &x) == ccol_success;
+  char *err = NULL;
+  _flaky_arm(1);
+  cmap_iterator *it = cvector_begin_iter(v, &err);
+  _flaky_arm(0);
+  bool err_ok = err && strstr(err, "Failed to allocate iterator") != NULL;
+  char *err2 = (char *)"unset";
+  cmap_iterator *it2 = cvector_begin_iter(v, &err2);
+  bool begun = it2 != NULL;
+  int seen = it2 ? *(int *)it2->val_pair->ptr : -1;
+  if (it2) ccol_iter_destroy(it2);
+  size_t count = cvector_elem_count(v);
+  cvector_destroy(v);
+
+  REQUIRE_TRUE(filled);
+  REQUIRE_EQ((void *)it, NULL);
+  REQUIRE_TRUE(err_ok);
+  REQUIRE_TRUE(begun);
+  REQUIRE_EQ((void *)err2, NULL);
+  REQUIRE_EQ(seen, 5);
+  REQUIRE_EQ(count, (size_t)1);
+  REQUIRE_EQ(g_flaky_allocs, g_flaky_frees);
+}
+
+/* A push that has to grow the buffer returns ccol_not_enough_memory when the
+ * growth fails, and the vector keeps its elements and its capacity; the
+ * same push goes through once memory is back. */
+TEST(alloc_failure, a_push_whose_growth_fails_leaves_the_vector_as_it_was) {
+  _flaky_reset_counts();
+  cvec v = cvector_create_full(sizeof(int), &g_flaky, NULL);
+  REQUIRE_NE((void *)v, NULL);
+  size_t cap = cvector_get_capacity(v);
+  bool filled = true;
+  for (int i = 0; i < (int)cap; i++)
+    if (cvector_push_back(v, &i) != ccol_success) filled = false;
+  int extra = 100;
+  _flaky_arm(1);
+  ccol_retval_t r = cvector_push_back(v, &extra);
+  _flaky_arm(0);
+  size_t count_after = cvector_elem_count(v);
+  size_t cap_after = cvector_get_capacity(v);
+  bool intact = true;
+  for (size_t i = 0; i < count_after; i++)
+    if (*(int *)cvector_at(v, i) != (int)i) intact = false;
+  ccol_retval_t r_again = cvector_push_back(v, &extra);
+  int last = cvector_elem_count(v) > cap ? *(int *)cvector_at(v, cap) : -1;
+  cvector_destroy(v);
+
+  REQUIRE_TRUE(filled);
+  REQUIRE_EQ(r, ccol_not_enough_memory);
+  REQUIRE_EQ(count_after, cap);
+  REQUIRE_EQ(cap_after, cap);
+  REQUIRE_TRUE(intact);
+  REQUIRE_EQ(r_again, ccol_success);
+  REQUIRE_EQ(last, extra);
+  REQUIRE_EQ(g_flaky_allocs, g_flaky_frees);
+}
+
+/* A reset whose shrinking realloc fails still empties the vector and keeps
+ * the larger buffer, so pushes up to that capacity need no allocation. */
+TEST(alloc_failure, a_reset_whose_shrink_fails_empties_the_vector) {
+  _flaky_reset_counts();
+  cvec v = cvector_create_full(sizeof(int), &g_flaky, NULL);
+  REQUIRE_NE((void *)v, NULL);
+  bool filled = true;
+  for (int i = 0; i < 40; i++)
+    if (cvector_push_back(v, &i) != ccol_success) filled = false;
+  size_t cap = cvector_get_capacity(v);
+  _flaky_arm(1);
+  cvector_reset(v);
+  bool realloc_tried = g_flaky_seen >= 1;
+  size_t count_after = cvector_elem_count(v);
+  size_t cap_after = cvector_get_capacity(v);
+  /* Still armed for a later call: these pushes must allocate nothing. */
+  _flaky_arm(1);
+  bool pushed = true;
+  for (int i = 0; i < (int)cap; i++)
+    if (cvector_push_back(v, &i) != ccol_success) pushed = false;
+  int calls_while_pushing = g_flaky_seen;
+  _flaky_arm(0);
+  bool intact = cvector_elem_count(v) == cap;
+  for (size_t i = 0; intact && i < cap; i++)
+    if (*(int *)cvector_at(v, i) != (int)i) intact = false;
+  cvector_destroy(v);
+
+  REQUIRE_TRUE(filled);
+  REQUIRE_TRUE(realloc_tried);
+  REQUIRE_EQ(count_after, (size_t)0);
+  REQUIRE_EQ(cap_after, cap);
+  REQUIRE_TRUE(pushed);
+  REQUIRE_EQ(calls_while_pushing, 0);
+  REQUIRE_TRUE(intact);
+  REQUIRE_EQ(g_flaky_allocs, g_flaky_frees);
+}
+
+typedef enum {
+  NULL_PUSH_BACK,
+  NULL_POP_BACK,
+  NULL_RESERVE,
+  NULL_APPEND_ARRAY,
+  NULL_APPEND_CVECTOR,
+  NULL_APPEND_CVECTOR_SIZE_MISMATCH,
+  NULL_DATA_PTR,
+  NULL_AT,
+  NULL_ELEM_COUNT,
+  NULL_RESET,
+  NULL_FIND,
+  NULL_CASE_COUNT
+} null_case_t;
+
+static void _null_case_run(null_case_t c) {
+  int x = 1;
+  switch (c) {
+    case NULL_PUSH_BACK:
+      (void)cvector_push_back(NULL, &x);
+      break;
+    case NULL_POP_BACK:
+      (void)cvector_pop_back(NULL, &x);
+      break;
+    case NULL_RESERVE:
+      (void)cvector_reserve(NULL, 8);
+      break;
+    case NULL_APPEND_ARRAY:
+      (void)cvector_append_array(NULL, &x, 1);
+      break;
+    case NULL_APPEND_CVECTOR: {
+      cvec from = cvector_create(sizeof(int), NULL);
+      (void)cvector_append_cvector(NULL, from);
+      break;
+    }
+    case NULL_APPEND_CVECTOR_SIZE_MISMATCH: {
+      cvec to = cvector_create(sizeof(int), NULL);
+      cvec from = cvector_create(sizeof(long long), NULL);
+      (void)cvector_append_cvector(to, from);
+      break;
+    }
+    case NULL_DATA_PTR:
+      (void)cvector_data_ptr(NULL);
+      break;
+    case NULL_AT:
+      (void)cvector_at(NULL, 0);
+      break;
+    case NULL_ELEM_COUNT:
+      (void)cvector_elem_count(NULL);
+      break;
+    case NULL_RESET:
+      cvector_reset(NULL);
+      break;
+    case NULL_FIND:
+      (void)cvector_find(NULL, &x, NULL);
+      break;
+    case NULL_CASE_COUNT:
+      break;
+  }
+}
+
+/* Every raw entry point that takes a vector asserts on a NULL one instead of
+ * reading through it, and cvector_append_cvector also asserts when the two
+ * element sizes differ. Each case runs in its own forked child, which must
+ * die by SIGABRT; a missing check dies by SIGSEGV instead, or exits. */
+TEST(null_vector, every_raw_entry_point_asserts_on_a_null_vector) {
+  int signal_of[NULL_CASE_COUNT];
+  for (int c = 0; c < NULL_CASE_COUNT; c++) {
+    signal_of[c] = 0;
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid == 0) {
+      test_child_no_core();
+      int dn = open("/dev/null", O_WRONLY);
+      if (dn >= 0) {
+        dup2(dn, STDOUT_FILENO);
+        dup2(dn, STDERR_FILENO);
+        close(dn);
+      }
+      _null_case_run((null_case_t)c);
+      test_child_exit(0);
+    }
+    if (pid < 0) continue;
+    int status = 0;
+    if (waitpid(pid, &status, 0) == pid && WIFSIGNALED(status))
+      signal_of[c] = WTERMSIG(status);
+  }
+  for (int c = 0; c < NULL_CASE_COUNT; c++) REQUIRE_EQ(signal_of[c], SIGABRT);
 }

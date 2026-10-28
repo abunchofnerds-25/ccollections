@@ -104,7 +104,7 @@ err_str               Optional pointer that gets an error string on a
 .nf
 A new ccol_event_loop handle on success.
 
-CCOL_EVENT_LOOP_INVALID on failure. The causes are: max_events_per_wait
+CCOL_EVENT_LOOP_NULL on failure. The causes are: max_events_per_wait
 is 0, larger than INT_MAX, or overflows size_t when multiplied by the
 size of one kernel event record; num_lock_stripes is 0;
 num_reactor_threads is 0; mmgmt_procs is malformed because it sets some
@@ -122,7 +122,7 @@ configuration made one, are stopped again before the call returns.
 .nf
 The handle is an opaque VALUE and not a pointer. Do not cast it to or
 from void*, and do not use it as an address. Compare it with
-CCOL_EVENT_LOOP_INVALID; that value is 0, so a test such as if (!loop)
+CCOL_EVENT_LOOP_NULL; that value is 0, so a test such as if (!loop)
 is correct as well. Every call resolves the handle before it touches
 the loop, so a stale or destroyed handle is refused and never
 dereferenced.

@@ -18,13 +18,13 @@ call returns.
 .fi
 .SH PARAMETERS
 .nf
-pool   Thread pool handle. CTPOOL_INVALID, or a stale or
+pool   Thread pool handle. CTPOOL_NULL, or a stale or
        already-destroyed handle, gives 0.
 .fi
 .SH RETURN VALUE
 .nf
 The number of tasks running at the moment, or 0 if pool is
-CTPOOL_INVALID or a stale or already-destroyed handle.
+CTPOOL_NULL or a stale or already-destroyed handle.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_pending_count (3)

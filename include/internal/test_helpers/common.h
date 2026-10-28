@@ -90,5 +90,9 @@ extern atomic_ulong _ccol_cloexec_gate_leaves_for_tests;
  * handler, so a test can see whether the gate already ran in the current
  * fork. */
 extern bool _ccol_cloexec_gate_prepared_for_tests;
+
+/* How many times the prepare handler of the gate started. It counts before
+ * the handler waits, so a test sees a fork() that waits at the gate. */
+extern atomic_ulong _ccol_cloexec_gate_prepares_for_tests;
 #endif /* _CCOL_CLOEXEC_GATE */
 #endif /* RUNNING_UNIT_TESTS */

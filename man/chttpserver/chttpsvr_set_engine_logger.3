@@ -11,7 +11,7 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 .fi
 .SH DESCRIPTION
 .nf
-When cl is not CLOG_INVALID, the function derives a child logger from
+When cl is not CLOG_NULL, the function derives a child logger from
 cl, adds the field component=http-server-engine to it and installs it
 as the diagnostics logger of the shared reactor.  It closes the
 logger that an earlier call derived and, if a running engine has one,
@@ -35,14 +35,14 @@ reactor that a later chttpsvr_start brings up after a full engine
 stop, until another call of this function replaces it.
 
 The derived child logger belongs to the library.  It is closed when
-another call replaces it, when a call with CLOG_INVALID releases it,
+another call replaces it, when a call with CLOG_NULL releases it,
 or at process exit or library unload; if an engine is still running
 at that point, the engine closes it when it stops.  The caller must
 not close it.  cl stays the caller's, and the caller may close it at
 any time, because the child logger is a handle of its own and keeps
 the destination of cl open for as long as it lives.
 
-A call with CLOG_INVALID releases the engine logger.  The child
+A call with CLOG_NULL releases the engine logger.  The child
 logger is closed at once, and the next engine that starts uses the
 fallback logger.  While an engine runs, the release is refused with
 ccol_not_permitted, because the engine logs through that logger, so
@@ -53,8 +53,8 @@ with no logger installed does nothing and succeeds.
 .nf
 ccol_success on success, including a release when no logger is
                   installed.
-ccol_not_permitted when cl is CLOG_INVALID and an engine runs.
-ccol_invalid_args when cl is not CLOG_INVALID but is closed or
+ccol_not_permitted when cl is CLOG_NULL and an engine runs.
+ccol_invalid_args when cl is not CLOG_NULL but is closed or
                   stale; nothing changes, and the engine keeps the
                   logger that it had.
 ccol_not_enough_memory when the child logger cannot be
@@ -64,7 +64,7 @@ ccol_not_enough_memory when the child logger cannot be
 .nf
 The child logger allocates and frees through the allocator of cl.
 An application that destroys that allocator before the process exits
-must release the engine logger with CLOG_INVALID first.  Otherwise
+must release the engine logger with CLOG_NULL first.  Otherwise
 the library closes the child logger at process exit through an
 allocator that is gone.
 

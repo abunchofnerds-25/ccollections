@@ -292,6 +292,9 @@ unsigned long _chttpclient_field_rec_reads_for_tests(void);
 unsigned long _chttp_tier1_reads_for_tests(void);
 unsigned long _chttp_tier1_read_waits_for_tests(void);
 
+/* The number of Tier 1 hops that have opened a 100-continue window. */
+unsigned long _chttp_tier1_continue_waits_for_tests(void);
+
 /* ---------------------------------------------------------------------------
  * Deadline sweep of Tiers 2 and 3
  * ------------------------------------------------------------------------- */
@@ -322,8 +325,9 @@ unsigned _chttp_offer_done_count_for_tests(void);
 
 /* Arms the next sweep tick that meets a ctx waiting for 100 Continue to park
  * after its critical section, before it judges the continue window, until
- * the release (10 s at most). The last one counts the stores of the continue
- * deadline. */
+ * the release (10 s at most). A release counts for the arm before it, also
+ * when it comes before the sweep parks, and no later arm takes it back. The
+ * last one counts the stores of the continue deadline. */
 void _chttp_continue_sweep_arm_for_tests(void);
 bool _chttp_continue_sweep_parked_for_tests(void);
 void _chttp_continue_sweep_release_for_tests(void);
@@ -377,7 +381,7 @@ void _chttpclient_engine_wait_for_quiescence_for_tests(void);
 /* Whether this process has started initializing the engine globals. */
 bool _chttpclient_engine_globals_entered_for_tests(void);
 
-/* The DNS pool of the running engine, or CTPOOL_INVALID when there is no
+/* The DNS pool of the running engine, or CTPOOL_NULL when there is no
  * engine. */
 ctpool _chttpclient_engine_dns_pool_for_tests(void);
 
@@ -507,4 +511,22 @@ void _chttpclient_force_async_hard_read_error_once_for_tests(void);
 bool _chttpclient_timeouts_for_tests(chttpcli cli, uint64_t *connect_us,
                                      uint64_t *request_us,
                                      uint64_t *inactivity_us);
+
+/* The primitive initializations of chttpclient_create_mp that
+ * _chttpclient_arm_create_fault_for_tests can make fail, in the order the
+ * create makes them. */
+typedef enum {
+  _CHTTPCLI_FAULT_NONE = 0,
+  _CHTTPCLI_FAULT_LOCK,
+  _CHTTPCLI_FAULT_AVAILABLE_CV,
+  _CHTTPCLI_FAULT_IDLE_ASYNC_DRAINED_CV,
+  _CHTTPCLI_FAULT_ASYNC_COUNT_LOCK,
+  _CHTTPCLI_FAULT_ASYNC_COUNT_DRAINED_CV
+} _chttpcli_fault_t;
+
+/* Arms one failure of step: the next create that reaches it sees the init
+ * fail, as pthread would report it, and the hook disarms itself.
+ * _CHTTPCLI_FAULT_NONE disarms it. The failing init is skipped, so the
+ * failure path has nothing of it to destroy, as after a real failure. */
+void _chttpclient_arm_create_fault_for_tests(_chttpcli_fault_t step);
 #endif /* RUNNING_UNIT_TESTS */

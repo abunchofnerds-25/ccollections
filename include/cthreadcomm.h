@@ -1516,8 +1516,8 @@ typedef struct _ccol_event_loop_s _ccol_event_loop_s;
  * ccol_event_loop is an opaque VALUE handle that packs a slot index and a
  * generation into one value. It is not a pointer: never cast it to or from
  * void*, never compare it through a pointer cast, and never treat it as an
- * address. Compare it directly against CCOL_EVENT_LOOP_INVALID, or use it in
- * a truthiness check, since CCOL_EVENT_LOOP_INVALID is 0 and `if (!loop)` is
+ * address. Compare it directly against CCOL_EVENT_LOOP_NULL, or use it in
+ * a truthiness check, since CCOL_EVENT_LOOP_NULL is 0 and `if (!loop)` is
  * a correct test for "no loop". The library resolves every use of a
  * ccol_event_loop through a slot table it owns before it touches the struct
  * _ccol_event_loop_s* behind the handle, so it always detects a handle whose
@@ -1530,7 +1530,7 @@ typedef uint64_t ccol_event_loop;
 /** @brief Sentinel value for "no loop", the ccol_event_loop equivalent of
  * NULL.
  */
-#define CCOL_EVENT_LOOP_INVALID ((ccol_event_loop)0)
+#define CCOL_EVENT_LOOP_NULL ((ccol_event_loop)0)
 
 /**
  * @brief Opaque handle to a single ccol_event_loop registration.
@@ -1539,8 +1539,8 @@ typedef uint64_t ccol_event_loop;
  * generation into one value, and it belongs to the one ccol_event_loop that
  * gave it out. It is not a pointer: never cast it to or from void*, never
  * compare it through a pointer cast, and never treat it as an address.
- * Compare it directly against CCOL_EVENT_REG_INVALID, or use it in a
- * truthiness check, since CCOL_EVENT_REG_INVALID is 0. The library resolves
+ * Compare it directly against CCOL_EVENT_REG_NULL, or use it in a
+ * truthiness check, since CCOL_EVENT_REG_NULL is 0. The library resolves
  * every use of a ccol_event_reg through that loop's reg slot table before it
  * touches the struct behind the handle, so it always detects a handle whose
  * slot is free. The slot becomes free when ccol_event_loop_remove runs, from
@@ -1553,7 +1553,7 @@ typedef uint64_t ccol_event_reg;
 
 /** @brief Sentinel value for "no registration", the ccol_event_reg
  * equivalent of NULL. */
-#define CCOL_EVENT_REG_INVALID ((ccol_event_reg)0)
+#define CCOL_EVENT_REG_NULL ((ccol_event_reg)0)
 
 /**
  * @brief Callback that the loop calls when a registration becomes readable
@@ -1824,7 +1824,7 @@ typedef struct ccol_event_handlers {
  * buffer. It must be from 1 to INT_MAX and small enough that
  * max_events_per_wait * sizeof(struct epoll_event) doesn't overflow size_t;
  * for a value outside that range this function returns
- * CCOL_EVENT_LOOP_INVALID. The
+ * CCOL_EVENT_LOOP_NULL. The
  * library narrows the value to epoll_wait's int maxevents parameter and sizes
  * the poller thread's events buffer from it. It bounds how many ready events
  * one epoll_wait call drains, not how many registrations the loop can hold.
@@ -1845,7 +1845,7 @@ typedef struct ccol_event_handlers {
  * @param err_str Optional pointer that gets an error string on failure. Pass
  * NULL to ignore it.
  *
- * @return New ccol_event_loop handle, or CCOL_EVENT_LOOP_INVALID on failure.
+ * @return New ccol_event_loop handle, or CCOL_EVENT_LOOP_NULL on failure.
  * The call fails on invalid arguments, on a failed allocation, and when
  * epoll_create1, eventfd, or pthread_create fails. It also fails when the
  * process has no thread-specific key left for the two keys that every loop's
@@ -1888,7 +1888,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
  * interest after that), uses one registration and ccol_event_loop_modify.
  * The function refuses a second selectable for a direction already in use on
  * the same fd, such as two read registrations on one fd; the call then
- * returns CCOL_EVENT_REG_INVALID and err_str names the cause (see the return
+ * returns CCOL_EVENT_REG_NULL and err_str names the cause (see the return
  * value below).
  *
  * Queue and ccol_channel selectables have no such restriction. You can make
@@ -1946,7 +1946,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
  * @param err_str  Optional pointer that gets an error string on failure, and
  *                 NULL on success
  *
- * @return New registration handle, or CCOL_EVENT_REG_INVALID on failure. On
+ * @return New registration handle, or CCOL_EVENT_REG_NULL on failure. On
  * failure, when err_str is not NULL, *err_str names the cause with one
  * message per class. A loop that is shut down (ccol_event_loop_shutdown())
  * refuses every registration with a message containing "shut down", because
@@ -2006,8 +2006,8 @@ ccol_event_reg ccol_event_loop_add(ccol_event_loop loop, ccol_selectable sel,
  * @param loop ccol_event_loop that owns reg
  * @param reg Registration to ask about
  * @return The generation value, or 0. The function gives 0 when reg is
- * CCOL_EVENT_REG_INVALID, when reg has already been removed, when loop is
- * CCOL_EVENT_LOOP_INVALID, and when loop is stale or already destroyed. The
+ * CCOL_EVENT_REG_NULL, when reg has already been removed, when loop is
+ * CCOL_EVENT_LOOP_NULL, and when loop is stale or already destroyed. The
  * counter starts at 1, so 0 is never a valid generation for a real
  * registration.
  */
@@ -2036,9 +2036,9 @@ uint64_t ccol_event_loop_reg_generation(ccol_event_loop loop,
  * @param new_dir ccol_select_read or ccol_select_write
  *
  * @return ccol_success on success
- * @return ccol_invalid_args if loop is CCOL_EVENT_LOOP_INVALID, a stale
+ * @return ccol_invalid_args if loop is CCOL_EVENT_LOOP_NULL, a stale
  * handle, or a handle that a call already destroyed; if reg is
- * CCOL_EVENT_REG_INVALID, or does not resolve for another reason (a call on
+ * CCOL_EVENT_REG_NULL, or does not resolve for another reason (a call on
  * this thread or on another thread that races it can already have removed
  * reg); if reg is a queue registration or a ccol_channel registration; or if
  * new_dir is not valid.
@@ -2088,9 +2088,9 @@ ccol_retval_t ccol_event_loop_modify(ccol_event_loop loop, ccol_event_reg reg,
  * @param reg  Registration to pause
  *
  * @return ccol_success on success
- * @return ccol_invalid_args if loop is CCOL_EVENT_LOOP_INVALID, a stale
+ * @return ccol_invalid_args if loop is CCOL_EVENT_LOOP_NULL, a stale
  * handle, or a handle that a call already destroyed; if reg is
- * CCOL_EVENT_REG_INVALID, or does not resolve for another reason (a call on
+ * CCOL_EVENT_REG_NULL, or does not resolve for another reason (a call on
  * this thread or on another thread that races it can already have removed
  * reg); or if reg is a queue registration or a ccol_channel registration.
  *
@@ -2119,9 +2119,9 @@ ccol_retval_t ccol_event_loop_pause(ccol_event_loop loop, ccol_event_reg reg);
  * @param reg  Registration to resume
  *
  * @return ccol_success on success
- * @return ccol_invalid_args if loop is CCOL_EVENT_LOOP_INVALID, a stale
+ * @return ccol_invalid_args if loop is CCOL_EVENT_LOOP_NULL, a stale
  * handle, or a handle that a call already destroyed; if reg is
- * CCOL_EVENT_REG_INVALID, or does not resolve for another reason; or if reg
+ * CCOL_EVENT_REG_NULL, or does not resolve for another reason; or if reg
  * is a queue registration or a ccol_channel registration. This can happen,
  * for example, when the connection closes while the caller still believes it
  * owns a paused registration to resume.
@@ -2213,9 +2213,9 @@ ccol_retval_t ccol_event_loop_resume(ccol_event_loop loop, ccol_event_reg reg);
  *
  * @return ccol_success on success, including the call that loses the race
  * in the window above.
- * @return ccol_invalid_args if loop is CCOL_EVENT_LOOP_INVALID, a stale
+ * @return ccol_invalid_args if loop is CCOL_EVENT_LOOP_NULL, a stale
  * handle, or a handle that a call already destroyed; or if reg is
- * CCOL_EVENT_REG_INVALID, or does not resolve for another reason, for example
+ * CCOL_EVENT_REG_NULL, or does not resolve for another reason, for example
  * because an earlier call that already returned removed it.
  *
  * @note The function is thread-safe
@@ -2233,7 +2233,7 @@ ccol_retval_t ccol_event_loop_remove(ccol_event_loop loop, ccol_event_reg reg);
  *
  * @param loop ccol_event_loop to ask
  * @return Count of registrations, or (size_t)-1 if loop is
- * CCOL_EVENT_LOOP_INVALID, a stale handle, or a handle that a call already
+ * CCOL_EVENT_LOOP_NULL, a stale handle, or a handle that a call already
  * destroyed.
  */
 size_t ccol_event_loop_reg_count(ccol_event_loop loop);
@@ -2260,7 +2260,7 @@ size_t ccol_event_loop_reg_count(ccol_event_loop loop);
  * @param loop ccol_event_loop to shut down
  *
  * @return ccol_success on success
- * @return ccol_invalid_args if loop is CCOL_EVENT_LOOP_INVALID, or if loop is
+ * @return ccol_invalid_args if loop is CCOL_EVENT_LOOP_NULL, or if loop is
  * a stale handle or a handle that a call already destroyed
  * @return ccol_not_permitted if the call comes from inside a callback running
  * on one of this loop's threads: the poller or, for num_reactor_threads > 1,
@@ -2317,7 +2317,7 @@ ccol_retval_t ccol_event_loop_shutdown(ccol_event_loop loop);
  * In those cases the function calls _ccol_fatal_err(), which aborts with
  * SIGABRT, instead of risking a use-after-free or a double free. The rule
  * covers both a plain double destroy one after the other and a concurrent
- * one that overlaps in time. CCOL_EVENT_LOOP_INVALID (0) is the one
+ * one that overlaps in time. CCOL_EVENT_LOOP_NULL (0) is the one
  * exception and stays a silent no-op, which fits the ccol_event_loop_destroy
  * idiom of setting the handle to the invalid value.
  *
@@ -2340,8 +2340,8 @@ void __ccol_event_loop_destroy(ccol_event_loop loop);
 /**
  * @brief RAII cleanup function. Use it with _ccol_destructor.
  *
- * Calling this on an *lp that is already CCOL_EVENT_LOOP_INVALID does
- * nothing. Calling it on a stale handle that isn't CCOL_EVENT_LOOP_INVALID
+ * Calling this on an *lp that is already CCOL_EVENT_LOOP_NULL does
+ * nothing. Calling it on a stale handle that isn't CCOL_EVENT_LOOP_NULL
  * and was already destroyed through another path is the same fatal misuse
  * that __ccol_event_loop_destroy documents.
  */
@@ -2349,13 +2349,16 @@ static inline __attribute__((always_inline)) void ___ccol_event_loop_destroy(
     ccol_event_loop *lp) {
   if (lp && *lp) {
     __ccol_event_loop_destroy(*lp);
-    *lp = CCOL_EVENT_LOOP_INVALID;
+    *lp = CCOL_EVENT_LOOP_NULL;
   }
-}
+  /* gcov can't count the closing brace of this always-inline function at
+   * -O3, although its body runs, so the coverage report leaves that one line
+   * out. Don't copy the marker to a line that a test can reach. */
+} /* LCOV_EXCL_LINE */
 
 /**
  * @brief Destroy a ccol_event_loop and set the handle to
- * CCOL_EVENT_LOOP_INVALID
+ * CCOL_EVENT_LOOP_NULL
  *
  * Blocks until every in-flight resolved use of this handle has finished. Do
  * not call it concurrently with another call on the same handle; as the doc
@@ -2363,9 +2366,9 @@ static inline __attribute__((always_inline)) void ___ccol_event_loop_destroy(
  * silent race.
  *
  * @param loop ccol_event_loop to destroy. The macro sets it to
- * CCOL_EVENT_LOOP_INVALID afterwards.
+ * CCOL_EVENT_LOOP_NULL afterwards.
  *
- * @note You can call this with a CCOL_EVENT_LOOP_INVALID handle
+ * @note You can call this with a CCOL_EVENT_LOOP_NULL handle
  * @warning Do not call this on loop from inside a callback that is being
  * dispatched on one of loop's threads. That's a self-destroy hazard, the
  * destroy-side twin of ccol_event_loop_shutdown's self-join hazard, and it is
@@ -2387,7 +2390,7 @@ static inline __attribute__((always_inline)) void ___ccol_event_loop_destroy(
   do {                                            \
     __typeof__(loop) *slot = &(loop);             \
     __ccol_event_loop_destroy(*slot);             \
-    *slot = CCOL_EVENT_LOOP_INVALID;              \
+    *slot = CCOL_EVENT_LOOP_NULL;                 \
   } while (0)
 
 /**
@@ -2402,7 +2405,7 @@ static inline __attribute__((always_inline)) void ___ccol_event_loop_destroy(
  */
 #define ccol_event_loop_declare_scoped(name)                          \
   ccol_event_loop name _ccol_destructor(___ccol_event_loop_destroy) = \
-      CCOL_EVENT_LOOP_INVALID
+      CCOL_EVENT_LOOP_NULL
 
 /**
  * @brief Declare and initialize in one step. On failure, call _ccol_fatal_err.
@@ -2432,7 +2435,7 @@ static inline __attribute__((always_inline)) void ___ccol_event_loop_destroy(
  */
 #define ccol_event_loop_construct(name, max_events_per_wait, num_lock_stripes, \
                                   num_reactor_threads)                         \
-  ccol_event_loop name = CCOL_EVENT_LOOP_INVALID;                              \
+  ccol_event_loop name = CCOL_EVENT_LOOP_NULL;                                 \
   do {                                                                         \
     char *_evl_err = NULL;                                                     \
     (name) = ccol_event_loop_create((max_events_per_wait), (num_lock_stripes), \
@@ -2464,7 +2467,7 @@ static inline __attribute__((always_inline)) void ___ccol_event_loop_destroy(
 #define ccol_event_loop_construct_scoped(                                      \
     name, max_events_per_wait, num_lock_stripes, num_reactor_threads)          \
   ccol_event_loop name _ccol_destructor(___ccol_event_loop_destroy) =          \
-      CCOL_EVENT_LOOP_INVALID;                                                 \
+      CCOL_EVENT_LOOP_NULL;                                                    \
   do {                                                                         \
     char *_evl_err = NULL;                                                     \
     (name) = ccol_event_loop_create((max_events_per_wait), (num_lock_stripes), \

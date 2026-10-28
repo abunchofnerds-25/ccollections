@@ -38,7 +38,7 @@ parent  Source logger to derive from.
 .fi
 .SH RETURN VALUE
 .nf
-A new derived logger handle on success, or CLOG_INVALID when a memory
+A new derived logger handle on success, or CLOG_NULL when a memory
 allocation fails.
 .fi
 .SH NOTES
@@ -53,7 +53,7 @@ Thread-safe.  The snapshot of the fields is synchronised with a
 concurrent clog_set_field(3), clog_remove_field(3) or
 clog_clear_fields(3) call on parent, whatever write a sibling logger
 has in progress.
-Asserts when parent is CLOG_INVALID, stale or already closed.
+Asserts when parent is CLOG_NULL, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_create_from_fd_mp (3),

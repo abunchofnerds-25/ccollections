@@ -47,7 +47,7 @@ the server starts.
 .SH RETURN VALUE
 .nf
 A pointer to the new chttpsvr_router on success.  NULL when srv is
-CHTTPSVR_INVALID, when srv is a stale handle that has already been
+CHTTPSVR_NULL, when srv is a stale handle that has already been
 destroyed, when prefix is NULL, when prefix does not start with '/',
 when prefix contains two consecutive slashes, or when the library
 runs out of memory.

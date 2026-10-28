@@ -26,7 +26,7 @@ file the function finds the current size, asking fstat(2) first and
 falling back to an lseek(2) to the end of the file, so the thresholds
 of size rotation are right for an append to a log that already exists.
 If neither method gives the size and cfg->size_rotation_enabled is
-true, the call fails and returns CLOG_INVALID instead of silently
+true, the call fails and returns CLOG_NULL instead of silently
 starting the byte counter from zero, which would let the file grow well
 past cfg->max_file_size before its first rotation.
 
@@ -240,7 +240,7 @@ thread.  The file counts as the same when the directory and the last
 component of path are the same, however each call spells the directory
 part.  Two different last components are two files, even when one of
 them is a symbolic link to the other, so open a rotating log under one
-name only.  The call returns CLOG_INVALID instead when its rotation
+name only.  The call returns CLOG_NULL instead when its rotation
 configuration, its async configuration (NULL or not, and every resolved
 value) or its allocator differs from that logger's, and also when one
 of the two rotates and the other does not.  Two independent backing
@@ -295,7 +295,7 @@ mprocs     A custom allocator with function pointers for malloc, free,
            calloc and realloc, or NULL for the default system
            allocator.  When mprocs is not NULL all four pointers must
            be set; a struct that is only partly filled makes the call
-           return CLOG_INVALID and no logger is created.  The library
+           return CLOG_NULL and no logger is created.  The library
            copies the struct, so you can free yours after the call.
            Every logger that clog_derive() makes from this one gets
            the same allocator.  The two allocations that belong to
@@ -306,7 +306,7 @@ mprocs     A custom allocator with function pointers for malloc, free,
 .SH RETURN VALUE
 .nf
 A new logger handle on success.
-CLOG_INVALID after a failure.  That is a bad path, a permission error,
+CLOG_NULL after a failure.  That is a bad path, a permission error,
 a min_level that is not one of the values of clog_level_t, an mprocs
 that is not valid or a failed allocation; size rotation turned on when
 the current size of an existing file cannot be found; a file that a

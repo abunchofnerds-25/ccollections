@@ -193,7 +193,7 @@ typedef struct clrucache clrucache;
  * clru_cache is an opaque VALUE handle, not a pointer: it packs a slot index
  * and a generation together. Never cast it to void* or a void* to it, never
  * compare it with a pointer cast, and never treat it as an address. Compare
- * it directly against CLRU_CACHE_INVALID. CLRU_CACHE_INVALID is 0, so it
+ * it directly against CLRU_CACHE_NULL. CLRU_CACHE_NULL is 0, so it
  * also works in a truthiness check and `if (!cache)` is a valid test for an
  * invalid handle. Inside the library every use of a clru_cache goes through
  * a slot table that the library owns, and the handle is resolved there
@@ -208,7 +208,7 @@ typedef uint64_t clru_cache;
 
 /** @brief Sentinel value for "no cache", the clru_cache equivalent of
  *         NULL. */
-#define CLRU_CACHE_INVALID ((clru_cache)0)
+#define CLRU_CACHE_NULL ((clru_cache)0)
 
 /* ========================================================================== */
 /*                         CREATION / DESTRUCTION                             */
@@ -246,7 +246,7 @@ typedef uint64_t clru_cache;
  *                     functions it names must stay callable until the cache
  *                     is destroyed.
  * @param err          Optional. Set to an error string on failure
- * @return The new cache handle, or CLRU_CACHE_INVALID on failure. A create
+ * @return The new cache handle, or CLRU_CACHE_NULL on failure. A create
  *         from a destructor that runs after the library's own destructor
  *         fails too, because by then the library has released its table of
  *         cache handles at the end of the process.
@@ -269,7 +269,7 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
  * error too. In all these cases the function calls _ccol_fatal_err(), which
  * calls abort() and raises SIGABRT, instead of risking a use-after-free or a
  * double-free. That covers both a plain sequential second destroy and a
- * concurrent destroy that overlaps in time. CLRU_CACHE_INVALID (0) is the
+ * concurrent destroy that overlaps in time. CLRU_CACHE_NULL (0) is the
  * one exception and stays a silent no-op, matching the "destroy sets the
  * handle to NULL" idiom of clru_destroy.
  *
@@ -391,8 +391,8 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
  * @brief Cleanup function for Resource Acquisition Is Initialization (RAII).
  *        Use it with _ccol_destructor.
  *
- * Calling it on a *cp that is already CLRU_CACHE_INVALID is safe and does
- * nothing. Calling it on a stale handle that isn't CLRU_CACHE_INVALID (one
+ * Calling it on a *cp that is already CLRU_CACHE_NULL is safe and does
+ * nothing. Calling it on a stale handle that isn't CLRU_CACHE_NULL (one
  * that some other path has already destroyed) is fatal misuse, as
  * __clrucache_destroy documents too.
  */
@@ -400,12 +400,12 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
     clru_cache *cp) {
   if (cp && *cp) {
     __clrucache_destroy(*cp);
-    *cp = CLRU_CACHE_INVALID;
+    *cp = CLRU_CACHE_NULL;
   }
 }
 
 /**
- * @brief Destroy a cache and set the handle to CLRU_CACHE_INVALID
+ * @brief Destroy a cache and set the handle to CLRU_CACHE_NULL
  *
  * Blocks until every in-flight resolved use of the handle has stopped. Don't
  * call it at the same time as another call on the same handle; the doc
@@ -426,7 +426,7 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
   do {                                      \
     __typeof__(name) *slot = &(name);       \
     __clrucache_destroy(*slot);             \
-    *slot = CLRU_CACHE_INVALID;             \
+    *slot = CLRU_CACHE_NULL;                \
   } while (0)
 
 /* ========================================================================== */
@@ -453,7 +453,7 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
   _ccol_refuse_array_types("clru", KeyT, ValT);                               \
   __typeof__(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL; \
   __typeof__(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL; \
-  clru_cache name _ccol_destructor(___clrucache_destroy) = CLRU_CACHE_INVALID
+  clru_cache name _ccol_destructor(___clrucache_destroy) = CLRU_CACHE_NULL
 
 /**
  * @brief Initialize a previously declared cache variable
@@ -495,7 +495,7 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
   _ccol_refuse_array_types("clru", KeyT, ValT);                                \
   __typeof__(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL;  \
   __typeof__(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL;  \
-  clru_cache name = CLRU_CACHE_INVALID;                                        \
+  clru_cache name = CLRU_CACHE_NULL;                                           \
   do {                                                                         \
     char *_clru_err = NULL;                                                    \
     (name) = clrucache_create_full(                                            \
@@ -516,7 +516,7 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
   _ccol_refuse_array_types("clru", KeyT, ValT);                                \
   __typeof__(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL;  \
   __typeof__(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL;  \
-  clru_cache name _ccol_destructor(___clrucache_destroy) = CLRU_CACHE_INVALID; \
+  clru_cache name _ccol_destructor(___clrucache_destroy) = CLRU_CACHE_NULL;    \
   do {                                                                         \
     char *_clru_err = NULL;                                                    \
     (name) = clrucache_create_full(                                            \

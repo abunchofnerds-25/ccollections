@@ -20,29 +20,29 @@ empty prefix.
 mprocs may be NULL, and the function then uses the default system
 allocator.
 
-cl decides the logger of the server, and it may be CLOG_INVALID:
+cl decides the logger of the server, and it may be CLOG_NULL:
 
-- cl == CLOG_INVALID: the server creates its own internal logger,
+- cl == CLOG_NULL: the server creates its own internal logger,
   which writes only FATAL messages to stderr.
-- cl != CLOG_INVALID: the server derives a new logger from cl (see
+- cl != CLOG_NULL: the server derives a new logger from cl (see
   clog_derive) and tags it with the field component=http-server.
   The server uses and manages the derived logger, while the caller's
   cl handle doesn't change and stays the caller's.  When cl is
   closed, or was never a valid handle, the function fails: it sets
   err_str to "the parent logger is not open" and returns
-  CHTTPSVR_INVALID.  It does not end the process, which clog_derive
+  CHTTPSVR_NULL.  It does not end the process, which clog_derive
   does for such a handle.
 
 Either way, internal or derived, the server closes its own logger
 when the server is destroyed.
 
-On failure the function returns CHTTPSVR_INVALID and, when err_str
+On failure the function returns CHTTPSVR_NULL and, when err_str
 is not NULL, sets err_str to a static diagnostic string.
 
 chttpsvr is an opaque value handle (a uint64_t) and not a pointer.
 Before the library uses the server, it resolves the handle through a
 table of its own and checks a generation.  Do not cast the handle to
-or from a pointer.  Compare it with CHTTPSVR_INVALID, which is 0, so
+or from a pointer.  Compare it with CHTTPSVR_NULL, which is 0, so
 a truth test such as if (!srv) works too.  A call with the handle of
 a destroyed server is refused, and fatal where chttpsvr_destroy(3)
 says so, but it never leads to a use-after-free.
@@ -88,14 +88,14 @@ none of this protection can compile it out with
 .fi
 .SH RETURN VALUE
 .nf
-A valid chttpsvr handle on success, or CHTTPSVR_INVALID on failure.
+A valid chttpsvr handle on success, or CHTTPSVR_NULL on failure.
 .fi
 .SH NOTES
 .nf
 At exit, the library's destructor releases its table of server
 handles once no server is left.  A call made after that point, for
 example from a later destructor or atexit handler of the
-application, returns CHTTPSVR_INVALID with an error string, and every
+application, returns CHTTPSVR_NULL with an error string, and every
 other function treats any handle it receives as invalid.
 .fi
 .SH "SEE ALSO"

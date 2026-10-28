@@ -33,7 +33,7 @@ link.
 .nf
 chttpcli is an opaque VALUE handle, a uint64_t and not a pointer. Do
 not cast it to or from a pointer, and do not use it as an address.
-CHTTPCLI_INVALID is 0 and plays the role of NULL for chttpcli, so
+CHTTPCLI_NULL is 0 and plays the role of NULL for chttpcli, so
 "if (!cli)" tests whether you have a client.
 
 Every call resolves the handle before it touches the client, so a

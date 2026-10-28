@@ -882,12 +882,14 @@ TEST(chttp1_stream, a_nonblocking_write_reports_a_full_socket_as_a_timeout) {
    * each chunk is bigger than the socket buffer, so the attempt after a
    * successful poll must not block either, since POLLOUT means some room and
    * not room for the whole chunk. Drop the flag and the last call waits out
-   * its whole 3 s timeout, and without MSG_DONTWAIT on the send the first call
-   * blocks until SO_SNDTIMEO gives up (5 s, the safety net that keeps a
-   * regression from hanging the suite). */
+   * its whole 30 s timeout, and without MSG_DONTWAIT on the send the first
+   * call blocks until SO_SNDTIMEO gives up (30 s, the safety net that keeps a
+   * regression from hanging the suite). The correct run takes milliseconds,
+   * and the 15 s bound sits halfway, so a runner that stalls for seconds
+   * can't fail it and neither regression can pass it. */
   int fds[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
-  struct timeval sndtimeo = {.tv_sec = 5};
+  struct timeval sndtimeo = {.tv_sec = 30};
   setsockopt(fds[0], SOL_SOCKET, SO_SNDTIMEO, &sndtimeo, sizeof(sndtimeo));
   chttp1_stream_t s;
   bool prepared = chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL);
@@ -898,20 +900,21 @@ TEST(chttp1_stream, a_nonblocking_write_reports_a_full_socket_as_a_timeout) {
   clock_gettime(CLOCK_MONOTONIC, &t0);
   ssize_t w = 0;
   for (int i = 0; prepared && i < 10000; i++) {
-    w = chttp1_stream_write(&s, chunk, sizeof(chunk), 3000);
+    w = chttp1_stream_write(&s, chunk, sizeof(chunk), 30000);
     if (w < 0) break;
   }
   clock_gettime(CLOCK_MONOTONIC, &t1);
   bool timed_out = chttp1_stream_timed_out(&s);
-  long ms = (long)(t1.tv_sec - t0.tv_sec) * 1000 +
-            (t1.tv_nsec - t0.tv_nsec) / 1000000;
+  long long ms = ((long long)(t1.tv_sec - t0.tv_sec) * 1000000000LL +
+                  (t1.tv_nsec - t0.tv_nsec)) /
+                 1000000;
   chttp1_stream_release(&s);
   close(fds[0]);
   close(fds[1]);
   REQUIRE_TRUE(prepared);
   REQUIRE_EQ(w, (ssize_t)-1);
   REQUIRE_TRUE(timed_out);
-  REQUIRE_LT(ms, 2000L);
+  REQUIRE_LT(ms, 15000LL);
 }
 
 TEST(chttp1_stream, writev2_keeps_the_byte_order_across_short_writes) {

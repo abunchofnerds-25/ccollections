@@ -54,7 +54,7 @@ close cl, so the fd itself must stay open until another call to this
 function replaces or releases the engine logger, or until the process
 exits.
 
-Calling it with cl equal to CLOG_INVALID releases the installed engine
+Calling it with cl equal to CLOG_NULL releases the installed engine
 logger. The engine closes its child logger, and every later start of
 the engine uses the fallback logger again. While the engine runs, the
 release is refused with ccol_not_permitted because the engine logs
@@ -68,8 +68,8 @@ destination, its file descriptor and cl's allocator may go away.
 ccol_success, if the call succeeds.
 ccol_not_enough_memory, if the library cannot allocate the child
     logger.
-ccol_not_permitted, if cl is CLOG_INVALID and the engine runs.
-ccol_invalid_args, if cl is not CLOG_INVALID but is closed or stale;
+ccol_not_permitted, if cl is CLOG_NULL and the engine runs.
+ccol_invalid_args, if cl is not CLOG_NULL but is closed or stale;
     nothing changes, and the engine keeps the logger that it had.
 .fi
 .SH "SEE ALSO"

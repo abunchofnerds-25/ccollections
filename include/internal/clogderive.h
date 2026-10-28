@@ -47,8 +47,8 @@ SOFTWARE.
  * reports a failure through *rv instead of ending the process.
  *
  * On success it gives the new handle and sets *rv to ccol_success. It
- * gives CLOG_INVALID with *rv set to ccol_invalid_args when parent is
- * CLOG_INVALID, stale or closed, and CLOG_INVALID with *rv set to
+ * gives CLOG_NULL with *rv set to ccol_invalid_args when parent is
+ * CLOG_NULL, stale or closed, and CLOG_NULL with *rv set to
  * ccol_not_enough_memory when the new logger or its handle couldn't be
  * allocated. rv must not be NULL.
  */

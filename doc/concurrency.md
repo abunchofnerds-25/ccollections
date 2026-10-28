@@ -188,7 +188,7 @@ The thread-safe components have rules as well, and the man page of each
 call states them. These are the ones people break most often.
 
 The destroy is the last call, and only one thread makes it. The destroy
-macro sets its variable to the `_INVALID` value, so a second destroy through
+macro sets its variable to the `_NULL` value, so a second destroy through
 the same variable does nothing, but destroying a `ctpool` or `chttpclient`
 handle that's already destroyed is a fatal error, whether it happens through
 a copy of the handle or through two destroys that race.

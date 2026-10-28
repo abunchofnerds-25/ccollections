@@ -313,8 +313,8 @@ and it never runs the read and the write callback of one file descriptor at
 the same time either, whatever the number of threads.
 
 `ccol_event_loop` and `ccol_event_reg` are opaque value handles (integers),
-not pointers. Compare them with `CCOL_EVENT_LOOP_INVALID` and
-`CCOL_EVENT_REG_INVALID`. Both are `0`, so `if (!loop)` works.
+not pointers. Compare them with `CCOL_EVENT_LOOP_NULL` and
+`CCOL_EVENT_REG_NULL`. Both are `0`, so `if (!loop)` works.
 
 ### Removing registrations safely
 

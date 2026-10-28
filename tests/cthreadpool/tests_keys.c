@@ -63,7 +63,7 @@ TEST(ctpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
   char *err = NULL;
   ctpool p = ctpool_create(1, 0, &err);
   /* ctpool_destroy clears the handle, so we keep the outcome first. */
-  int created = p != CTPOOL_INVALID;
+  int created = p != CTPOOL_NULL;
   if (created) {
     ctpool_submit(p, noop_task, NULL, NULL);
     ctpool_shutdown_drain(p);
@@ -75,7 +75,7 @@ TEST(ctpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
   for (int i = 0; i < n; i++) pthread_key_delete(exhausted[i]);
   char *err_again = NULL;
   ctpool again = ctpool_create(1, 0, &err_again);
-  int created_again = again != CTPOOL_INVALID;
+  int created_again = again != CTPOOL_NULL;
   if (created_again) ctpool_destroy(again);
   if (app_key_ok) pthread_key_delete(app_key);
 

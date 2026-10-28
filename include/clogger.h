@@ -361,8 +361,8 @@ struct clogger;
  * A `clog` is an opaque, generational value handle that packs an index and a
  * generation counter into a uint64_t. It isn't a pointer: never cast it to or
  * from `void *`, and never compare two handles after casting either one to a
- * pointer. Both `if (!lg)` and `lg == CLOG_INVALID` work as you'd expect,
- * because CLOG_INVALID is numerically zero.
+ * pointer. Both `if (!lg)` and `lg == CLOG_NULL` work as you'd expect,
+ * because CLOG_NULL is numerically zero.
  *
  * You get a handle from clog_create_from_fd_mp() or clog_create_from_file_mp()
  * and free it with clog_close().
@@ -370,7 +370,7 @@ struct clogger;
 typedef uint64_t clog;
 
 /** @brief Sentinel value that means "no logger". It is numerically zero. */
-#define CLOG_INVALID ((clog)0)
+#define CLOG_NULL ((clog)0)
 
 /* ========================================================================== */
 /*                         LIFECYCLE                                          */
@@ -396,12 +396,12 @@ typedef uint64_t clog;
  * @param async_cfg Async logging config, or NULL for synchronous logging
  *                  (see clog_async_cfg_t).
  * @param mprocs    Custom allocator, or NULL to use malloc/free.
- * @return New logger handle, or CLOG_INVALID on an allocation failure, for
+ * @return New logger handle, or CLOG_NULL on an allocation failure, for
  *         invalid mprocs, for a min_level that clog_level_t doesn't name, or
  *         when fd is closed, read-only or invalid for some other reason. An
  *         open from a destructor that runs after the library's destructor
  *         (which releases the table of loggers at the end of the process)
- *         also gives CLOG_INVALID.
+ *         also gives CLOG_NULL.
  */
 clog clog_create_from_fd_mp(int fd, clog_level_t min_level,
                             const clog_async_cfg_t *async_cfg,
@@ -417,7 +417,7 @@ clog clog_create_from_fd_mp(int fd, clog_level_t min_level,
  * @param min_level The logger silently drops a message below this level.
  * @param async_cfg Async logging config, or NULL for synchronous logging
  *                  (see clog_async_cfg_t).
- * @return New logger handle, or CLOG_INVALID on an allocation failure, for a
+ * @return New logger handle, or CLOG_NULL on an allocation failure, for a
  *         min_level that clog_level_t doesn't name, or when fd is closed,
  *         read-only or invalid for some other reason.
  */
@@ -452,7 +452,7 @@ static inline __attribute__((always_inline)) clog clog_create_from_fd(
  * same directory and the same last component of the path) and either of the
  * two rotates, this call joins that logger the way clog_derive() does: the
  * new handle has its own level and fields and shares the target. It gives
- * CLOG_INVALID when the rotation configuration, the async configuration or
+ * CLOG_NULL when the rotation configuration, the async configuration or
  * the allocator differs from that logger's, or when only one of the two
  * rotates. Two opens of one file where neither rotates stay independent.
  *
@@ -477,7 +477,7 @@ static inline __attribute__((always_inline)) clog clog_create_from_fd(
  * @param async_cfg Async logging config, or NULL for synchronous logging
  *                  (see clog_async_cfg_t).
  * @param mprocs    Custom allocator, or NULL to use malloc/free.
- * @return New logger handle, or CLOG_INVALID on a failure, for example a bad
+ * @return New logger handle, or CLOG_NULL on a failure, for example a bad
  *         path, a min_level that clog_level_t doesn't name, an allocation
  *         error, a configuration that differs from that of a rotating logger
  *         of this process on the same file, or an open from a destructor that
@@ -501,7 +501,7 @@ clog clog_create_from_file_mp(const char *path, clog_level_t min_level,
  * @param cfg       Rotation config, or NULL to turn off rotation.
  * @param async_cfg Async logging config, or NULL for synchronous logging
  *                  (see clog_async_cfg_t).
- * @return New logger handle, or CLOG_INVALID on a failure, for example a bad
+ * @return New logger handle, or CLOG_NULL on a failure, for example a bad
  *         path, a min_level that clog_level_t doesn't name, or an allocation
  *         error.
  */
@@ -523,7 +523,7 @@ static inline __attribute__((always_inline)) clog clog_create_from_file(
  * files, that last close also waits until every compression its rotations
  * queued has finished, and stops the compression thread.
  *
- * A CLOG_INVALID, stale or already closed handle is a fatal error. Once the
+ * A CLOG_NULL, stale or already closed handle is a fatal error. Once the
  * library's destructor has released the table of loggers at the end of the
  * process, every handle is stale.
  */
@@ -551,7 +551,7 @@ void clog_close(clog logger);
  * root logger and every derived logger.
  *
  * @param parent Source logger to derive from.
- * @return New derived logger handle, or CLOG_INVALID on an allocation failure.
+ * @return New derived logger handle, or CLOG_NULL on an allocation failure.
  */
 clog clog_derive(clog parent);
 
@@ -686,7 +686,7 @@ clog_format_t clog_get_format(clog logger);
  *   if (fd < 0 || connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0)
  *     return -1;  // close fd if it is open
  *   clog lg = clog_create_from_fd(fd, CLOG_INFO, NULL);
- *   if (lg == CLOG_INVALID) return -1;  // close fd
+ *   if (lg == CLOG_NULL) return -1;  // close fd
  *   clog_set_format(lg, CLOG_FMT_SYSLOG);
  * @endcode
  * For SOCK_DGRAM the kernel delivers each write() as one datagram. Keep each
@@ -760,7 +760,7 @@ clog_syslog_facility_t clog_get_facility(clog logger);
  * its value.
  *
  * Like every other function taking a clog handle, it ends the process through
- * _ccol_fatal_err() when the handle is CLOG_INVALID, stale or already closed.
+ * _ccol_fatal_err() when the handle is CLOG_NULL, stale or already closed.
  *
  * @param logger Logger handle.
  * @param key    Field name. It must not be NULL or empty, and every character

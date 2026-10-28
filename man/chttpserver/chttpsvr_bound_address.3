@@ -42,7 +42,7 @@ buflen   The size of buf in bytes.  On every failure with a buflen
 .SH RETURN VALUE
 .nf
 ccol_success        buf holds the address.
-ccol_invalid_args   srv is CHTTPSVR_INVALID or a stale handle, buf is
+ccol_invalid_args   srv is CHTTPSVR_NULL or a stale handle, buf is
                     NULL, or buflen is 0.
 ccol_not_permitted  The server does not listen (see
                     chttpsvr_is_running(3)).

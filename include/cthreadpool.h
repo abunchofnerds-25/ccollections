@@ -100,8 +100,8 @@ typedef struct cthread_pool cthread_pool;
  *        pair), NOT a pointer.
  *
  * Never cast a ctpool to or from void*, never compare it with a pointer cast,
- * and never treat it as an address. Compare it against CTPOOL_INVALID, or use
- * it in a truthiness check: CTPOOL_INVALID is 0, so `if (!pool)` is a valid
+ * and never treat it as an address. Compare it against CTPOOL_NULL, or use
+ * it in a truthiness check: CTPOOL_NULL is 0, so `if (!pool)` is a valid
  * test for an invalid handle.
  *
  * The library resolves every use of a ctpool through a slot table of its own
@@ -114,7 +114,7 @@ typedef struct cthread_pool cthread_pool;
 typedef uint64_t ctpool;
 
 /** @brief Sentinel value for "no pool" / "not yet created" / "destroyed" */
-#define CTPOOL_INVALID ((ctpool)0)
+#define CTPOOL_NULL ((ctpool)0)
 
 /** @brief Future handle. It holds a void* result that is not ready yet */
 typedef struct ctpool_future ctpool_future;
@@ -132,7 +132,7 @@ typedef struct ctpool_future ctpool_future;
  * @param mprocs          Custom allocator, or NULL for malloc/free
  * @param err_str         Optional. It gets a description of the error on
  *                        failure
- * @return New pool handle, or CTPOOL_INVALID on failure
+ * @return New pool handle, or CTPOOL_NULL on failure
  *
  * @note The pool recycles the internal node behind each submission through
  * its own cache, which keeps what the recent traffic needed, up to
@@ -144,7 +144,7 @@ typedef struct ctpool_future ctpool_future;
  * the library creates for the whole process the first time a pool is
  * created; that key is what lets a task that destroys its own pool fail
  * loudly. When the process has no key left to give (PTHREAD_KEYS_MAX), this
- * function returns CTPOOL_INVALID, and so does every later call in that
+ * function returns CTPOOL_NULL, and so does every later call in that
  * process. The library deletes the key when it unloads with no pool left, so
  * a dlopen() and dlclose() cycle gives the key back
  */
@@ -171,7 +171,7 @@ ctpool_create(size_t num_threads, size_t queue_capacity, char **err_str) {
  * pool is an opaque VALUE handle, and the library resolves it through its own
  * slot table before it touches the pool object behind it. pool must be live
  * at this moment, meaning ctpool_create or ctpool_create_mp returned it and
- * nothing has destroyed it yet. CTPOOL_INVALID is a silent no-op.
+ * nothing has destroyed it yet. CTPOOL_NULL is a silent no-op.
  *
  * Every other stale handle is a FATAL ERROR: a handle that an earlier,
  * completed call to this function destroyed, a handle that another thread is
@@ -206,12 +206,12 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
     ctpool *pp) {
   if (pp && *pp) {
     __ctpool_destroy(*pp);
-    *pp = CTPOOL_INVALID;
+    *pp = CTPOOL_NULL;
   }
 }
 
 /**
- * @brief Destroy a thread pool and set handle to CTPOOL_INVALID
+ * @brief Destroy a thread pool and set handle to CTPOOL_NULL
  *
  * Calling this macro with a stale handle is a FATAL ERROR (abort()/SIGABRT),
  * not a silent double-free. A stale handle is one that an earlier call
@@ -238,7 +238,7 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
   do {                                        \
     __typeof__(pool) *slot = &(pool);         \
     __ctpool_destroy(*slot);                  \
-    *slot = CTPOOL_INVALID;                   \
+    *slot = CTPOOL_NULL;                      \
   } while (0)
 
 /* ========================================================================== */
@@ -256,7 +256,7 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
  * @brief Declare with automatic destruction on scope exit
  */
 #define ctpool_declare_scoped(name) \
-  ctpool name _ccol_destructor(___ctpool_destroy) = CTPOOL_INVALID
+  ctpool name _ccol_destructor(___ctpool_destroy) = CTPOOL_NULL
 
 /**
  * @brief Declare and initialise in one step. It calls _ccol_fatal_err on
@@ -271,7 +271,7 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
  * @endcode
  */
 #define ctpool_construct(name, num_threads, queue_capacity)             \
-  ctpool name = CTPOOL_INVALID;                                         \
+  ctpool name = CTPOOL_NULL;                                            \
   do {                                                                  \
     char *_ctp_err = NULL;                                              \
     (name) = ctpool_create((num_threads), (queue_capacity), &_ctp_err); \
@@ -286,7 +286,7 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
  *        _ccol_fatal_err on failure
  */
 #define ctpool_construct_scoped(name, num_threads, queue_capacity)      \
-  ctpool name _ccol_destructor(___ctpool_destroy) = CTPOOL_INVALID;     \
+  ctpool name _ccol_destructor(___ctpool_destroy) = CTPOOL_NULL;        \
   do {                                                                  \
     char *_ctp_err = NULL;                                              \
     (name) = ctpool_create((num_threads), (queue_capacity), &_ctp_err); \
@@ -347,7 +347,7 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
  * @param on_complete Called once for the task: with ran == true after fn
  *                    returns, or with ran == false when the pool discards the
  *                    task unrun (may be NULL)
- * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
+ * @return ccol_success, ccol_invalid_args (pool is CTPOOL_NULL or a
  *         stale/already-destroyed handle, or fn is NULL),
  *         ccol_not_enough_memory, ccol_not_permitted (the pool is in
  *         shutdown), or ccol_container_full (a bounded queue is at capacity
@@ -362,7 +362,7 @@ ccol_retval_t ctpool_submit(ctpool pool, void (*fn)(void *), void *arg,
  * It returns ccol_container_full at once if a bounded queue is at capacity.
  * For an unbounded queue the behaviour is the same as ctpool_submit.
  *
- * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
+ * @return ccol_success, ccol_invalid_args (pool is CTPOOL_NULL or a
  *         stale/already-destroyed handle, or fn is NULL),
  *         ccol_not_enough_memory, ccol_not_permitted, or
  *         ccol_container_full
@@ -391,7 +391,7 @@ ccol_retval_t ctpool_try_submit(ctpool pool, void (*fn)(void *), void *arg,
  * them. It returns ccol_container_full at once, whatever timeout_us says.
  *
  * @param timeout_us Longest time to wait, in microseconds. 0 means try only
- * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
+ * @return ccol_success, ccol_invalid_args (pool is CTPOOL_NULL or a
  *         stale/already-destroyed handle, or fn is NULL),
  *         ccol_not_enough_memory, ccol_not_permitted, ccol_container_full,
  *         ccol_timed_out, or ccol_unexpected_failure
@@ -428,7 +428,7 @@ ccol_retval_t ctpool_timed_submit(ctpool pool, void (*fn)(void *), void *arg,
  * @param arg    Argument that the library gives to fn (may be NULL)
  * @param rv_out If it is not NULL, this function stores the result code here
  *               on every return: ccol_success when it returns a future;
- *               ccol_invalid_args when pool is CTPOOL_INVALID or a
+ *               ccol_invalid_args when pool is CTPOOL_NULL or a
  *               stale/already-destroyed handle, or fn is NULL;
  *               ccol_not_permitted when the pool is in shutdown;
  *               ccol_container_full when a bounded queue is at capacity and
@@ -451,7 +451,7 @@ ctpool_future *ctpool_submit_future(ctpool pool, void *(*fn)(void *), void *arg,
  * @param arg   Argument that the library gives to fn (may be NULL)
  * @param out   It gets the future handle on success, and this function sets
  *              it to NULL on failure (must not be NULL)
- * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
+ * @return ccol_success, ccol_invalid_args (pool is CTPOOL_NULL or a
  *         stale/already-destroyed handle, or fn or out is NULL),
  *         ccol_not_enough_memory, ccol_not_permitted, or
  *         ccol_container_full
@@ -484,7 +484,7 @@ ccol_retval_t ctpool_try_submit_future(ctpool pool, void *(*fn)(void *),
  * @param timeout_us Longest time to wait, in microseconds. 0 means try only
  * @param out     It gets the future handle on success, and this function sets
  *                it to NULL on failure (must not be NULL)
- * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
+ * @return ccol_success, ccol_invalid_args (pool is CTPOOL_NULL or a
  *         stale/already-destroyed handle, or fn or out is NULL),
  *         ccol_not_enough_memory, ccol_not_permitted, ccol_container_full,
  *         ccol_timed_out, or ccol_unexpected_failure
@@ -621,7 +621,7 @@ ccol_retval_t ctpool_future_fulfill(ctpool_future *f, void *result);
  * If you need to know that all of them finished, wait for the
  * ctpool_shutdown_immediate call itself to return.
  *
- * This function is a no-op if pool is CTPOOL_INVALID or a stale
+ * This function is a no-op if pool is CTPOOL_NULL or a stale
  * (already-destroyed) handle. It is also a no-op that returns at once when
  * it's called on pool from inside a task running on one of pool's own worker
  * threads, or from that task's on_complete callback. The pool counts the
@@ -644,7 +644,7 @@ void ctpool_wait(ctpool pool);
  * arrives while this call is draining the queue, the pool discards the rest
  * of the queue and this call returns once every worker has exited.
  *
- * This function is a no-op if pool is CTPOOL_INVALID or a stale
+ * This function is a no-op if pool is CTPOOL_NULL or a stale
  * (already-destroyed) handle. It is also a no-op that doesn't block when
  * it's called on pool from inside a task running on one of pool's own worker
  * threads, or from that task's on_complete callback. A worker thread can't
@@ -672,7 +672,7 @@ void ctpool_shutdown_drain(ctpool pool);
  * ctpool_shutdown_immediate starts nothing new but blocks until the shutdown
  * already under way stops.
  *
- * This function is a no-op if pool is CTPOOL_INVALID or a stale
+ * This function is a no-op if pool is CTPOOL_NULL or a stale
  * (already-destroyed) handle. It is also a no-op when it's called on pool
  * from inside a task running on one of pool's own worker threads, or from
  * that task's on_complete callback: such a call doesn't block and discards
@@ -684,7 +684,7 @@ void ctpool_shutdown_immediate(ctpool pool);
  * @brief Number of tasks waiting in the queue right now (no worker has taken
  *        them yet)
  *
- * It returns 0 if pool is CTPOOL_INVALID or a stale (already-destroyed)
+ * It returns 0 if pool is CTPOOL_NULL or a stale (already-destroyed)
  * handle.
  */
 size_t ctpool_pending_count(ctpool pool);
@@ -692,7 +692,7 @@ size_t ctpool_pending_count(ctpool pool);
 /**
  * @brief Number of tasks the worker threads are running right now
  *
- * It returns 0 if pool is CTPOOL_INVALID or a stale (already-destroyed)
+ * It returns 0 if pool is CTPOOL_NULL or a stale (already-destroyed)
  * handle.
  */
 size_t ctpool_active_count(ctpool pool);

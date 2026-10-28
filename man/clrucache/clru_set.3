@@ -60,7 +60,7 @@ ccol_success             The macro stored the value, and the remote
 ccol_unexpected_failure  The remote setter returned false. The set
                          changed nothing, but a concurrent insert can
                          have evicted the key (see above).
-ccol_invalid_args        cache is CLRU_CACHE_INVALID, or cache is a
+ccol_invalid_args        cache is CLRU_CACHE_NULL, or cache is a
                          stale handle that a call already destroyed, or
                          an argument is a null pointer, or an argument
                          has a size of zero. A NULL key or value of a

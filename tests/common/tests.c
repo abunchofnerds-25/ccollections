@@ -38,9 +38,18 @@ SOFTWARE.
 #include <sys/wait.h>
 #include <tau/tau.h>
 #include <test_connect.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 #include <time.h>
 #include <unistd.h>
 TAU_MAIN()  // sets Tau up, and gives the main function
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
 
 /* Counting allocator */
 
@@ -720,13 +729,14 @@ TEST(dump_key, unprintable_bytes_render_as_dots) {
 TEST(atfork_order, an_inverted_prepare_handler_order_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     _ccol_atfork_order_record(_ccol_atfork_module_clogger);
     _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
     _ccol_atfork_order_reset();
     /* The opposite order, the way a second fork would make it. */
     _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
     _ccol_atfork_order_record(_ccol_atfork_module_clogger);
-    _exit(0); /* reached only if the recorder took the inversion */
+    test_child_exit(0); /* reached only if the recorder took the inversion */
   }
   REQUIRE_NE(pid, -1);
 
@@ -750,7 +760,7 @@ TEST(atfork_order, a_repeated_consistent_order_is_accepted) {
       _ccol_atfork_order_record(_ccol_atfork_module_cthreadpool);
       _ccol_atfork_order_reset();
     }
-    _exit(0);
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
 
@@ -780,6 +790,7 @@ TEST(atfork_order, a_repeated_consistent_order_is_accepted) {
 TEST(atfork_order, a_handler_that_joins_later_is_ordered_against_the_rest) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     _ccol_atfork_order_record(_ccol_atfork_module_clogger);
     _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
     _ccol_atfork_order_reset();
@@ -791,7 +802,7 @@ TEST(atfork_order, a_handler_that_joins_later_is_ordered_against_the_rest) {
     /* clogger before cthreadpool contradicts the fork above. */
     _ccol_atfork_order_record(_ccol_atfork_module_clogger);
     _ccol_atfork_order_record(_ccol_atfork_module_cthreadpool);
-    _exit(0); /* reached only if the recorder took the inversion */
+    test_child_exit(0); /* reached only if the recorder took the inversion */
   }
   REQUIRE_NE(pid, -1);
 
@@ -814,14 +825,15 @@ TEST(atfork_order, a_handler_that_joins_later_is_ordered_against_the_rest) {
 TEST(atfork_order, a_real_fork_starts_a_new_sequence) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     _ccol_atfork_order_record(_ccol_atfork_module_clogger);
     _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
     pid_t inner = fork();
-    if (inner == 0) _exit(0);
+    if (inner == 0) test_child_exit(0);
     if (inner > 0) (void)waitpid(inner, NULL, 0);
     _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
     _ccol_atfork_order_record(_ccol_atfork_module_clogger);
-    _exit(0); /* reached only if no reset ran at the fork */
+    test_child_exit(0); /* reached only if no reset ran at the fork */
   }
   REQUIRE_NE(pid, -1);
 
@@ -1101,6 +1113,7 @@ static bool fatal_err_capture(int which, char *out, size_t out_size) {
   if (pipe(fds) != 0) return false;
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     close(fds[0]);
     dup2(fds[1], STDERR_FILENO);
     close(fds[1]);
@@ -1109,7 +1122,7 @@ static bool fatal_err_capture(int which, char *out, size_t out_size) {
     } else {
       _ccol_fatal_err("n=%d s=%s", 42, "text");
     }
-    _exit(0);
+    test_child_exit(0);
   }
   close(fds[1]);
   if (pid < 0) {
@@ -1165,28 +1178,45 @@ typedef struct {
 static void *gate_forker(void *arg) {
   gate_fork_ctx *c = (gate_fork_ctx *)arg;
   pid_t pid = fork();
-  if (pid == 0) _exit(0);
+  if (pid == 0) test_child_exit(0);
   c->pid = pid;
   atomic_store(&c->forked, 1);
   return NULL;
 }
 
 /* A fork() can't return while a thread is inside the gate, because the
- * gate's fork-prepare handler waits for the read side. So the check after
- * the wait can never see a fork that returned while the gate was held, no
- * matter how slow the machine is.
+ * gate's fork-prepare handler waits for the read side. The test holds the
+ * gate until the forking thread has started that handler, so the check
+ * looks at a fork that really waits at the gate, however slowly the forking
+ * thread gets there.
  *
- * Without the gate's fork-prepare handler the fork returns at once and
- * forked_inside is 1. */
+ * Without the gate's fork-prepare handler the counter never moves and
+ * reached_prepare stays false. With a handler that doesn't wait, the fork
+ * returns during the pause and forked_inside is 1. */
 TEST(cloexec_gate, fork_waits_while_a_descriptor_is_inside_the_gate) {
   gate_fork_ctx c;
   atomic_init(&c.forked, 0);
   c.pid = -1;
   _ccol_cloexec_gate_enter();
+  unsigned long prepares = atomic_load(&_ccol_cloexec_gate_prepares_for_tests);
   pthread_t t;
   bool started = pthread_create(&t, NULL, gate_forker, &c) == 0;
-  struct timespec wait = {.tv_sec = 0, .tv_nsec = 200 * 1000 * 1000};
-  nanosleep(&wait, NULL);
+  /* The bound is only a hang guard; the forking thread gets to the handler
+   * in microseconds. */
+  bool reached_prepare = false;
+  for (int i = 0; started && i < 20000 && !reached_prepare; i++) {
+    reached_prepare =
+        atomic_load(&_ccol_cloexec_gate_prepares_for_tests) != prepares;
+    if (!reached_prepare) {
+      struct timespec ms = {.tv_sec = 0, .tv_nsec = 1000 * 1000};
+      nanosleep(&ms, NULL);
+    }
+  }
+  /* A correct gate keeps the fork where it is however long this lasts. The
+   * pause only gives a handler that doesn't wait the time to let its fork
+   * return, so the check below can see it. */
+  struct timespec pause = {.tv_sec = 0, .tv_nsec = 20 * 1000 * 1000};
+  nanosleep(&pause, NULL);
   int forked_inside = atomic_load(&c.forked);
   _ccol_cloexec_gate_leave();
   if (started) pthread_join(t, NULL);
@@ -1194,6 +1224,7 @@ TEST(cloexec_gate, fork_waits_while_a_descriptor_is_inside_the_gate) {
   bool reaped = c.pid > 0 && waitpid(c.pid, &status, 0) == c.pid;
 
   REQUIRE_TRUE(started);
+  REQUIRE_TRUE(reached_prepare);
   REQUIRE_EQ(forked_inside, 0);
   REQUIRE_EQ(atomic_load(&c.forked), 1);
   REQUIRE_TRUE(reaped);
@@ -1341,7 +1372,7 @@ gate_register_early_handler(void) {
 TEST(cloexec_gate, a_handler_registered_before_the_library_runs_before_gate) {
   atomic_store(&gate_early_handler_saw_gate, -1);
   pid_t pid = fork();
-  if (pid == 0) _exit(0);
+  if (pid == 0) test_child_exit(0);
   int status = 0;
   bool reaped = pid > 0 && waitpid(pid, &status, 0) == pid;
   REQUIRE_TRUE(reaped);
@@ -1395,7 +1426,7 @@ TEST(fork, a_child_of_a_threaded_process_can_call_libc_functions_that_lock) {
       struct tm tm;
       localtime_r(&now, &tm);
       (void)getpwnam("root");
-      _exit(0);
+      test_child_exit(0);
     }
     if (pid < 0) break;
     forked++;
@@ -1514,7 +1545,7 @@ TEST(semaphore, posts_without_a_waiter_never_block) {
     do {
       wr = write(pfd[1], &code, 1);
     } while (wr < 0 && errno == EINTR);
-    _exit(0);
+    test_child_exit(0);
   }
   close(pfd[1]);
   int code = -1;
@@ -1575,10 +1606,11 @@ static void *intern_race_worker(void *p) {
 
 /* Many threads that use one content for the first time at the same moment
  * all get the same pointer, and the content takes exactly one slot. The
- * claim delay holds the first claimer between its claim and its copy while
- * every other thread reaches that slot. A lookup that skips a slot being
- * written fails it, since it hands the threads several pointers and takes
- * a slot for each of them. */
+ * claim hook holds the first claimer between its claim and its copy until
+ * every other thread has met that slot while it is being written, so the
+ * race happens however late the other threads start. A lookup that skips a
+ * slot being written fails it, since it hands the threads several pointers
+ * and takes a slot for each of them. */
 TEST(procs_intern, a_burst_of_first_uses_of_one_content_takes_one_slot) {
   /* Function pointers nothing ever calls, different from every content that
    * another test interns. */
@@ -1599,10 +1631,23 @@ TEST(procs_intern, a_burst_of_first_uses_of_one_content_takes_one_slot) {
     created++;
   }
   while (atomic_load(&arrived) < created) intern_race_pause();
-  atomic_store(&_ccol_procs_intern_claim_delay_us_for_tests, 20000u);
+  unsigned sightings_before =
+      atomic_load(&_ccol_procs_intern_writing_sightings_for_tests);
+  /* The 30 s is only the bound of the claimer's wait. With fewer than two
+   * threads nobody can see the slot being written, the wait could only run
+   * out, and the test fails on the thread count below anyway. */
+  if (created >= 2) {
+    atomic_store(&_ccol_procs_intern_claim_wait_sightings_for_tests,
+                 sightings_before + (unsigned)(created - 1));
+    atomic_store(&_ccol_procs_intern_claim_delay_us_for_tests, 30000000u);
+  }
   atomic_store(&go, true);
   for (int i = 0; i < created; i++) pthread_join(tids[i], NULL);
   atomic_store(&_ccol_procs_intern_claim_delay_us_for_tests, 0u);
+  atomic_store(&_ccol_procs_intern_claim_wait_sightings_for_tests, 0u);
+  unsigned sightings =
+      atomic_load(&_ccol_procs_intern_writing_sightings_for_tests) -
+      sightings_before;
   size_t after = _ccol_procs_intern_used_for_tests();
 
   int failed = 0, distinct = 0;
@@ -1622,6 +1667,9 @@ TEST(procs_intern, a_burst_of_first_uses_of_one_content_takes_one_slot) {
   REQUIRE_EQ(distinct, 0);
   REQUIRE_TRUE(same_content);
   REQUIRE_EQ(after, before + 1);
+  /* Every other thread met the slot while it was being written, so the race
+   * the test is about took place. */
+  REQUIRE_GE(sightings, (unsigned)(created - 1));
 }
 
 /* A burst of first uses of many different contents fills one slot per
@@ -1742,7 +1790,10 @@ static void *_cnl_user_thread(void *arg) {
   _cnl_user_t *u = (_cnl_user_t *)arg;
   ccol_c_locale_scope_t scope = ccol_c_locale_enter();
   atomic_store(&u->stage, 1);
-  for (int i = 0; i < 5000 && atomic_load(&u->stage) != 2; i++) usleep(1000);
+  /* The main thread sets stage 2 on every path, so the bound is only a hang
+   * guard, and a generous one, because the thread must stay in its scope
+   * until the destructor has run. */
+  for (int i = 0; i < 60000 && atomic_load(&u->stage) != 2; i++) usleep(1000);
   snprintf(u->text, sizeof(u->text), "%.1f", 1.5);
   ccol_c_locale_leave(scope);
   atomic_store(&u->stage, 3);
@@ -1761,7 +1812,7 @@ TEST(c_locale, the_destructor_keeps_an_object_that_a_scope_still_uses) {
   _cnl_user_t u = {.stage = 0};
   pthread_t t;
   bool started = pthread_create(&t, NULL, _cnl_user_thread, &u) == 0;
-  for (int i = 0; started && i < 5000 && atomic_load(&u.stage) != 1; i++)
+  for (int i = 0; started && i < 60000 && atomic_load(&u.stage) != 1; i++)
     usleep(1000);
   bool in_scope = started && atomic_load(&u.stage) == 1;
   _ccol_c_locale_fini();

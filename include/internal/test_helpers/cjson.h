@@ -44,6 +44,11 @@ SOFTWARE.
  * threads. */
 extern atomic_ulong _cjson_utf8_cstr_checks_for_tests;
 
+/* How many nodes the cycle check of cjson_list_push() and
+ * cjson_dictionary_set() has visited, over all threads. A test reads it
+ * before and after a series of inserts to count the work of the search. */
+extern atomic_ulong _cjson_cycle_search_nodes_for_tests;
+
 /* How many times any thread has taken the pool key lock to arm the key. */
 extern atomic_ulong _cjson_pool_key_lock_count_for_tests;
 

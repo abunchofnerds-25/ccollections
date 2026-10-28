@@ -83,7 +83,7 @@ ccol_not_enough_memory  The copy of the key or the value cannot be
 Thread-safe, because the mutex of the logger protects the call.
 Every line that goes out visits each attached field once, so keep the
 number of fields small if logging is on a hot path.
-Asserts when logger is CLOG_INVALID, stale or already closed.
+Asserts when logger is CLOG_NULL, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_remove_field (3),

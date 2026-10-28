@@ -85,11 +85,30 @@ bool _clog_test_gz_dest_opened(void);
  * While the gate is held, each compression pauses right after creating its
  * ".gz" destination until the gate is released. The pause gives up after 30
  * seconds, so a test whose expectation fails doesn't hang. Holding the gate
- * also resets what _clog_test_gz_dest_opened() reports.
+ * also resets what _clog_test_gz_dest_opened() and
+ * _clog_test_compressor_teardown_entered() report.
  *
  * @param hold true to hold the gate, false to release it.
  */
 void _clog_test_hold_compressions(bool hold);
+
+/**
+ * @brief Report whether a close has asked a running compressor thread to
+ *        stop and waits for it, for a test.
+ *
+ * The flag is set right before the close joins the compressor thread, so a
+ * test that holds a compression can wait until the close really waits for
+ * the queue before it releases the gate. Holding the gate with
+ * _clog_test_hold_compressions(true) clears it.
+ *
+ * @return true once a close waits for its compressor thread.
+ */
+bool _clog_test_compressor_teardown_entered(void);
+
+/* How many times an open has backed off from a target of the same file
+ * whose last close is still running, so a test can tell that an open
+ * really waits for that close. */
+size_t _clog_test_closing_target_waits(void);
 
 /**
  * @brief Test-only: make the publish step of each of the next `count`
@@ -132,6 +151,13 @@ bool _clog_test_compression_recovery_entered(void);
  */
 size_t _clog_test_writer_timeout_wakeups(clog logger);
 
+/* Whether the async writer thread of the target behind logger had SIGPIPE
+ * and SIGXFSZ blocked the last time it brought its mask in line with the
+ * signal policy, which it does before each piece of work. Returns false for
+ * a handle that doesn't resolve or a writer that hasn't recorded it yet. */
+bool _clog_test_writer_blocked_signals(clog logger, bool *pipe_blocked,
+                                       bool *xfsz_blocked);
+
 /**
  * @brief Test-only: while on is true, a socket sink that a logger (or a
  *        rotation) opens is written the way a system without MSG_NOSIGNAL
@@ -144,6 +170,21 @@ void _clog_test_classify_sockets_as_pipes(bool on);
  *        logger started because flush_interval_us was over, for a test.
  */
 size_t _clog_test_writer_interval_flushes(clog logger);
+
+/**
+ * @brief Report how many synchronous records of the target behind logger
+ *        wait for its mutex right now, for a test. A record counts once it
+ *        has passed the unlocked level check, so a level change after this
+ *        reports it still applies through the locked check.
+ */
+size_t _clog_test_sync_lock_waiters(clog logger);
+
+/**
+ * @brief Report how many synchronous records of the target behind logger got
+ *        its mutex and passed the locked level check, for a test. Each one
+ *        holds the mutex from then until its write has returned.
+ */
+size_t _clog_test_sync_records_locked(clog logger);
 
 /**
  * @brief Reset the counter of real rotation attempts (_rotate() calls) to zero,
@@ -335,7 +376,7 @@ bool _clog_test_backtrace_supported(void);
  * While the hook is armed, the next call into _clog_handle_acquire() does
  * three things: it grows the slot table with a fresh slot, exactly as if
  * free_indices were empty, it treats that slot's live_shareds registration as
- * failed without really attempting it, and it returns CLOG_INVALID. The hook
+ * failed without really attempting it, and it returns CLOG_NULL. The hook
  * then disarms itself, so it affects that one call only.
  *
  * @param force true to force the next acquisition to take this path. false to
@@ -344,8 +385,8 @@ bool _clog_test_backtrace_supported(void);
 void _clog_test_force_next_fresh_slot_registration_failure(bool force);
 
 /**
- * @brief Widen the window inside clog_close() between its step 3 and its step
- *        4, for a test.
+ * @brief Hold every clog_close() between its step 3 and its step 4, for a
+ *        test.
  *
  * Step 3 waits for any concurrent resolver holding a pin to finish, and step
  * 4 retires the slot and frees the reference to the shared target. Inside
@@ -353,21 +394,19 @@ void _clog_test_force_next_fresh_slot_registration_failure(bool force);
  * thread can call fork(); the child-side handling of "closing" slots in
  * _clog_atfork_release() is there to make that safe (see
  * clog_atfork_closing_t in clogger.c). The window is normally only a few
- * instructions, far too narrow for a test to land a real fork() inside it
- * deterministically, so this hook lets a test widen it on demand instead of
- * relying on scheduling luck.
+ * instructions, far too narrow for a test to land a real fork() inside it,
+ * so this gate keeps a close there for as long as the test needs.
  *
- * While the hook is armed (delay_us != 0), every clog_close() call sleeps for
- * delay_us microseconds right after step 3 finishes and before step 4
- * starts. That affects every clog_close() call in the process until you
- * disarm it (delay_us == 0). Unlike most other hooks in this section it
- * doesn't disarm itself, because a test needs it armed across the one
- * clog_close() call under test, which a background thread makes while the
- * main test thread arranges the fork() into the widened window.
+ * While the gate is held, every clog_close() call waits right after step 3
+ * until the gate is released, and gives up after 30 seconds so that a test
+ * that fails before its release doesn't hang. Unlike most other hooks in this
+ * section it doesn't disarm itself, because a background thread makes the
+ * close under test while the main test thread forks into the window. Holding
+ * the gate also resets what _clog_test_close_finalize_entered() reports.
  *
- * @param delay_us Microseconds to sleep after step 3, or 0 to disarm.
+ * @param hold true to hold the gate, false to release it.
  */
-void _clog_test_set_close_finalize_delay_us(unsigned int delay_us);
+void _clog_test_hold_close_finalize(bool hold);
 
 /**
  * @brief Test-only: widen the window in which a close has cleared its slot but
@@ -397,21 +436,31 @@ void _clog_test_set_close_release_window_us(unsigned int delay_us);
 bool _clog_test_close_release_window_entered(void);
 
 /**
- * @brief Report whether some clog_close() call entered the armed delay, for a
+ * @brief Report whether some clog_close() call reached the held gate, for a
  *        test.
  *
- * The latest call to _clog_test_set_close_finalize_delay_us() arms that
- * delay. A test spin-polls this function, as with
- * _clog_test_gz_dest_opened(), so it can wait deterministically until a
- * concurrent clog_close() call really enters its widened step-3 to step-4
- * window before forking into it, instead of sleeping for a fixed time and
- * hoping the timing works out. A call to
- * _clog_test_set_close_finalize_delay_us() resets this to false.
+ * A test polls this function, as it does _clog_test_gz_dest_opened(), so it
+ * forks only once a concurrent clog_close() call really waits between its
+ * step 3 and its step 4, instead of sleeping for a guessed interval.
  *
- * @return true after some clog_close() call enters the currently armed delay. A
- *         call to _clog_test_set_close_finalize_delay_us() resets it to false.
+ * @return true after some clog_close() call reaches the gate since the last
+ *         call to _clog_test_hold_close_finalize(true).
  */
-bool _clog_test_close_finalize_delay_entered(void);
+bool _clog_test_close_finalize_entered(void);
+
+/* How many closes have found a call still pinning their handle and started
+ * to wait for it, so a test can tell that a close is waiting before it
+ * releases that call. */
+size_t _clog_test_close_pin_waits(void);
+
+/* Names the output whose waits _clog_test_writable_waits counts, by the
+ * device and inode of fd; a negative fd stops the counting. */
+void _clog_test_watch_writable(int fd);
+
+/* How many times a write to the watched output has met a full output
+ * (EAGAIN) and started to wait for room, so a test can make room only once
+ * its own record really waits for it. */
+size_t _clog_test_writable_waits(void);
 
 /**
  * @brief Report how many different shared logging targets are live in this

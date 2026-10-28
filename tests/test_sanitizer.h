@@ -58,7 +58,8 @@ SOFTWARE.
 #endif
 #endif
 
-/* glibc and FreeBSD have pthread_timedjoin_np(), macOS and OpenBSD don't.
+/* glibc, musl and FreeBSD have pthread_timedjoin_np(), macOS and OpenBSD
+ * don't.
  * ThreadSanitizer on FreeBSD intercepts pthread_join() and pthread_detach()
  * but not pthread_timedjoin_np(), so a thread joined through the latter
  * stays alive as far as the runtime knows. It sees no ordering between that
@@ -66,7 +67,7 @@ SOFTWARE.
  * starts in the same thread structure stops the process with a CHECK
  * failure of the runtime. In every other build a bounded join just joins
  * without its bound, and the CI job's timeout bounds a hang. */
-#if defined(__GLIBC__) || \
+#if defined(__linux__) || \
     (defined(__FreeBSD__) && !defined(TEST_SANITIZER_THREAD))
 #define TEST_TIMEDJOIN_VISIBLE 1
 #else

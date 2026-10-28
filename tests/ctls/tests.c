@@ -24,6 +24,7 @@ SOFTWARE.
 
 #include <arpa/inet.h>
 #include <common.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <internal/ctls.h>
@@ -33,6 +34,8 @@ SOFTWARE.
 #include <netinet/in.h>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <poll.h>
@@ -43,10 +46,13 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
 #include <test_connect.h>
+#include <test_coverage.h>
 #include <test_sanitizer.h>
+#include <test_signals.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -230,6 +236,9 @@ __attribute__((constructor)) static void _setup(void) {
    * take down the whole binary; tests_sigpipe keeps the default disposition and
    * is the suite that asserts the property itself. */
   signal(SIGPIPE, SIG_IGN);
+  /* The certificates come from system() calls of the openssl command, which
+   * fail when an inherited SIGCHLD ignore lets the kernel reap the shell. */
+  test_reset_inherited_signals();
   g_certs_ready = (_generate_all_certs() == 0);
   if (!g_certs_ready) {
     fprintf(stderr,
@@ -439,6 +448,72 @@ TEST(ctls_ctx, new_custom_alloc_is_used) {
   ctls_ctx_release(ctx);
 }
 
+/* An allocator that refuses every request of exactly g_refused_size bytes, so
+ * a test can fail the buffer that holds one file it names and nothing else. */
+static size_t g_refused_size;
+static long g_refused_allocs;
+static void *_refusing_malloc(size_t n) {
+  if (n == g_refused_size) {
+    g_refused_allocs++;
+    return NULL;
+  }
+  return malloc(n);
+}
+
+static size_t _file_size(const char *path) {
+  struct stat st;
+  return stat(path, &st) == 0 ? (size_t)st.st_size : 0;
+}
+
+/* A failed allocation of the buffer that a certificate, key or CA file is read
+ * into is out of memory, not an unreadable file: ctls_ctx_cert_add and
+ * ctls_ctx_trust give ccol_not_enough_memory and say so in err_str, and the
+ * context still takes the same files once memory is there. */
+TEST(ctls_ctx, a_file_buffer_that_cannot_be_allocated_is_out_of_memory) {
+  if (!g_certs_ready) return;
+  ccol_memmgmt_procs_t procs = {.malloc = _refusing_malloc,
+                                .free = _custom_free,
+                                .calloc = _custom_calloc,
+                                .realloc = _custom_realloc};
+  ctls_ctx_t *ctx = ctls_ctx_new_mp(&procs, NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+
+  char *cert_err = NULL, *key_err = NULL, *ca_err = NULL;
+  g_refused_allocs = 0;
+  g_refused_size = _file_size(g_server_cert);
+  ccol_retval_t cert_rv = ctls_ctx_cert_add(ctx, NULL, g_server_cert,
+                                            g_server_key, NULL, &cert_err);
+  long cert_refusals = g_refused_allocs;
+  g_refused_allocs = 0;
+  g_refused_size = _file_size(g_server_key);
+  ccol_retval_t key_rv =
+      ctls_ctx_cert_add(ctx, NULL, g_server_cert, g_server_key, NULL, &key_err);
+  long key_refusals = g_refused_allocs;
+  g_refused_allocs = 0;
+  g_refused_size = _file_size(g_client_cert);
+  ccol_retval_t ca_rv = ctls_ctx_trust(ctx, g_client_cert, &ca_err);
+  long ca_refusals = g_refused_allocs;
+  g_refused_size = 0;
+  ccol_retval_t cert_later =
+      ctls_ctx_cert_add(ctx, NULL, g_server_cert, g_server_key, NULL, NULL);
+  ccol_retval_t ca_later = ctls_ctx_trust(ctx, g_client_cert, NULL);
+  ctls_ctx_release(ctx);
+
+  /* The refused size must be the file buffer itself, or nothing here tests
+   * the read. */
+  REQUIRE_GT(cert_refusals, 0);
+  REQUIRE_GT(key_refusals, 0);
+  REQUIRE_GT(ca_refusals, 0);
+  REQUIRE_EQ(cert_rv, ccol_not_enough_memory);
+  REQUIRE_EQ(key_rv, ccol_not_enough_memory);
+  REQUIRE_EQ(ca_rv, ccol_not_enough_memory);
+  REQUIRE_TRUE(cert_err && strstr(cert_err, "out of memory"));
+  REQUIRE_TRUE(key_err && strstr(key_err, "out of memory"));
+  REQUIRE_TRUE(ca_err && strstr(ca_err, "out of memory"));
+  REQUIRE_EQ(cert_later, ccol_success);
+  REQUIRE_EQ(ca_later, ccol_success);
+}
+
 TEST(ctls_ctx, cert_add_null_ctx_is_invalid) {
   ccol_retval_t rv = ctls_ctx_cert_add(NULL, "x", NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_invalid_args);
@@ -454,7 +529,7 @@ __attribute__((destructor)) static void _root_key_freed_at_exit(void) {
     static const char msg[] = "ctls: the root key is still held at exit\n";
     ssize_t w = write(2, msg, sizeof(msg) - 1);
     (void)w;
-    _exit(1);
+    test_child_exit(1);
   }
 }
 
@@ -574,9 +649,9 @@ static bool _client_verifies_test_server(ctls_ctx_t *client_ctx) {
  * environment as it was: no later test sees the change, and musl, which
  * keeps every setenv() block for the life of the process, has nothing left
  * for the memtest to report. Returns false when the child gave no full
- * result within 30 s, in which case it's killed. */
+ * result within bound_ms, in which case it's killed. */
 static bool _ctls_run_in_child(void (*body)(void *out), void *out,
-                               size_t out_size) {
+                               size_t out_size, int bound_ms) {
   int p[2];
   if (pipe(p) != 0) return false;
   fflush(NULL);
@@ -590,13 +665,13 @@ static bool _ctls_run_in_child(void (*body)(void *out), void *out,
     close(p[0]);
     body(out);
     ssize_t w = write(p[1], out, out_size);
-    _exit(w == (ssize_t)out_size ? 0 : 1);
+    test_child_exit(w == (ssize_t)out_size ? 0 : 1);
   }
   close(p[1]);
   size_t got = 0;
   while (got < out_size) {
     struct pollfd pf = {.fd = p[0], .events = POLLIN};
-    if (poll(&pf, 1, 30000) <= 0) break;
+    if (poll(&pf, 1, bound_ms) <= 0) break;
     ssize_t r = read(p[0], (char *)out + got, out_size - got);
     if (r > 0) {
       got += (size_t)r;
@@ -645,7 +720,7 @@ TEST(ctls_system_ca, ssl_cert_file_names_the_trusted_bundle) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   _system_ca_names_result_t r = {ccol_unexpected_failure, false,
                                  ccol_unexpected_failure, true};
-  bool ran = _ctls_run_in_child(_system_ca_names_body, &r, sizeof(r));
+  bool ran = _ctls_run_in_child(_system_ca_names_body, &r, sizeof(r), 30000);
   REQUIRE_TRUE(ran);
   REQUIRE_EQ(r.rv_trusting, ccol_success);
   REQUIRE_TRUE(r.verified);
@@ -686,7 +761,7 @@ TEST(ctls_system_ca, the_default_file_is_parsed_once_per_process) {
   if (!g_certs_ready) return;
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   _system_ca_once_result_t r = {false, -1, false};
-  bool ran = _ctls_run_in_child(_system_ca_once_body, &r, sizeof(r));
+  bool ran = _ctls_run_in_child(_system_ca_once_body, &r, sizeof(r), 30000);
   REQUIRE_TRUE(ran);
   REQUIRE_TRUE(r.all_ok);
   REQUIRE_EQ(r.parses, 1L);
@@ -816,6 +891,73 @@ TEST(ctls_handshake, self_signed_no_verify_completes) {
   close(fds[1]);
   ctls_ctx_release(client_ctx);
   ctls_ctx_release(server_ctx);
+}
+
+/* An allocator that keeps the size in a header and fills a block with a
+ * poison byte when it frees it, so a read through freed memory sees garbage
+ * instead of the bytes that were there, in an ordinary build too. */
+typedef struct {
+  size_t size;
+  max_align_t align;
+} poison_hdr;
+
+static void *_poison_malloc(size_t n) {
+  poison_hdr *h = (poison_hdr *)malloc(sizeof(poison_hdr) + n);
+  if (!h) return NULL;
+  h->size = n;
+  return h + 1;
+}
+static void *_poison_calloc(size_t n, size_t sz) {
+  if (sz && n > SIZE_MAX / sz) return NULL;
+  void *p = _poison_malloc(n * sz);
+  if (p) memset(p, 0, n * sz);
+  return p;
+}
+static void _poison_free(void *p) {
+  if (!p) return;
+  poison_hdr *h = (poison_hdr *)p - 1;
+  memset(h, 0xA5, sizeof(poison_hdr) + h->size);
+  free(h);
+}
+static void *_poison_realloc(void *p, size_t n) {
+  if (!p) return _poison_malloc(n);
+  void *q = _poison_malloc(n);
+  if (!q) return NULL;
+  size_t old = ((poison_hdr *)p - 1)->size;
+  memcpy(q, p, old < n ? old : n);
+  _poison_free(p);
+  return q;
+}
+
+/* A connection that holds the last reference to its context frees itself
+ * with the context's allocator after the release has freed the context, and
+ * the copy of the procs with it. With the poisoning allocator a read of that
+ * copy after the release calls through 0xA5A5... and the process dies. */
+TEST(ctls_conn, a_connection_that_outlives_its_context_frees_itself_cleanly) {
+  ccol_memmgmt_procs_t procs = {.malloc = _poison_malloc,
+                                .free = _poison_free,
+                                .calloc = _poison_calloc,
+                                .realloc = _poison_realloc};
+  /* The pair comes first, so a failed socketpair leaves no context behind. */
+  int fds[2] = {-1, -1};
+  _make_nonblocking_pair(fds);
+  REQUIRE_TRUE(fds[0] >= 0 && fds[1] >= 0);
+  ctls_ctx_t *ctx = ctls_ctx_new_mp(&procs, NULL);
+  bool have_ctx = ctx != NULL;
+  if (!have_ctx) {
+    close(fds[0]);
+    close(fds[1]);
+  }
+  REQUIRE_TRUE(have_ctx);
+  ctls_conn_t *conn =
+      ctls_conn_create_client(ctx, fds[1], "srv.test", false, NULL);
+  /* The connection's own reference is now the last one. */
+  ctls_ctx_release(ctx);
+  bool created = conn != NULL;
+  ctls_conn_destroy(conn);
+  close(fds[0]);
+  close(fds[1]);
+  REQUIRE_TRUE(created);
 }
 
 TEST(ctls_handshake, read_write_roundtrip_after_handshake) {
@@ -4177,4 +4319,661 @@ TEST(ctls_conn, pending_input_reports_plaintext_that_the_socket_no_longer_has) {
   REQUIRE_TRUE(socket_empty_mid);
   REQUIRE_EQ(total, sizeof(payload));
   REQUIRE_FALSE(pending_after);
+}
+
+/* ========================================================================== */
+/* Construction and peer-certificate answers under allocation failure         */
+/* ========================================================================== */
+
+/* Counts every allocation and every free of a non-NULL block, so a test can
+ * tell that a context gave back everything it took once its last reference
+ * is gone. */
+static _Atomic long g_cnt_allocs = 0;
+static _Atomic long g_cnt_frees = 0;
+
+static void *_cnt_malloc(size_t n) {
+  void *p = malloc(n);
+  if (p) atomic_fetch_add(&g_cnt_allocs, 1);
+  return p;
+}
+static void *_cnt_calloc(size_t a, size_t b) {
+  void *p = calloc(a, b);
+  if (p) atomic_fetch_add(&g_cnt_allocs, 1);
+  return p;
+}
+static void *_cnt_realloc(void *old, size_t n) {
+  void *p = realloc(old, n);
+  if (p && !old) atomic_fetch_add(&g_cnt_allocs, 1);
+  return p;
+}
+static void _cnt_free(void *p) {
+  if (p) atomic_fetch_add(&g_cnt_frees, 1);
+  free(p);
+}
+static ccol_memmgmt_procs_t g_cnt_mp = {_cnt_malloc, _cnt_free, _cnt_calloc,
+                                        _cnt_realloc};
+
+static void _cnt_reset(void) {
+  atomic_store(&g_cnt_allocs, 0);
+  atomic_store(&g_cnt_frees, 0);
+}
+
+/* ctls_ctx_new fails as a whole when OpenSSL cannot build its SSL_CTX: it
+ * returns NULL with an err_str and has given every block back to the
+ * caller's allocator. */
+TEST(ctls_oom, ctx_new_under_openssl_allocation_failure_gives_everything_back) {
+  if (!g_ossl_mem_hooked) return;
+  /* An unarmed build first, so OpenSSL's one-time initialisation is done
+   * before the sweep: a failure inside a run-once init sticks for the whole
+   * process, which would fail this test when it runs alone and every test
+   * after it. */
+  ctls_ctx_t *warm = ctls_ctx_new_mp(&g_cnt_mp, NULL);
+  bool warmed = warm != NULL;
+  if (warm) ctls_ctx_release(warm);
+  long failures = 0;
+  bool err_missing = false;
+  bool unbalanced = false;
+  bool finished = false;
+  for (long n = 1; warmed && n <= 2000 && !finished; n++) {
+    _cnt_reset();
+    char *err = NULL;
+    _ossl_arm(n);
+    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_cnt_mp, &err);
+    _ossl_disarm();
+    bool fired = atomic_load(&g_ossl_alloc_fired);
+    if (ctx) {
+      ctls_ctx_release(ctx);
+      finished = !fired;
+    } else {
+      failures++;
+      if (!err) err_missing = true;
+    }
+    if (atomic_load(&g_cnt_allocs) != atomic_load(&g_cnt_frees))
+      unbalanced = true;
+  }
+  REQUIRE_TRUE(warmed);
+  REQUIRE_TRUE(finished);
+  REQUIRE_GT(failures, 0L);
+  REQUIRE_FALSE(err_missing);
+  REQUIRE_FALSE(unbalanced);
+}
+
+typedef enum {
+  CREATE_CLIENT_NAME,
+  CREATE_CLIENT_IP,
+  CREATE_SERVER,
+  CREATE_KIND_COUNT
+} create_kind_t;
+
+static ctls_conn_t *_create_of_kind(ctls_ctx_t *ctx, int fd, create_kind_t k,
+                                    char **err) {
+  switch (k) {
+    case CREATE_CLIENT_NAME:
+      return ctls_conn_create_client(ctx, fd, "sweep.test", true, err);
+    case CREATE_CLIENT_IP:
+      return ctls_conn_create_client(ctx, fd, "127.0.0.1", true, err);
+    case CREATE_SERVER:
+      return ctls_conn_create_server(ctx, fd, NULL, err);
+    case CREATE_KIND_COUNT:
+      break;
+  }
+  return NULL;
+}
+
+/* A connection that cannot be built under an OpenSSL allocation failure
+ * comes back as NULL with an err_str naming its create call, and hands back
+ * all it took on the way: the pin on the served SSL_CTX, the socket BIO, and
+ * the reference on the context. The context stays usable, and once it is
+ * released the caller's allocator has every block back, which it would not
+ * if any failed create kept a reference. */
+TEST(ctls_oom,
+     conn_create_under_openssl_allocation_failure_gives_everything_back) {
+  if (!g_ossl_mem_hooked || !g_certs_ready) return;
+  static const char *const prefix[CREATE_KIND_COUNT] = {
+      "ctls_conn_create_client:", "ctls_conn_create_client:",
+      "ctls_conn_create_server:"};
+  for (int k = 0; k < CREATE_KIND_COUNT; k++) {
+    _cnt_reset();
+    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_cnt_mp, NULL);
+    REQUIRE_NE((void *)ctx, NULL);
+    ccol_retval_t rv_cert =
+        ctls_ctx_cert_add(ctx, NULL, g_server_cert, g_server_key, NULL, NULL);
+    int fds[2] = {-1, -1};
+    bool paired = socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0;
+    long pins_before = _ctls_live_conn_ctx_pin_count_for_tests();
+    size_t bios_before = _ctls_live_sock_bio_count_for_tests();
+    long failures = 0;
+    bool bad_err = false;
+    bool leaked = false;
+    bool finished = false;
+    for (long n = 1; paired && n <= 2000 && !finished; n++) {
+      char *err = NULL;
+      _ossl_arm(n);
+      ctls_conn_t *conn = _create_of_kind(ctx, fds[0], (create_kind_t)k, &err);
+      _ossl_disarm();
+      bool fired = atomic_load(&g_ossl_alloc_fired);
+      if (conn) {
+        ctls_conn_destroy(conn);
+        finished = !fired;
+      } else {
+        failures++;
+        if (!err || strncmp(err, prefix[k], strlen(prefix[k])) != 0)
+          bad_err = true;
+      }
+      if (_ctls_live_conn_ctx_pin_count_for_tests() != pins_before ||
+          _ctls_live_sock_bio_count_for_tests() != bios_before)
+        leaked = true;
+    }
+    ctls_conn_t *after =
+        paired ? _create_of_kind(ctx, fds[0], (create_kind_t)k, NULL) : NULL;
+    ctls_conn_destroy(after);
+    if (fds[0] >= 0) close(fds[0]);
+    if (fds[1] >= 0) close(fds[1]);
+    ctls_ctx_release(ctx);
+    long allocs = atomic_load(&g_cnt_allocs);
+    long frees = atomic_load(&g_cnt_frees);
+
+    REQUIRE_EQ(rv_cert, ccol_success);
+    REQUIRE_TRUE(paired);
+    REQUIRE_TRUE(finished);
+    REQUIRE_GT(failures, 0L);
+    REQUIRE_FALSE(bad_err);
+    REQUIRE_FALSE(leaked);
+    REQUIRE_NE((void *)after, NULL);
+    REQUIRE_EQ(allocs, frees);
+  }
+}
+
+/* A verified mutual TLS pair: the server trusts the client's self-signed
+ * certificate, and the server context takes its memory from server_mp. */
+typedef struct {
+  ctls_ctx_t *server_ctx;
+  ctls_ctx_t *client_ctx;
+  ctls_conn_t *server;
+  ctls_conn_t *client;
+  int fds[2];
+} _mtls_pair_t;
+
+static void _mtls_close(_mtls_pair_t *p) {
+  ctls_conn_destroy(p->client);
+  ctls_conn_destroy(p->server);
+  if (p->fds[0] >= 0) close(p->fds[0]);
+  if (p->fds[1] >= 0) close(p->fds[1]);
+  ctls_ctx_release(p->client_ctx);
+  ctls_ctx_release(p->server_ctx);
+  memset(p, 0, sizeof(*p));
+  p->fds[0] = p->fds[1] = -1;
+}
+
+static bool _mtls_open(_mtls_pair_t *p, ccol_memmgmt_procs_t *server_mp,
+                       bool client_presents) {
+  memset(p, 0, sizeof(*p));
+  p->fds[0] = p->fds[1] = -1;
+  p->server_ctx = ctls_ctx_new_mp(server_mp, NULL);
+  p->client_ctx = ctls_ctx_new(NULL);
+  bool ok = p->server_ctx && p->client_ctx &&
+            ctls_ctx_cert_add(p->server_ctx, NULL, g_server_cert, g_server_key,
+                              NULL, NULL) == ccol_success &&
+            ctls_ctx_trust(p->server_ctx, g_client_cert, NULL) == ccol_success;
+  if (ok && client_presents)
+    ok = ctls_ctx_cert_add(p->client_ctx, NULL, g_client_cert, g_client_key,
+                           NULL, NULL) == ccol_success;
+  if (ok && !client_presents)
+    ok = ctls_ctx_peer_cert_optional(p->server_ctx, true) == ccol_success;
+  if (ok) {
+    _make_nonblocking_pair(p->fds);
+    p->server = ctls_conn_create_server(p->server_ctx, p->fds[0], NULL, NULL);
+    p->client =
+        ctls_conn_create_client(p->client_ctx, p->fds[1], NULL, false, NULL);
+    ok = p->server && p->client &&
+         _drive_both(p->client, p->server, 200, NULL, NULL);
+  }
+  if (!ok) _mtls_close(p);
+  return ok;
+}
+
+/* The DER encoding of the client certificate, read from its file, which the
+ * caller frees with OPENSSL_free. */
+static unsigned char *_client_cert_der(int *len_out) {
+  *len_out = 0;
+  FILE *f = fopen(g_client_cert, "r");
+  if (!f) return NULL;
+  X509 *x = PEM_read_X509(f, NULL, NULL, NULL);
+  fclose(f);
+  if (!x) return NULL;
+  unsigned char *der = NULL;
+  int len = i2d_X509(x, &der);
+  X509_free(x);
+  if (len <= 0) return NULL;
+  *len_out = len;
+  return der;
+}
+
+/* On the server end of a verified mutual TLS connection, the three
+ * accessors describe the client's certificate: its DER encoding, the SHA-256
+ * of that encoding and its subject as RFC 2253 text. A second call answers
+ * from the same storage. A peer that presented no certificate gets NULL, a
+ * zero length and an all-zero digest. */
+TEST(ctls_handshake, peer_cert_accessors_describe_the_verified_client) {
+  if (!g_certs_ready) return;
+  int want_len = 0;
+  unsigned char *want = _client_cert_der(&want_len);
+  unsigned char want_md[CTLS_SHA256_LEN] = {0};
+  unsigned int md_len = 0;
+  bool digested = want && EVP_Digest(want, (size_t)want_len, want_md, &md_len,
+                                     EVP_sha256(), NULL) == 1;
+
+  _mtls_pair_t p;
+  bool opened = _mtls_open(&p, NULL, true);
+  size_t len = 0, len2 = 0;
+  const unsigned char *der =
+      opened ? ctls_conn_peer_cert_der(p.server, &len) : NULL;
+  const unsigned char *der2 =
+      opened ? ctls_conn_peer_cert_der(p.server, &len2) : NULL;
+  bool der_ok = der && want && len == (size_t)want_len &&
+                memcmp(der, want, len) == 0 && der2 == der && len2 == len;
+  unsigned char md[CTLS_SHA256_LEN];
+  bool md_ok = opened && ctls_conn_peer_cert_sha256(p.server, md) && digested &&
+               memcmp(md, want_md, sizeof(md)) == 0;
+  const char *subject = opened ? ctls_conn_peer_cert_subject(p.server) : NULL;
+  bool subject_ok = subject && strcmp(subject, "CN=test-client") == 0 &&
+                    ctls_conn_peer_cert_subject(p.server) == subject;
+  /* The client end did not verify the server, so it has no answer. */
+  size_t client_len = 99;
+  bool client_none = opened &&
+                     !ctls_conn_peer_cert_der(p.client, &client_len) &&
+                     client_len == 0;
+  _mtls_close(&p);
+
+  _mtls_pair_t anon;
+  bool anon_opened = _mtls_open(&anon, NULL, false);
+  size_t anon_len = 99;
+  unsigned char anon_md[CTLS_SHA256_LEN];
+  memset(anon_md, 0xAB, sizeof(anon_md));
+  bool anon_none =
+      anon_opened && !ctls_conn_peer_cert_der(anon.server, &anon_len) &&
+      anon_len == 0 && !ctls_conn_peer_cert_sha256(anon.server, anon_md) &&
+      !ctls_conn_peer_cert_subject(anon.server);
+  bool anon_md_zero = true;
+  for (size_t i = 0; i < sizeof(anon_md); i++)
+    if (anon_md[i] != 0) anon_md_zero = false;
+  _mtls_close(&anon);
+  OPENSSL_free(want);
+
+  REQUIRE_TRUE(opened);
+  REQUIRE_TRUE(der_ok);
+  REQUIRE_TRUE(md_ok);
+  REQUIRE_TRUE(subject_ok);
+  REQUIRE_TRUE(client_none);
+  REQUIRE_TRUE(anon_opened);
+  REQUIRE_TRUE(anon_none);
+  REQUIRE_TRUE(anon_md_zero);
+}
+
+/* An accessor whose answer cannot be built (a block of the server context's
+ * allocator, or an allocation inside OpenSSL) answers NULL with a zero length,
+ * or false with an all-zero digest, and caches nothing: the next call with
+ * memory available gives the full answer. The ctx sweep fails each block of
+ * the context's own allocator; the OpenSSL sweep each allocation of OpenSSL
+ * on this thread. */
+TEST(ctls_oom, peer_cert_accessors_under_allocation_failure_cache_nothing) {
+  if (!g_certs_ready) return;
+  int want_len = 0;
+  unsigned char *want = _client_cert_der(&want_len);
+  REQUIRE_NE((void *)want, NULL);
+  long failures = 0;
+  bool bad_failure = false;
+  bool bad_recovery = false;
+  bool finished_lib = false, finished_ossl = !g_ossl_mem_hooked;
+  for (int ossl = 0; ossl < 2; ossl++) {
+    if (ossl && !g_ossl_mem_hooked) break;
+    bool *finished = ossl ? &finished_ossl : &finished_lib;
+    for (long n = 1; n <= 200 && !*finished; n++) {
+      _mtls_pair_t p;
+      if (!_mtls_open(&p, &g_sweep_mp, true)) {
+        bad_recovery = true;
+        break;
+      }
+      size_t len = 99;
+      bool fired;
+      const unsigned char *der;
+      if (ossl) {
+        _ossl_arm(n);
+        der = ctls_conn_peer_cert_der(p.server, &len);
+        _ossl_disarm();
+        fired = atomic_load(&g_ossl_alloc_fired);
+      } else {
+        _sweep_arm((int)n);
+        der = ctls_conn_peer_cert_der(p.server, &len);
+        fired = atomic_load(&g_alloc_seen) >= n;
+        _sweep_disarm();
+      }
+      if (!der) {
+        failures++;
+        if (len != 0) bad_failure = true;
+      } else {
+        *finished = !fired;
+      }
+      size_t len2 = 0;
+      const unsigned char *der2 = ctls_conn_peer_cert_der(p.server, &len2);
+      const char *subject = ctls_conn_peer_cert_subject(p.server);
+      if (!der2 || len2 != (size_t)want_len || memcmp(der2, want, len2) != 0 ||
+          !subject || strcmp(subject, "CN=test-client") != 0)
+        bad_recovery = true;
+      _mtls_close(&p);
+    }
+  }
+  /* The digest is computed on each call, so one connection serves the whole
+   * sweep once the DER is cached. */
+  long md_failures = 0;
+  bool md_bad = false;
+  bool md_finished = !g_ossl_mem_hooked;
+  _mtls_pair_t p;
+  bool opened = _mtls_open(&p, NULL, true);
+  unsigned char good[CTLS_SHA256_LEN] = {0};
+  bool have_good = opened && ctls_conn_peer_cert_sha256(p.server, good);
+  for (long n = 1; have_good && !md_finished && n <= 200; n++) {
+    unsigned char md[CTLS_SHA256_LEN];
+    memset(md, 0xAB, sizeof(md));
+    _ossl_arm(n);
+    bool ok = ctls_conn_peer_cert_sha256(p.server, md);
+    _ossl_disarm();
+    bool fired = atomic_load(&g_ossl_alloc_fired);
+    if (ok) {
+      md_finished = !fired;
+      if (memcmp(md, good, sizeof(md)) != 0) md_bad = true;
+    } else {
+      md_failures++;
+      for (size_t i = 0; i < sizeof(md); i++)
+        if (md[i] != 0) md_bad = true;
+    }
+  }
+  if (opened) _mtls_close(&p);
+  OPENSSL_free(want);
+
+  REQUIRE_TRUE(finished_lib);
+  REQUIRE_TRUE(finished_ossl);
+  REQUIRE_GT(failures, 0L);
+  REQUIRE_FALSE(bad_failure);
+  REQUIRE_FALSE(bad_recovery);
+  REQUIRE_TRUE(have_good);
+  REQUIRE_TRUE(md_finished);
+  if (g_ossl_mem_hooked) REQUIRE_GT(md_failures, 0L);
+  REQUIRE_FALSE(md_bad);
+}
+
+typedef struct {
+  int cleanups;
+  void *last_udata;
+} _alpn_cleanup_log_t;
+
+static _alpn_cleanup_log_t g_alpn_log;
+static void _alpn_log_cleanup(void *udata) {
+  g_alpn_log.cleanups++;
+  g_alpn_log.last_udata = udata;
+}
+
+/* An ALPN replacement whose rebuild fails reports it and keeps the earlier
+ * registration: nothing's cleanup runs, the count stays 1, and the next
+ * replacement that succeeds runs the cleanup of the earlier registration
+ * with its own udata, which shows that the earlier one was still the stored
+ * one. */
+TEST(ctls_oom, a_failed_alpn_replacement_keeps_the_earlier_registration) {
+  if (!g_ossl_mem_hooked) return;
+  int old_udata = 1, new_udata = 2, last_udata = 3;
+  ctls_ctx_t *probe = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)probe, NULL);
+  ccol_retval_t rv_first =
+      ctls_ctx_alpn_add(probe, "h2", NULL, &old_udata, NULL, NULL);
+  _ossl_arm(LONG_MAX);
+  ccol_retval_t rv_count =
+      ctls_ctx_alpn_add(probe, "h2", NULL, &new_udata, NULL, NULL);
+  _ossl_disarm();
+  long total = atomic_load(&g_ossl_alloc_seen);
+  ctls_ctx_release(probe);
+  REQUIRE_EQ(rv_first, ccol_success);
+  REQUIRE_EQ(rv_count, ccol_success);
+  REQUIRE_GT(total, 0L);
+
+  long step = total > 60 ? total / 60 : 1;
+  long failures = 0;
+  bool breach = false;
+  for (long n = 1; n <= total; n += step) {
+    ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+    if (!ctx || ctls_ctx_alpn_add(ctx, "h2", NULL, &old_udata,
+                                  _alpn_log_cleanup, NULL) != ccol_success) {
+      ctls_ctx_release(ctx);
+      breach = true;
+      break;
+    }
+    memset(&g_alpn_log, 0, sizeof(g_alpn_log));
+    char *err = NULL;
+    _ossl_arm(n);
+    ccol_retval_t rv =
+        ctls_ctx_alpn_add(ctx, "h2", NULL, &new_udata, _alpn_log_cleanup, &err);
+    _ossl_disarm();
+    if (rv == ccol_success) {
+      if (g_alpn_log.cleanups != 1 || g_alpn_log.last_udata != &old_udata)
+        breach = true;
+      ctls_ctx_release(ctx);
+      continue;
+    }
+    failures++;
+    bool kept = g_alpn_log.cleanups == 0 && ctls_ctx_alpn_count(ctx) == 1 &&
+                err && strstr(err, "rebuild failure") != NULL;
+    ccol_retval_t rv_after = ctls_ctx_alpn_add(ctx, "h2", NULL, &last_udata,
+                                               _alpn_log_cleanup, NULL);
+    if (!kept || rv_after != ccol_success || g_alpn_log.cleanups != 1 ||
+        g_alpn_log.last_udata != &old_udata)
+      breach = true;
+    ctls_ctx_release(ctx);
+    if (g_alpn_log.cleanups != 2 || g_alpn_log.last_udata != &last_udata)
+      breach = true;
+  }
+  REQUIRE_GT(failures, 0L);
+  REQUIRE_FALSE(breach);
+}
+
+typedef struct {
+  ccol_retval_t rv_dir;
+  bool verified_dir;
+  ccol_retval_t rv_empty;
+  bool verified_empty;
+} _system_ca_dir_result_t;
+
+/* A directory named after the subject hash of g_server_cert, holding a link
+ * to it, as OpenSSL's hashed lookup expects. */
+static bool _hashed_dir_make(const char *dir) {
+  FILE *f = fopen(g_server_cert, "r");
+  if (!f) return false;
+  X509 *x = PEM_read_X509(f, NULL, NULL, NULL);
+  fclose(f);
+  if (!x) return false;
+  char link_path[320];
+  int n = snprintf(link_path, sizeof(link_path), "%s/%08lx.0", dir,
+                   X509_subject_name_hash(x));
+  X509_free(x);
+  return n > 0 && (size_t)n < sizeof(link_path) &&
+         symlink(g_server_cert, link_path) == 0;
+}
+
+static void _system_ca_dir_body(void *out) {
+  _system_ca_dir_result_t *r = (_system_ca_dir_result_t *)out;
+  char dir[300], empty[300];
+  snprintf(dir, sizeof(dir), "%s/hashed", g_cert_dir);
+  snprintf(empty, sizeof(empty), "%s/hashed_empty", g_cert_dir);
+  bool made =
+      mkdir(dir, 0700) == 0 && mkdir(empty, 0700) == 0 && _hashed_dir_make(dir);
+  /* A key holds no certificate, so the default file contributes nothing. */
+  if (made) {
+    setenv("SSL_CERT_DIR", dir, 1);
+    _system_ca_env_set(g_server_key);
+    ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+    r->rv_dir = ctx ? ctls_ctx_trust_system(ctx) : ccol_unexpected_failure;
+    r->verified_dir =
+        r->rv_dir == ccol_success && _client_verifies_test_server(ctx);
+    ctls_ctx_release(ctx);
+
+    setenv("SSL_CERT_DIR", empty, 1);
+    _system_ca_env_set(g_server_key);
+    ctx = ctls_ctx_new(NULL);
+    r->rv_empty = ctx ? ctls_ctx_trust_system(ctx) : ccol_unexpected_failure;
+    r->verified_empty =
+        r->rv_empty == ccol_success && _client_verifies_test_server(ctx);
+    ctls_ctx_release(ctx);
+  }
+  char link_path[600];
+  DIR *d = opendir(dir);
+  for (struct dirent *e; d && (e = readdir(d));) {
+    if (e->d_name[0] == '.') continue;
+    int n = snprintf(link_path, sizeof(link_path), "%s/%s", dir, e->d_name);
+    if (n > 0 && (size_t)n < sizeof(link_path)) unlink(link_path);
+  }
+  if (d) closedir(d);
+  rmdir(dir);
+  rmdir(empty);
+}
+
+/* When the default CA file holds no certificate, the system store is the
+ * hashed directory that SSL_CERT_DIR names: a client trusts the server whose
+ * certificate that directory holds, and trusts nothing from an empty one.
+ * The test runs in a child; see _ctls_run_in_child. */
+TEST(ctls_system_ca,
+     a_default_file_without_certificates_falls_back_to_the_directory) {
+  if (!g_certs_ready) return;
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  _system_ca_dir_result_t r = {ccol_unexpected_failure, false,
+                               ccol_unexpected_failure, true};
+  bool ran = _ctls_run_in_child(_system_ca_dir_body, &r, sizeof(r), 30000);
+  REQUIRE_TRUE(ran);
+  REQUIRE_EQ(r.rv_dir, ccol_success);
+  REQUIRE_TRUE(r.verified_dir);
+  REQUIRE_EQ(r.rv_empty, ccol_success);
+  REQUIRE_FALSE(r.verified_empty);
+}
+
+typedef struct {
+  long failures;
+  long breaches;
+  bool reached_the_end;
+  bool clean_verified;
+  int clean_count;
+} _system_ca_oom_result_t;
+
+/* Writes a bundle of six certificates with the test server's among them to
+ * path, and says whether it could. OpenSSL starts the list a parse fills with
+ * room for four entries, so only a bundle longer than that makes the parse
+ * grow the list, and a failed growth gives NULL with nothing on the error
+ * queue. */
+static bool _write_system_ca_bundle(const char *path) {
+  const char *parts[] = {g_client_cert, g_enc_cert, g_named_cert,
+                         g_client_cert, g_enc_cert, g_server_cert};
+  FILE *out = fopen(path, "w");
+  if (!out) return false;
+  bool ok = true;
+  for (size_t i = 0; ok && i < sizeof(parts) / sizeof(parts[0]); ++i) {
+    FILE *in = fopen(parts[i], "r");
+    if (!in) {
+      ok = false;
+      break;
+    }
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
+      if (fwrite(buf, 1, n, out) != n) ok = false;
+    fclose(in);
+  }
+  if (fclose(out) != 0) ok = false;
+  return ok;
+}
+
+/* With SSL_CERT_FILE naming a bundle of six certificates, the test server's
+ * among them, and SSL_CERT_DIR an empty directory, fails each OpenSSL
+ * allocation of ctls_ctx_trust_system in turn. A call that reports success must
+ * hold every certificate of the bundle, as a call with nothing failing does
+ * (and that call must also verify the test server in a handshake); one that
+ * ran out of memory while it read the file must say so, because falling back
+ * to the empty directory would leave a store that trusts nothing. A
+ * handshake for every success would take minutes under valgrind, so the
+ * sweep compares the count of trusted certificates instead. The child gets
+ * 600 s where the others get 30. */
+static void _system_ca_oom_body(void *out) {
+  _system_ca_oom_result_t *r = (_system_ca_oom_result_t *)out;
+  char empty[300];
+  snprintf(empty, sizeof(empty), "%s/hashed_empty_oom", g_cert_dir);
+  char bundle[300];
+  snprintf(bundle, sizeof(bundle), "%s/system_bundle_oom.pem", g_cert_dir);
+  if (!_write_system_ca_bundle(bundle)) return;
+  if (mkdir(empty, 0700) != 0) {
+    unlink(bundle);
+    return;
+  }
+  setenv("SSL_CERT_DIR", empty, 1);
+  _system_ca_env_set(bundle);
+  ctls_ctx_t *clean = ctls_ctx_new(NULL);
+  /* The clean call is counted, and the sweep runs to that count with room to
+   * spare, because the number of allocations differs a lot between TLS
+   * libraries (about 1500 with OpenSSL 3.5, more than 8000 with 3.0 on
+   * FreeBSD). The sweep still stops at the first index that nothing fails. */
+  _ossl_arm(LONG_MAX);
+  ccol_retval_t clean_rv =
+      clean ? ctls_ctx_trust_system(clean) : ccol_unexpected_failure;
+  _ossl_disarm();
+  long clean_allocs = atomic_load(&g_ossl_alloc_seen);
+  if (clean_rv == ccol_success) {
+    r->clean_count = _ctls_trusted_cert_count_for_tests(clean);
+    r->clean_verified = _client_verifies_test_server(clean);
+  }
+  ctls_ctx_release(clean);
+  long sweep_max = 2 * clean_allocs + 64;
+  /* Every index costs a whole call, so the sweep grows with the square of
+   * the count, which valgrind can't finish in the child's time with OpenSSL
+   * 3.0 (6000 to 9000 allocations). The memtest target therefore sets
+   * CTLS_SAMPLED_SWEEP and visits about 300 evenly spaced points; every
+   * other run visits each index. Past the counted end the step is 1, so the
+   * sweep still finds the first index that nothing fails. */
+  long step = 1;
+  if (getenv("CTLS_SAMPLED_SWEEP") && clean_allocs > 300)
+    step = clean_allocs / 300;
+  for (long nth = 1; nth < sweep_max && !r->reached_the_end;
+       nth = nth >= clean_allocs         ? nth + 1
+             : nth + step > clean_allocs ? clean_allocs
+                                         : nth + step) {
+    _system_ca_env_set(bundle);
+    ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+    if (!ctx) {
+      r->breaches++;
+      break;
+    }
+    _ossl_arm(nth);
+    ccol_retval_t rv = ctls_ctx_trust_system(ctx);
+    bool fired = atomic_load(&g_ossl_alloc_fired);
+    _ossl_disarm();
+    if (!fired) r->reached_the_end = true;
+    if (rv == ccol_not_enough_memory)
+      r->failures++;
+    else if (rv != ccol_success ||
+             _ctls_trusted_cert_count_for_tests(ctx) != r->clean_count)
+      r->breaches++;
+    ctls_ctx_release(ctx);
+  }
+  rmdir(empty);
+  unlink(bundle);
+}
+
+TEST(ctls_system_ca, a_default_file_that_cannot_be_parsed_for_memory_says_so) {
+  if (!g_certs_ready) return;
+  if (!g_ossl_mem_hooked) {
+    fprintf(stderr, "SKIP: this TLS library takes no custom allocator\n");
+    return;
+  }
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  _system_ca_oom_result_t r = {0, 0, false, false, -1};
+  bool ran = _ctls_run_in_child(_system_ca_oom_body, &r, sizeof(r), 600000);
+  REQUIRE_TRUE(ran);
+  REQUIRE_TRUE(r.clean_verified);
+  REQUIRE_GE(r.clean_count, 4);
+  REQUIRE_TRUE(r.reached_the_end);
+  REQUIRE_GT(r.failures, 0L);
+  REQUIRE_EQ(r.breaches, 0L);
 }

@@ -65,16 +65,22 @@ SOFTWARE.
 
 #include <tau/tau.h>
 #include <test_connect.h>
+#include <test_coverage.h>
 #include <test_sanitizer.h>
+#include <test_signals.h>
 
 TAU_MAIN()
 
 /* The test clients of this binary write to the server with plain write(2), and
  * the server can close a connection while one of them is writing. The library
  * leaves the SIGPIPE disposition to the application, so this binary ignores it
- * itself; tests_sigpipe.c covers the library under the default disposition. */
+ * itself; tests_sigpipe.c covers the library under the default disposition.
+ *
+ * test_reset_inherited_signals() puts back the rest of the signal state that
+ * the parent process can leave behind, before any thread starts. */
 __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
   signal(SIGPIPE, SIG_IGN);
+  test_reset_inherited_signals();
 }
 
 /* ========================================================================== */
@@ -84,8 +90,8 @@ __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
 #define TEST_PORT 18765
 #define BASE_URL "http://127.0.0.1:18765"
 
-static clog g_test_logger = CLOG_INVALID;
-static chttpsvr g_srv = CHTTPSVR_INVALID;
+static clog g_test_logger = CLOG_NULL;
+static chttpsvr g_srv = CHTTPSVR_NULL;
 
 /* Scope-exit cleanup for a plain client-side test socket fd, used as `int fd
    _ccol_destructor(_close_scoped_fd) = socket(...);`. A later REQUIRE_* check
@@ -416,10 +422,14 @@ static void _identity_header_echo_handler(chttpsvr_req *req,
    of buffers. */
 #define _CHTTPSVR_TEST_LARGE_BODY_SIZE (16 * 1024 * 1024)
 
+/* How many times _large_response_handler has started. */
+static atomic_int g_large_response_runs = 0;
+
 static void _large_response_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                     void *ctx) {
   (void)req;
   (void)ctx;
+  atomic_fetch_add(&g_large_response_runs, 1);
   /* A plain static array in BSS instead of a heap allocation. A single malloc()
      that nothing frees for the rest of the process's life shows up as a real
      "still reachable" block, which make memtest reports with
@@ -862,7 +872,7 @@ static void _null_key_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* A second server for the "already running" test (it never really serves). */
-static chttpsvr g_srv2 = CHTTPSVR_INVALID;
+static chttpsvr g_srv2 = CHTTPSVR_NULL;
 
 /* ========================================================================== */
 /*       SHARED RESULT ARRAYS FOR HANDLERS REGISTERED IN _setup              */
@@ -1129,12 +1139,12 @@ static void _any_method_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    queue_capacity=1. It checks that a full ctpool makes ctpool_try_submit return
    ccol_container_full and that the server then answers with a 503. It listens
    on TEST_PORT+2. */
-static chttpsvr g_bounded_srv = CHTTPSVR_INVALID;
+static chttpsvr g_bounded_srv = CHTTPSVR_NULL;
 
 /* A dedicated server with a small max_body_size (64 bytes) for the boundary
    tests of the 413/PAYLOAD_TOO_LARGE enforcement, buffered and streaming. It
    listens on TEST_PORT+3. */
-static chttpsvr g_small_body_srv = CHTTPSVR_INVALID;
+static chttpsvr g_small_body_srv = CHTTPSVR_NULL;
 #define SMALL_BODY_MAX 64
 
 /* Mutex and condition variable that synchronize the blocking handler of the 503
@@ -1162,7 +1172,7 @@ static void _bounded_blk_handler(chttpsvr_req *req, chttpsvr_resp *resp,
  * request of the test. The default client allows one connection per CPU, so on
  * a machine with two CPUs the two requests blocked in the handler would hold
  * every slot and the third one would wait forever. */
-static chttpcli g_bounded_cli = CHTTPCLI_INVALID;
+static chttpcli g_bounded_cli = CHTTPCLI_NULL;
 
 /* Sends one GET /bounded-503 to g_bounded_srv through g_bounded_cli. */
 static chttpcli_response *_bounded_get(void) {
@@ -1185,13 +1195,13 @@ static void *_send_bounded_req(void *arg) {
 }
 
 /* Thread entry: sends one GET to a route that doesn't match on g_srv (a sure
-   404) and throws the response away. We use it to fire a concurrent burst of
-   route rejections; see
+   404) and stores the status it got, or -1, in the int that arg points to. We
+   use it to fire a concurrent burst of route rejections; see
    concurrent_route_rejections_do_not_starve_other_requests. */
 static void *_send_unmatched_route_req(void *arg) {
-  (void)arg;
   chttpcli_response *resp = NULL;
   chttp_get(BASE_URL "/definitely-not-a-registered-route-xyz", &resp);
+  *(int *)arg = resp ? resp->status_code : -1;
   if (resp) chttpclient_resp_free(resp);
   return NULL;
 }
@@ -1225,19 +1235,19 @@ static void _teardown(void) {
    * (g_test_logger) when this function closes it just below. */
   if (g_bounded_srv) {
     __chttpsvr_destroy(g_bounded_srv);
-    g_bounded_srv = CHTTPSVR_INVALID;
+    g_bounded_srv = CHTTPSVR_NULL;
   }
   if (g_small_body_srv) {
     __chttpsvr_destroy(g_small_body_srv);
-    g_small_body_srv = CHTTPSVR_INVALID;
+    g_small_body_srv = CHTTPSVR_NULL;
   }
   if (g_srv) {
     __chttpsvr_destroy(g_srv);
-    g_srv = CHTTPSVR_INVALID;
+    g_srv = CHTTPSVR_NULL;
   }
   if (g_srv2) {
     __chttpsvr_destroy(g_srv2);
-    g_srv2 = CHTTPSVR_INVALID;
+    g_srv2 = CHTTPSVR_NULL;
   }
   /* On OpenBSD an exit handler registered by a constructor runs after the
    * dynamic loader has taken its lock for the destructors of every object, and
@@ -1251,10 +1261,111 @@ static void _teardown(void) {
   chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
-    g_test_logger = CLOG_INVALID;
+    g_test_logger = CLOG_NULL;
   }
 #endif
 }
+
+/* Builds and starts g_bounded_srv: 1 worker thread and queue_capacity=1 on
+ * TEST_PORT+2, so the total capacity is 2 (1 running and 1 queued) and a third
+ * concurrent request gets a 503. Returns false, with no server left, when the
+ * create or the start fails. */
+static bool _create_bounded_srv(void) {
+  g_bounded_srv = chttpsvr_create(g_test_logger, NULL);
+  if (!g_bounded_srv) return false;
+  chttpsvr_register_streaming_handler(g_bounded_srv, CHTTP_GET, "/bounded-503",
+                                      _bounded_blk_handler, NULL);
+  chttpsvr_register_streaming_handler(g_bounded_srv, CHTTP_POST,
+                                      "/stream-error-report-slow",
+                                      _stream_error_report_handler, NULL);
+  chttpsvr_config_t bcfg = CHTTPSVR_CONFIG_DEFAULT;
+  bcfg.host = "127.0.0.1";
+  bcfg.port = TEST_PORT + 2;
+  bcfg.worker_thread_count = 1;
+  bcfg.worker_queue_capacity = 1;
+  /* This server's routes are streaming routes and the tests that use it fill
+   * the WORKER pool, so here the streaming handlers share that pool instead of
+   * running on a streaming pool of their own. */
+  bcfg.streaming_thread_count = CHTTPSVR_STREAMING_POOL_OFF;
+  /* Short enough that a client which stops sending halfway through the body
+   * hits a timeout quickly in the tests, without affecting /bounded-503, which
+   * never calls chttpsvr_req_read. */
+  bcfg.stream_read_timeout_us = 300000;
+  ccol_retval_t brv = chttpsvr_start(g_bounded_srv, &bcfg);
+  if (brv != ccol_success) {
+    fprintf(stderr, "bounded chttpsvr_start failed: %d\n", brv);
+    chttpsvr_destroy(g_bounded_srv);
+    return false;
+  }
+  return true;
+}
+
+/* Builds and starts g_small_body_srv, whose max_body_size of SMALL_BODY_MAX
+ * serves the 413 boundary tests, buffered and streaming, on TEST_PORT+3.
+ * Returns false, with no server left, when the create or the start fails. */
+static bool _create_small_body_srv(void) {
+  g_small_body_srv = chttpsvr_create(g_test_logger, NULL);
+  if (!g_small_body_srv) return false;
+  chttpsvr_register_handler(g_small_body_srv, CHTTP_POST, "/small-body-echo",
+                            _echo_body_handler, NULL);
+  chttpsvr_register_streaming_handler(g_small_body_srv, CHTTP_POST,
+                                      "/small-body-stream",
+                                      _stream_error_report_handler, NULL);
+  chttpsvr_config_t scfg = CHTTPSVR_CONFIG_DEFAULT;
+  scfg.host = "127.0.0.1";
+  scfg.port = TEST_PORT + 3;
+  scfg.max_body_size = SMALL_BODY_MAX;
+  ccol_retval_t srv_rv = chttpsvr_start(g_small_body_srv, &scfg);
+  if (srv_rv != ccol_success) {
+    fprintf(stderr, "small-body chttpsvr_start failed: %d\n", srv_rv);
+    chttpsvr_destroy(g_small_body_srv);
+    return false;
+  }
+  return true;
+}
+
+/* The fork handlers of the library lock every live server (five locks each)
+ * and every pool, logger and event loop, and the forking thread holds all of
+ * them at once inside fork(). ThreadSanitizer stops the process once a thread
+ * holds 64 locks, and then hangs in fork(). With every server of _setup alive
+ * a fork here holds 59 to 61 locks, depending on what the tests before it left
+ * on those servers. So a test that forks puts FORK_TEST_SCOPE() first: it
+ * destroys g_srv2, g_bounded_srv and g_small_body_srv, which no such test
+ * uses, and builds them again on every path out of the test, for the tests
+ * that run after it. A fork then holds about 36 locks, whatever ran before.
+ * g_srv stays, since it carries the routes that _setup registers. */
+static int _release_unused_servers(void) {
+  /* A handler that a failed bounded test left waiting would keep the destroy
+   * of g_bounded_srv waiting too, as in _teardown. */
+  pthread_mutex_lock(&g_blk_mtx);
+  g_blk_go = true;
+  pthread_cond_broadcast(&g_blk_cv);
+  pthread_mutex_unlock(&g_blk_mtx);
+  if (g_srv2) chttpsvr_stop(g_srv2);
+  if (g_bounded_srv) chttpsvr_stop(g_bounded_srv);
+  if (g_small_body_srv) chttpsvr_stop(g_small_body_srv);
+  if (g_srv2) chttpsvr_destroy(g_srv2);
+  if (g_bounded_srv) chttpsvr_destroy(g_bounded_srv);
+  if (g_small_body_srv) chttpsvr_destroy(g_small_body_srv);
+  return 0;
+}
+
+static void _restore_unused_servers(int *scope) {
+  (void)scope;
+  if (!g_srv2) g_srv2 = chttpsvr_create(g_test_logger, NULL);
+  bool ok = g_srv2 && (g_bounded_srv || _create_bounded_srv()) &&
+            (g_small_body_srv || _create_small_body_srv());
+  if (!ok) {
+    /* Every later test that uses these servers would fail for a reason that
+     * has nothing to do with it, so the run stops here, as _setup does. */
+    fprintf(stderr, "FATAL: could not build the servers of _setup again\n");
+    exit(1);
+  }
+}
+
+#define FORK_TEST_SCOPE()                          \
+  __attribute__((cleanup(_restore_unused_servers), \
+                 unused)) int _fork_test_scope = _release_unused_servers()
 
 __attribute__((constructor)) static void _setup(void) {
   char *err = NULL;
@@ -1570,6 +1681,10 @@ __attribute__((constructor)) static void _setup(void) {
   /* A second server instance (not started) for the route-registration edge-case
    * tests and the double-start rejection tests. */
   g_srv2 = chttpsvr_create(g_test_logger, NULL);
+  if (!g_srv2) {
+    fprintf(stderr, "FATAL: could not create the second chttpsvr\n");
+    exit(1);
+  }
 
   /* Send the engine's log to g_test_logger before the first chttpsvr_start. */
   chttpsvr_set_engine_logger(g_test_logger);
@@ -1595,35 +1710,9 @@ __attribute__((constructor)) static void _setup(void) {
    * test, with 1 worker thread and queue_capacity=1, so the total capacity is 2
    * (1 running and 1 queued) and a third concurrent request gets a 503.
    */
-  g_bounded_srv = chttpsvr_create(g_test_logger, NULL);
-  if (!g_bounded_srv) {
-    fprintf(stderr, "FATAL: could not create bounded chttpsvr\n");
+  if (!_create_bounded_srv()) {
+    fprintf(stderr, "FATAL: could not create and start the bounded chttpsvr\n");
     exit(1);
-  }
-  chttpsvr_register_streaming_handler(g_bounded_srv, CHTTP_GET, "/bounded-503",
-                                      _bounded_blk_handler, NULL);
-  chttpsvr_register_streaming_handler(g_bounded_srv, CHTTP_POST,
-                                      "/stream-error-report-slow",
-                                      _stream_error_report_handler, NULL);
-  {
-    chttpsvr_config_t bcfg = CHTTPSVR_CONFIG_DEFAULT;
-    bcfg.host = "127.0.0.1";
-    bcfg.port = TEST_PORT + 2;
-    bcfg.worker_thread_count = 1;
-    bcfg.worker_queue_capacity = 1;
-    /* This server's routes are streaming routes and the tests that use it fill
-     * the WORKER pool, so here the streaming handlers share that pool instead
-     * of running on a streaming pool of their own. */
-    bcfg.streaming_thread_count = CHTTPSVR_STREAMING_POOL_OFF;
-    /* Short enough that a client which stops sending halfway through the body
-     * hits a timeout quickly in the tests, without affecting /bounded-503,
-     * which never calls chttpsvr_req_read. */
-    bcfg.stream_read_timeout_us = 300000;
-    ccol_retval_t brv = chttpsvr_start(g_bounded_srv, &bcfg);
-    if (brv != ccol_success) {
-      fprintf(stderr, "FATAL: bounded chttpsvr_start failed: %d\n", brv);
-      exit(1);
-    }
   }
   /* No readiness poll needed here either: the engine is already running, so a
    * later chttpsvr_start binds the socket synchronously, through
@@ -1631,26 +1720,10 @@ __attribute__((constructor)) static void _setup(void) {
 
   /* Create and start the server with the small max_body_size for the
    * max_body_size/413 boundary tests, buffered and streaming. */
-  g_small_body_srv = chttpsvr_create(g_test_logger, NULL);
-  if (!g_small_body_srv) {
-    fprintf(stderr, "FATAL: could not create small-body chttpsvr\n");
+  if (!_create_small_body_srv()) {
+    fprintf(stderr,
+            "FATAL: could not create and start the small-body chttpsvr\n");
     exit(1);
-  }
-  chttpsvr_register_handler(g_small_body_srv, CHTTP_POST, "/small-body-echo",
-                            _echo_body_handler, NULL);
-  chttpsvr_register_streaming_handler(g_small_body_srv, CHTTP_POST,
-                                      "/small-body-stream",
-                                      _stream_error_report_handler, NULL);
-  {
-    chttpsvr_config_t scfg = CHTTPSVR_CONFIG_DEFAULT;
-    scfg.host = "127.0.0.1";
-    scfg.port = TEST_PORT + 3;
-    scfg.max_body_size = SMALL_BODY_MAX;
-    ccol_retval_t srv_rv = chttpsvr_start(g_small_body_srv, &scfg);
-    if (srv_rv != ccol_success) {
-      fprintf(stderr, "FATAL: small-body chttpsvr_start failed: %d\n", srv_rv);
-      exit(1);
-    }
   }
 
   atexit(_teardown);
@@ -2000,7 +2073,7 @@ TEST(chttpserver, multi_server_start_stop) {
    * could return early. A real regression in what this test checks (starting
    * and serving a second concurrent server) must not leave g_srv2's listener
    * alive for every later test of this binary to trip over. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
 
   chttpsvr_register_handler(g_srv2, CHTTP_GET, "/ping-srv2", _hello_handler,
                             NULL);
@@ -2164,7 +2237,7 @@ TEST(chttpserver, stream_handler_registration_accepted) {
   /* chttpsvr_register_streaming_handler should accept a valid registration on a
      server that isn't started. The server owns its ctpool, so the caller passes
      no pool. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       g_srv2, CHTTP_POST, "/noop", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -2218,7 +2291,7 @@ TEST(chttpserver, invalid_param_pattern_rejected) {
      time with ccol_invalid_args instead of silently extracting a wrong param
      name. We use g_srv2 because it's never started, so adding invalid routes to
      it doesn't affect the running test server. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "/{unclosed",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -2234,7 +2307,7 @@ TEST(chttpserver, invalid_param_name_chars_rejected) {
    * chttpsvr_req_param could never read such a name back and the pattern would
    * create parameters nothing can reach. The test uses g_srv2, which is never
    * started, so it doesn't pollute the running test server. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
 
   /* A space inside the param name. */
   ccol_retval_t rv = chttpsvr_register_handler(
@@ -2268,7 +2341,7 @@ TEST(chttpserver, duplicate_param_name_in_pattern_rejected) {
    * chttpsvr_req_param always returns on the first match of the name. The test
    * uses g_srv2, which is never started, so it doesn't pollute the running test
    * server. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
 
   ccol_retval_t rv = chttpsvr_register_handler(
       g_srv2, CHTTP_GET, "/dup/{id}/b/{id}", _hello_handler, NULL);
@@ -2366,7 +2439,7 @@ TEST(chttpserver, double_slash_pattern_rejected) {
      rejected at registration time with ccol_invalid_args, because quietly
      turning such a pattern into /foo/bar surprises the caller and leads to
      mistakes. The test uses g_srv2, which is never started. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "/foo//bar",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -2534,7 +2607,7 @@ TEST(chttpserver, custom_allocator_lifecycle) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_GT(g_wrap_malloc_count + g_wrap_calloc_count, (size_t)0);
   REQUIRE_EQ(g_wrap_free_count, (size_t)0);
 
@@ -2615,14 +2688,45 @@ TEST(chttpserver, long_path_heap_alloc) {
    library promises. That's why this function polls for the expected delta
    instead of asserting right away, the same pattern this codebase uses for
    timing after an asynchronous completion (see the wait loop for
-   g_mm_free_count in tests_mem_mgmt.c). It returns the count it saw, so the
-   caller can still assert on it. */
+   g_mm_free_count in tests_mem_mgmt.c). It waits at most 5 s, a bound that
+   only matters when the count never comes, and returns the count it saw, so
+   the caller can still assert on it. */
 static size_t _wait_for_reject_pool_task_count(size_t expected) {
-  for (int attempt = 0; attempt < 50; attempt++) {
+  for (int attempt = 0; attempt < 250; attempt++) {
     if (_chttpsvr_reject_pool_task_count_for_tests() >= expected) break;
     usleep(20000);
   }
   return _chttpsvr_reject_pool_task_count_for_tests();
+}
+
+/* A reject_pool task bumps the counter above before it gives back its
+   in_flight_requests slot, so once no server shows a request in flight, every
+   rejection that any of them started has been counted, including one whose
+   client returned long ago. The counter belongs to the whole process, so a
+   test that reads it as a baseline waits for this first; otherwise a late
+   increment from a test that ran earlier lands inside its window, and which
+   test runs earlier depends on the compiler (egcc on OpenBSD runs this file's
+   tests in another order). It covers the servers that live as long as the
+   process; a server that one test creates is drained by its own destroy. A
+   handle that doesn't resolve reads as -1 and a stopped server as 0.
+   Bounded at 5 s. A rejection or a worker that closes at once counts its
+   linger before it gives back the slot; one whose write parked gives the
+   slot back first and lingers later, from the reactor or the sweep, so the
+   wait also lasts until none of these servers has a connection parked on a
+   write (kind 2) or lingering (kind 6). */
+static void _wait_for_reject_counter_to_settle(void) {
+  const chttpsvr *servers[] = {&g_srv, &g_srv2, &g_bounded_srv,
+                               &g_small_body_srv};
+  for (int attempt = 0; attempt < 250; attempt++) {
+    bool busy = false;
+    for (size_t i = 0; i < sizeof(servers) / sizeof(servers[0]); i++)
+      if (_chttpsvr_in_flight_requests_for_tests(*servers[i]) > 0 ||
+          _chttpsvr_parked_count_for_tests(*servers[i], 2) > 0 ||
+          _chttpsvr_parked_count_for_tests(*servers[i], 6) > 0)
+        busy = true;
+    if (!busy) return;
+    usleep(20000);
+  }
 }
 
 /* ========================================================================== */
@@ -2757,13 +2861,14 @@ TEST(chttpserver, bounded_pool_full_returns_503) {
    * the process's life, since nothing else in this test binary unblocks it
    * before the process exits, and every later test that reaches g_bounded_srv
    * would wait behind a worker that can never make progress. */
+  _wait_for_reject_counter_to_settle();
   size_t reject_count_before = _chttpsvr_reject_pool_task_count_for_tests();
   /* The request timeout turns a wrong outcome into a failure instead of a hang.
    * If request 3 got a queue slot instead of a 503, it would wait for g_blk_go,
    * which this test sets only after request 3 returns. */
   g_bounded_cli = chttpclient_create(NULL);
   bool cli_ok =
-      g_bounded_cli != CHTTPCLI_INVALID &&
+      g_bounded_cli != CHTTPCLI_NULL &&
       chttpclient_set_pool_size(g_bounded_cli, 8) == ccol_success &&
       chttpclient_set_request_timeout(g_bounded_cli, 30000000) == ccol_success;
 
@@ -2863,8 +2968,8 @@ TEST(chttpserver, bounded_pool_full_returns_503) {
 
   if (t1_created) pthread_join(t1, NULL);
   if (t2_created) pthread_join(t2, NULL);
-  if (g_bounded_cli != CHTTPCLI_INVALID) chttpclient_destroy(g_bounded_cli);
-  g_bounded_cli = CHTTPCLI_INVALID;
+  if (g_bounded_cli != CHTTPCLI_NULL) chttpclient_destroy(g_bounded_cli);
+  g_bounded_cli = CHTTPCLI_NULL;
 
   /* Reset g_blk_go in case of a rerun, for example the safety broadcast of
    * _teardown. */
@@ -2892,7 +2997,7 @@ TEST(chttpserver, stop_on_unstarted_server_is_safe) {
    * point of the suite's order multi_server_start_stop has already started and
    * stopped it once. Either way started==false here, and that's the only
    * property this test relies on. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_stop(g_srv2); /* must not block or crash */
   chttpsvr_stop(g_srv2); /* second call, should be a no-op too */
 }
@@ -3408,6 +3513,7 @@ TEST(chttpserver, unmatched_route_rejected_without_reading_body) {
      though the client declares a huge body and never sends it. A server that
      read the body before responding would make this test hang instead of
      returning quickly. */
+  _wait_for_reject_counter_to_settle();
   size_t reject_count_before = _chttpsvr_reject_pool_task_count_for_tests();
 
   char buf[4096] = {0};
@@ -3432,6 +3538,7 @@ TEST(chttpserver, unmatched_route_rejection_routed_through_reject_pool) {
      by the synchronous last-resort fallback, because both put the same 404 on
      the wire, so this test checks the mechanism directly with the white-box
      counter g_reject_task_run_count_for_tests. */
+  _wait_for_reject_counter_to_settle();
   size_t before = _chttpsvr_reject_pool_task_count_for_tests();
 
   chttpcli_response *resp = _get("/definitely-not-a-registered-route-xyz");
@@ -3469,11 +3576,15 @@ TEST(chttpserver, concurrent_route_rejections_do_not_starve_other_requests) {
    * need for exact-delta assertions. */
   enum { N_REJECTIONS = 40 };
   pthread_t threads[N_REJECTIONS];
+  int statuses[N_REJECTIONS];
   int created = 0;
   ccol_retval_t create_rv = ccol_success;
+  _wait_for_reject_counter_to_settle();
+  size_t rejects_before = _chttpsvr_reject_pool_task_count_for_tests();
   for (; created < N_REJECTIONS; created++) {
+    statuses[created] = -1;
     int rc = pthread_create(&threads[created], NULL, _send_unmatched_route_req,
-                            NULL);
+                            &statuses[created]);
     if (rc != 0) {
       create_rv = ccol_unexpected_failure;
       break;
@@ -3481,8 +3592,9 @@ TEST(chttpserver, concurrent_route_rejections_do_not_starve_other_requests) {
   }
 
   /* Time one ordinary request on the same server while the burst above is in
-     flight. The bound is generous, since this is a starvation smoke test and
-     not a tight latency proof. */
+     flight. The bound only catches a reactor that stalls for seconds: valgrind
+     on a loaded runner alone takes this request past 1.5 s. What the test
+     asserts exactly is that every rejection of the burst ran on reject_pool. */
   struct timespec t0, t1;
   clock_gettime(CLOCK_MONOTONIC, &t0);
   chttpcli_response *resp = _get("/hello");
@@ -3494,11 +3606,22 @@ TEST(chttpserver, concurrent_route_rejections_do_not_starve_other_requests) {
       (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
 
   for (int i = 0; i < created; i++) pthread_join(threads[i], NULL);
+  /* Each client above has its 404, but the reject_pool task that wrote it can
+     still be on its way to the counter; let those land here, so they all count
+     in this test and never in the next one that reads the counter. */
+  _wait_for_reject_counter_to_settle();
+  size_t on_pool =
+      _chttpsvr_reject_pool_task_count_for_tests() - rejects_before;
+  int not_found = 0;
+  for (int i = 0; i < created; i++)
+    if (statuses[i] == 404) not_found++;
 
   REQUIRE_EQ((int)create_rv, (int)ccol_success);
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(status_code, 200);
-  REQUIRE_LT(elapsed_ms, 2000L);
+  REQUIRE_EQ(not_found, (int)N_REJECTIONS);
+  REQUIRE_EQ(on_pool, (size_t)N_REJECTIONS);
+  REQUIRE_LT(elapsed_ms, 10000L);
 }
 
 TEST(chttpserver, pipelined_bytes_after_rejected_route_not_misparsed) {
@@ -4079,7 +4202,7 @@ TEST(chttpserver, client_disconnect_mid_body_does_not_hang_server) {
      abrupt disconnect and went back to the pool. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t reg_rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/disconnect-mid-body", _stream_error_report_handler,
       NULL);
@@ -4548,7 +4671,7 @@ TEST(chttpserver, stream_read_timeout_ms_zero_means_wait_indefinitely) {
      delivers the response. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv =
       chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/zero-timeout-wait",
                                           _stream_error_report_handler, NULL);
@@ -4765,7 +4888,7 @@ TEST(chttpserver, cache_shared_literal_prefix_segment_multiple_candidates) {
      not corrupt the shared "alpha" cache entry. A corrupt entry (freed, stale
      or never computed again) would make this test crash or return the wrong
      body. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(
                  g_srv, CHTTP_GET, "/cache-share/alpha/one",
                  _cache_literal_handler, (void *)"alpha-one"),
@@ -4798,7 +4921,7 @@ TEST(chttpserver,
      segment 0, which shows that the cache keeps its own decoded copy, whatever
      an earlier candidate did with a copy of it, and not a reference into memory
      that an earlier failed match has already freed. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(
                  g_srv, CHTTP_GET, "/cache-param/{id}/first",
                  _cache_param_handler, (void *)"first"),
@@ -4823,7 +4946,7 @@ TEST(chttpserver, cache_malformed_segment_rejects_every_sharing_candidate) {
      the one it tries first. A decode failure of a raw segment is a permanent
      fact about that segment (it can never match), and it doesn't depend on
      which candidate route asks. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   REQUIRE_EQ(
       (int)chttpsvr_register_handler(g_srv, CHTTP_GET, "/cache-bad/{id}/x",
                                      _cache_param_handler, (void *)"x"),
@@ -4871,7 +4994,7 @@ TEST(chttpserver, subrouter_prefix_cache_shared_across_candidates) {
      those tries and rejections must not corrupt the shared "pfx-share" cache
      entry. A corrupt entry (freed, stale or never computed again) would make
      this test crash or route to the wrong handler. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   chttpsvr_router *r1 = chttpsvr_subrouter(g_srv, "/pfx-share/alpha");
   chttpsvr_router *r2 = chttpsvr_subrouter(g_srv, "/pfx-share/beta");
   chttpsvr_router *r3 = chttpsvr_subrouter(g_srv, "/pfx-share/gamma");
@@ -4907,7 +5030,7 @@ TEST(chttpserver,
      A decode failure of a raw path segment is a permanent fact about that
      segment (it can never match), and it doesn't depend on which sub-router
      prefix asks. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   chttpsvr_router *r1 = chttpsvr_subrouter(g_srv, "/pfx-bad/one");
   chttpsvr_router *r2 = chttpsvr_subrouter(g_srv, "/pfx-bad/two");
   REQUIRE_TRUE(r1 != NULL);
@@ -4939,7 +5062,7 @@ TEST(chttpserver, on_null_fn_rejected) {
   /* chttpsvr_register_handler must return ccol_invalid_args when fn is NULL,
    * so a NULL handler can never be installed and crash later at dispatch time.
    * Uses g_srv2, which is created but never started. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv =
       chttpsvr_register_handler(g_srv2, CHTTP_GET, "/test-null-fn", NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -4948,7 +5071,7 @@ TEST(chttpserver, on_null_fn_rejected) {
 TEST(chttpserver, router_use_null_fn_rejected) {
   /* chttpsvr_router_use has to return ccol_invalid_args when fn is NULL, so
    * that no NULL middleware can be appended to the chain. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-mw-test");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv = chttpsvr_router_use(r, NULL, NULL);
@@ -4959,7 +5082,7 @@ TEST(chttpserver, use_null_fn_rejected) {
   /* chttpsvr_use should return ccol_invalid_args when fn is NULL, just like
    * chttpsvr_register_handler and chttpsvr_router_use. Uses g_srv2, which is
    * never started, so the running server isn't affected. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_use(g_srv2, NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
@@ -4972,7 +5095,7 @@ TEST(chttpserver, on_null_pattern_rejected) {
   /* chttpsvr_register_handler needs to enforce the NULL-pattern precondition at
    * the public API boundary itself and not quietly leave it to
    * _router_add_route. Uses g_srv2. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv =
       chttpsvr_register_handler(g_srv2, CHTTP_GET, NULL, _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -4981,7 +5104,7 @@ TEST(chttpserver, on_null_pattern_rejected) {
 TEST(chttpserver, on_stream_null_pattern_rejected) {
   /* chttpsvr_register_streaming_handler rejects a NULL pattern at the
    * public API boundary. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       g_srv2, CHTTP_POST, NULL, _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -4990,7 +5113,7 @@ TEST(chttpserver, on_stream_null_pattern_rejected) {
 TEST(chttpserver, router_on_null_pattern_rejected) {
   /* chttpsvr_router_on must guard against a NULL pattern too, the same way as
    * chttpsvr_register_handler. Uses a sub-router on g_srv2. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-pat-rt");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv =
@@ -5002,7 +5125,7 @@ TEST(chttpserver, router_on_stream_null_pattern_rejected) {
   /* chttpsvr_router_on_stream has to enforce the NULL-pattern precondition at
    * the public API boundary, the same way as chttpsvr_router_on and
    * chttpsvr_register_streaming_handler. Uses a sub-router on g_srv2. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-pat-stream");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv =
@@ -5018,7 +5141,7 @@ TEST(chttpserver, stop_twice_safe) {
   /* Two chttpsvr_stop calls on a server that was never started need to be safe.
    * Both are no-ops because chttpsvr_stop's was_started check is false, and
    * neither may crash or touch the shared engine reactor. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_stop(g_srv2);
   chttpsvr_stop(g_srv2);
 }
@@ -5122,7 +5245,7 @@ TEST(chttpserver, trailing_slash_pattern_rejected) {
    *
    * The test uses g_srv2, which is never started, so it doesn't pollute g_srv's
    * routing table. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
 
   /* Rejected: a trailing slash on a single-segment pattern. */
   ccol_retval_t rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "/foo/",
@@ -5176,7 +5299,7 @@ TEST(chttpserver, subrouter_null_prefix_rejected) {
   /* chttpsvr_subrouter returns NULL when prefix is NULL, so the server
    * never dereferences the prefix later when it matches paths. Uses g_srv2
    * (never started) so that g_srv's routing tables stay clean. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, NULL);
   REQUIRE_TRUE(r == NULL);
 }
@@ -5185,7 +5308,7 @@ TEST(chttpserver, subrouter_no_leading_slash_rejected) {
   /* chttpsvr_subrouter must return NULL when the prefix doesn't start with
    * '/', since every valid HTTP path does. Uses g_srv2 (never started) so that
    * g_srv's routing tables stay clean. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "api/v1");
   REQUIRE_TRUE(r == NULL);
 }
@@ -5196,7 +5319,7 @@ TEST(chttpserver, subrouter_double_slash_at_start_rejected) {
    * router that can never be reached, so chttpsvr_subrouter must reject it by
    * returning NULL. Uses g_srv2 (never started) so that g_srv's routing tables
    * stay clean. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "//api");
   REQUIRE_TRUE(r == NULL);
 }
@@ -5205,7 +5328,7 @@ TEST(chttpserver, subrouter_double_slash_in_middle_rejected) {
   /* A prefix with two slashes in a row in the middle, for example "/api//v1",
    * can't be reached either, so the server rejects it too. The test uses
    * g_srv2, which is never started. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/api//v1");
   REQUIRE_TRUE(r == NULL);
 }
@@ -5219,7 +5342,7 @@ TEST(chttpserver, on_stream_null_fn_rejected) {
    * is NULL, just like chttpsvr_register_handler rejects a NULL handler. A NULL
    * streaming handler would crash when the ctpool tries to call it. Uses g_srv2
    * (never started). */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       g_srv2, CHTTP_POST, "/noop-fn", NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -5229,7 +5352,7 @@ TEST(chttpserver, router_on_stream_null_fn_rejected) {
   /* chttpsvr_router_on_stream should return ccol_invalid_args when fn is NULL,
    * just like chttpsvr_register_streaming_handler and chttpsvr_router_on. Uses
    * a sub-router on g_srv2 (never started). */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-stream-fn");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv = chttpsvr_router_on_stream(r, CHTTP_POST, "/x", NULL, NULL);
@@ -5443,13 +5566,13 @@ TEST(chttpserver, resp_set_header_null_resp_returns_invalid_args) {
 TEST(chttpserver, serve_null_srv_returns_invalid_args) {
   /* chttpsvr_start(NULL, ...) returns ccol_invalid_args instead of
    * crashing on a NULL server pointer. */
-  ccol_retval_t rv = chttpsvr_start(CHTTPSVR_INVALID, NULL);
+  ccol_retval_t rv = chttpsvr_start(CHTTPSVR_NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
 TEST(chttpserver, stop_null_is_noop) {
-  /* chttpsvr_stop(CHTTPSVR_INVALID) must not crash. */
-  chttpsvr_stop(CHTTPSVR_INVALID);
+  /* chttpsvr_stop(CHTTPSVR_NULL) must not crash. */
+  chttpsvr_stop(CHTTPSVR_NULL);
 }
 
 /* (The engine lifecycle is implicit: the engine starts with the first
@@ -5524,7 +5647,7 @@ TEST(chttpserver, router_on_null_fn_rejected) {
    * like chttpsvr_register_handler, chttpsvr_register_streaming_handler and
    * chttpsvr_router_on_stream, which have their own tests for it. Uses a
    * sub-router on g_srv2 (never started). */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-fn-rt");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv = chttpsvr_router_on(r, CHTTP_GET, "/x", NULL, NULL);
@@ -5681,7 +5804,7 @@ TEST(chttpserver, subrouter_null_srv_rejected) {
    * back-pointer in the new router can't cause crashes at routing time. The
    * NULL prefix and the no-leading-slash cases have their own tests, and this
    * one completes the guard coverage. */
-  chttpsvr_router *r = chttpsvr_subrouter(CHTTPSVR_INVALID, "/any");
+  chttpsvr_router *r = chttpsvr_subrouter(CHTTPSVR_NULL, "/any");
   REQUIRE_TRUE(r == NULL);
 }
 
@@ -5703,11 +5826,11 @@ TEST(chttpserver, req_param_null_name_returns_null) {
 /* 1. on_stream with a NULL server returns ccol_invalid_args */
 
 TEST(chttpserver, on_stream_null_srv_returns_invalid_args) {
-  /* chttpsvr_register_streaming_handler has to check srv != CHTTPSVR_INVALID
+  /* chttpsvr_register_streaming_handler has to check srv != CHTTPSVR_NULL
    * before doing anything else, or dereferencing the server pointer crashes. A
    * pure API validation test that needs no live server. */
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
-      CHTTPSVR_INVALID, CHTTP_GET, "/any", _hello_handler, NULL);
+      CHTTPSVR_NULL, CHTTP_GET, "/any", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -5818,7 +5941,7 @@ TEST(chttpserver, pattern_no_leading_slash_rejected) {
    * documented API contract. The test uses g_srv2 because it's never started,
    * so registering an invalid route on it doesn't affect the running test
    * server. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
 
   ccol_retval_t rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "health",
                                                _hello_handler, NULL);
@@ -5841,10 +5964,10 @@ TEST(chttpserver, pattern_no_leading_slash_rejected) {
 /* 2. Releasing the engine logger is refused while the engine runs */
 
 TEST(chttpserver, set_engine_logger_release_refused_while_running) {
-  /* chttpsvr_set_engine_logger(CLOG_INVALID) releases the engine logger, and
+  /* chttpsvr_set_engine_logger(CLOG_NULL) releases the engine logger, and
    * this binary's engine runs for its whole life, so the release is refused and
    * the logger _setup installed stays in place. */
-  ccol_retval_t rv = chttpsvr_set_engine_logger(CLOG_INVALID);
+  ccol_retval_t rv = chttpsvr_set_engine_logger(CLOG_NULL);
   REQUIRE_EQ((int)rv, (int)ccol_not_permitted);
 }
 
@@ -5854,7 +5977,7 @@ TEST(chttpserver, serve_stopped_server_state_valid) {
   /* chttpsvr_stop on a server that wasn't started is a no-op, and the handle
    * should stay consistent afterwards: route registration still needs to work
    * without crashing or returning an error. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_stop(g_srv2); /* no-op, g_srv2 isn't started */
   chttpsvr_stop(g_srv2); /* second call, is a no-op too */
 
@@ -5873,7 +5996,7 @@ TEST(chttpserver, serve_tls_with_missing_certificate_files_fails_cleanly) {
    * handshakes, needs valid certificate files, so that coverage lives in the
    * dedicated tests_tls binary of this directory and not here; see this
    * directory's Makefile. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.cert_path = "/nonexistent/cert.pem";
   tls.key_path = "/nonexistent/key.pem";
@@ -5912,7 +6035,7 @@ TEST(chttpserver, streaming_get_no_body_via_req_body) {
    * handler has to return NULL/0, and the handler needs to produce a valid
    * "(empty)" response instead of crashing or returning garbage. This covers
    * the else branch of (body && len > 0) in a streaming route. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   chttpcli_response *resp = _get("/stream-body-get-no-body");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5926,7 +6049,7 @@ TEST(chttpserver, dynamic_route_registration_while_running) {
    * serving requests, which exercises the write path of the rwlock while
    * reactor threads hold read locks, and a later request in the same test
    * process needs to reach the new route right away. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       g_srv, CHTTP_GET, "/late-dynamic-route", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5951,7 +6074,7 @@ TEST(chttpserver, subrouter_wins_over_root_route_at_same_path) {
    *   1. Root route  /shadow-test/ping -> _shadow_root_handler
    *   2. Sub-router  /shadow-test  with /ping -> _shadow_sub_handler
    * Request: GET /shadow-test/ping -> has to return "sub-wins". */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   chttpcli_response *resp = _get("/shadow-test/ping");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5967,7 +6090,7 @@ TEST(chttpserver, middleware_overflow_registration_rejected) {
    * ccol_not_permitted. Rejecting the registration itself keeps any single
    * router from ever building a chain that overflows, so the public API can't
    * reach the quiet 500 path at dispatch time this way. */
-  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *ov_r = chttpsvr_subrouter(g_srv2, "/overflow-mw-test");
   REQUIRE_TRUE(ov_r != NULL);
 
@@ -5993,7 +6116,7 @@ TEST(chttpserver, middleware_overflow_produces_500) {
    * (_global_mw), so the combined count at dispatch time is 33 > 32, which
    * trips the overflow guard in _on_request before the route handler is called.
    */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   chttpcli_response *resp = _get("/mw-overflow-live/ping");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 500);
@@ -6011,7 +6134,7 @@ TEST(chttpserver, middleware_overflow_streaming_produces_500) {
    * > _CHTTPSVR_MAX_MW (32). The streaming route /mw-overflow-live/stream-ping
    * has to get the same 500 response as the buffered /mw-overflow-live/ping
    * route. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   chttpcli_response *resp =
       _post("/mw-overflow-live/stream-ping", "payload", "text/plain");
   REQUIRE_TRUE(resp != NULL);
@@ -6026,7 +6149,7 @@ TEST(chttpserver, malformed_encoding_in_param_correct_method_returns_404) {
    * for a bad encoding and the server treats the route as no match.
    *
    * _setup registers /api/v1/items/{id} for GET only. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   char buf[2048] = {0};
   int status =
       _raw_request("GET", "/api/v1/items/bad%ZZvalue", NULL, buf, sizeof(buf));
@@ -6049,7 +6172,7 @@ TEST(chttpserver,
    * encoding is rejected the same way in both cases.
    *
    * This request needs to return 404 and not 405. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   char buf[2048] = {0};
   int status =
       _raw_request("POST", "/api/v1/items/bad%ZZvalue", NULL, buf, sizeof(buf));
@@ -6068,7 +6191,7 @@ TEST(chttpserver, valid_percent_encoded_literal_segment_matches_route) {
    * NUL the following strcmp reads past the valid content into uninitialised
    * stack memory, and on a stack where that byte isn't zero the route fails to
    * match and the server returns 404. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   char buf[4096] = {0};
   int status = _raw_request("GET", "/hel%6Co", NULL, buf, sizeof(buf));
   REQUIRE_EQ(status, 200);
@@ -6083,7 +6206,7 @@ TEST(chttpserver,
    * the wrong method. /hel%6Co decodes to /hello, which is GET-only. The path
    * has to match (the literal-segment decode succeeds), so the server sets the
    * method-mismatch flag and replies 405, not 404. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   char buf[2048] = {0};
   int status = _raw_request("POST", "/hel%6Co", NULL, buf, sizeof(buf));
   REQUIRE_EQ(status, 405);
@@ -6093,7 +6216,7 @@ TEST(chttpserver, malformed_encoding_in_literal_segment_returns_404) {
   /* A bad percent-encoding in a LITERAL route segment should give a 404.
    * /hel%ZZo has a bad encoding where the "hello" literal sits, so no route can
    * match it, and the server returns 404 and not a 500 or a crash. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   char buf[2048] = {0};
   int status = _raw_request("GET", "/hel%ZZo", NULL, buf, sizeof(buf));
   REQUIRE_EQ(status, 404);
@@ -6105,7 +6228,7 @@ TEST(chttpserver,
    * match any route even in dry-run mode (the method-check only), so the
    * method-mismatch flag is never set and the server must return 404 and not
    * 405, whatever methods are registered for the pattern. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   char buf[2048] = {0};
   int status = _raw_request("POST", "/hel%ZZo", NULL, buf, sizeof(buf));
   REQUIRE_EQ(status, 404);
@@ -6116,12 +6239,12 @@ TEST(chttpserver,
 /* ========================================================================== */
 
 TEST(chttpserver, on_null_srv_returns_invalid_args) {
-  /* chttpsvr_register_handler must check srv != CHTTPSVR_INVALID and return
+  /* chttpsvr_register_handler must check srv != CHTTPSVR_NULL and return
    * ccol_invalid_args before it touches the root router, mirroring
    * on_stream_null_srv_returns_invalid_args, which covers the streaming
    * variant. */
-  ccol_retval_t rv = chttpsvr_register_handler(CHTTPSVR_INVALID, CHTTP_GET,
-                                               "/any", _hello_handler, NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(CHTTPSVR_NULL, CHTTP_GET, "/any",
+                                               _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -6153,7 +6276,7 @@ TEST(chttpserver, serve_null_cfg_uses_default) {
    * ccol_not_permitted. It must NOT return ccol_invalid_args, a code that would
    * wrongly claim NULL is an invalid argument when it's a default the function
    * handles. */
-  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_start(g_srv, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_not_permitted);
 }
@@ -6435,7 +6558,7 @@ TEST(chttpserver, streaming_max_body_size_exceeded_reported) {
 TEST(chttpserver, buffered_max_body_size_zero_means_unlimited) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_POST, "/unlimited-body-echo", _echo_body_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -6466,7 +6589,7 @@ TEST(chttpserver, buffered_max_body_size_zero_means_unlimited) {
 TEST(chttpserver, streaming_max_body_size_zero_means_unlimited) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/unlimited-body-stream", _stream_error_report_handler,
       NULL);
@@ -7450,7 +7573,7 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
   pthread_mutex_init(&ctx->mtx, NULL);
   pthread_cond_init(&ctx->cv, NULL);
   ctx->srv = chttpsvr_create(g_test_logger, NULL);
-  if (ctx->srv == CHTTPSVR_INVALID) {
+  if (ctx->srv == CHTTPSVR_NULL) {
     free(ctx);
     REQUIRE_TRUE(false);
   }
@@ -7695,7 +7818,7 @@ TEST(chttpserver,
   pthread_mutex_init(&ctx->mtx, NULL);
   pthread_cond_init(&ctx->cv, NULL);
   ctx->srv = chttpsvr_create(g_test_logger, NULL);
-  if (ctx->srv == CHTTPSVR_INVALID) {
+  if (ctx->srv == CHTTPSVR_NULL) {
     free(ctx);
     _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
     REQUIRE_TRUE(false);
@@ -7893,7 +8016,7 @@ TEST(chttpserver, restart_races_live_keep_alive_connection_is_safe) {
    * short-lived server, so it can't disturb the shared test fixture. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/restart-race",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -7975,7 +8098,7 @@ TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
    * EPIPE before it ever reads the response. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/deadline-test", _stream_error_report_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -7983,8 +8106,12 @@ TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
   cfg.port = TEST_PORT + 5;
-  cfg.stream_read_timeout_us = 5000000;   /* generous, must not fire first */
+  cfg.stream_read_timeout_us = 60000000;  /* generous, must not fire first */
   cfg.max_body_read_duration_us = 300000; /* the cap really under test */
+  /* The rate floor ends this stalled body after its grace period, and the
+     elapsed time below can't tell that apart from a late cap on a slow
+     runner, so it stays off. */
+  cfg.min_transfer_rate_bps = CHTTPSVR_NO_RATE_FLOOR;
   REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
 
   struct sockaddr_in sa;
@@ -7996,9 +8123,10 @@ TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
   REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
-  /* Well clear of the 300ms cap under test. It bounds the read loop below in
-     case a regression makes the server never respond and never close. */
-  struct timeval rcvtimeo = {5, 0};
+  /* Well clear of the 300ms cap under test, and well short of the 60 s per-gap
+     cap. It bounds the read loop below in case a regression makes the server
+     never respond and never close. */
+  struct timeval rcvtimeo = {30, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
   const char *hdr =
@@ -8032,14 +8160,14 @@ TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
    * ccol_timed_out value (see chttpsvr_req_stream_error and
    * conn->deadline_exceeded in src/chttpserver.c). Without a wall-clock check a
    * max_body_read_duration_us that does nothing would still pass this test: the
-   * connection would sit until the 5000ms cap of stream_read_timeout_us fires
-   * instead, about 5s instead of about 300ms. So the test bounds the elapsed
-   * time well below the 5000ms per-gap cap while leaving plenty of room above
-   * the 300ms overall cap for scheduling jitter under load or valgrind, which
-   * shows that the *short* cap is the one that fired. */
+   * connection would sit until the 60 s cap of stream_read_timeout_us fires,
+   * and the read above gives up at 30 s, instead of about 300ms. So the test
+   * bounds the elapsed time well below both while leaving plenty of room above
+   * the 300ms overall cap, which shows that the *short* cap is the one that
+   * fired. valgrind on one loaded CPU takes this request past 4 s. */
   long elapsed_ms = (t_end.tv_sec - t_start.tv_sec) * 1000 +
                     (t_end.tv_nsec - t_start.tv_nsec) / 1000000;
-  REQUIRE_LT(elapsed_ms, 2500L);
+  REQUIRE_LT(elapsed_ms, 20000L);
 
   chttpsvr_destroy(srv);
 }
@@ -8052,7 +8180,7 @@ TEST(chttpserver, max_body_read_duration_disabled_allows_slow_drip) {
    * that fires when it should do nothing. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv =
       chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/deadline-disabled",
                                           _stream_error_report_handler, NULL);
@@ -8104,7 +8232,7 @@ TEST(chttpserver, max_response_write_duration_exceeded_closes_connection) {
    * rest of the response however long it tries. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/large-response", _large_response_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -8130,18 +8258,25 @@ TEST(chttpserver, max_response_write_duration_exceeded_closes_connection) {
       "GET /large-response HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: "
       "close\r\n\r\n";
   size_t write_parks_before = _chttpsvr_park_kind_count_for_tests(2);
+  int runs_before = atomic_load(&g_large_response_runs);
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
 
   /* Real silence: no read() call of any kind until the server's response write
-     has parked on backpressure (a bounded poll of the process-wide count of
-     write parks, and nothing else in this binary writes a response now), and
-     then 700ms more, which is longer than the 300ms cap. The cap counts from
-     the start of the response, which is before the park, so the deadline has
-     passed when the reads below start, however fast the machine is. */
-  bool write_parked = false;
-  for (int i = 0; i < 10000 && !write_parked; i++) { /* at most 10 s */
-    write_parked = _chttpsvr_park_kind_count_for_tests(2) > write_parks_before;
-    if (!write_parked) usleep(1000);
+     has stopped making progress, and then 700ms more, which is longer than the
+     300ms cap. The write stops in one of two ways. It parks on backpressure (a
+     bounded poll of the process-wide count of write parks, and nothing else in
+     this binary writes a response now), or, when the worker loses the CPU for
+     longer than the cap between two writes, the cap ends it before it parks,
+     and the worker gives back its in-flight slot without a park. The cap
+     counts from the start of the response, which is before either, so the
+     deadline has passed when the reads below start, however fast the machine
+     is. The 30 s bound only guards against a hang. */
+  bool write_ended = false;
+  for (int i = 0; i < 30000 && !write_ended; i++) {
+    write_ended = _chttpsvr_park_kind_count_for_tests(2) > write_parks_before ||
+                  (atomic_load(&g_large_response_runs) > runs_before &&
+                   _chttpsvr_in_flight_requests_for_tests(srv) <= 0);
+    if (!write_ended) usleep(1000);
   }
   struct timespec nap = {0, 700000000L}; /* 700ms */
   nanosleep(&nap, NULL);
@@ -8167,7 +8302,7 @@ TEST(chttpserver, max_response_write_duration_exceeded_closes_connection) {
      early (compare max_response_write_duration_disabled_allows_slow_reader,
      which shows that this exact handler and setup deliver the full response
      when the cap is off). */
-  REQUIRE_TRUE(write_parked);
+  REQUIRE_TRUE(write_ended);
   REQUIRE_LT(total, (size_t)_CHTTPSVR_TEST_LARGE_BODY_SIZE);
 
   chttpsvr_destroy(srv);
@@ -8181,7 +8316,7 @@ TEST(chttpserver, max_response_write_duration_disabled_allows_slow_reader) {
      that fires when it should do nothing. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/large-response-slow-ok", _large_response_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -8259,7 +8394,7 @@ TEST(chttpserver, max_response_write_duration_bounds_rejection_response) {
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -8327,8 +8462,8 @@ TEST(chttpserver, create_with_null_logger_uses_internal_fatal_only_logger) {
    * logger (stderr, FATAL-only) and doesn't need one from the caller, and it
    * is still expected to work fully. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+      chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/null-logger-hello", _hello_handler, NULL);
@@ -8354,17 +8489,17 @@ TEST(chttpserver, create_with_null_logger_uses_internal_fatal_only_logger) {
 }
 
 TEST(chttpserver, create_with_logger_derives_and_leaves_parent_open) {
-  /* The server must not store a cl != CLOG_INVALID directly. It derives its own
+  /* The server must not store a cl != CLOG_NULL directly. It derives its own
    * logger from it (tagged component=http-server), and on destroy it closes
    * only that derived logger, so the caller's handle stays open and usable. */
   clog parent = clog_create_from_fd(2, CLOG_INFO, NULL);
-  REQUIRE_TRUE(parent != CLOG_INVALID);
+  REQUIRE_TRUE(parent != CLOG_NULL);
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(parent, NULL);
-  if (srv == CHTTPSVR_INVALID) {
+  if (srv == CHTTPSVR_NULL) {
     clog_close(parent);
-    REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+    REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   }
 
   ccol_retval_t rv = chttpsvr_register_handler(
@@ -8396,7 +8531,7 @@ TEST(chttpserver, create_with_logger_derives_and_leaves_parent_open) {
 
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(parent, NULL);
-  REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv2 != CHTTPSVR_NULL);
   chttpsvr_destroy(srv2);
 
   clog_close(parent);
@@ -8412,7 +8547,7 @@ TEST(chttpserver, unix_socket_listen_and_round_trip) {
      over that socket exactly like over a TCP connection. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/unix-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -8472,7 +8607,7 @@ TEST(chttpserver, accepted_tcp_socket_keeps_kernel_buffer_autotuning) {
   /* The counter is live, a unix:// connection does raise its buffers. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/unix-bufs",
                                             _hello_handler, NULL),
              (int)ccol_success);
@@ -8536,7 +8671,7 @@ TEST(chttpserver, unix_socket_stale_file_replaced_on_start) {
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/stale-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -8574,7 +8709,7 @@ TEST(chttpserver, unix_socket_unwritable_path_start_fails) {
      gracefully (bind() fails), and not crash or quietly succeed. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "unix:///chttpsvr_test_nonexistent_dir_xyz/socket.sock";
   ccol_retval_t rv = chttpsvr_start(srv, &cfg);
@@ -8589,7 +8724,7 @@ TEST(chttpserver, unix_socket_unwritable_path_start_fails) {
 TEST(chttpserver, unix_socket_path_too_long_reports_enametoolong) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   char host[512];
   memcpy(host, "unix:///tmp/", 12);
   memset(host + 12, 'p', sizeof(host) - 13);
@@ -8620,7 +8755,7 @@ TEST(chttpserver, max_connections_enforced) {
      slot. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/maxconn-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -8694,7 +8829,7 @@ TEST(chttpserver, max_connections_at_capacity_does_not_busy_loop) {
      one produces many thousands within a fraction of a second. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/busyloop-hello", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -8858,7 +8993,7 @@ TEST(chttpserver,
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/backoff-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -8973,7 +9108,7 @@ TEST(chttpserver,
      accept_unclassified_errno_pauses_and_resumes_instead_of_busy_looping) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/accept-errno-hello", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -9053,7 +9188,7 @@ TEST(chttpserver,
 TEST(chttpserver, max_header_bytes_within_limit_succeeds) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdrcap-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -9089,7 +9224,7 @@ TEST(chttpserver, max_header_bytes_exceeded_closes_connection) {
      come back empty. What must NEVER show up is a routed answer. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdrcap-hello2",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -9153,7 +9288,7 @@ TEST(chttpserver, max_header_bytes_exact_boundary) {
      buffered_max_body_size_exceeded_rejected use for max_body_size. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/hdrcap-boundary", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -9287,7 +9422,7 @@ static bool _server_end_of_conn_open(int client_fd) {
 TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/big-body",
                                                _large_body_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -9397,7 +9532,7 @@ TEST(chttpserver, idle_timeout_closes_unused_connection) {
      keep it open forever. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/idle-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -9581,7 +9716,7 @@ TEST(chttpserver, idle_timeout_us_overflow_saturates_not_wrapped) {
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
   cfg.port = TEST_PORT + 24;
@@ -9595,7 +9730,7 @@ TEST(chttpserver, idle_timeout_us_overflow_saturates_not_wrapped) {
      largest value, and idle_timeout_us left at 0. */
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv2 != CHTTPSVR_NULL);
   chttpsvr_config_t cfg2 = CHTTPSVR_CONFIG_DEFAULT;
   cfg2.host = "127.0.0.1";
   cfg2.port = TEST_PORT + 25;
@@ -9609,7 +9744,7 @@ TEST(chttpserver, idle_timeout_us_overflow_saturates_not_wrapped) {
      turns the sweep off. */
   chttpsvr srv4 _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv4 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv4 != CHTTPSVR_NULL);
   chttpsvr_config_t cfg4 = CHTTPSVR_CONFIG_DEFAULT;
   cfg4.host = "127.0.0.1";
   cfg4.port = TEST_PORT + 25;
@@ -9622,7 +9757,7 @@ TEST(chttpserver, idle_timeout_us_overflow_saturates_not_wrapped) {
    * platform, whatever the above does. */
   chttpsvr srv3 _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv3 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv3 != CHTTPSVR_NULL);
   chttpsvr_config_t cfg3 = CHTTPSVR_CONFIG_DEFAULT;
   cfg3.host = "127.0.0.1";
   cfg3.port = TEST_PORT + 26;
@@ -9636,7 +9771,7 @@ TEST(chttpserver, idle_timeout_us_overflow_saturates_not_wrapped) {
  * resolved, in milliseconds. */
 static bool _resolved_ms(chttpsvr_config_t cfg, int port, unsigned out[9]) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  if (srv == CHTTPSVR_INVALID) return false;
+  if (srv == CHTTPSVR_NULL) return false;
   cfg.host = "127.0.0.1";
   cfg.port = (uint16_t)port;
   bool ok = chttpsvr_start(srv, &cfg) == ccol_success &&
@@ -9703,7 +9838,7 @@ TEST(chttpserver, enable_keepalive_does_not_break_normal_requests) {
      itself, for example). */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/keepalive-opt-hello", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -9733,7 +9868,7 @@ TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
      and ipv6_only above. */
   chttpsvr srv1 _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv1 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv1 != CHTTPSVR_NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
   cfg.port = TEST_PORT + 15;
@@ -9742,7 +9877,7 @@ TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
 
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv2, CHTTP_GET, "/reuseport-hello", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -9796,7 +9931,7 @@ TEST(chttpserver, ipv6_only_listener_still_serves_ipv6_traffic) {
      environment and has nothing to do with ipv6_only. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/v6only-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -9851,7 +9986,7 @@ TEST(chttpserver, ipv6_only_blocks_ipv4_mapped_connections) {
      directly. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/v6only-blocks-v4", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -9931,7 +10066,7 @@ TEST(chttpserver, head_request_suppresses_response_body) {
      that reached a handler which writes one. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_ANY, "/head-body",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -10018,7 +10153,7 @@ TEST(chttpserver, head_request_on_rejected_route_still_has_no_body) {
      header block, so it's not just "some text that contains 404". */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -10064,16 +10199,16 @@ TEST(chttpserver, head_request_on_rejected_route_still_has_no_body) {
 static _Atomic size_t g_fail_alloc_size = 0;
 
 static void *_fail_at_size_malloc(size_t n) {
-  if (n == g_fail_alloc_size) return NULL;
+  if (g_fail_alloc_size != 0 && n == g_fail_alloc_size) return NULL;
   return malloc(n);
 }
 static void _fail_at_size_free(void *p) { free(p); }
 static void *_fail_at_size_calloc(size_t n, size_t s) {
-  if (n * s == g_fail_alloc_size) return NULL;
+  if (g_fail_alloc_size != 0 && n * s == g_fail_alloc_size) return NULL;
   return calloc(n, s);
 }
 static void *_fail_at_size_realloc(void *p, size_t s) {
-  if (s == g_fail_alloc_size) return NULL;
+  if (g_fail_alloc_size != 0 && s == g_fail_alloc_size) return NULL;
   return realloc(p, s);
 }
 
@@ -10096,7 +10231,7 @@ TEST(chttpserver,
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_POST, "/carry-oom",
                                                _echo_body_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -10169,7 +10304,7 @@ TEST(chttpserver,
      and didn't corrupt shared state. */
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv2 != CHTTPSVR_NULL);
   rv = chttpsvr_register_handler(srv2, CHTTP_GET, "/after-carry-oom",
                                  _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -10222,7 +10357,7 @@ TEST(chttpserver,
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/body-buf-oom", _stream_error_report_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -10299,7 +10434,7 @@ TEST(
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdr-oom",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -10389,7 +10524,7 @@ TEST(
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/after-path-oom", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -10526,7 +10661,7 @@ TEST(chttpserver, req_query_oom_latches_true_across_later_successful_calls) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/query-oom",
                                                _query_oom_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -10636,7 +10771,7 @@ TEST(chttpserver, req_query_one_reports_not_enough_memory_not_key_not_found) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/query-one-oom",
                                                _query_one_oom_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -10704,7 +10839,7 @@ TEST(chttpserver, stream_prepare_failure_in_worker_sends_500_not_bare_close) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/stream-prepare-oom", _stream_error_report_handler,
       NULL);
@@ -10769,7 +10904,7 @@ TEST(chttpserver, stream_prepare_failure_in_worker_sends_500_not_bare_close) {
   /* The server (and this process) should be fully usable afterwards. */
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv2 != CHTTPSVR_NULL);
   rv = chttpsvr_register_handler(srv2, CHTTP_GET, "/after-stream-prepare-oom",
                                  _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -11164,21 +11299,21 @@ TEST(chttpserver, stream_error_of_no_request_is_invalid_args) {
  * fatal error. A live parent still gives a working server. */
 TEST(chttpsvr_handle_lifecycle, create_with_a_closed_logger_fails_cleanly) {
   clog parent = clog_create_from_fd(2, CLOG_INFO, NULL);
-  REQUIRE_NE(parent, CLOG_INVALID);
+  REQUIRE_NE(parent, CLOG_NULL);
   clog stale = parent;
   clog_close(parent);
 
   char *err = NULL;
   chttpsvr srv = chttpsvr_create(stale, &err);
-  REQUIRE_EQ(srv, CHTTPSVR_INVALID);
+  REQUIRE_EQ(srv, CHTTPSVR_NULL);
   REQUIRE_NE((void *)err, NULL);
   REQUIRE_NE((void *)strstr(err, "the parent logger is not open"), NULL);
 
   clog live = clog_create_from_fd(2, CLOG_INFO, NULL);
-  REQUIRE_NE(live, CLOG_INVALID);
+  REQUIRE_NE(live, CLOG_NULL);
   err = NULL;
   chttpsvr ok = chttpsvr_create(live, &err);
-  bool created = ok != CHTTPSVR_INVALID;
+  bool created = ok != CHTTPSVR_NULL;
   if (created) chttpsvr_destroy(ok);
   clog_close(live);
   REQUIRE_TRUE(created);
@@ -11190,8 +11325,8 @@ TEST(chttpsvr_handle_lifecycle, a_destroyed_server_keeps_no_root_router) {
   _chttpsvr_router_shell_registry_state_for_tests(&before, &array);
   bool created = true;
   for (int i = 0; i < 20; i++) {
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) {
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) {
       created = false;
       continue;
     }
@@ -11200,8 +11335,8 @@ TEST(chttpsvr_handle_lifecycle, a_destroyed_server_keeps_no_root_router) {
   _chttpsvr_router_shell_registry_state_for_tests(&after_plain, &array);
   bool subrouted = true;
   for (int i = 0; i < 5; i++) {
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) {
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) {
       created = false;
       continue;
     }
@@ -11217,23 +11352,26 @@ TEST(chttpsvr_handle_lifecycle, a_destroyed_server_keeps_no_root_router) {
 
 TEST(chttpsvr_handle_lifecycle, sequential_double_destroy_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  FORK_TEST_SCOPE();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) _exit(2);
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) test_child_exit(2);
     chttpsvr stale = srv;  /* an independently-held copy of the handle value,
          distinct from the local the macro below NULLs out */
     chttpsvr_destroy(srv); /* completes normally; the local `srv` is now
-        CHTTPSVR_INVALID, but `stale` still holds the original value */
+        CHTTPSVR_NULL, but `stale` still holds the original value */
     __chttpsvr_destroy(stale); /* the actual misuse under test: a second,
         purely sequential destroy of a handle already fully torn down */
-    _exit(0); /* unreachable if _ccol_fatal_err() aborted as expected */
+    /* unreachable if _ccol_fatal_err() aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -11264,16 +11402,18 @@ static void *concurrent_svr_destroy_thread(void *arg) {
  * is there to turn into a failure the library detects and reports loudly. */
 TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  FORK_TEST_SCOPE();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) _exit(2);
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) test_child_exit(2);
     concurrent_svr_destroy_arg_t a1 = {.h = srv};
     concurrent_svr_destroy_arg_t a2 = {.h = srv};
     pthread_t t1, t2;
@@ -11281,8 +11421,8 @@ TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
     pthread_create(&t2, NULL, concurrent_svr_destroy_thread, &a2);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
-    _exit(0); /* unreachable: whichever of the two destroy calls loses the
-                  race must hit _ccol_fatal_err() */
+    test_child_exit(0); /* unreachable: whichever of the two destroy calls loses
+                  the race must hit _ccol_fatal_err() */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -11321,19 +11461,22 @@ TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
  * driving exactly the same comparison that __chttpsvr_destroy itself makes. */
 TEST(chttpsvr_handle_lifecycle, destroy_from_within_own_handler_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  FORK_TEST_SCOPE();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) _exit(2);
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) test_child_exit(2);
     _chttpsvr_mark_self_as_worker_for_tests(srv);
     __chttpsvr_destroy(srv); /* the actual misuse under test */
-    _exit(0); /* unreachable if _ccol_fatal_err() aborted as expected */
+    /* unreachable if _ccol_fatal_err() aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -11365,19 +11508,22 @@ TEST(chttpsvr_handle_lifecycle, destroy_from_within_own_handler_is_fatal) {
  * and this test needs no real dispatch and no running reactor. */
 TEST(chttpsvr_handle_lifecycle, engine_wait_from_within_own_handler_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  FORK_TEST_SCOPE();
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) _exit(2);
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) test_child_exit(2);
     _chttpsvr_mark_self_as_worker_for_tests(srv);
     chttpsvr_engine_wait(); /* the actual misuse under test */
-    _exit(0); /* unreachable if _ccol_fatal_err() aborted as expected */
+    /* unreachable if _ccol_fatal_err() aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -11392,7 +11538,7 @@ TEST(chttpsvr_handle_lifecycle, engine_wait_from_within_own_handler_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-static chttpsvr g_self_restart_srv_for_lifecycle_test = CHTTPSVR_INVALID;
+static chttpsvr g_self_restart_srv_for_lifecycle_test = CHTTPSVR_NULL;
 static _Atomic int g_self_restart_result_for_lifecycle_test = -1;
 
 static void _self_restarting_handler_for_lifecycle_test(chttpsvr_req *req,
@@ -11437,15 +11583,15 @@ static void _self_restarting_handler_for_lifecycle_test(chttpsvr_req *req,
  * feature under test would become a silent hang of the whole binary instead of
  * a clean, reported failure. */
 static void _destroy_self_restart_test_server_if_live(void) {
-  if (g_self_restart_srv_for_lifecycle_test != CHTTPSVR_INVALID)
+  if (g_self_restart_srv_for_lifecycle_test != CHTTPSVR_NULL)
     chttpsvr_destroy(g_self_restart_srv_for_lifecycle_test);
 }
 
 TEST(chttpsvr_handle_lifecycle,
      restart_from_within_own_handler_returns_not_permitted) {
   atomic_store(&g_self_restart_result_for_lifecycle_test, -1);
-  g_self_restart_srv_for_lifecycle_test = chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_NE(g_self_restart_srv_for_lifecycle_test, CHTTPSVR_INVALID);
+  g_self_restart_srv_for_lifecycle_test = chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_NE(g_self_restart_srv_for_lifecycle_test, CHTTPSVR_NULL);
   ccol_retval_t reg_rv = chttpsvr_register_handler(
       g_self_restart_srv_for_lifecycle_test, CHTTP_GET, "/self-restart",
       _self_restarting_handler_for_lifecycle_test, NULL);
@@ -11585,8 +11731,8 @@ TEST(chttpsvr_handle_lifecycle, resolve_unpin_race_stress) {
    * until every server has been destroyed. */
   enum { ITERATIONS = 30 };
   for (int i = 0; i < ITERATIONS; i++) {
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) REQUIRE_NE(srv, CHTTPSVR_INVALID);
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) REQUIRE_NE(srv, CHTTPSVR_NULL);
 
     use_setter_arg_t setter_arg = {.h = srv};
     concurrent_svr_destroy_arg_t destroy_arg = {.h = srv};
@@ -11653,8 +11799,8 @@ TEST(chttpsvr_handle_lifecycle, router_resolve_unpin_race_stress) {
    * process exits. */
   enum { ITERATIONS = 30 };
   for (int i = 0; i < ITERATIONS; i++) {
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) REQUIRE_NE(srv, CHTTPSVR_INVALID);
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) REQUIRE_NE(srv, CHTTPSVR_NULL);
     chttpsvr_router *router = chttpsvr_subrouter(srv, "/race-router");
     if (!router) {
       chttpsvr_destroy(srv);
@@ -11742,7 +11888,7 @@ static void *fork_feeder_thread(void *arg) {
  * sibling test uses the same shape for its burst of submits before a fork), and
  * that burst also drives chttpsvr_router_shell_registry.mutex and the mutex,
  * idle_mutex, diverted_mutex and routes_lock of a fresh instance, without a
- * second background thread spinning all the time. An alarm(1) bounds each
+ * second background thread spinning all the time. An alarm(5) bounds each
  * child, so a real regression here fails this test instead of hanging the whole
  * suite. Each child makes exactly the call a real application would make right
  * after inheriting a live server handle across a fork, chttpsvr_use on the
@@ -11782,6 +11928,7 @@ static void *fork_feeder_thread(void *arg) {
  * fork, benefits from repeated trials. */
 TEST(chttpsvr_handle_lifecycle, fork_does_not_inherit_a_locked_mutex) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  FORK_TEST_SCOPE();
   /* Each intermediate outcome below goes into a local instead of being asserted
    * with a REQUIRE_*, and feeder_tid is stopped and joined and
    * feeder_srv destroyed, unconditionally, before any REQUIRE_* can return
@@ -11790,8 +11937,8 @@ TEST(chttpsvr_handle_lifecycle, fork_does_not_inherit_a_locked_mutex) {
    * return here would leave it spinning forever, and feeder_srv still holds a
    * live shared-engine reference, so if nothing destroyed it, this whole
    * binary's teardown would hang when the process exits. */
-  chttpsvr feeder_srv = chttpsvr_create(CLOG_INVALID, NULL);
-  if (feeder_srv == CHTTPSVR_INVALID) REQUIRE_NE(feeder_srv, CHTTPSVR_INVALID);
+  chttpsvr feeder_srv = chttpsvr_create(CLOG_NULL, NULL);
+  if (feeder_srv == CHTTPSVR_NULL) REQUIRE_NE(feeder_srv, CHTTPSVR_NULL);
   fork_feeder_arg_t feeder = {.h = feeder_srv, .stop = 0};
   pthread_t feeder_tid;
   int feeder_create_rc =
@@ -11809,8 +11956,8 @@ TEST(chttpsvr_handle_lifecycle, fork_does_not_inherit_a_locked_mutex) {
   for (int i = 0; i < TRIALS && bad_fork_pid == 0 && bad_waitpid_pid == 0;
        i++) {
     for (int b = 0; b < BURST; b++) {
-      chttpsvr burst_srv = chttpsvr_create(CLOG_INVALID, NULL);
-      if (burst_srv != CHTTPSVR_INVALID) chttpsvr_destroy(burst_srv);
+      chttpsvr burst_srv = chttpsvr_create(CLOG_NULL, NULL);
+      if (burst_srv != CHTTPSVR_NULL) chttpsvr_destroy(burst_srv);
     }
 
     pid_t pid = fork();
@@ -11828,9 +11975,9 @@ TEST(chttpsvr_handle_lifecycle, fork_does_not_inherit_a_locked_mutex) {
       /* Bounds this child's lifetime, so that if the hazard this test guards
        * against still fires somehow it doesn't hang the whole suite; the parent
        * below tells that case apart from a clean exit with WIFEXITED. */
-      alarm(1);
+      alarm(5);
       chttpsvr_use(feeder_srv, _noop_middleware_for_lifecycle_tests, NULL);
-      _exit(0); /* we only get here if the call above returned */
+      test_child_exit(0); /* we only get here if the call above returned */
     }
 
     int status = 0;
@@ -11850,7 +11997,7 @@ TEST(chttpsvr_handle_lifecycle, fork_does_not_inherit_a_locked_mutex) {
   REQUIRE_EQ(hangs, 0);
 }
 
-static chttpsvr g_fork_stop_race_srv = CHTTPSVR_INVALID;
+static chttpsvr g_fork_stop_race_srv = CHTTPSVR_NULL;
 
 static void *_fork_stop_race_stop_thread(void *arg) {
   (void)arg;
@@ -11874,8 +12021,9 @@ static void *_fork_stop_race_stop_thread(void *arg) {
 TEST(chttpsvr_handle_lifecycle,
      fork_mid_stop_internal_does_not_hang_start_in_child) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
-  g_fork_stop_race_srv = chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_NE(g_fork_stop_race_srv, CHTTPSVR_INVALID);
+  FORK_TEST_SCOPE();
+  g_fork_stop_race_srv = chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_NE(g_fork_stop_race_srv, CHTTPSVR_NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
   cfg.port = TEST_PORT + 73;
@@ -11914,7 +12062,7 @@ TEST(chttpsvr_handle_lifecycle,
        still fires (chttpsvr_start() would otherwise block forever polling for
        lifecycle to leave CHTTPSVR_LC_STOPPING); the parent below tells that
        case apart from a clean exit with WIFEXITED. */
-    alarm(3);
+    alarm(30);
     chttpsvr_config_t restart_cfg = CHTTPSVR_CONFIG_DEFAULT;
     restart_cfg.host = "127.0.0.1";
     restart_cfg.port = TEST_PORT + 73;
@@ -11925,7 +12073,7 @@ TEST(chttpsvr_handle_lifecycle,
        the code handles gracefully and not what this test checks. The only thing
        under test is whether the call returns at all. */
     chttpsvr_start(g_fork_stop_race_srv, &restart_cfg);
-    _exit(0); /* reached only if the call above really returned */
+    test_child_exit(0); /* reached only if the call above really returned */
   } else if (!fork_failed) {
     int status = 0;
     if (waitpid(pid, &status, 0) != pid) {
@@ -11956,7 +12104,7 @@ TEST(chttpsvr_handle_lifecycle,
   REQUIRE_TRUE(stop_th_joined);
 }
 
-static chttpsvr g_fork_starting_race_srv = CHTTPSVR_INVALID;
+static chttpsvr g_fork_starting_race_srv = CHTTPSVR_NULL;
 static ccol_retval_t g_fork_starting_race_start_rv = ccol_success;
 
 static void *_fork_starting_race_start_thread(void *arg) {
@@ -11991,8 +12139,9 @@ static void *_fork_starting_race_start_thread(void *arg) {
 TEST(chttpsvr_handle_lifecycle,
      fork_mid_start_internal_does_not_disable_start_in_child) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
-  g_fork_starting_race_srv = chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_NE(g_fork_starting_race_srv, CHTTPSVR_INVALID);
+  FORK_TEST_SCOPE();
+  g_fork_starting_race_srv = chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_NE(g_fork_starting_race_srv, CHTTPSVR_NULL);
   g_fork_starting_race_start_rv = ccol_success;
 
   _chttpsvr_arm_start_race_hook_for_tests();
@@ -12059,7 +12208,7 @@ TEST(chttpsvr_handle_lifecycle,
        further away wait_from_within_own_task_does_not_hang in tests/cthreadpool
        and the fork_safety group in tests/clogger) give the full, independently
        confirmed story of this valgrind behaviour. */
-    alarm(3);
+    alarm(30);
     chttpsvr_config_t restart_cfg = CHTTPSVR_CONFIG_DEFAULT;
     restart_cfg.host = "127.0.0.1";
     restart_cfg.port = TEST_PORT + 75;
@@ -12076,7 +12225,7 @@ TEST(chttpsvr_handle_lifecycle,
     ssize_t written = write(pipefd[1], &ok, 1);
     (void)written;
     close(pipefd[1]);
-    _exit(0);
+    test_child_exit(0);
   }
   close(pipefd[1]);
 
@@ -12148,7 +12297,7 @@ TEST(chttpsvr_handle_lifecycle,
      when the process exits, turning a rare setup failure into a silent hang of
      the whole binary instead of a clean, reported failure). */
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_NE(srv, CHTTPSVR_INVALID);
+  REQUIRE_NE(srv, CHTTPSVR_NULL);
 
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/listener-race-hello", _hello_handler, NULL);
@@ -12305,7 +12454,7 @@ TEST(chttpsvr_handle_lifecycle,
   /* Every step that could leave the hook armed, the reactor thread parked or
      the server alive runs before the first REQUIRE_* below. */
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_NE(srv, CHTTPSVR_INVALID);
+  REQUIRE_NE(srv, CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/entry-race-hello", _hello_handler, NULL);
   if (rv != ccol_success) chttpsvr_destroy(srv);
@@ -12412,7 +12561,7 @@ TEST(chttpsvr_handle_lifecycle,
   atomic_store(&g_route_lifetime_handler_release, false);
 
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_NE(srv, CHTTPSVR_INVALID);
+  REQUIRE_NE(srv, CHTTPSVR_NULL);
   ccol_retval_t rv1 =
       chttpsvr_register_handler(srv, CHTTP_GET, "/route-lifetime/{id}",
                                 _route_lifetime_slow_handler, NULL);
@@ -12527,13 +12676,13 @@ TEST(chttpsvr_handle_lifecycle,
  * to the very next one it allocates (not guaranteed, but often). */
 TEST(chttpsvr_handle_lifecycle,
      legitimate_slot_reuse_not_confused_with_stale_handle) {
-  chttpsvr a = chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_NE(a, CHTTPSVR_INVALID);
+  chttpsvr a = chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_NE(a, CHTTPSVR_NULL);
   chttpsvr stale_a = a;
   chttpsvr_destroy(a);
 
-  chttpsvr b = chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_NE(b, CHTTPSVR_INVALID);
+  chttpsvr b = chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_NE(b, CHTTPSVR_NULL);
 
   /* Every operation on b has to succeed normally, whether or not the allocator
    * reused a's exact address for b. */
@@ -12558,14 +12707,14 @@ TEST(chttpsvr_handle_lifecycle,
 TEST(chttpsvr_handle_lifecycle, bounded_slot_reuse_under_churn) {
   enum { ITERATIONS = 100 };
 
-  chttpsvr s0 = chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_NE(s0, CHTTPSVR_INVALID);
+  chttpsvr s0 = chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_NE(s0, CHTTPSVR_NULL);
   chttpsvr_destroy(s0);
   size_t capacity_after_first = _chttpsvr_slot_table_capacity_for_tests();
 
   for (int i = 1; i < ITERATIONS; i++) {
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    REQUIRE_NE(srv, CHTTPSVR_INVALID);
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    REQUIRE_NE(srv, CHTTPSVR_NULL);
     chttpsvr_destroy(srv);
   }
 
@@ -12780,8 +12929,8 @@ TEST(chttpserver, read_timeout_ms_zero_leaves_an_idle_connection_alone) {
       chttpsvr_create(g_test_logger, NULL);
   chttpsvr calibrated _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(disabled != CHTTPSVR_INVALID);
-  REQUIRE_TRUE(calibrated != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(disabled != CHTTPSVR_NULL);
+  REQUIRE_TRUE(calibrated != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(disabled, CHTTP_GET, "/idle",
                                             _hello_handler, NULL),
              (int)ccol_success);
@@ -12830,7 +12979,7 @@ TEST(chttpserver, max_connections_zero_means_unlimited) {
   enum { CONNS = 12 };
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/many",
                                             _hello_handler, NULL),
              (int)ccol_success);
@@ -12956,7 +13105,7 @@ TEST(chttpserver, subrouter_middleware_not_bypassed_by_broad_root_pattern) {
      on g_srv. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   chttpsvr_router *admin = chttpsvr_subrouter(srv, "/admin");
   REQUIRE_TRUE(admin != NULL);
@@ -13002,7 +13151,7 @@ TEST(chttpserver, more_specific_mount_wins_over_less_specific_one) {
      registered first here, so registration order alone would pick it. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   chttpsvr_router *shallow = chttpsvr_subrouter(srv, "/api");
   chttpsvr_router *deep = chttpsvr_subrouter(srv, "/api/v1");
@@ -13120,23 +13269,17 @@ static void _rej_mount_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
   next(req, resp);
 }
 
-static chttpsvr g_rej_srv = CHTTPSVR_INVALID;
 #define REJ_PORT ((uint16_t)(TEST_PORT + 102))
 
-/* One server shared by all the rejection-middleware tests below. It starts on
-   first use and is stopped by _teardown's atexit hook through the destroy
-   below, and it's kept out of _setup so that the tests that don't need it pay
-   nothing for it. */
-static void _rej_srv_destroy_at_exit(void) {
-  if (g_rej_srv != CHTTPSVR_INVALID) {
-    chttpsvr_destroy(g_rej_srv);
-  }
-}
-
-static bool _rej_srv_ready(void) {
-  if (g_rej_srv != CHTTPSVR_INVALID) return true;
+/* The server of the rejection-middleware tests below. Each test starts its own
+   and destroys it when it returns, so no server outlives the test that uses
+   it. A server kept for the rest of the run would add its locks to every later
+   fork() of this binary: the fork handlers lock every live server, and
+   ThreadSanitizer stops the process (and then hangs) once one thread holds 64
+   locks, which the servers of _setup alone already bring close to. */
+static chttpsvr _rej_srv_start(void) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  if (!srv) return false;
+  if (!srv) return CHTTPSVR_NULL;
   bool ok = false;
   chttpsvr_router *mounted = NULL;
   if (chttpsvr_use(srv, _rej_global_mw, NULL) != ccol_success) goto done;
@@ -13163,22 +13306,21 @@ static bool _rej_srv_ready(void) {
   ok = true;
 done:
   /* Destroyed right here on any failure: the caller's REQUIRE_TRUE returns from
-     the test on a false, so nothing else would ever get it back and memtest
-     would report the whole server as definitely lost. */
+     the test on CHTTPSVR_NULL, so nothing else would ever get it back and
+     memtest would report the whole server as definitely lost. */
   if (!ok) {
     chttpsvr_destroy(srv);
-    return false;
+    return CHTTPSVR_NULL;
   }
-  g_rej_srv = srv;
-  atexit(_rej_srv_destroy_at_exit);
-  return true;
+  return srv;
 }
 
 TEST(chttpserver, global_middleware_runs_for_an_unmatched_route) {
   /* A 404 is exactly the traffic a rate limiter or an access log built as
      middleware is there to see. If the chain didn't run here, a flood of probes
      for paths that don't exist would be invisible to the application. */
-  REQUIRE_TRUE(_rej_srv_ready());
+  chttpsvr rej_srv _ccol_destructor(___chttpsvr_destroy) = _rej_srv_start();
+  REQUIRE_TRUE(rej_srv != CHTTPSVR_NULL);
   int before = atomic_load(&g_rej_mw_runs);
   char buf[2048] = {0};
   int status =
@@ -13194,7 +13336,8 @@ TEST(chttpserver, global_middleware_runs_for_an_unmatched_route) {
 }
 
 TEST(chttpserver, global_middleware_runs_for_a_method_rejection) {
-  REQUIRE_TRUE(_rej_srv_ready());
+  chttpsvr rej_srv _ccol_destructor(___chttpsvr_destroy) = _rej_srv_start();
+  REQUIRE_TRUE(rej_srv != CHTTPSVR_NULL);
   int before = atomic_load(&g_rej_mw_runs);
   char buf[2048] = {0};
   int status =
@@ -13209,7 +13352,8 @@ TEST(chttpserver, global_middleware_runs_for_a_method_rejection) {
 TEST(chttpserver, global_middleware_can_short_circuit_a_rejected_request) {
   /* The middleware answers /rate-limited itself and never calls next, so its
      own 429 replaces the 404 this request was heading for. */
-  REQUIRE_TRUE(_rej_srv_ready());
+  chttpsvr rej_srv _ccol_destructor(___chttpsvr_destroy) = _rej_srv_start();
+  REQUIRE_TRUE(rej_srv != CHTTPSVR_NULL);
   char buf[2048] = {0};
   int status = _raw_request_on_port(REJ_PORT, "GET", "/rate-limited", NULL, buf,
                                     sizeof(buf));
@@ -13221,7 +13365,8 @@ TEST(chttpserver, payload_too_large_rejection_runs_the_matched_routers_chain) {
   /* A 413 is decided after a route has already matched, so the chain that match
      produced runs in full (the global middleware and the mounted sub-router's
      own), while no handler runs. */
-  REQUIRE_TRUE(_rej_srv_ready());
+  chttpsvr rej_srv _ccol_destructor(___chttpsvr_destroy) = _rej_srv_start();
+  REQUIRE_TRUE(rej_srv != CHTTPSVR_NULL);
   int before_global = atomic_load(&g_rej_mw_runs);
   int before_mount = atomic_load(&g_mount_mw_runs);
   char buf[2048] = {0};
@@ -13243,7 +13388,8 @@ TEST(chttpserver, unknown_method_rejection_runs_no_middleware) {
      chttp_method_t names and before the request target is parsed, so there's no
      request object a middleware could look at, and on purpose the chain doesn't
      run. */
-  REQUIRE_TRUE(_rej_srv_ready());
+  chttpsvr rej_srv _ccol_destructor(___chttpsvr_destroy) = _rej_srv_start();
+  REQUIRE_TRUE(rej_srv != CHTTPSVR_NULL);
   int before = atomic_load(&g_rej_mw_runs);
   char buf[2048] = {0};
   int status =
@@ -13319,7 +13465,7 @@ static void _rej_oom_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
 }
 
 TEST(chttpserver, rejection_middleware_never_sees_an_undecodable_path) {
-  chttpsvr srv _ccol_destructor(___chttpsvr_destroy) = CHTTPSVR_INVALID;
+  chttpsvr srv _ccol_destructor(___chttpsvr_destroy) = CHTTPSVR_NULL;
   {
     ccol_memmgmt_procs_t procs = {
         .malloc = _rej_oom_malloc,
@@ -13329,7 +13475,7 @@ TEST(chttpserver, rejection_middleware_never_sees_an_undecodable_path) {
     };
     srv = chttpsvr_create_mp(&procs, g_test_logger, NULL);
   }
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_use(srv, _rej_oom_mw, NULL), (int)ccol_success);
   /* A single registered route, on a path the request below deliberately misses,
      so the request gets a 404, which is the status the chain does run for. */
@@ -13479,7 +13625,7 @@ TEST(chttpserver, trickled_header_block_is_closed_at_the_duration_ceiling) {
      gets near max_header_bytes. Only the total-duration ceiling can end it. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/ok",
                                             _hello_handler, NULL),
              (int)ccol_success);
@@ -13513,7 +13659,7 @@ TEST(chttpserver, header_read_duration_zero_leaves_a_trickling_peer_alone) {
      in chttpsvr_config_t. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/ok",
                                             _hello_handler, NULL),
              (int)ccol_success);
@@ -13553,7 +13699,7 @@ TEST(chttpserver, slow_but_completing_header_block_is_served) {
      the ceiling closes a block that doesn't end. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/ok",
                                             _hello_handler, NULL),
              (int)ccol_success);
@@ -13587,7 +13733,7 @@ TEST(chttpserver, header_read_duration_budget_is_fresh_per_keepalive_request) {
      be answered. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/ok",
                                             _hello_handler, NULL),
              (int)ccol_success);
@@ -13642,7 +13788,7 @@ TEST(chttpsvr_handle_lifecycle, slot_table_counts_a_mid_teardown_server_live) {
      test can't reach deterministically. */
 
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   bool live_while_resolvable = _chttpsvr_slot_live_for_tests(srv);
   _chttpsvr_slot_set_in_use_for_tests(srv, false);
@@ -13692,7 +13838,7 @@ static void _target_path_echo_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 TEST(chttpserver, request_target_must_be_origin_or_absolute_form) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_use(srv, _admin_guard_mw, NULL), (int)ccol_success);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/admin/secret",
                                             _prec_secret_handler, NULL),
@@ -13835,7 +13981,7 @@ static void _star_exchange(const char *wire, size_t wire_len, char *buf,
 TEST(chttpserver, options_star_is_answered_by_the_server) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_use(srv, _star_counting_mw, NULL),
              (int)ccol_success);
   /* A catch-all for every method. If the server routed "*" at all, the request
@@ -14417,7 +14563,7 @@ static void _sc_gate_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 /* Starts a fresh server on port with the routes these tests use. */
 static chttpsvr _sc_server(int port, const chttpsvr_config_t *extra) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  if (srv == CHTTPSVR_INVALID) return CHTTPSVR_INVALID;
+  if (srv == CHTTPSVR_NULL) return CHTTPSVR_NULL;
   chttpsvr_register_handler(srv, CHTTP_POST, "/len", _sc_len_handler, NULL);
   chttpsvr_register_handler(srv, CHTTP_OPTIONS, "/len", _sc_len_handler, NULL);
   chttpsvr_register_handler(srv, CHTTP_GET, "/big", _sc_big_handler, NULL);
@@ -14435,7 +14581,7 @@ static chttpsvr _sc_server(int port, const chttpsvr_config_t *extra) {
   cfg.port = (uint16_t)port;
   if (chttpsvr_start(srv, &cfg) != ccol_success) {
     chttpsvr_destroy(srv);
-    return CHTTPSVR_INVALID;
+    return CHTTPSVR_NULL;
   }
   return srv;
 }
@@ -14514,7 +14660,7 @@ TEST(slow_clients, slow_bodies_park_and_hold_no_worker_thread) {
   cfg.worker_thread_count = 2;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   int fds[6];
   bool opened = true;
@@ -14599,7 +14745,7 @@ TEST(slow_clients, slow_readers_park_and_hold_no_worker_thread) {
   cfg.worker_thread_count = 2;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 1, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   int fds[4];
   bool opened = true;
@@ -14658,7 +14804,7 @@ TEST(slow_clients, rate_floor_keeps_a_body_just_above_it) {
   cfg.min_transfer_rate_grace_us = 1000000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 2, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd _ccol_destructor(_close_scoped_fd) =
       _sc_open_partial_post(_SC_PORT + 2, "/len", 2000, 1000, NULL);
   REQUIRE_TRUE(fd >= 0);
@@ -14697,7 +14843,7 @@ TEST(slow_clients, queue_wait_of_a_resumed_body_is_never_charged) {
   cfg.worker_thread_count = 1;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 30, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   _sc_gate_open(false);
 
   int fd = _sc_open_partial_post(_SC_PORT + 30, "/len", 1000, 500, NULL);
@@ -14747,7 +14893,7 @@ TEST(slow_clients, rate_floor_answers_a_slow_body_with_408) {
   cfg.min_transfer_rate_grace_us = 1000000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 3, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd _ccol_destructor(_close_scoped_fd) =
       _sc_open_partial_post(_SC_PORT + 3, "/len", 2000, 1000, NULL);
   REQUIRE_TRUE(fd >= 0);
@@ -14777,7 +14923,7 @@ TEST(slow_clients, rate_floor_closes_a_slow_reader) {
   cfg.response_write_timeout_us = 600000000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 4, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd _ccol_destructor(_close_scoped_fd) =
       _sc_connect_small_rcvbuf(_SC_PORT + 4);
   REQUIRE_TRUE(fd >= 0);
@@ -14803,7 +14949,7 @@ TEST(slow_clients, rate_floor_ends_a_slow_streaming_read) {
   cfg.min_transfer_rate_grace_us = 300000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 5, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd _ccol_destructor(_close_scoped_fd) =
       _sc_open_partial_post(_SC_PORT + 5, "/stream-err", 1000, 10, NULL);
   REQUIRE_TRUE(fd >= 0);
@@ -14832,7 +14978,7 @@ TEST(slow_clients, time_waiting_for_memory_is_not_charged_to_the_client) {
   cfg.max_body_size = 1024 * 1024;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 6, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   int holder _ccol_destructor(_close_scoped_fd) =
       _sc_open_partial_post(_SC_PORT + 6, "/len", 30000, 10, NULL);
@@ -14877,7 +15023,7 @@ TEST(slow_clients, a_chunked_body_near_the_limit_needs_no_more_than_the_limit) {
   cfg.body_memory_wait_timeout_us = 2000000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 32, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   int holder _ccol_destructor(_close_scoped_fd) =
       _sc_open_partial_post(_SC_PORT + 32, "/len", 256 * 1024, 1000, NULL);
@@ -14917,7 +15063,7 @@ TEST(slow_clients, queue_wait_after_a_memory_wait_is_never_charged) {
   cfg.max_body_size = 1024 * 1024;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 31, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   _sc_gate_open(false);
 
   int holder = _sc_open_partial_post(_SC_PORT + 31, "/len", 30000, 10, NULL);
@@ -14993,7 +15139,7 @@ TEST(slow_clients, a_body_that_does_not_fit_waits_unread_then_completes) {
   cfg.max_partial_body_memory = 100000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 7, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int holders[6];
   bool held = _sc_hold_memory(srv, _SC_PORT + 7, holders, 6);
   int b = held ? _sc_open_partial_post(_SC_PORT + 7, "/len", 50000, 0,
@@ -15079,7 +15225,7 @@ TEST(slow_clients, chunked_bodies_that_fill_the_limit_still_progress) {
   cfg.max_body_size = 1024 * 1024;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 8, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   _chttpsvr_mem_peak_reset_for_tests();
   int a _ccol_destructor(_close_scoped_fd) = _sc_connect(_SC_PORT + 8);
   int b _ccol_destructor(_close_scoped_fd) = _sc_connect(_SC_PORT + 8);
@@ -15120,7 +15266,7 @@ TEST(slow_clients, a_memory_wait_past_its_deadline_gets_503) {
   cfg.stream_read_timeout_us = 120000000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 9, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int holders[6];
   bool held = _sc_hold_memory(srv, _SC_PORT + 9, holders, 6);
   int b =
@@ -15156,7 +15302,7 @@ TEST(slow_clients, the_503_of_a_memory_wait_carries_retry_after) {
   cfg.stream_read_timeout_us = 120000000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 10, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int holders[6];
   bool held = _sc_hold_memory(srv, _SC_PORT + 10, holders, 6);
   int b _ccol_destructor(_close_scoped_fd) =
@@ -15188,7 +15334,7 @@ TEST(slow_clients, memory_waiters_are_admitted_in_order) {
   cfg.max_partial_body_memory = 100000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 11, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int holders[6];
   bool held = _sc_hold_memory(srv, _SC_PORT + 11, holders, 6);
   int b _ccol_destructor(_close_scoped_fd) =
@@ -15249,7 +15395,7 @@ TEST(slow_clients, a_saturated_streaming_pool_leaves_buffered_routes_served) {
   cfg.streaming_thread_count = 2;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 12, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int g[3];
   for (int i = 0; i < 3; i++) g[i] = _sc_post_gate(_SC_PORT + 12);
   bool busy = _sc_wait_for(srv, _sc_stream_active, NULL, 2, 5000) &&
@@ -15284,7 +15430,7 @@ TEST(slow_clients, one_streaming_request_starts_one_task) {
   cfg.streaming_thread_count = 8;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 33, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   size_t before = _chttpsvr_stream_tokens_started_for_tests();
   char buf[4096];
   int ok = 0;
@@ -15314,7 +15460,7 @@ TEST(slow_clients, a_request_behind_a_task_on_its_way_starts_one_task) {
   cfg.streaming_thread_count = 8;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 34, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   _chttpsvr_arm_stream_claim_hook_for_tests(1);
   size_t before = _chttpsvr_stream_tokens_started_for_tests();
   int r1 = _sc_post_gate(_SC_PORT + 34);
@@ -15345,7 +15491,7 @@ TEST(slow_clients, a_full_streaming_queue_answers_503_at_once) {
   cfg.streaming_queue_capacity = 1;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 13, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int r1 = _sc_post_gate(_SC_PORT + 13);
   bool running = _sc_wait_for(srv, _sc_stream_active, NULL, 1, 5000);
   int r2 = _sc_post_gate(_SC_PORT + 13);
@@ -15380,7 +15526,7 @@ TEST(slow_clients, a_queued_streaming_request_past_its_deadline_gets_503) {
   cfg.streaming_thread_count = 1;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 14, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int r1 = _sc_post_gate(_SC_PORT + 14);
   bool running = _sc_wait_for(srv, _sc_stream_active, NULL, 1, 5000);
   int r2 = _sc_post_gate(_SC_PORT + 14);
@@ -15417,7 +15563,7 @@ static void _sc_claim_race_round(int port, int where, int *status_out,
   *setup_ok = false;
   *status_out = -1;
   *eof_out = -1;
-  if (srv == CHTTPSVR_INVALID) return;
+  if (srv == CHTTPSVR_NULL) return;
   int r1 = _sc_post_gate(port);
   bool running = _sc_wait_for(srv, _sc_stream_active, NULL, 1, 5000);
   int r2 = _sc_post_gate(port);
@@ -15468,7 +15614,7 @@ TEST(slow_clients, the_streaming_pool_starts_at_the_first_streaming_request) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 17, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   bool before = _chttpsvr_stream_pool_created_for_tests(srv);
   char buf[4096];
   int fd = _sc_connect(_SC_PORT + 17);
@@ -15539,7 +15685,7 @@ TEST(slow_clients, the_receive_low_water_mark_wakes_a_drip_once) {
   cfg.max_body_size = 8 * 1024 * 1024;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 18, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int s_with, s_without, u_with, u_without;
   _chttpsvr_set_rcvlowat_enabled_for_tests(true);
   long drip_with = _sc_drip_dispatches(srv, _SC_PORT + 18, 200, &s_with);
@@ -15571,7 +15717,7 @@ TEST(slow_clients, a_pipelined_request_after_a_parked_body_is_served) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 19, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd _ccol_destructor(_close_scoped_fd) =
       _sc_open_partial_post(_SC_PORT + 19, "/len", 100, 10, NULL);
   REQUIRE_TRUE(fd >= 0);
@@ -15600,7 +15746,7 @@ TEST(slow_clients, pipelined_responses_after_a_parked_write_keep_order) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 20, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd _ccol_destructor(_close_scoped_fd) =
       _sc_connect_small_rcvbuf(_SC_PORT + 20);
   REQUIRE_TRUE(fd >= 0);
@@ -15638,7 +15784,7 @@ TEST(slow_clients, a_parked_body_after_100_continue_completes) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 21, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd _ccol_destructor(_close_scoped_fd) = _sc_open_partial_post(
       _SC_PORT + 21, "/len", 3000, 0, "Expect: 100-continue\r\n");
   REQUIRE_TRUE(fd >= 0);
@@ -15659,7 +15805,7 @@ TEST(slow_clients, options_star_with_a_parked_body_keeps_the_connection) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 22, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd _ccol_destructor(_close_scoped_fd) = _sc_connect(_SC_PORT + 22);
   REQUIRE_TRUE(fd >= 0);
   REQUIRE_TRUE(_sc_send_str(fd,
@@ -15682,7 +15828,7 @@ TEST(slow_clients, a_chunked_body_over_the_limit_after_a_park_gets_413) {
   cfg.max_body_size = 1000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 23, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd _ccol_destructor(_close_scoped_fd) = _sc_connect(_SC_PORT + 23);
   REQUIRE_TRUE(fd >= 0);
   REQUIRE_TRUE(_sc_send_str(fd,
@@ -15731,7 +15877,7 @@ TEST(slow_clients, destroy_closes_or_answers_every_waiting_connection) {
   cfg.max_body_read_duration_us = 0;
   _sc_destroy_ctx_t *ctx = calloc(1, sizeof(*ctx));
   ctx->srv = _sc_server(_SC_PORT + 24, &cfg);
-  bool started = ctx->srv != CHTTPSVR_INVALID;
+  bool started = ctx->srv != CHTTPSVR_NULL;
   int a = -1, b = -1, c = -1, d = -1, e = -1;
   bool staged = false;
   if (started) {
@@ -15827,7 +15973,7 @@ TEST(slow_clients, a_write_cut_inside_the_head_or_the_body_resumes_intact) {
       hn == ref_head_len && hn > 0 && memcmp(got_head, ref_head, hn) == 0;
   if (fd >= 0) close(fd);
   _chttpsvr_set_date_override_for_tests(INT64_MIN);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_GT(ref_len, (size_t)100);
   REQUIRE_EQ(intact, 3);
   REQUIRE_TRUE(head_intact);
@@ -15845,7 +15991,7 @@ TEST(slow_clients,
   cfg.max_header_read_duration_us = 0;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 26, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int idle[20], parked[3];
   char buf[4096];
   bool ok = true;
@@ -15909,7 +16055,7 @@ static void _own_guard_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
 
 static chttpsvr _own_server(void) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  if (srv == CHTTPSVR_INVALID) return CHTTPSVR_INVALID;
+  if (srv == CHTTPSVR_NULL) return CHTTPSVR_NULL;
   chttpsvr_register_handler(srv, CHTTP_ANY, "/{a}", _own_text_handler, "root1");
   chttpsvr_register_handler(srv, CHTTP_ANY, "/{a}/{b}", _own_text_handler,
                             "root2");
@@ -15919,7 +16065,7 @@ static chttpsvr _own_server(void) {
   chttpsvr_router *deep = chttpsvr_subrouter(srv, "/admin/deep");
   if (!adm || !deep) {
     chttpsvr_destroy(srv);
-    return CHTTPSVR_INVALID;
+    return CHTTPSVR_NULL;
   }
   chttpsvr_router_use(adm, _own_guard_mw, NULL);
   chttpsvr_router_on(adm, CHTTP_GET, "/secret", _own_text_handler,
@@ -15934,7 +16080,7 @@ static chttpsvr _own_server(void) {
   cfg.port = _OWN_PORT;
   if (chttpsvr_start(srv, &cfg) != ccol_success) {
     chttpsvr_destroy(srv);
-    return CHTTPSVR_INVALID;
+    return CHTTPSVR_NULL;
   }
   return srv;
 }
@@ -15963,7 +16109,7 @@ TEST(route_ownership, every_spelling_under_a_mount_meets_its_guard) {
    * "/{a}/{b}/{c}". Those targets answer 200 from a root route when the owning
    * router lets them fall through, and the test then fails. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) = _own_server();
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   static const char *const owned[] = {
       "/admin",          "/admin/",           "/admin/secret",
       "/admin/secret/",  "/admin/unknown",    "/admin/a/b",
@@ -15994,7 +16140,7 @@ TEST(route_ownership, the_owner_answers_404_and_405_itself) {
    * gets a 405 whose Allow names only the owner's methods. A root CHTTP_ANY
    * route never serves either of them. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) = _own_server();
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   atomic_store(&g_own_root_runs, 0);
   char buf[2048] = {0};
   int st_ok =
@@ -16030,7 +16176,7 @@ TEST(route_ownership, a_nested_mount_owns_its_own_prefix) {
    * request. A path next to it stays with "/admin". With a fall-through to
    * "/admin", "/admin/deep/zz" would reach "/{a}/{b}" there and be guarded. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) = _own_server();
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   char buf[2048] = {0};
   int g0 = atomic_load(&g_own_guard_runs);
   int st_x = _own_request("GET", "/admin/deep/x", NULL, buf, sizeof(buf));
@@ -16054,7 +16200,7 @@ TEST(route_ownership, a_path_outside_every_mount_reaches_the_root) {
   /* Only a path under a mount is owned. "/administrator" and "/ADMIN" share no
    * segment boundary with "/admin", and ";" isn't a separator. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) = _own_server();
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   static const char *const free_paths[] = {"/administrator", "/ADMIN/secret",
                                            "/admin;x/secret", "/x/admin",
                                            "/admin%252fsecret"};
@@ -16115,7 +16261,7 @@ TEST(slow_clients, a_steady_reader_of_a_parked_response_is_never_cut) {
   cfg.response_write_timeout_us = 200000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 28, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd = _sc_connect(_SC_PORT + 28);
   REQUIRE_TRUE(fd >= 0);
   bool sent = _sc_send_str(fd, "GET /big HTTP/1.1\r\nHost: h\r\n\r\n");
@@ -16137,20 +16283,30 @@ TEST(slow_clients, the_sweep_queries_the_kernel_outside_its_lock) {
   cfg.response_write_timeout_us = 30000000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 35, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   size_t total0 = 0, locked0 = 0;
   _chttpsvr_parked_queries_for_tests(&total0, &locked0);
   int fd = _sc_connect_small_rcvbuf(_SC_PORT + 35);
   REQUIRE_TRUE(fd >= 0);
   bool sent = _sc_send_str(fd, "GET /big HTTP/1.1\r\nHost: h\r\n\r\n");
-  /* The response parks immediately on a reader that takes nothing, and three
-   * sweep ticks judge it. */
-  _sc_nap_ms(3500);
-  size_t total1 = 0, locked1 = 0;
-  _chttpsvr_parked_queries_for_tests(&total1, &locked1);
+  /* The response parks on a reader that takes nothing, and the park itself
+   * reads the send queue once. From then on the sweep judges it once a second,
+   * and the test waits for two of those ticks, with a 20 s bound, because a
+   * slow runner can take longer than a tick to park the response or to get to
+   * the next sweep. */
+  bool parked = sent && _sc_wait_for(srv, _sc_parked_writes, NULL, 1, 10000);
+  size_t at_park = 0, locked_at_park = 0;
+  _chttpsvr_parked_queries_for_tests(&at_park, &locked_at_park);
+  size_t total1 = at_park, locked1 = locked_at_park;
+  long long until = _sc_now_ms() + 20000;
+  while (parked && total1 - at_park < 2 && _sc_now_ms() <= until) {
+    _sc_nap_ms(10);
+    _chttpsvr_parked_queries_for_tests(&total1, &locked1);
+  }
   close(fd);
   REQUIRE_TRUE(sent);
-  REQUIRE_GE(total1 - total0, (size_t)2);
+  REQUIRE_TRUE(parked);
+  REQUIRE_GE(total1 - at_park, (size_t)2);
   REQUIRE_EQ(locked1 - locked0, (size_t)0);
 }
 
@@ -16163,7 +16319,7 @@ TEST(slow_clients, keep_alive_requests_make_no_direction_change) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_SC_PORT + 36, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd = _sc_connect(_SC_PORT + 36);
   REQUIRE_TRUE(fd >= 0);
   /* The first request creates the connection's registration. */
@@ -16538,7 +16694,7 @@ static bool _linger_count_passes(size_t before) {
 static chttpsvr _lc_server(const char *host, int port,
                            const chttpsvr_config_t *base) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  if (srv == CHTTPSVR_INVALID) return CHTTPSVR_INVALID;
+  if (srv == CHTTPSVR_NULL) return CHTTPSVR_NULL;
   chttpsvr_register_handler(srv, CHTTP_GET, "/lc", _sc_hello_handler, NULL);
   chttpsvr_register_handler(srv, CHTTP_POST, "/lc", _sc_len_handler, NULL);
   chttpsvr_config_t cfg = base ? *base : CHTTPSVR_CONFIG_DEFAULT;
@@ -16546,7 +16702,7 @@ static chttpsvr _lc_server(const char *host, int port,
   cfg.port = (uint16_t)port;
   if (chttpsvr_start(srv, &cfg) != ccol_success) {
     chttpsvr_destroy(srv);
-    return CHTTPSVR_INVALID;
+    return CHTTPSVR_NULL;
   }
   return srv;
 }
@@ -16622,7 +16778,7 @@ TEST(listener_host, a_null_or_empty_host_listens_on_ipv4_and_ipv6) {
   int v4_status[2] = {-1, -1}, v6_status[2] = {-1, -1};
   for (int i = 0; i < 2; i++) {
     chttpsvr srv = _lc_server(hosts[i], _LC_PORT + i, NULL);
-    if (srv == CHTTPSVR_INVALID) continue;
+    if (srv == CHTTPSVR_NULL) continue;
     v4_status[i] = _lc_get_v4(_LC_PORT + i);
     v6_status[i] = v6 ? _lc_get_v6(_LC_PORT + i) : 200;
     chttpsvr_destroy(srv);
@@ -16643,7 +16799,7 @@ TEST(listener_host, the_default_configuration_listens_on_ipv4_and_ipv6) {
   bool host_is_null = cfg.host == NULL;
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
   bool started = false;
-  if (srv != CHTTPSVR_INVALID) {
+  if (srv != CHTTPSVR_NULL) {
     chttpsvr_register_handler(srv, CHTTP_GET, "/lc", _sc_hello_handler, NULL);
     cfg.port = (uint16_t)(_LC_PORT + 14);
     started = chttpsvr_start(srv, &cfg) == ccol_success;
@@ -16651,7 +16807,7 @@ TEST(listener_host, the_default_configuration_listens_on_ipv4_and_ipv6) {
   int v4 = started ? _lc_get_v4(_LC_PORT + 14) : -2;
   int v6_status = !v6 ? 200 : (started ? _lc_get_v6(_LC_PORT + 14) : -2);
   if (!v6) fprintf(stderr, "SKIP: no dual-stack IPv6; ::1 not checked\n");
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(host_is_null);
   REQUIRE_TRUE(started);
   REQUIRE_EQ(v4, 200);
@@ -16665,22 +16821,21 @@ TEST(listener_host, localhost_listens_on_the_ipv4_loopback) {
      Linux systems: the resolver's first address would be ::1, and 127.0.0.1
      would then be refused. */
   chttpsvr srv = _lc_server("localhost", _LC_PORT + 2, NULL);
-  int status = srv != CHTTPSVR_INVALID ? _lc_get_v4(_LC_PORT + 2) : -2;
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  int status = srv != CHTTPSVR_NULL ? _lc_get_v4(_LC_PORT + 2) : -2;
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_EQ(status, 200);
 }
 
 TEST(listener_host, a_literal_address_binds_exactly_that_address) {
   bool v6 = _lc_have_ipv6_loopback();
   chttpsvr srv = _lc_server("127.0.0.1", _LC_PORT + 3, NULL);
-  int v4 = srv != CHTTPSVR_INVALID ? _lc_get_v4(_LC_PORT + 3) : -2;
-  int v6_status =
-      (srv != CHTTPSVR_INVALID && v6) ? _lc_get_v6(_LC_PORT + 3) : -1;
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
-  chttpsvr srv6 = v6 ? _lc_server("::1", _LC_PORT + 4, NULL) : CHTTPSVR_INVALID;
-  int v6_on_v6 = srv6 != CHTTPSVR_INVALID ? _lc_get_v6(_LC_PORT + 4) : 200;
-  int v4_on_v6 = srv6 != CHTTPSVR_INVALID ? _lc_get_v4(_LC_PORT + 4) : -1;
-  if (srv6 != CHTTPSVR_INVALID) chttpsvr_destroy(srv6);
+  int v4 = srv != CHTTPSVR_NULL ? _lc_get_v4(_LC_PORT + 3) : -2;
+  int v6_status = (srv != CHTTPSVR_NULL && v6) ? _lc_get_v6(_LC_PORT + 3) : -1;
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
+  chttpsvr srv6 = v6 ? _lc_server("::1", _LC_PORT + 4, NULL) : CHTTPSVR_NULL;
+  int v6_on_v6 = srv6 != CHTTPSVR_NULL ? _lc_get_v6(_LC_PORT + 4) : 200;
+  int v4_on_v6 = srv6 != CHTTPSVR_NULL ? _lc_get_v4(_LC_PORT + 4) : -1;
+  if (srv6 != CHTTPSVR_NULL) chttpsvr_destroy(srv6);
   REQUIRE_EQ(v4, 200);
   REQUIRE_EQ(v6_status, -1);
   REQUIRE_EQ(v6_on_v6, 200);
@@ -16717,9 +16872,9 @@ TEST(listener_unix, a_regular_file_at_the_path_survives_a_failed_start) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = host;
-  ccol_retval_t rv = srv != CHTTPSVR_INVALID ? chttpsvr_start(srv, &cfg)
-                                             : ccol_unexpected_failure;
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  ccol_retval_t rv = srv != CHTTPSVR_NULL ? chttpsvr_start(srv, &cfg)
+                                          : ccol_unexpected_failure;
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   struct stat st;
   bool regular = lstat(path, &st) == 0 && S_ISREG(st.st_mode);
   char content[32] = {0};
@@ -16744,16 +16899,16 @@ TEST(listener_unix, a_live_listener_keeps_its_socket) {
   unlink(path);
   _lc_unix_host(host, sizeof(host), path);
   chttpsvr first = _lc_server(host, 0, NULL);
-  bool first_started = first != CHTTPSVR_INVALID;
+  bool first_started = first != CHTTPSVR_NULL;
   chttpsvr second = chttpsvr_create(g_test_logger, NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = host;
-  ccol_retval_t rv = (first != CHTTPSVR_INVALID && second != CHTTPSVR_INVALID)
+  ccol_retval_t rv = (first != CHTTPSVR_NULL && second != CHTTPSVR_NULL)
                          ? chttpsvr_start(second, &cfg)
                          : ccol_unexpected_failure;
-  if (second != CHTTPSVR_INVALID) chttpsvr_destroy(second);
-  int status = first != CHTTPSVR_INVALID ? _lc_get_unix(path) : -2;
-  if (first != CHTTPSVR_INVALID) chttpsvr_destroy(first);
+  if (second != CHTTPSVR_NULL) chttpsvr_destroy(second);
+  int status = first != CHTTPSVR_NULL ? _lc_get_unix(path) : -2;
+  if (first != CHTTPSVR_NULL) chttpsvr_destroy(first);
   struct stat st;
   bool gone = lstat(path, &st) != 0;
   unlink(path);
@@ -16773,9 +16928,9 @@ TEST(listener_unix, a_stop_leaves_a_path_that_names_another_file_alone) {
   unlink(path);
   _lc_unix_host(host, sizeof(host), path);
   chttpsvr srv = _lc_server(host, 0, NULL);
-  bool started = srv != CHTTPSVR_INVALID;
+  bool started = srv != CHTTPSVR_NULL;
   bool replaced = false;
-  if (srv != CHTTPSVR_INVALID && unlink(path) == 0) {
+  if (srv != CHTTPSVR_NULL && unlink(path) == 0) {
     FILE *f = fopen(path, "w");
     if (f) {
       fputs("not yours\n", f);
@@ -16783,7 +16938,7 @@ TEST(listener_unix, a_stop_leaves_a_path_that_names_another_file_alone) {
       replaced = true;
     }
   }
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   struct stat st;
   bool survived = lstat(path, &st) == 0 && S_ISREG(st.st_mode);
   unlink(path);
@@ -16807,13 +16962,12 @@ TEST(listener_unix, a_relative_path_is_cleaned_up_after_a_chdir) {
   mkdir(dir_a, 0700);
   mkdir(dir_b, 0700);
   bool in_a = have_cwd && chdir(dir_a) == 0;
-  chttpsvr srv =
-      in_a ? _lc_server("unix://rel.sock", 0, NULL) : CHTTPSVR_INVALID;
-  bool started = srv != CHTTPSVR_INVALID;
+  chttpsvr srv = in_a ? _lc_server("unix://rel.sock", 0, NULL) : CHTTPSVR_NULL;
+  bool started = srv != CHTTPSVR_NULL;
   bool in_b = chdir(dir_b) == 0;
   /* A file with the same name in the new directory, which isn't ours. */
   bool made_b = in_b && _make_stale_unix_socket("rel.sock");
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   struct stat st;
   bool a_gone = lstat(sock_a, &st) != 0;
   bool b_kept = lstat(sock_b, &st) == 0;
@@ -16834,6 +16988,13 @@ TEST(listener_unix, a_relative_path_is_cleaned_up_after_a_chdir) {
 static size_t _lc_lingering(chttpsvr h, void *arg) {
   (void)arg;
   return _chttpsvr_parked_count_for_tests(h, 6);
+}
+
+/* The requests of h that a thread is serving or rejecting right now. */
+static size_t _lc_in_flight(chttpsvr h, void *arg) {
+  (void)arg;
+  int n = _chttpsvr_in_flight_requests_for_tests(h);
+  return n > 0 ? (size_t)n : 0;
 }
 
 /* Sends the head of a POST to path with a body of declared bytes, plus
@@ -16881,7 +17042,7 @@ TEST(lingering_close, a_refused_upload_gets_its_response_and_an_orderly_end) {
      reports as ECONNRESET. */
   chttpsvr srv = _lc_server("127.0.0.1", _LC_PORT + 5, NULL);
   size_t lingers = _chttpsvr_linger_count_for_tests();
-  int fd = srv != CHTTPSVR_INVALID ? _sc_connect(_LC_PORT + 5) : -1;
+  int fd = srv != CHTTPSVR_NULL ? _sc_connect(_LC_PORT + 5) : -1;
   bool sent = fd >= 0 && _lc_send_upload_start(fd, "/nope", 1048576, 32768);
   char buf[2048] = {0};
   size_t body = 0;
@@ -16890,9 +17051,9 @@ TEST(lingering_close, a_refused_upload_gets_its_response_and_an_orderly_end) {
   bool lingered = _linger_count_passes(lingers);
   if (fd >= 0) close(fd);
   /* Once the client closes, the linger ends right away. */
-  bool drained = srv != CHTTPSVR_INVALID &&
-                 _sc_wait_for_zero(srv, _lc_lingering, NULL, 5000);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  bool drained =
+      srv != CHTTPSVR_NULL && _sc_wait_for_zero(srv, _lc_lingering, NULL, 5000);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(sent);
   REQUIRE_EQ(status, 404);
   REQUIRE_EQ(end, 0);
@@ -16906,7 +17067,7 @@ TEST(lingering_close, a_linger_ends_at_its_deadline) {
   chttpsvr srv = _lc_server("127.0.0.1", _LC_PORT + 6, NULL);
   /* 1. A client that goes quiet and keeps its end open: the sweep closes the
      linger at its deadline. */
-  int quiet = srv != CHTTPSVR_INVALID ? _sc_connect(_LC_PORT + 6) : -1;
+  int quiet = srv != CHTTPSVR_NULL ? _sc_connect(_LC_PORT + 6) : -1;
   bool q_sent =
       quiet >= 0 && _lc_send_upload_start(quiet, "/nope", 1048576, 32768);
   char buf[2048];
@@ -16922,7 +17083,7 @@ TEST(lingering_close, a_linger_ends_at_its_deadline) {
   /* 2. A client that keeps sending after the response, without end: the linger
      throws away what it sends until its deadline and then closes, so the
      client's writes fail within a few seconds. */
-  int loud = srv != CHTTPSVR_INVALID ? _sc_connect(_LC_PORT + 6) : -1;
+  int loud = srv != CHTTPSVR_NULL ? _sc_connect(_LC_PORT + 6) : -1;
   bool l_sent =
       loud >= 0 && _lc_send_upload_start(loud, "/nope", 1048576, 4096);
   int l_status =
@@ -16944,9 +17105,9 @@ TEST(lingering_close, a_linger_ends_at_its_deadline) {
     l_ms = _sc_now_ms() - l_t0;
   }
   if (loud >= 0) close(loud);
-  bool l_closed = srv != CHTTPSVR_INVALID &&
-                  _sc_wait_for_zero(srv, _lc_lingering, NULL, 5000);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  bool l_closed =
+      srv != CHTTPSVR_NULL && _sc_wait_for_zero(srv, _lc_lingering, NULL, 5000);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_EQ(q_status, 404);
   REQUIRE_TRUE(q_parked);
   REQUIRE_TRUE(q_closed);
@@ -16962,18 +17123,30 @@ TEST(lingering_close, a_request_with_no_body_closes_at_once) {
   /* A refused request whose framing has no body, with nothing else in the
      socket, closes without a linger. */
   chttpsvr srv = _lc_server("127.0.0.1", _LC_PORT + 7, NULL);
+  /* The linger count belongs to the whole process, and a rejection on one of
+     the long-lived servers counts its linger after the shutdown that its
+     client already saw as the end of the stream, still inside the request's
+     in-flight slot. So a test that ran earlier can add to the count inside
+     this test's window unless that slot is given back first. */
+  _wait_for_reject_counter_to_settle();
   size_t lingers = _chttpsvr_linger_count_for_tests();
-  int fd = srv != CHTTPSVR_INVALID ? _sc_connect(_LC_PORT + 7) : -1;
+  int fd = srv != CHTTPSVR_NULL ? _sc_connect(_LC_PORT + 7) : -1;
   bool sent =
       fd >= 0 && _sc_send_str(fd, "GET /nope HTTP/1.1\r\nHost: h\r\n\r\n");
   char buf[2048];
   int status = sent ? _sc_read_response(fd, buf, sizeof(buf), NULL, 5000) : -1;
   int end = status > 0 ? _lc_stream_end(fd, 5000) : -2;
+  /* A linger is counted after the shutdown that the client reads as the end
+     of the stream, and before the rejection gives back its in-flight slot, so
+     the count is final only once the server shows nothing in flight. */
+  bool settled =
+      srv != CHTTPSVR_NULL && _sc_wait_for_zero(srv, _lc_in_flight, NULL, 5000);
   bool lingered = _chttpsvr_linger_count_for_tests() > lingers;
   if (fd >= 0) close(fd);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_EQ(status, 404);
   REQUIRE_EQ(end, 0);
+  REQUIRE_TRUE(settled);
   REQUIRE_FALSE(lingered);
 }
 
@@ -16984,7 +17157,7 @@ TEST(lingering_close, a_handler_that_leaves_the_body_unread_lingers_too) {
      body in the socket would send a reset. */
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
   bool started =
-      srv != CHTTPSVR_INVALID &&
+      srv != CHTTPSVR_NULL &&
       chttpsvr_register_streaming_handler(
           srv, CHTTP_POST, "/lc-refuse", _stream_reject_without_reading_handler,
           NULL) == ccol_success;
@@ -17001,7 +17174,7 @@ TEST(lingering_close, a_handler_that_leaves_the_body_unread_lingers_too) {
   int end = status > 0 ? _lc_stream_end(fd, 5000) : -2;
   bool lingered = _linger_count_passes(lingers);
   if (fd >= 0) close(fd);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(started);
   REQUIRE_EQ(status, 401);
   REQUIRE_EQ(end, 0);
@@ -17024,7 +17197,7 @@ TEST(listener_accept, one_dispatch_accepts_a_bounded_batch) {
   for (int i = 0; i < N; i++) fds[i] = -1;
   bool armed = false;
   int opened = 0, served = 0;
-  if (srv != CHTTPSVR_INVALID) {
+  if (srv != CHTTPSVR_NULL) {
     _chttpsvr_arm_listener_dispatch_entry_race_hook_for_tests();
     armed = true;
     fds[0] = _sc_connect(_LC_PORT + 8);
@@ -17050,7 +17223,7 @@ TEST(listener_accept, one_dispatch_accepts_a_bounded_batch) {
   size_t max_batch = _chttpsvr_listener_max_accepts_per_dispatch_for_tests();
   for (int i = 0; i < N; i++)
     if (fds[i] >= 0) close(fds[i]);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(armed);
   REQUIRE_EQ(opened, N);
   REQUIRE_EQ(served, N);
@@ -17089,7 +17262,7 @@ TEST(chttpserver, options_star_is_safe_beside_a_subrouter_registration) {
   chttpsvr srv = _lc_server("127.0.0.1", _LC_PORT + 9, NULL);
   _lc_star_arg_t arg = {.port = _LC_PORT + 9, .stop = false, .answered = 0};
   pthread_t tid;
-  bool started = srv != CHTTPSVR_INVALID &&
+  bool started = srv != CHTTPSVR_NULL &&
                  pthread_create(&tid, NULL, _lc_star_thread, &arg) == 0;
   int made = 0;
   for (int i = 0; started && i < 300; i++) {
@@ -17105,7 +17278,7 @@ TEST(chttpserver, options_star_is_safe_beside_a_subrouter_registration) {
   atomic_store(&arg.stop, true);
   bool joined = started ? _bounded_join(tid, NULL) : false;
   if (started && !joined) pthread_detach(tid);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(started);
   REQUIRE_TRUE(joined);
   REQUIRE_EQ(made, 300);
@@ -17124,21 +17297,21 @@ TEST(slow_clients, a_huge_declared_length_never_wraps_the_memory_count) {
   cfg.max_partial_body_memory = 65536;
   chttpsvr srv = _lc_server("127.0.0.1", _LC_PORT + 10, &cfg);
   _chttpsvr_mem_peak_reset_for_tests();
-  int fd = srv != CHTTPSVR_INVALID ? _sc_connect(_LC_PORT + 10) : -1;
+  int fd = srv != CHTTPSVR_NULL ? _sc_connect(_LC_PORT + 10) : -1;
   bool sent = fd >= 0 &&
               _sc_send_str(fd,
                            "POST /lc HTTP/1.1\r\nHost: h\r\n"
                            "Content-Length: 18446744073709551000\r\n\r\nabc");
   bool charged = sent && _sc_wait_for(srv, _sc_mem_in_use, NULL, 1, 5000);
   size_t in_use =
-      srv != CHTTPSVR_INVALID ? _chttpsvr_mem_in_use_for_tests(srv) : 0;
+      srv != CHTTPSVR_NULL ? _chttpsvr_mem_in_use_for_tests(srv) : 0;
   size_t peak = _chttpsvr_mem_peak_for_tests();
   if (fd >= 0) close(fd);
-  bool released = srv != CHTTPSVR_INVALID &&
+  bool released = srv != CHTTPSVR_NULL &&
                   _sc_wait_for_zero(srv, _sc_mem_in_use, NULL, 5000);
   /* An ordinary request still gets served normally afterwards. */
   int after = -1;
-  int fd2 = srv != CHTTPSVR_INVALID ? _sc_connect(_LC_PORT + 10) : -1;
+  int fd2 = srv != CHTTPSVR_NULL ? _sc_connect(_LC_PORT + 10) : -1;
   if (fd2 >= 0 && _sc_send_str(fd2,
                                "POST /lc HTTP/1.1\r\nHost: h\r\n"
                                "Content-Length: 3\r\n\r\nxyz")) {
@@ -17146,7 +17319,7 @@ TEST(slow_clients, a_huge_declared_length_never_wraps_the_memory_count) {
     after = _sc_read_response(fd2, buf, sizeof(buf), NULL, 5000);
   }
   if (fd2 >= 0) close(fd2);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(charged);
   REQUIRE_LE(in_use, (size_t)65536);
   REQUIRE_LE(peak, (size_t)65536);
@@ -17197,7 +17370,7 @@ static void _lc_pipeline_with_lost_leftover(int port, bool park_write,
   ccol_memmgmt_procs_t mp = {_lc_malloc, _lc_free, _lc_calloc, _lc_realloc};
   chttpsvr srv = chttpsvr_create_mp(&mp, g_test_logger, NULL);
   *first = *second = *end = -2;
-  if (srv == CHTTPSVR_INVALID) return;
+  if (srv == CHTTPSVR_NULL) return;
   chttpsvr_register_handler(srv, CHTTP_GET, "/lc", _sc_hello_handler, NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -17310,7 +17483,7 @@ TEST(sweep, one_tick_closes_every_expired_idle_and_parked_connection) {
   int parked_fds[_RX_PARKED_N];
   for (int i = 0; i < _RX_IDLE_N; i++) idle_fds[i] = -1;
   for (int i = 0; i < _RX_PARKED_N; i++) parked_fds[i] = -1;
-  bool opened = srv != CHTTPSVR_INVALID;
+  bool opened = srv != CHTTPSVR_NULL;
   for (int i = 0; opened && i < _RX_PARKED_N; i++) {
     parked_fds[i] = _rx_open_parked_post(_LC_PORT + 15);
     opened = parked_fds[i] >= 0;
@@ -17345,7 +17518,7 @@ TEST(sweep, one_tick_closes_every_expired_idle_and_parked_connection) {
   }
   for (int i = 0; i < _RX_IDLE_N; i++)
     if (idle_fds[i] >= 0) close(idle_fds[i]);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(opened);
   REQUIRE_EQ(idle_after, (size_t)0);
   REQUIRE_EQ(parked_after, (size_t)0);
@@ -17385,7 +17558,7 @@ TEST(restart, neither_waits_for_nor_cuts_a_request_of_the_previous_run) {
   _rx_destroy_ctx_t *ctx = calloc(1, sizeof(*ctx));
   ctx->srv = _sc_server(_LC_PORT + 16, &cfg);
   chttpsvr srv = ctx->srv;
-  bool started = srv != CHTTPSVR_INVALID;
+  bool started = srv != CHTTPSVR_NULL;
   size_t drained_before = _chttpsvr_retired_drained_for_tests();
   int a = started ? _sc_connect(_LC_PORT + 16) : -1;
   bool running = a >= 0 &&
@@ -17441,7 +17614,7 @@ TEST(restart, a_failed_registration_fails_the_start) {
      listens, and a later start succeeds. A start that ignored a failed
      registration would report success for a server the sweep never reaches. */
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  bool created = srv != CHTTPSVR_INVALID;
+  bool created = srv != CHTTPSVR_NULL;
   if (created)
     chttpsvr_register_handler(srv, CHTTP_GET, "/lc", _sc_hello_handler, NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -17489,7 +17662,7 @@ TEST(listener_host, a_host_name_reports_a_port_taken_on_its_address) {
   uint16_t port = held ? ntohs(a.sin_port) : 0;
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
   ccol_retval_t rv = ccol_success;
-  if (held && srv != CHTTPSVR_INVALID) {
+  if (held && srv != CHTTPSVR_NULL) {
     chttpsvr_register_handler(srv, CHTTP_GET, "/lc", _sc_hello_handler, NULL);
     chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = "localhost";
@@ -17497,7 +17670,7 @@ TEST(listener_host, a_host_name_reports_a_port_taken_on_its_address) {
     rv = chttpsvr_start(srv, &cfg);
   }
   int v6 = held && _lc_have_ipv6_loopback() ? _lc_get_v6(port) : -1;
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   if (other >= 0) close(other);
   REQUIRE_TRUE(held);
   REQUIRE_EQ((int)rv, (int)ccol_unexpected_failure);
@@ -17527,9 +17700,9 @@ TEST(listener_host, ipv6_only_makes_a_host_name_listen_on_its_ipv6_address) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.ipv6_only = true;
   chttpsvr srv = _lc_server("localhost", _LC_PORT + 19, &cfg);
-  int v6 = srv != CHTTPSVR_INVALID ? _lc_get_v6(_LC_PORT + 19) : -2;
-  int v4 = srv != CHTTPSVR_INVALID ? _lc_get_v4(_LC_PORT + 19) : -2;
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  int v6 = srv != CHTTPSVR_NULL ? _lc_get_v6(_LC_PORT + 19) : -2;
+  int v4 = srv != CHTTPSVR_NULL ? _lc_get_v4(_LC_PORT + 19) : -2;
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_EQ(v6, 200);
   REQUIRE_EQ(v4, -1);
 }
@@ -17539,18 +17712,17 @@ TEST(listener_host, a_bracketed_address_names_the_address_inside) {
      unclosed bracket fails the start. The brackets have to come off first,
      because the resolver refuses a bracketed address. */
   chttpsvr srv4 = _lc_server("[127.0.0.1]", _LC_PORT + 20, NULL);
-  int v4 = srv4 != CHTTPSVR_INVALID ? _lc_get_v4(_LC_PORT + 20) : -2;
-  if (srv4 != CHTTPSVR_INVALID) chttpsvr_destroy(srv4);
+  int v4 = srv4 != CHTTPSVR_NULL ? _lc_get_v4(_LC_PORT + 20) : -2;
+  if (srv4 != CHTTPSVR_NULL) chttpsvr_destroy(srv4);
   bool have_v6 = _lc_have_ipv6_loopback();
   chttpsvr srv6 =
-      have_v6 ? _lc_server("[::1]", _LC_PORT + 21, NULL) : CHTTPSVR_INVALID;
-  int v6 = !have_v6
-               ? 200
-               : (srv6 != CHTTPSVR_INVALID ? _lc_get_v6(_LC_PORT + 21) : -2);
-  if (srv6 != CHTTPSVR_INVALID) chttpsvr_destroy(srv6);
+      have_v6 ? _lc_server("[::1]", _LC_PORT + 21, NULL) : CHTTPSVR_NULL;
+  int v6 =
+      !have_v6 ? 200 : (srv6 != CHTTPSVR_NULL ? _lc_get_v6(_LC_PORT + 21) : -2);
+  if (srv6 != CHTTPSVR_NULL) chttpsvr_destroy(srv6);
   chttpsvr bad = _lc_server("[::1", _LC_PORT + 22, NULL);
-  bool bad_refused = bad == CHTTPSVR_INVALID;
-  if (bad != CHTTPSVR_INVALID) chttpsvr_destroy(bad);
+  bool bad_refused = bad == CHTTPSVR_NULL;
+  if (bad != CHTTPSVR_NULL) chttpsvr_destroy(bad);
   REQUIRE_EQ(v4, 200);
   REQUIRE_EQ(v6, 200);
   REQUIRE_TRUE(bad_refused);
@@ -17571,12 +17743,11 @@ TEST(listener_host, a_host_that_does_not_resolve_is_logged_with_its_reason) {
   int pfd[2] = {-1, -1};
   bool piped = gai != 0 && pipe(pfd) == 0;
   if (piped) fcntl(pfd[0], F_SETFL, O_NONBLOCK);
-  clog plog =
-      piped ? clog_create_from_fd(pfd[1], CLOG_INFO, NULL) : CLOG_INVALID;
+  clog plog = piped ? clog_create_from_fd(pfd[1], CLOG_INFO, NULL) : CLOG_NULL;
   bool installed = plog && chttpsvr_set_engine_logger(plog) == ccol_success;
   chttpsvr srv =
-      installed ? _lc_server("[a..b]", _LC_PORT + 23, NULL) : CHTTPSVR_INVALID;
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+      installed ? _lc_server("[a..b]", _LC_PORT + 23, NULL) : CHTTPSVR_NULL;
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   char text[8192] = {0};
   size_t got = 0;
   if (piped) {
@@ -17591,7 +17762,7 @@ TEST(listener_host, a_host_that_does_not_resolve_is_logged_with_its_reason) {
   if (pfd[1] >= 0) close(pfd[1]);
   REQUIRE_TRUE(piped);
   REQUIRE_TRUE(installed);
-  REQUIRE_TRUE(srv == CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv == CHTTPSVR_NULL);
   REQUIRE_TRUE(strstr(text, gai_strerror(gai)) != NULL);
 }
 
@@ -17615,7 +17786,7 @@ TEST(chttpserver, a_query_key_is_matched_against_the_decoded_keys) {
      "x&y" finds x%26y. */
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
   bool started =
-      srv != CHTTPSVR_INVALID &&
+      srv != CHTTPSVR_NULL &&
       chttpsvr_register_handler(srv, CHTTP_GET, "/q", _rx_query_handler,
                                 NULL) == ccol_success;
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -17630,7 +17801,7 @@ TEST(chttpserver, a_query_key_is_matched_against_the_decoded_keys) {
                    "GET /q?a+b=1&a%20b=2&x%26y=3 HTTP/1.1\r\nHost: h\r\n\r\n"))
     status = _sc_read_response(fd, buf, sizeof(buf), NULL, 5000);
   if (fd >= 0) close(fd);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(started);
   REQUIRE_EQ(status, 200);
   REQUIRE_TRUE(strstr(buf, "\r\n\r\n2 0 0 3") != NULL);
@@ -17647,7 +17818,7 @@ TEST(lingering_close, a_linger_gives_the_body_memory_back_at_once) {
      the close would still be held while the connection lingers. */
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   chttpsvr srv = _sc_server(_LC_PORT + 25, &cfg);
-  int fd = srv != CHTTPSVR_INVALID
+  int fd = srv != CHTTPSVR_NULL
                ? _sc_open_partial_post(_LC_PORT + 25, "/len", 8000, 100, NULL)
                : -1;
   bool parked = fd >= 0 && _sc_wait_for(srv, _sc_parked_bodies, NULL, 1, 5000);
@@ -17666,7 +17837,7 @@ TEST(lingering_close, a_linger_gives_the_body_memory_back_at_once) {
     }
   }
   if (fd >= 0) close(fd);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(parked);
   REQUIRE_EQ(charged, (size_t)8000);
   REQUIRE_EQ(status, 408);
@@ -17681,7 +17852,7 @@ TEST(lingering_close, a_large_refused_upload_is_taken_whole_before_the_close) {
      stopped after a fixed byte count would close under the client, whose write
      would then fail with a reset. */
   chttpsvr srv = _lc_server("127.0.0.1", _LC_PORT + 26, NULL);
-  int fd = srv != CHTTPSVR_INVALID ? _sc_connect(_LC_PORT + 26) : -1;
+  int fd = srv != CHTTPSVR_NULL ? _sc_connect(_LC_PORT + 26) : -1;
   const size_t total = (size_t)4 * 1024 * 1024;
   bool sent = fd >= 0 && _lc_send_upload_start(fd, "/nope", total, 0);
   size_t pushed = 0;
@@ -17707,7 +17878,7 @@ TEST(lingering_close, a_large_refused_upload_is_taken_whole_before_the_close) {
                    : -1;
   int end = status > 0 ? _lc_stream_end(fd, 5000) : -2;
   if (fd >= 0) close(fd);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(sent);
   REQUIRE_EQ(write_errno, 0);
   REQUIRE_EQ(pushed, total);
@@ -17757,7 +17928,7 @@ TEST(lingering_close, a_close_after_the_response_lingers_on_unread_bytes) {
   _sc_gate_open(false);
   int runs = atomic_load(&g_sc_gate_runs);
   size_t lingers = _chttpsvr_linger_count_for_tests();
-  int fd = srv != CHTTPSVR_INVALID ? _sc_connect(_LC_PORT + 41) : -1;
+  int fd = srv != CHTTPSVR_NULL ? _sc_connect(_LC_PORT + 41) : -1;
   bool sent = fd >= 0 && _sc_send_str(fd,
                                       "GET /busy HTTP/1.1\r\nHost: h\r\n"
                                       "Connection: close\r\n\r\n");
@@ -17781,7 +17952,7 @@ TEST(lingering_close, a_close_after_the_response_lingers_on_unread_bytes) {
   bool lingered = extra && _linger_count_passes(lingers);
   if (fd >= 0) close(fd);
   _sc_gate_open(false);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(sent);
   REQUIRE_TRUE(entered);
   REQUIRE_TRUE(extra);
@@ -17804,7 +17975,7 @@ TEST(listeners, a_tcp_listener_does_not_turn_on_fast_open) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   chttpsvr srv = _sc_server(_LC_PORT + 42, &cfg);
   int found = 0, qlen_seen = -1;
-  for (int fd = 3; srv != CHTTPSVR_INVALID && fd < 4096 && !found; fd++) {
+  for (int fd = 3; srv != CHTTPSVR_NULL && fd < 4096 && !found; fd++) {
     struct sockaddr_storage ss;
     socklen_t sl = sizeof(ss);
     if (getsockname(fd, (struct sockaddr *)&ss, &sl) != 0) continue;
@@ -17819,7 +17990,7 @@ TEST(listeners, a_tcp_listener_does_not_turn_on_fast_open) {
     if (getsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN, &q, &ql) == 0) qlen_seen = q;
     found = 1;
   }
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_EQ(found, 1);
   REQUIRE_EQ(qlen_seen, 0);
 #else
@@ -17838,7 +18009,7 @@ static void _rx_pipeline_after_body(int port, const char *path, int *first,
   ccol_memmgmt_procs_t mp = {_lc_malloc, _lc_free, _lc_calloc, _lc_realloc};
   chttpsvr srv = chttpsvr_create_mp(&mp, g_test_logger, NULL);
   *first = *second = *end = -2;
-  if (srv == CHTTPSVR_INVALID) return;
+  if (srv == CHTTPSVR_NULL) return;
   chttpsvr_register_handler(srv, CHTTP_POST, "/rx-buffered", _sc_len_handler,
                             NULL);
   chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/rx-streaming",
@@ -17983,7 +18154,7 @@ TEST(restart, a_request_whose_submit_meets_a_retired_pool_is_still_served) {
      as the answer would give 503, and the counter of moved submits shows that
      the window was reached. */
   chttpsvr srv = _lc_server("127.0.0.1", _LC_PORT + 29, NULL);
-  bool started = srv != CHTTPSVR_INVALID;
+  bool started = srv != CHTTPSVR_NULL;
   size_t drains_before = _chttpsvr_retired_drain_started_for_tests();
   size_t retried_before = _chttpsvr_submit_retried_for_tests();
   int fd = started ? _sc_connect(_LC_PORT + 29) : -1;
@@ -18061,7 +18232,7 @@ TEST(restart, a_streaming_request_during_the_start_uses_the_new_settings) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.streaming_thread_count = 1;
   chttpsvr srv = _sc_server(_LC_PORT + 31, &cfg);
-  bool started = srv != CHTTPSVR_INVALID;
+  bool started = srv != CHTTPSVR_NULL;
   char buf[2048];
   int fd = started ? _sc_connect(_LC_PORT + 31) : -1;
   int hello = -1;
@@ -18121,7 +18292,7 @@ TEST(restart, a_streaming_pool_built_across_a_restart_uses_the_new_size) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.streaming_thread_count = 1;
   chttpsvr srv = _sc_server(_LC_PORT + 39, &cfg);
-  bool started = srv != CHTTPSVR_INVALID;
+  bool started = srv != CHTTPSVR_NULL;
   char buf[2048];
   int fd = started ? _sc_connect(_LC_PORT + 39) : -1;
   int hello = -1;
@@ -18181,7 +18352,7 @@ TEST(restart, queued_streaming_requests_move_to_the_new_streaming_pool) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.streaming_thread_count = 1;
   chttpsvr srv = _sc_server(_LC_PORT + 33, &cfg);
-  bool started = srv != CHTTPSVR_INVALID;
+  bool started = srv != CHTTPSVR_NULL;
   int fds[3] = {-1, -1, -1};
   bool sent = started;
   for (int i = 0; i < 3 && sent; i++) {
@@ -18249,7 +18420,7 @@ TEST(restart, a_new_streaming_request_does_not_wait_for_an_old_one) {
   cfg.streaming_thread_count = 1;
   cfg.streaming_queue_timeout_us = 2000000;
   chttpsvr srv = _sc_server(_LC_PORT + 35, &cfg);
-  bool started = srv != CHTTPSVR_INVALID;
+  bool started = srv != CHTTPSVR_NULL;
   if (started)
     (void)chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/stream-quick",
                                               _rx_quick_stream_handler, NULL);
@@ -18305,7 +18476,7 @@ TEST(restart, a_queued_streaming_request_starts_on_the_new_run_at_once) {
   cfg.streaming_thread_count = 1;
   cfg.streaming_queue_timeout_us = 30000000;
   chttpsvr srv = _sc_server(_LC_PORT + 37, &cfg);
-  bool started = srv != CHTTPSVR_INVALID;
+  bool started = srv != CHTTPSVR_NULL;
   if (started)
     (void)chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/stream-quick",
                                               _rx_quick_stream_handler, NULL);
@@ -18369,7 +18540,7 @@ static void _fx_body_then_big_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 static chttpsvr _fx_server(int port, const chttpsvr_config_t *extra) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  if (srv == CHTTPSVR_INVALID) return CHTTPSVR_INVALID;
+  if (srv == CHTTPSVR_NULL) return CHTTPSVR_NULL;
   chttpsvr_register_handler(srv, CHTTP_POST, "/upload-big/{id}",
                             _fx_body_then_big_handler, NULL);
   chttpsvr_register_handler(srv, CHTTP_POST, "/len", _sc_len_handler, NULL);
@@ -18379,7 +18550,7 @@ static chttpsvr _fx_server(int port, const chttpsvr_config_t *extra) {
   cfg.port = (uint16_t)port;
   if (chttpsvr_start(srv, &cfg) != ccol_success) {
     chttpsvr_destroy(srv);
-    return CHTTPSVR_INVALID;
+    return CHTTPSVR_NULL;
   }
   return srv;
 }
@@ -18397,7 +18568,7 @@ TEST(request_state, a_parked_response_keeps_nothing_of_its_request) {
   cfg.worker_thread_count = 2;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _fx_server(_FX_PORT, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   const size_t body_len = (size_t)1 << 20;
   char head[256];
@@ -18442,7 +18613,7 @@ TEST(request_state, a_lingering_connection_keeps_nothing_of_its_request) {
      target and the header fields. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _fx_server(_FX_PORT + 1, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd = _sc_connect(_FX_PORT + 1);
   bool sent = fd >= 0 && _lc_send_upload_start(fd, "/nope?x=1", 1048576, 4096);
   char buf[2048];
@@ -18466,7 +18637,7 @@ TEST(request_state, a_lingering_connection_keeps_nothing_of_its_response) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _sc_server(_FX_PORT + 15, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   _sc_gate_open(false);
   int runs = atomic_load(&g_sc_gate_runs);
   int fd = _sc_connect(_FX_PORT + 15);
@@ -18511,7 +18682,7 @@ TEST(body_memory, a_framed_body_reserves_all_that_its_buffer_holds) {
      against a smaller reservation. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _fx_server(_FX_PORT + 2, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   _chttpsvr_body_overshoot_reset_for_tests();
   int fd = _sc_open_partial_post(_FX_PORT + 2, "/len", 70000, 66000, NULL);
   bool parked = fd >= 0 && _sc_wait_for(srv, _sc_parked_bodies, NULL, 1, 5000);
@@ -18539,7 +18710,7 @@ TEST(body_memory, a_chunked_body_reserves_all_that_its_buffer_holds) {
      against a reservation of 196608. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _fx_server(_FX_PORT + 3, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   _chttpsvr_body_overshoot_reset_for_tests();
   int fd = _sc_connect(_FX_PORT + 3);
   bool sent = fd >= 0 && _sc_send_str(fd,
@@ -18601,8 +18772,8 @@ TEST(internal_writes, a_rejection_to_a_client_that_does_not_read_parks) {
   REQUIRE_TRUE(big != NULL);
   memset(big, 'z', _FX_BIG_REJECT);
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  if (srv == CHTTPSVR_INVALID) free(big);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  if (srv == CHTTPSVR_NULL) free(big);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   _chttpsvr_set_internal_write_ceiling_ms_for_tests(120000);
   chttpsvr_use(srv, _fx_big_reject_mw, big);
   chttpsvr_register_handler(srv, CHTTP_GET, "/hello", _sc_hello_handler, NULL);
@@ -18652,8 +18823,8 @@ TEST(internal_writes, a_parked_rejection_ends_at_its_ceiling) {
   REQUIRE_TRUE(big != NULL);
   memset(big, 'z', _FX_BIG_REJECT);
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  if (srv == CHTTPSVR_INVALID) free(big);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  if (srv == CHTTPSVR_NULL) free(big);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr_use(srv, _fx_big_reject_mw, big);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -18686,7 +18857,7 @@ TEST(internal_writes, a_short_bare_rejection_parks_and_completes) {
      wouldn't move. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _fx_server(_FX_PORT + 6, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   size_t parks = _chttpsvr_park_kind_count_for_tests(2);
   int fd = _sc_connect(_FX_PORT + 6);
   _chttpsvr_force_short_response_write_for_tests(10);
@@ -18712,7 +18883,7 @@ TEST(internal_writes, an_interim_line_on_a_full_socket_parks_and_completes) {
      stop, and the count of parked writes wouldn't move. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _fx_server(_FX_PORT + 7, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   size_t parks = _chttpsvr_park_kind_count_for_tests(2);
   _chttpsvr_force_interim_park_after_for_tests(5);
   int fd = _sc_connect(_FX_PORT + 7);
@@ -18778,7 +18949,7 @@ TEST(request_state, a_plaintext_request_has_no_client_identity) {
      all zeroes. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ(chttpsvr_register_handler(srv, CHTTP_GET, "/id",
                                        _fx_identity_handler, NULL),
              ccol_success);
@@ -18809,7 +18980,8 @@ TEST(internal_writes, an_inline_rejection_on_the_reactor_parks_and_completes) {
      forced stop and the count of parked writes wouldn't move. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _fx_server(_FX_PORT + 9, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
+  _wait_for_reject_counter_to_settle();
   size_t parks = _chttpsvr_park_kind_count_for_tests(2);
   size_t rejects = _chttpsvr_reject_pool_task_count_for_tests();
   int fd = _sc_connect(_FX_PORT + 9);
@@ -18869,7 +19041,7 @@ TEST(pause_fallback, a_rejection_that_parks_completes) {
      write, and the response would stop after 10 bytes. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _fx_server(_PF_PORT + 0, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   size_t parks = _chttpsvr_park_kind_count_for_tests(2);
   size_t fallbacks = _chttpsvr_pause_fallback_count_for_tests();
   int fd = _pf_connect_registered(srv, _PF_PORT + 0);
@@ -18902,7 +19074,7 @@ TEST(pause_fallback, a_refused_upload_lingers_and_ends_in_order) {
   size_t fallbacks = _chttpsvr_pause_fallback_count_for_tests();
   _chttpsvr_force_pause_fail_for_tests(true);
   int fd =
-      srv != CHTTPSVR_INVALID ? _pf_connect_registered(srv, _PF_PORT + 1) : -1;
+      srv != CHTTPSVR_NULL ? _pf_connect_registered(srv, _PF_PORT + 1) : -1;
   bool sent = fd >= 0 && _lc_send_upload_start(fd, "/nope", 1048576, 32768);
   char buf[2048] = {0};
   int status = sent ? _sc_read_response(fd, buf, sizeof(buf), NULL, 5000) : -1;
@@ -18911,9 +19083,9 @@ TEST(pause_fallback, a_refused_upload_lingers_and_ends_in_order) {
   _chttpsvr_force_pause_fail_for_tests(false);
   size_t removed = _chttpsvr_pause_fallback_count_for_tests() - fallbacks;
   if (fd >= 0) close(fd);
-  bool drained = srv != CHTTPSVR_INVALID &&
-                 _sc_wait_for_zero(srv, _lc_lingering, NULL, 5000);
-  if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
+  bool drained =
+      srv != CHTTPSVR_NULL && _sc_wait_for_zero(srv, _lc_lingering, NULL, 5000);
+  if (srv != CHTTPSVR_NULL) chttpsvr_destroy(srv);
   REQUIRE_TRUE(sent);
   REQUIRE_EQ(status, 404);
   REQUIRE_EQ(end, 0);
@@ -18930,7 +19102,7 @@ TEST(pause_fallback, a_keep_alive_connection_serves_its_next_requests) {
      answer. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _fx_server(_PF_PORT + 2, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   size_t fallbacks = _chttpsvr_pause_fallback_count_for_tests();
   _chttpsvr_force_pause_fail_for_tests(true);
   int fd = _pf_connect_registered(srv, _PF_PORT + 2);
@@ -18964,7 +19136,7 @@ TEST(pause_fallback, a_parked_body_resumes_and_completes) {
      connection. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _fx_server(_PF_PORT + 3, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   size_t fallbacks = _chttpsvr_pause_fallback_count_for_tests();
   _chttpsvr_force_pause_fail_for_tests(true);
   int fd = _sc_open_partial_post(_PF_PORT + 3, "/len", 20000, 100, NULL);
@@ -19025,7 +19197,7 @@ static void _bm_hold_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 static chttpsvr _bm_server(int port, const chttpsvr_config_t *extra) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  if (srv == CHTTPSVR_INVALID) return CHTTPSVR_INVALID;
+  if (srv == CHTTPSVR_NULL) return CHTTPSVR_NULL;
   chttpsvr_register_handler(srv, CHTTP_POST, "/probe", _bm_probe_handler, NULL);
   chttpsvr_register_handler(srv, CHTTP_POST, "/hold", _bm_hold_handler, NULL);
   chttpsvr_register_handler(srv, CHTTP_POST, "/len", _sc_len_handler, NULL);
@@ -19034,7 +19206,7 @@ static chttpsvr _bm_server(int port, const chttpsvr_config_t *extra) {
   cfg.port = (uint16_t)port;
   if (chttpsvr_start(srv, &cfg) != ccol_success) {
     chttpsvr_destroy(srv);
-    return CHTTPSVR_INVALID;
+    return CHTTPSVR_NULL;
   }
   atomic_store(&g_bm_srv, (uint64_t)srv);
   return srv;
@@ -19092,7 +19264,7 @@ TEST(body_memory, a_running_handler_holds_exactly_the_memory_of_its_body) {
   cfg.max_partial_body_memory = 1024 * 1024;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _bm_server(_BM_PORT + 0, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int fd _ccol_destructor(_close_scoped_fd) = _sc_connect(_BM_PORT + 0);
   REQUIRE_TRUE(fd >= 0);
   char buf[4096];
@@ -19136,7 +19308,7 @@ TEST(body_memory, a_body_waits_while_a_handler_holds_the_limit) {
   cfg.max_partial_body_memory = 100000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _bm_server(_BM_PORT + 1, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   _sc_gate_open(false);
   atomic_store(&g_sc_gate_runs, 0);
   int a _ccol_destructor(_close_scoped_fd) = _sc_connect(_BM_PORT + 1);
@@ -19202,7 +19374,7 @@ TEST(body_memory, no_path_that_ends_a_body_keeps_its_reservation) {
   cfg.min_transfer_rate_grace_us = 1000000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _bm_server(_BM_PORT + 2, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   char buf[4096];
 
   /* 1. The client leaves in the middle of a parked body. */
@@ -19296,7 +19468,7 @@ TEST(body_memory, a_chunked_wait_that_ends_in_503_gives_its_part_back) {
   cfg.stream_read_timeout_us = 120000000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _bm_server(_BM_PORT + 3, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int h _ccol_destructor(_close_scoped_fd) =
       _sc_open_partial_post(_BM_PORT + 3, "/len", _SC_HOLD_LEN, 100, NULL);
   bool parked = h >= 0 && _sc_wait_for(srv, _sc_parked_bodies, NULL, 1, 5000);
@@ -19354,7 +19526,7 @@ TEST(body_memory, bodies_that_trickle_hold_only_what_arrived) {
   cfg.body_memory_wait_timeout_us = 2000000;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _bm_server(_BM_PORT + 4, &cfg);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   _chttpsvr_mem_peak_reset_for_tests();
   int fds[trickles];
   bool opened = true;
@@ -19466,7 +19638,7 @@ TEST(drain_on_teardown, a_request_queued_for_a_worker_gets_503) {
   atomic_store(&g_queued_drain_release, false);
 
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/queued",
                                                _queued_drain_handler, NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -19650,7 +19822,7 @@ TEST(drain_on_teardown,
   atomic_store(&g_drain_entries_after_destroy, 0);
 
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   ccol_retval_t reg_rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/drain-slow", _drain_slow_handler, NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -19933,8 +20105,8 @@ TEST(locale_folding, the_server_matches_field_names_in_any_case) {
    the width of the mask or more. */
 TEST(chttpserver, a_method_outside_the_enum_is_refused_by_every_registration) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+      chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr_router *sub = chttpsvr_subrouter(srv, "/sub");
   REQUIRE_TRUE(sub != NULL);
   const int bad[] = {(int)CHTTP_ANY + 1, 8, 31, 32, 100, -1};
@@ -20073,7 +20245,7 @@ TEST(chttpserver, a_header_value_with_a_control_byte_is_refused) {
 TEST(listen_info, port_zero_binds_an_ephemeral_port_that_a_client_reaches) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/port-zero",
                                             _hello_handler, NULL),
              (int)ccol_success);
@@ -20104,7 +20276,7 @@ TEST(listen_info, port_zero_binds_an_ephemeral_port_that_a_client_reaches) {
 TEST(listen_info, a_fixed_port_is_reported_as_bound) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
   cfg.port = TEST_PORT + 101;
@@ -20119,7 +20291,7 @@ TEST(listen_info, a_fixed_port_is_reported_as_bound) {
 TEST(listen_info, the_default_host_reports_an_address_of_every_interface) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/any-host",
                                             _hello_handler, NULL),
              (int)ccol_success);
@@ -20144,7 +20316,7 @@ TEST(listen_info, the_default_host_reports_an_address_of_every_interface) {
 
 TEST(listen_info, the_running_flag_follows_start_stop_restart_and_destroy) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   bool before = true, started = false, stopped = true, restarted = false;
   uint16_t first_port = 0, stopped_port = 7, second_port = 0;
   ccol_retval_t stopped_port_rv, before_addr_rv;
@@ -20165,7 +20337,7 @@ TEST(listen_info, the_running_flag_follows_start_stop_restart_and_destroy) {
   chttpsvr_is_running(srv, &restarted);
   chttpsvr_bound_port(srv, &second_port);
   chttpsvr_destroy(srv);
-  REQUIRE_TRUE(srv == CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv == CHTTPSVR_NULL);
 
   REQUIRE_FALSE(before);
   REQUIRE_EQ((int)before_addr_rv, (int)ccol_not_permitted);
@@ -20183,7 +20355,7 @@ TEST(listen_info, the_running_flag_follows_start_stop_restart_and_destroy) {
 
 TEST(listen_info, a_stale_handle_and_bad_arguments_are_refused) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr stale = srv;
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -20212,7 +20384,7 @@ TEST(listen_info, a_stale_handle_and_bad_arguments_are_refused) {
              (int)ccol_invalid_args);
   REQUIRE_STREQ(addr, "");
   running = true;
-  REQUIRE_EQ((int)chttpsvr_is_running(CHTTPSVR_INVALID, &running),
+  REQUIRE_EQ((int)chttpsvr_is_running(CHTTPSVR_NULL, &running),
              (int)ccol_invalid_args);
   REQUIRE_FALSE(running);
 
@@ -20231,7 +20403,7 @@ TEST(listen_info, a_stale_handle_and_bad_arguments_are_refused) {
 TEST(listen_info, a_unix_listener_reports_its_path_and_no_port) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   char sock_path[64];
   snprintf(sock_path, sizeof(sock_path), "/tmp/chttpsvr_info_%d.sock",
            (int)getpid());
@@ -20358,7 +20530,7 @@ TEST(req_context, middleware_values_reach_the_handler_through_a_subrouter) {
   atomic_store(&probe.calls_after_next, 0);
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_use(srv, _ctx_global_mw, &probe), (int)ccol_success);
   chttpsvr_router *sub = chttpsvr_subrouter(srv, "/ctx");
   REQUIRE_TRUE(sub != NULL);
@@ -20455,7 +20627,7 @@ TEST(req_context, a_failed_allocation_keeps_the_earlier_values) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_use(srv, _ctx_oom_mw, NULL), (int)ccol_success);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/ctx-oom",
                                             _ctx_handler, NULL),
@@ -20478,4 +20650,649 @@ TEST(req_context, a_failed_allocation_keeps_the_earlier_values) {
   REQUIRE_EQ(atomic_load(&g_ctx_oom_results[4]), (int)ccol_success);
   REQUIRE_EQ(atomic_load(&g_ctx_oom_results[5]), 1);
   REQUIRE_TRUE(strstr(buf, "buffered a=global-a b=b") != NULL);
+}
+
+/* ========================================================================== */
+/*         STATUS LINES, LONG printf BODIES, BUSY PORTS, ALLOCATION SWEEPS    */
+/* ========================================================================== */
+
+/* Sets the status that the query parameter s names, so one route can answer
+   with any code. */
+static void _reason_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+  (void)ctx;
+  const char *s = NULL;
+  if (chttpsvr_req_query_one(req, "s", &s) != ccol_success) {
+    chttpsvr_resp_set_status(resp, 400);
+    return;
+  }
+  chttpsvr_resp_set_status(resp, atoi(s));
+  chttpsvr_resp_write_str(resp, "x");
+}
+
+/* Every status line carries the reason phrase that the IANA HTTP Status Code
+   Registry gives the code, and a code the registry doesn't list gets
+   "Unknown". A client may ignore the phrase, but a person who reads a log or
+   a packet capture reads it, and a wrong one points them the wrong way. */
+TEST(status_line, every_code_carries_the_reason_phrase_of_the_registry) {
+  static const struct {
+    int code;
+    const char *phrase;
+  } table[] = {
+      {200, "OK"},
+      {201, "Created"},
+      {202, "Accepted"},
+      {203, "Non-Authoritative Information"},
+      {206, "Partial Content"},
+      {207, "Multi-Status"},
+      {208, "Already Reported"},
+      {226, "IM Used"},
+      {300, "Multiple Choices"},
+      {301, "Moved Permanently"},
+      {302, "Found"},
+      {303, "See Other"},
+      {305, "Use Proxy"},
+      {307, "Temporary Redirect"},
+      {308, "Permanent Redirect"},
+      {400, "Bad Request"},
+      {402, "Payment Required"},
+      {406, "Not Acceptable"},
+      {409, "Conflict"},
+      {410, "Gone"},
+      {415, "Unsupported Media Type"},
+      {417, "Expectation Failed"},
+      {422, "Unprocessable Entity"},
+      {423, "Locked"},
+      {424, "Failed Dependency"},
+      {425, "Too Early"},
+      {426, "Upgrade Required"},
+      {451, "Unavailable For Legal Reasons"},
+      {500, "Internal Server Error"},
+      {502, "Bad Gateway"},
+      {504, "Gateway Timeout"},
+      {506, "Variant Also Negotiates"},
+      {507, "Insufficient Storage"},
+      {508, "Loop Detected"},
+      {510, "Not Extended"},
+      {511, "Network Authentication Required"},
+      {299, "Unknown"},
+      {999, "Unknown"},
+  };
+  chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
+      chttpsvr_create(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
+  REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/reason",
+                                            _reason_handler, NULL),
+             (int)ccol_success);
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = 0;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+  uint16_t port = 0;
+  REQUIRE_EQ((int)chttpsvr_bound_port(srv, &port), (int)ccol_success);
+  size_t wrong = 0;
+  for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+    char path[32];
+    snprintf(path, sizeof(path), "/reason?s=%d", table[i].code);
+    char buf[1024] = {0};
+    _raw_request_on_port(port, "GET", path, NULL, buf, sizeof(buf));
+    char want[96];
+    snprintf(want, sizeof(want), "HTTP/1.1 %d %s\r\n", table[i].code,
+             table[i].phrase);
+    if (strncmp(buf, want, strlen(want)) != 0) {
+      fprintf(stderr, "status %d: got \"%.60s\", want \"%s\"\n", table[i].code,
+              buf, want);
+      wrong++;
+    }
+  }
+  chttpsvr_stop(srv);
+  REQUIRE_EQ(wrong, (size_t)0);
+}
+
+/* 3000 bytes of 'p', far past the 256-byte buffer that chttpsvr_resp_printf
+   formats into first. */
+#define LONG_PRINTF_FILL 3000
+static char g_long_printf_fill[LONG_PRINTF_FILL + 1];
+static _Atomic int g_long_printf_rv = -100;
+
+static void _long_printf_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+                                 void *ctx) {
+  (void)req;
+  (void)ctx;
+  atomic_store(
+      &g_long_printf_rv,
+      (int)chttpsvr_resp_printf(resp, "<%s|%d>", g_long_printf_fill, 4242));
+  chttpsvr_resp_write_str(resp, "end");
+}
+
+/* A formatted body longer than the stack buffer that chttpsvr_resp_printf
+   tries first reaches the client whole, every byte in place. When the
+   longer buffer can't be allocated the call returns ccol_not_enough_memory
+   and adds nothing, so the body holds only what the handler wrote after
+   it. */
+TEST(resp_printf, a_body_longer_than_the_stack_buffer_arrives_whole) {
+  memset(g_long_printf_fill, 'p', LONG_PRINTF_FILL);
+  g_long_printf_fill[LONG_PRINTF_FILL] = '\0';
+  ccol_memmgmt_procs_t mp = {_fail_at_size_malloc, _fail_at_size_free,
+                             _fail_at_size_calloc, _fail_at_size_realloc};
+  chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
+      chttpsvr_create_mp(&mp, g_test_logger, NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
+  REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/long-printf",
+                                            _long_printf_handler, NULL),
+             (int)ccol_success);
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = 0;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+  uint16_t port = 0;
+  REQUIRE_EQ((int)chttpsvr_bound_port(srv, &port), (int)ccol_success);
+
+  static char buf[8192];
+  memset(buf, 0, sizeof(buf));
+  int status =
+      _raw_request_on_port(port, "GET", "/long-printf", NULL, buf, sizeof(buf));
+  int rv_whole = atomic_load(&g_long_printf_rv);
+  char *body = strstr(buf, "\r\n\r\n");
+  bool whole = false;
+  if (body) {
+    body += 4;
+    whole = strlen(body) == (size_t)LONG_PRINTF_FILL + 7 + 3 &&
+            body[0] == '<' && body[LONG_PRINTF_FILL + 1] == '|' &&
+            strspn(body + 1, "p") == (size_t)LONG_PRINTF_FILL &&
+            strcmp(body + LONG_PRINTF_FILL + 1, "|4242>end") == 0;
+  }
+
+  /* The formatted text is the fill plus "<|4242>", so its buffer is that
+     plus the NUL: a size nothing else of this request allocates. */
+  atomic_store(&g_long_printf_rv, -100);
+  memset(buf, 0, sizeof(buf));
+  g_fail_alloc_size = LONG_PRINTF_FILL + 7 + 1;
+  int status_oom =
+      _raw_request_on_port(port, "GET", "/long-printf", NULL, buf, sizeof(buf));
+  g_fail_alloc_size = 0;
+  int rv_oom = atomic_load(&g_long_printf_rv);
+  char *body_oom = strstr(buf, "\r\n\r\n");
+  chttpsvr_stop(srv);
+
+  REQUIRE_EQ(status, 200);
+  REQUIRE_EQ(rv_whole, (int)ccol_success);
+  REQUIRE_TRUE(whole);
+  REQUIRE_EQ(status_oom, 200);
+  REQUIRE_EQ(rv_oom, (int)ccol_not_enough_memory);
+  REQUIRE_TRUE(body_oom != NULL);
+  REQUIRE_STREQ(body_oom + 4, "end");
+}
+
+/* Holds an IPv6-only listener on an ephemeral port whose IPv4 twin is free,
+   so that a dual-stack listener can take the port once the holder closes.
+   The kernel picks the IPv6 port without looking at IPv4 sockets of the
+   same number, so a port that one of them holds is tried again. Returns the
+   descriptor, or -1 with *why naming what the host lacks. */
+static int _hold_v6only_port(uint16_t *port_out, const char **why) {
+  for (int attempt = 0; attempt < 20; attempt++) {
+    int holder = socket(AF_INET6, SOCK_STREAM, 0);
+    if (holder < 0) {
+      *why = "no IPv6 sockets on this host";
+      return -1;
+    }
+    int zero = 0, one = 1;
+    if (setsockopt(holder, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof(zero)) !=
+        0) {
+      close(holder);
+      *why = "no dual-stack IPv6 sockets on this host";
+      return -1;
+    }
+    struct sockaddr_in6 a6;
+    memset(&a6, 0, sizeof(a6));
+    a6.sin6_family = AF_INET6;
+    a6.sin6_addr = in6addr_any;
+    socklen_t alen = sizeof(a6);
+    if (setsockopt(holder, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one)) != 0 ||
+        bind(holder, (struct sockaddr *)&a6, sizeof(a6)) != 0 ||
+        listen(holder, 1) != 0 ||
+        getsockname(holder, (struct sockaddr *)&a6, &alen) != 0) {
+      close(holder);
+      *why = "can't hold an IPv6-only port on this host";
+      return -1;
+    }
+    int probe = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in a4;
+    memset(&a4, 0, sizeof(a4));
+    a4.sin_family = AF_INET;
+    a4.sin_addr.s_addr = htonl(INADDR_ANY);
+    a4.sin_port = a6.sin6_port;
+    bool v4_free =
+        probe >= 0 &&
+        setsockopt(probe, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) == 0 &&
+        bind(probe, (struct sockaddr *)&a4, sizeof(a4)) == 0;
+    if (probe >= 0) close(probe);
+    if (v4_free) {
+      *port_out = ntohs(a6.sin6_port);
+      return holder;
+    }
+    close(holder);
+  }
+  *why = "no port whose IPv4 twin is free after 20 tries";
+  return -1;
+}
+
+/* A start on the default host, whose port another socket holds on [::],
+   fails with ccol_unexpected_failure and errno EADDRINUSE; it doesn't fall
+   back to an IPv4 listener on the same port, because a port in use is the
+   answer and not a sign of a host without IPv6. The holder here is
+   IPv6-only, so an IPv4 fallback would bind and hide the failure. Once the
+   port is free, the same server starts there. A system with no dual-stack
+   sockets (OpenBSD) listens on 0.0.0.0 for the default host by design, so
+   the test skips there. */
+TEST(listen_collision, a_busy_port_on_the_default_host_fails_with_eaddrinuse) {
+  uint16_t port = 0;
+  const char *why = NULL;
+  int holder = _hold_v6only_port(&port, &why);
+  if (holder < 0) {
+    fprintf(stderr, "SKIP: %s\n", why);
+    return;
+  }
+  chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
+  if (srv == CHTTPSVR_NULL) close(holder);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
+  chttpsvr_register_handler(srv, CHTTP_GET, "/busy", _reason_handler, NULL);
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = NULL;
+  cfg.port = port;
+  ccol_retval_t busy_rv = chttpsvr_start(srv, &cfg);
+  int busy_errno = _chttpsvr_last_listen_errno_for_tests();
+  bool running = true;
+  chttpsvr_is_running(srv, &running);
+  if (busy_rv == ccol_success) chttpsvr_stop(srv);
+  close(holder);
+  ccol_retval_t free_rv = chttpsvr_start(srv, &cfg);
+  char buf[512] = {0};
+  int status = free_rv == ccol_success
+                   ? _raw_request_on_port(port, "GET", "/busy?s=204", NULL, buf,
+                                          sizeof(buf))
+                   : -1;
+  chttpsvr_destroy(srv);
+  REQUIRE_EQ((int)busy_rv, (int)ccol_unexpected_failure);
+  REQUIRE_EQ(busy_errno, EADDRINUSE);
+  REQUIRE_FALSE(running);
+  REQUIRE_EQ((int)free_rv, (int)ccol_success);
+  REQUIRE_EQ(status, 204);
+}
+
+/* An allocator that counts the blocks it has handed out and not yet taken
+   back, and fails exactly one call: the one that brings g_sw_countdown from
+   0 to -1. A countdown below 0 never fails anything. */
+static _Atomic long g_sw_countdown = -1;
+static _Atomic long g_sw_live = 0;
+static _Atomic long g_sw_failed = 0;
+/* While g_sw_owner_only is set, only a thread with t_sw_owner set counts down
+   and fails, so the threads that a start leaves running can't take the
+   failure after the call has returned. */
+static _Atomic bool g_sw_owner_only = false;
+static __thread bool t_sw_owner = false;
+
+static bool _sw_fail_now(void) {
+  if (atomic_load(&g_sw_countdown) < 0) return false;
+  if (atomic_load(&g_sw_owner_only) && !t_sw_owner) return false;
+  if (atomic_fetch_sub(&g_sw_countdown, 1) != 0) return false;
+  atomic_fetch_add(&g_sw_failed, 1);
+  return true;
+}
+static void *_sw_malloc(size_t n) {
+  if (_sw_fail_now()) return NULL;
+  void *p = malloc(n);
+  if (p) atomic_fetch_add(&g_sw_live, 1);
+  return p;
+}
+static void *_sw_calloc(size_t n, size_t s) {
+  if (_sw_fail_now()) return NULL;
+  void *p = calloc(n, s);
+  if (p) atomic_fetch_add(&g_sw_live, 1);
+  return p;
+}
+static void *_sw_realloc(void *p, size_t s) {
+  if (_sw_fail_now()) return NULL;
+  void *np = realloc(p, s);
+  if (np && !p) atomic_fetch_add(&g_sw_live, 1);
+  return np;
+}
+static void _sw_free(void *p) {
+  if (p) atomic_fetch_sub(&g_sw_live, 1);
+  free(p);
+}
+
+/* The last frees of a server that was ever started run on the reactor
+   thread after chttpsvr_destroy() has returned, once its registrations are
+   reclaimed. Waits up to 10 s for g_sw_live to reach 0 and returns what it
+   reads last. */
+static long _sw_wait_for_no_live_blocks(void) {
+  struct timespec start, now;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  long live = atomic_load(&g_sw_live);
+  while (live != 0) {
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (now.tv_sec - start.tv_sec >= 10) break;
+    struct timespec nap = {0, 1000000L};
+    nanosleep(&nap, NULL);
+    live = atomic_load(&g_sw_live);
+  }
+  return live;
+}
+
+static void _sw_plain_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+                              void *ctx) {
+  (void)req;
+  (void)ctx;
+  chttpsvr_resp_write_str(resp, "served");
+}
+
+/* Fails each allocation of server setup in turn: the create, a route with two
+   parameters, a sub-router with a route of its own, and the start. Every
+   failure is reported the documented way (CHTTPSVR_NULL with an err_str,
+   ccol_not_enough_memory, a NULL sub-router), a start that failed leaves the
+   server stopped and able to start once memory is back, and the destroy that
+   follows gives back every block. The sweep ends at the first index that no
+   setup allocation reaches, and that server serves a request. Only the
+   allocations that this thread makes inside the calls can fail. */
+TEST(oom_sweep, every_failed_allocation_of_a_server_setup_is_reported) {
+  ccol_memmgmt_procs_t mp = {_sw_malloc, _sw_free, _sw_calloc, _sw_realloc};
+  t_sw_owner = true;
+  atomic_store(&g_sw_owner_only, true);
+  size_t create_fails = 0, route_fails = 0, sub_fails = 0, start_fails = 0;
+  size_t bad = 0, leaked = 0, start_later_bad = 0;
+  int final_status = -1;
+  bool finished = false;
+  for (long n = 0; n < 4000 && !finished; n++) {
+    atomic_store(&g_sw_failed, 0);
+    atomic_store(&g_sw_live, 0);
+    atomic_store(&g_sw_countdown, n);
+    char *err = NULL;
+    chttpsvr srv = chttpsvr_create_mp(&mp, g_test_logger, &err);
+    if (srv == CHTTPSVR_NULL) {
+      atomic_store(&g_sw_countdown, -1);
+      if (!err || !*err) bad++;
+      create_fails++;
+      if (atomic_load(&g_sw_live) != 0) leaked++;
+      continue;
+    }
+    bool stopped = false;
+    ccol_retval_t rv = chttpsvr_register_handler(
+        srv, CHTTP_GET, "/items/{id}/parts/{part}", _sw_plain_handler, NULL);
+    if (rv != ccol_success) {
+      stopped = true;
+      route_fails++;
+      if (rv != ccol_not_enough_memory) bad++;
+    }
+    chttpsvr_router *sub = NULL;
+    if (!stopped) {
+      sub = chttpsvr_subrouter(srv, "/api/v1");
+      if (!sub) {
+        stopped = true;
+        sub_fails++;
+      }
+    }
+    if (!stopped) {
+      rv = chttpsvr_router_on(sub, CHTTP_GET, "/things/{x}", _sw_plain_handler,
+                              NULL);
+      if (rv != ccol_success) {
+        stopped = true;
+        route_fails++;
+        if (rv != ccol_not_enough_memory) bad++;
+      }
+    }
+    chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+    cfg.host = "127.0.0.1";
+    cfg.port = 0;
+    cfg.worker_thread_count = 1;
+    if (!stopped) {
+      rv = chttpsvr_start(srv, &cfg);
+      if (rv != ccol_success) {
+        start_fails++;
+        if (rv != ccol_not_enough_memory) bad++;
+        atomic_store(&g_sw_countdown, -1);
+        bool running = true;
+        chttpsvr_is_running(srv, &running);
+        if (running || chttpsvr_start(srv, &cfg) != ccol_success)
+          start_later_bad++;
+        stopped = true;
+      }
+    }
+    atomic_store(&g_sw_countdown, -1);
+    if (atomic_load(&g_sw_failed) == 0) {
+      finished = true;
+      uint16_t port = 0;
+      char buf[1024] = {0};
+      if (chttpsvr_bound_port(srv, &port) == ccol_success)
+        final_status = _raw_request_on_port(port, "GET", "/api/v1/things/3",
+                                            NULL, buf, sizeof(buf));
+    }
+    chttpsvr_destroy(srv);
+    long live = _sw_wait_for_no_live_blocks();
+    if (live != 0) {
+      fprintf(stderr, "setup sweep: %ld blocks left after index %ld\n", live,
+              n);
+      leaked++;
+    }
+  }
+  atomic_store(&g_sw_owner_only, false);
+  t_sw_owner = false;
+  REQUIRE_TRUE(finished);
+  REQUIRE_EQ(bad, (size_t)0);
+  REQUIRE_EQ(leaked, (size_t)0);
+  REQUIRE_EQ(start_later_bad, (size_t)0);
+  REQUIRE_GT(create_fails, (size_t)0);
+  REQUIRE_GT(route_fails, (size_t)0);
+  REQUIRE_GT(sub_fails, (size_t)0);
+  REQUIRE_GT(start_fails, (size_t)0);
+  REQUIRE_EQ(final_status, 200);
+}
+
+/* What the handler of the request sweep saw, for the test to compare with
+   the response that reached the client. */
+#define RSW_LONG_HEADER 5000
+static char g_rsw_long_value[RSW_LONG_HEADER + 1];
+static _Atomic int g_rsw_ran = 0;
+static _Atomic int g_rsw_params_ok = -100;
+static _Atomic int g_rsw_query_ok = -100;
+static _Atomic int g_rsw_query_one_rv = -100;
+static _Atomic int g_rsw_set_rv = -100;
+static _Atomic int g_rsw_replace_rv = -100;
+static _Atomic int g_rsw_add_rv = -100;
+static _Atomic int g_rsw_long_rv = -100;
+static _Atomic int g_rsw_printf_rv = -100;
+
+static bool _rsw_rv_allowed(int rv) {
+  return rv == (int)ccol_success || rv == (int)ccol_not_enough_memory;
+}
+
+/* Reads both path parameters and four query parameters (a single value, a
+   repeated key, a key with no '=', a value longer than 512 bytes), sets a
+   header and then replaces its value, adds another, sets one long enough to
+   push the response head past its stack buffer, and formats a body past the
+   stack buffer of chttpsvr_resp_printf. When any of it ran out of memory it
+   answers 500 itself; every result goes to the globals above. */
+static void _rsw_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+  (void)ctx;
+  atomic_fetch_add(&g_rsw_ran, 1);
+  const char *id = chttpsvr_req_param(req, "id");
+  const char *part = chttpsvr_req_param(req, "part");
+  atomic_store(&g_rsw_params_ok,
+               id && part && strcmp(id, "7") == 0 && strcmp(part, "9") == 0);
+  const char *k = NULL;
+  ccol_retval_t q1 = chttpsvr_req_query_one(req, "k", &k);
+  atomic_store(&g_rsw_query_one_rv, (int)q1);
+  /* The array that chttpsvr_req_query returns lives only until the next
+     query call, so each result is checked before the next call. */
+  bool query_ok = q1 == ccol_success && k && strcmp(k, "v1") == 0;
+  size_t count = 0;
+  const char **m = chttpsvr_req_query(req, "m", &count);
+  query_ok = query_ok && m && count == 2 && strcmp(m[0], "a") == 0 &&
+             strcmp(m[1], "b") == 0;
+  const char **e = chttpsvr_req_query(req, "e", &count);
+  query_ok = query_ok && e && count == 1 && e[0][0] == '\0';
+  const char **l = chttpsvr_req_query(req, "long", &count);
+  query_ok = query_ok && l && count == 1 && strlen(l[0]) == 600;
+  /* Every key is present, so a miss must come from a failed allocation, and
+     chttpsvr_req_query_oom or the code of chttpsvr_req_query_one says so. */
+  atomic_store(&g_rsw_query_ok,
+               query_ok ? 1
+               : (q1 == ccol_not_enough_memory || chttpsvr_req_query_oom(req))
+                   ? 2
+                   : 0);
+  ccol_retval_t set_rv = chttpsvr_resp_set_header(resp, "X-One", "1");
+  ccol_retval_t replace_rv = chttpsvr_resp_set_header(resp, "X-One", "uno");
+  ccol_retval_t add_rv = chttpsvr_resp_add_header(resp, "X-Two", "2");
+  ccol_retval_t long_rv =
+      chttpsvr_resp_set_header(resp, "X-Long", g_rsw_long_value);
+  ccol_retval_t printf_rv =
+      chttpsvr_resp_printf(resp, "%s", g_long_printf_fill);
+  atomic_store(&g_rsw_set_rv, (int)set_rv);
+  atomic_store(&g_rsw_replace_rv, (int)replace_rv);
+  atomic_store(&g_rsw_add_rv, (int)add_rv);
+  atomic_store(&g_rsw_long_rv, (int)long_rv);
+  atomic_store(&g_rsw_printf_rv, (int)printf_rv);
+  if (!query_ok || set_rv != ccol_success || replace_rv != ccol_success ||
+      add_rv != ccol_success || long_rv != ccol_success ||
+      printf_rv != ccol_success)
+    chttpsvr_resp_set_status(resp, 500);
+}
+
+/* Whether the handler's results and the response it answered with agree:
+   every call gave ccol_success or ccol_not_enough_memory, and a header is on
+   the wire exactly when the call that set it worked, since a failed call
+   changes nothing in the response. */
+static bool _rsw_response_agrees(const char *buf) {
+  int set_rv = atomic_load(&g_rsw_set_rv);
+  int replace_rv = atomic_load(&g_rsw_replace_rv);
+  int add_rv = atomic_load(&g_rsw_add_rv);
+  int long_rv = atomic_load(&g_rsw_long_rv);
+  if (!_rsw_rv_allowed(set_rv) || !_rsw_rv_allowed(replace_rv) ||
+      !_rsw_rv_allowed(add_rv) || !_rsw_rv_allowed(long_rv) ||
+      !_rsw_rv_allowed(atomic_load(&g_rsw_printf_rv)) ||
+      !_rsw_rv_allowed(atomic_load(&g_rsw_query_one_rv)) ||
+      atomic_load(&g_rsw_query_ok) == 0)
+    return false;
+  bool want_uno = replace_rv == (int)ccol_success;
+  bool want_one = set_rv == (int)ccol_success && !want_uno;
+  return (strstr(buf, "X-One:uno\r\n") != NULL) == want_uno &&
+         (strstr(buf, "X-One:1\r\n") != NULL) == want_one &&
+         (strstr(buf, "X-Two:2\r\n") != NULL) ==
+             (add_rv == (int)ccol_success) &&
+         (strstr(buf, "X-Long:") != NULL) == (long_rv == (int)ccol_success);
+}
+
+/* Fails each allocation that one request makes in turn, from the accept to
+   the close: the request's header table, routing through a sub-router to a
+   route with two parameters, the query parse, the response headers, the
+   response head and a long formatted body. The query functions and the
+   header setters report ccol_not_enough_memory and change nothing, the
+   client gets a 500 or the whole response (or, when the connection or the
+   response head itself can't be allocated, a close), the server serves the
+   next request, and the destroy gives back every block. */
+TEST(oom_sweep, every_failed_allocation_of_a_request_ends_in_a_whole_answer) {
+  memset(g_long_printf_fill, 'p', LONG_PRINTF_FILL);
+  g_long_printf_fill[LONG_PRINTF_FILL] = '\0';
+  memset(g_rsw_long_value, 'h', RSW_LONG_HEADER);
+  g_rsw_long_value[RSW_LONG_HEADER] = '\0';
+  ccol_memmgmt_procs_t mp = {_sw_malloc, _sw_free, _sw_calloc, _sw_realloc};
+  atomic_store(&g_sw_countdown, -1);
+  atomic_store(&g_sw_live, 0);
+  chttpsvr srv = chttpsvr_create_mp(&mp, g_test_logger, NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
+  chttpsvr_router *sub = chttpsvr_subrouter(srv, "/api");
+  bool setup_ok =
+      sub &&
+      chttpsvr_router_on(sub, CHTTP_GET, "/items/{id}/parts/{part}",
+                         _rsw_handler, NULL) == ccol_success &&
+      chttpsvr_register_handler(srv, CHTTP_GET, "/plain", _sw_plain_handler,
+                                NULL) == ccol_success;
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = 0;
+  cfg.worker_thread_count = 1;
+  uint16_t port = 0;
+  setup_ok = setup_ok && chttpsvr_start(srv, &cfg) == ccol_success &&
+             chttpsvr_bound_port(srv, &port) == ccol_success;
+  if (!setup_ok) chttpsvr_destroy(srv);
+  REQUIRE_TRUE(setup_ok);
+
+  static char target[1024];
+  {
+    char long_val[601];
+    memset(long_val, 'L', 600);
+    long_val[600] = '\0';
+    snprintf(target, sizeof(target),
+             "/api/items/7/parts/9?k=v1&m=a&m=b&e&long=%s", long_val);
+  }
+  /* More request fields than the first header table holds, so it grows. */
+  static char extra[512];
+  {
+    size_t off = 0;
+    for (int i = 0; i < 12; i++)
+      off += (size_t)snprintf(extra + off, sizeof(extra) - off,
+                              "X-Req-%d: %d\r\n", i, i);
+  }
+  static char buf[16384];
+  size_t server_500 = 0, handler_500 = 0, dropped = 0, closed = 0, other = 0;
+  size_t disagree = 0, next_failed = 0;
+  bool finished = false, whole = false;
+  for (long n = 0; n < 4000 && !finished; n++) {
+    atomic_store(&g_rsw_ran, 0);
+    atomic_store(&g_sw_failed, 0);
+    memset(buf, 0, sizeof(buf));
+    atomic_store(&g_sw_countdown, n);
+    int status =
+        _raw_request_on_port(port, "GET", target, extra, buf, sizeof(buf));
+    atomic_store(&g_sw_countdown, -1);
+    bool failed = atomic_load(&g_sw_failed) != 0;
+    bool ran = atomic_load(&g_rsw_ran) != 0;
+    if (!failed) {
+      finished = true;
+      char *body = strstr(buf, "\r\n\r\n");
+      whole = status == 200 && ran && body &&
+              strcmp(body + 4, g_long_printf_fill) == 0 &&
+              strstr(buf, "X-One:uno\r\n") && strstr(buf, "X-Two:2\r\n") &&
+              strstr(buf, "X-Long:hhhh") &&
+              atomic_load(&g_rsw_params_ok) == 1 &&
+              atomic_load(&g_rsw_query_ok) == 1;
+      break;
+    }
+    if ((status == 200 || status == 500) && ran) {
+      if (status == 500) handler_500++;
+      if (!_rsw_response_agrees(buf)) disagree++;
+    } else if (status == 500) {
+      server_500++;
+    } else if (status == -1 && buf[0] == '\0' && !ran) {
+      /* The accepted connection itself couldn't be allocated, so the server
+         closed it unanswered and paused its listener for a moment. */
+      dropped++;
+    } else if (status == -1 && buf[0] == '\0') {
+      /* The handler ran but the response head couldn't be built, and a
+         response can't go out without its head. */
+      closed++;
+    } else {
+      fprintf(stderr, "request sweep: index %ld gave status %d (\"%.40s\")\n",
+              n, status, buf);
+      other++;
+    }
+    char pbuf[512] = {0};
+    if (_raw_request_on_port(port, "GET", "/plain", NULL, pbuf, sizeof(pbuf)) !=
+        200)
+      next_failed++;
+  }
+  chttpsvr_stop(srv);
+  chttpsvr_destroy(srv);
+  long live = _sw_wait_for_no_live_blocks();
+  REQUIRE_TRUE(finished);
+  REQUIRE_TRUE(whole);
+  REQUIRE_EQ(other, (size_t)0);
+  /* One allocation makes the connection and one the response head, so at
+     most one index ends in each kind of close. */
+  REQUIRE_LE(dropped, (size_t)1);
+  REQUIRE_LE(closed, (size_t)1);
+  REQUIRE_EQ(disagree, (size_t)0);
+  REQUIRE_EQ(next_failed, (size_t)0);
+  REQUIRE_GT(server_500, (size_t)0);
+  REQUIRE_GT(handler_500, (size_t)0);
+  REQUIRE_EQ(live, 0L);
 }

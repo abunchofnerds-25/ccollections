@@ -68,6 +68,11 @@ size_t _ctls_live_sock_bio_count_for_tests(void);
 long _ctls_system_ca_parses_for_tests(void);
 void _ctls_system_ca_forget_for_tests(void);
 
+/* How many certificates the trust store of ctx's default context holds
+ * right now, without the ones a hashed directory would load during a
+ * handshake, or -1 when ctx has no built context yet. */
+int _ctls_trusted_cert_count_for_tests(ctls_ctx_t *ctx);
+
 /* The raw SSL object of a connection, so a test can inspect the peer
  * certificate that the two sides agreed on. */
 SSL *_ctls_conn_ssl_for_tests(ctls_conn_t *conn);

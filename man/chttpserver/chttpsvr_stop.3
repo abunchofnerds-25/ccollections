@@ -20,7 +20,7 @@ shared reactor and every other registered listener keep running.
 Calling it again changes nothing: on a server that never started, or
 that has already stopped, chttpsvr_stop does nothing.
 
-It also does nothing, without any error, when srv is CHTTPSVR_INVALID
+It also does nothing, without any error, when srv is CHTTPSVR_NULL
 or a stale handle of a server that has already been destroyed.
 
 Connections that the server accepted before this call stay open, and
@@ -34,7 +34,7 @@ configuration.  chttpsvr_destroy waits for these in-flight requests
 to drain completely and closes every idle connection that is left
 before it frees the resources of the server.
 
-It is safe to call this function with CHTTPSVR_INVALID (0).
+It is safe to call this function with CHTTPSVR_NULL (0).
 
 It may run at the same time as a chttpsvr_start that restarts the
 same handle on another thread.  The restart doesn't race this call:

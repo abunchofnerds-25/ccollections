@@ -19,7 +19,7 @@
 # Naming them explicitly keeps the check meaningful for every other file.
 set -eu
 
-MIN_COVERAGE=80
+MIN_COVERAGE=90
 CCOL_DISABLED_SOURCES="${CCOL_DISABLED_SOURCES:-}"
 
 # Modules with no unit tests of their own. Whatever coverage they show comes by

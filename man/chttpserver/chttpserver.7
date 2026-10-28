@@ -24,7 +24,7 @@ chttpsvr_engine_wait(3) and then destroy it (chttpsvr_destroy(3)).
 .SS "Handles"
 .nf
 chttpsvr is an opaque value handle and not a pointer, and
-CHTTPSVR_INVALID (0) means no server. The library checks every handle
+CHTTPSVR_NULL (0) means no server. The library checks every handle
 before it touches the server, so a call through an invalid or
 destroyed handle fails cleanly. A destroy of a stale handle, a second
 destroy that races the first, and a destroy from a handler or a

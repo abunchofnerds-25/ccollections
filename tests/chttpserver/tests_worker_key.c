@@ -37,7 +37,9 @@ SOFTWARE.
 #include <sys/wait.h>
 #include <tau/tau.h>
 #include <test_connect.h>
+#include <test_coverage.h>
 #include <test_sanitizer.h>
+#include <test_signals.h>
 #include <unistd.h>
 
 TAU_MAIN()
@@ -45,9 +47,13 @@ TAU_MAIN()
 /* The test clients of this binary write to the server with plain write(2), and
  * the server can close a connection while one of them is writing. The library
  * leaves the SIGPIPE disposition to the application, so this binary ignores it
- * itself; tests_sigpipe.c covers the library under the default disposition. */
+ * itself; tests_sigpipe.c covers the library under the default disposition.
+ *
+ * test_reset_inherited_signals() puts back the rest of the signal state that
+ * the parent process can leave behind, before any thread starts. */
 __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
   signal(SIGPIPE, SIG_IGN);
+  test_reset_inherited_signals();
 }
 
 /* ========================================================================== */
@@ -103,8 +109,8 @@ static int _get_over_unix(const char *path) {
    server serves normally. If the key creation weren't checked, the first
    chttpsvr_start would succeed. */
 TEST(chttpsvr_worker_key, start_fails_cleanly_when_no_thread_key_is_left) {
-  chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_NE(srv, CHTTPSVR_INVALID);
+  chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_NE(srv, CHTTPSVR_NULL);
   ccol_retval_t reg_rv =
       chttpsvr_register_handler(srv, CHTTP_GET, "/hello", _hello, NULL);
   if (reg_rv != ccol_success) chttpsvr_destroy(srv);
@@ -212,9 +218,9 @@ TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
                                          .free = _late_free};
     int null_fd = open("/dev/null", O_WRONLY);
     clog cl = null_fd >= 0 ? clog_create_from_fd(null_fd, CLOG_INFO, NULL)
-                           : CLOG_INVALID;
+                           : CLOG_NULL;
     if (cl) chttpsvr_set_engine_logger(cl);
-    chttpsvr srv = chttpsvr_create_mp(&procs, CLOG_INVALID, NULL);
+    chttpsvr srv = chttpsvr_create_mp(&procs, CLOG_NULL, NULL);
     char sock_path[64];
     snprintf(sock_path, sizeof(sock_path), "/tmp/chttpsvr_late_%d.sock",
              (int)getpid());
@@ -224,7 +230,7 @@ TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
     chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = host_buf;
     chttpsvr_router *api =
-        srv != CHTTPSVR_INVALID ? chttpsvr_subrouter(srv, "/api") : NULL;
+        srv != CHTTPSVR_NULL ? chttpsvr_subrouter(srv, "/api") : NULL;
     if (api &&
         chttpsvr_router_on(api, CHTTP_GET, "/x", _hello, NULL) ==
             ccol_success &&
@@ -250,7 +256,7 @@ TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
     unlink(sock_path);
     ssize_t written = write(pipefd[1], out, sizeof(out));
     (void)written;
-    _exit(0);
+    test_child_exit(0);
   }
   close(pipefd[1]);
   char got[LATE_CHECKS] = {0};
@@ -280,12 +286,12 @@ TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
 /* priority.                                                                  */
 /* ========================================================================== */
 
-static chttpsvr g_stale_handle_for_exit_check = CHTTPSVR_INVALID;
+static chttpsvr g_stale_handle_for_exit_check = CHTTPSVR_NULL;
 
 /* Remembers a handle whose server is destroyed, for the check at exit. */
 TEST(chttpsvr_worker_key, a_stale_handle_is_kept_for_the_check_at_exit) {
-  chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_NE(srv, CHTTPSVR_INVALID);
+  chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_NE(srv, CHTTPSVR_NULL);
   chttpsvr kept = srv;
   chttpsvr_destroy(srv);
   g_stale_handle_for_exit_check = kept;
@@ -300,17 +306,17 @@ TEST(chttpsvr_worker_key, a_stale_handle_is_kept_for_the_check_at_exit) {
  * reads of freed memory. */
 __attribute__((destructor(101))) static void
 _check_handles_after_library_destructor(void) {
-  if (g_stale_handle_for_exit_check == CHTTPSVR_INVALID) return;
+  if (g_stale_handle_for_exit_check == CHTTPSVR_NULL) return;
   chttpsvr_stop(g_stale_handle_for_exit_check);
   ccol_retval_t reg_rv = chttpsvr_register_handler(
       g_stale_handle_for_exit_check, CHTTP_GET, "/late", _hello, NULL);
   char *err = NULL;
-  chttpsvr late = chttpsvr_create(CLOG_INVALID, &err);
-  if (late != CHTTPSVR_INVALID || err == NULL || reg_rv == ccol_success) {
+  chttpsvr late = chttpsvr_create(CLOG_NULL, &err);
+  if (late != CHTTPSVR_NULL || err == NULL || reg_rv == ccol_success) {
     fprintf(stderr,
             "FAILED: a call after the exit-time destructor of the library "
             "used its released handle table (create=%llu err=%s reg=%d)\n",
             (unsigned long long)late, err ? err : "(null)", (int)reg_rv);
-    _exit(1);
+    test_child_exit(1);
   }
 }

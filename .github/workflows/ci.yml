@@ -13,10 +13,22 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The root Makefile runs each module of `make test` and `make memtest` under
+# timeout(1) for this many seconds when SUITE_TIMEOUT is set, so a hang fails
+# its own module and names it, instead of using up the whole job timeout.
+env:
+  SUITE_TIMEOUT: 1800
+
+# Every Linux job names ubuntu-24.04 rather than ubuntu-latest. The cross jobs
+# add ports.ubuntu.com sources for the noble release, and multiarch needs the
+# host and foreign packages from one release, so a runner on any other release
+# can't install them. The pin also keeps CI on the toolchain the suites were
+# verified with; moving to a newer release means changing every runs-on line,
+# the noble sources lines and the ABI baselines together.
 jobs:
   linux-x86_64-gcc:
     name: Linux x86_64 (GCC)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Nothing inside the process limits a hang: a queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
@@ -172,7 +184,7 @@ jobs:
 
   linux-x86_64-clang:
     name: Linux x86_64 (Clang)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Nothing inside the process limits a hang: a queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
@@ -193,7 +205,7 @@ jobs:
 
   freebsd-x86_64:
     name: FreeBSD 14 x86_64 (Clang and GCC)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The FreeBSD guest boots inside the Linux runner, so this job pays for the
     # boot, for valgrind and for ThreadSanitizer in a VM, and the timeout leaves
     # room for all three.
@@ -219,6 +231,11 @@ jobs:
           # the previous compiler.
           run: |
             set -eu
+            # A deliberate abort in a forked test child writes a core file of
+            # the whole test heap (up to about 260 MB) before the parent can
+            # reap it, and on a busy runner that write can outlast the bound
+            # the parent puts on the child.
+            ulimit -c 0
             # Runs one target in every module with a time bound of 30 minutes
             # each (the slowest module takes a few minutes here), carries on
             # after a failing module and names the failures at the end. A plain
@@ -264,7 +281,7 @@ jobs:
 
   openbsd-x86_64:
     name: OpenBSD 7.9 x86_64 (Clang and GCC)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The OpenBSD guest boots inside the Linux runner like the FreeBSD one, and
     # every suite runs twice in it, so the timeout leaves room for both passes.
     timeout-minutes: 150
@@ -290,6 +307,11 @@ jobs:
           run: |
             set -eu
             ulimit -n 1024
+            # A deliberate abort in a forked test child writes a core file of
+            # the whole test heap (up to about 260 MB) before the parent can
+            # reap it, and on a busy runner that write can outlast the bound
+            # the parent puts on the child.
+            ulimit -c 0
             # Runs one target in every module with a time bound of 30 minutes
             # each (the slowest module takes a few minutes here), carries on
             # after a failing module and names the failures at the end. A plain
@@ -320,7 +342,7 @@ jobs:
 
   linux-x86_64-musl:
     name: Linux x86_64 musl (Alpine 3.24, GCC and Clang)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Alpine is the usual base image for containers, so this job runs the suites
     # on musl inside that image, as root. Every suite runs with GCC and with
     # Clang, and then once more under valgrind.
@@ -330,7 +352,7 @@ jobs:
       # git goes first, otherwise actions/checkout downloads an archive of the
       # repository instead of cloning it.
       - name: Install dependencies
-        run: apk add --no-cache build-base linux-headers openssl openssl-dev zlib-dev valgrind pkgconf clang lld git
+        run: apk add --no-cache build-base linux-headers openssl openssl-dev zlib-dev valgrind pkgconf clang lld git coreutils
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: make test (GCC)
         run: make test
@@ -350,14 +372,14 @@ jobs:
           for d in tests/*/; do
             [ -f "$d/Makefile" ] || continue
             case "$d" in tests/cjson/|tests/cyaml/) continue ;; esac
-            make -C "$d" memtest
+            timeout -k 30 "$SUITE_TIMEOUT" make -C "$d" memtest || { echo "$d: memtest failed or ran past $SUITE_TIMEOUT s" >&2; exit 1; }
           done
       - name: unload and install checks
         run: make && make check_dso_unload && make check_install
 
   linux-x86_64-debian11:
     name: Linux x86_64 Debian 11 (GCC 10, Clang 11, OpenSSL 1.1.1)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The oldest compilers and TLS library that we support: GCC 10, Clang 11 and
     # OpenSSL 1.1.1, as Debian 11 ships them. Every other Linux job builds with
     # a newer GCC and Clang and with OpenSSL 3, so without this job a call that
@@ -381,6 +403,9 @@ jobs:
           rm -f /etc/apt/sources.list.d/*
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libssl-dev zlib1g-dev pkg-config locales git clang-11
+          # The compile probes look for a command named clang and skip
+          # without one.
+          ln -s /usr/bin/clang-11 /usr/local/bin/clang
           gcc --version | head -n 1
           clang-11 --version | head -n 1
           openssl version
@@ -398,7 +423,7 @@ jobs:
 
   linux-x86_64-minimal:
     name: Linux x86_64 (minimal build, no optional modules)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Nothing inside the process limits a hang: a queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
@@ -443,7 +468,7 @@ jobs:
 
   linux-x86_64-coverage:
     name: Coverage threshold
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Nothing inside the process limits a hang: a queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
@@ -468,7 +493,7 @@ jobs:
 
   linux-x86_64-sanitizers:
     name: Linux x86_64 (ASan + UBSan)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Nothing inside the process limits a hang: a queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
@@ -493,7 +518,7 @@ jobs:
 
   linux-x86_64-tsan:
     name: Linux x86_64 (ThreadSanitizer)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Nothing inside the process limits a hang: a queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
@@ -507,30 +532,41 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev
       - name: cpintable test_tsan
         run: cd tests/cpintable && make test_tsan
+        timeout-minutes: 45
       - name: cmempool test_tsan
         run: cd tests/cmempool && make test_tsan
+        timeout-minutes: 45
       - name: clrucache test_tsan
         run: cd tests/clrucache && make test_tsan
+        timeout-minutes: 45
       - name: mixed test_tsan (behavioural compatibility corpus)
         run: cd tests/mixed && make test_tsan
+        timeout-minutes: 45
       - name: clogger test_tsan
         run: cd tests/clogger && make test_tsan
+        timeout-minutes: 45
       - name: cthreadpool test_tsan
         run: cd tests/cthreadpool && make test_tsan
+        timeout-minutes: 45
       - name: cthreadcomm test_tsan
         run: cd tests/cthreadcomm && make test_tsan
+        timeout-minutes: 45
       - name: ctls test_tsan
         run: cd tests/ctls && make test_tsan
+        timeout-minutes: 45
       - name: chttpclient test_tsan
         run: cd tests/chttpclient && make test_tsan
+        timeout-minutes: 45
       - name: chttpserver test_tsan
         run: cd tests/chttpserver && make test_tsan
+        timeout-minutes: 45
       - name: chttpserver test_engine_stop_tsan
         run: cd tests/chttpserver && make test_engine_stop_tsan
+        timeout-minutes: 45
 
   linux-x86_64-tsan-clang:
     name: Linux x86_64 (ThreadSanitizer, Clang)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The GCC ThreadSanitizer job above doesn't see a data race on a struct
     # assignment. GCC's instrumentation pass emits no __tsan_write for a struct
     # copy, so a race on a copied struct timespec or any other aggregate passes
@@ -544,30 +580,41 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
       - name: cpintable test_tsan (Clang)
         run: cd tests/cpintable && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: cmempool test_tsan (Clang)
         run: cd tests/cmempool && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: clrucache test_tsan (Clang)
         run: cd tests/clrucache && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: mixed test_tsan (behavioural compatibility corpus) (Clang)
         run: cd tests/mixed && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: clogger test_tsan (Clang)
         run: cd tests/clogger && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: cthreadpool test_tsan (Clang)
         run: cd tests/cthreadpool && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: cthreadcomm test_tsan (Clang)
         run: cd tests/cthreadcomm && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: ctls test_tsan (Clang)
         run: cd tests/ctls && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: chttpclient test_tsan (Clang)
         run: cd tests/chttpclient && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: chttpserver test_tsan (Clang)
         run: cd tests/chttpserver && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: chttpserver test_engine_stop_tsan (Clang)
         run: cd tests/chttpserver && make CC=clang test_engine_stop_tsan
+        timeout-minutes: 45
 
   linux-x86_64-tsan-macos-paths:
     name: Linux x86_64 (ThreadSanitizer, Clang, macOS code paths)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The macOS build compiles its own timed locks, a condition variable that
     # waits on a relative time, a pipe semaphore, per-thread state on the heap
     # and the close-on-exec gate, and neither ThreadSanitizer job above compiles
@@ -586,30 +633,41 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
       - name: cpintable test_tsan (Clang, macOS code paths)
         run: cd tests/cpintable && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: cmempool test_tsan (Clang, macOS code paths)
         run: cd tests/cmempool && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: clrucache test_tsan (Clang, macOS code paths)
         run: cd tests/clrucache && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: mixed test_tsan (Clang, macOS code paths)
         run: cd tests/mixed && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: clogger test_tsan (Clang, macOS code paths)
         run: cd tests/clogger && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: cthreadpool test_tsan (Clang, macOS code paths)
         run: cd tests/cthreadpool && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: cthreadcomm test_tsan (Clang, macOS code paths)
         run: cd tests/cthreadcomm && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: ctls test_tsan (Clang, macOS code paths)
         run: cd tests/ctls && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: chttpclient test_tsan (Clang, macOS code paths)
         run: cd tests/chttpclient && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: chttpserver test_tsan (Clang, macOS code paths)
         run: cd tests/chttpserver && make CC=clang test_tsan
+        timeout-minutes: 45
       - name: chttpserver test_engine_stop_tsan (Clang, macOS code paths)
         run: cd tests/chttpserver && make CC=clang test_engine_stop_tsan
+        timeout-minutes: 45
 
   linux-x86_64-memtest-macos-paths:
     name: Linux x86_64 (memtest, macOS code paths)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # macOS has no valgrind, and leaks(1) there drops the exit status of the
     # test and hangs on a program that forks. The code that only macOS compiles
     # sits behind the _CCOL_EMULATE_DARWIN_* switches, and this job turns them
@@ -632,7 +690,7 @@ jobs:
 
   linux-i386-gcc:
     name: Linux i386 (GCC, gcc -m32)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Nothing inside the process limits a hang: a queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
@@ -664,7 +722,7 @@ jobs:
 
   linux-i386-clang:
     name: Linux i386 (Clang, clang -m32)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Nothing inside the process limits a hang: a queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
@@ -693,7 +751,7 @@ jobs:
 
   linux-i386-ubsan:
     name: Linux i386 (UBSan, gcc -m32 and clang -m32)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Nothing inside the process limits a hang: a queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
@@ -745,7 +803,7 @@ jobs:
 
   linux-aarch64-gcc:
     name: Linux aarch64 (cross-compile + QEMU)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # qemu-user has a timing-dependent class of deadlock around a guest fork():
     # a lock that the emulator holds at that instant passes to the child locked,
     # and the child's threads then sleep on a futex, waiting for a lock that
@@ -858,7 +916,7 @@ jobs:
             # fails completely from any other directory.
             for bin in $bins; do
               echo "--- $bin ---"
-              (cd "$dir" && qemu-aarch64-static -L /usr/aarch64-linux-gnu "./$bin")
+              (cd "$dir" && timeout -k 30 1200 qemu-aarch64-static -L /usr/aarch64-linux-gnu "./$bin")
             done
             echo "::endgroup::"
           done
@@ -875,7 +933,7 @@ jobs:
 
   linux-s390x-gcc:
     name: Linux s390x, big-endian (cross-compile + QEMU)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # s390x is the one big-endian target of this matrix, so a byte-order
     # assumption in a hash, a serializer, a parser or a test that reads raw
     # bytes passes on every other job and fails here.
@@ -991,7 +1049,7 @@ jobs:
             # fails completely from any other directory.
             for bin in $bins; do
               echo "--- $bin ---"
-              (cd "$dir" && qemu-s390x-static -L /usr/s390x-linux-gnu "./$bin")
+              (cd "$dir" && timeout -k 30 1200 qemu-s390x-static -L /usr/s390x-linux-gnu "./$bin")
             done
             echo "::endgroup::"
           done
@@ -1008,7 +1066,7 @@ jobs:
 
   linux-aarch64-clang:
     name: Linux aarch64 (Clang cross-compile + QEMU)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # See the comment in the linux-aarch64-gcc job above for the full reason.
     # This job runs the same fork() tests under the same emulator, so it has
     # the same remaining risk of a deadlock.
@@ -1098,14 +1156,14 @@ jobs:
             # fails completely from any other directory.
             for bin in $bins; do
               echo "--- $bin ---"
-              (cd "$dir" && qemu-aarch64-static -L /usr/aarch64-linux-gnu "./$bin")
+              (cd "$dir" && timeout -k 30 1200 qemu-aarch64-static -L /usr/aarch64-linux-gnu "./$bin")
             done
             echo "::endgroup::"
           done
 
   linux-arm32-gcc:
     name: Linux arm32 (cross-compile + QEMU)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # See the comment in the linux-aarch64-gcc job above for the full reason.
     # This job runs the same fork() tests under qemu-arm, so it has the same
     # remaining risk of a deadlock.
@@ -1186,7 +1244,7 @@ jobs:
             # fails completely from any other directory.
             for bin in $bins; do
               echo "--- $bin ---"
-              (cd "$dir" && qemu-arm-static -L /usr/arm-linux-gnueabihf "./$bin")
+              (cd "$dir" && timeout -k 30 1200 qemu-arm-static -L /usr/arm-linux-gnueabihf "./$bin")
             done
             echo "::endgroup::"
           done
@@ -1203,7 +1261,7 @@ jobs:
 
   linux-arm32-clang:
     name: Linux arm32 (Clang cross-compile + QEMU)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # See the comment in the linux-aarch64-gcc job above for the full reason.
     # This job runs the same fork() tests under qemu-arm, so it has the same
     # remaining risk of a deadlock.
@@ -1297,7 +1355,7 @@ jobs:
             # fails completely from any other directory.
             for bin in $bins; do
               echo "--- $bin ---"
-              (cd "$dir" && qemu-arm-static -L /usr/arm-linux-gnueabihf "./$bin")
+              (cd "$dir" && timeout -k 30 1200 qemu-arm-static -L /usr/arm-linux-gnueabihf "./$bin")
             done
             echo "::endgroup::"
           done

@@ -44,7 +44,7 @@ SRC_CFLAGS = $(CFLAGS_COMMON) $(SRC_OPT) $(EXTRA_CFLAGS)
 SRC_OBJS = $(notdir $(SRC_FILES:.c=.o))
 TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1 $(EXTRA_CFLAGS)
 COVERAGE_FLAGS =
-COVERAGE_ON = -fprofile-arcs -ftest-coverage
+COVERAGE_ON = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 LFLAGS = -lpthread $(CCOL_PLATFORM_LIBS) $(CCOL_DL_LIBS)
 
 # An object file keeps no record of how it was built, so without this stamp
@@ -124,11 +124,15 @@ memtest: build
 # above instruments the library objects too. The build rebuilds those objects
 # because the flags differ from an ordinary build, so you do not have to run
 # `make clean` first.
+# Every binary that `test` runs is built and run here too, with the same
+# instrumentation, so the tracefile counts what each of them reaches.
 generate_coverage_report:
 	$(MAKE) clean_objs
 	$(MAKE) COVERAGE_FLAGS="$(COVERAGE_ON)" $(SRC_OBJS)
 	$(CC) $(COVERAGE_ON) $(CFLAGS) tests.c $(SRC_OBJS) -o tests $(LFLAGS) && \
 	./tests && \
+	$(CC) $(COVERAGE_ON) $(CFLAGS) tests_keys.c $(SRC_OBJS) -o tests_keys $(LFLAGS) && \
+	./tests_keys && \
 	gcov -d -w $(SRC_FILE_PREFIX) && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \

@@ -11983,6 +11983,13 @@ typedef struct {
   int depth;
 } _sblock_frame_t;
 
+#ifdef RUNNING_UNIT_TESTS
+__thread size_t _cyaml_serialize_oom_visits_for_tests;
+#define _CYAML_COUNT_OOM_VISIT() (_cyaml_serialize_oom_visits_for_tests++)
+#else
+#define _CYAML_COUNT_OOM_VISIT() ((void)0)
+#endif /* RUNNING_UNIT_TESTS */
+
 /*
  * Writes everything about n that comes before its children: the null literal
  * for a NULL pointer, a verbatim tag where the node's type doesn't already
@@ -12004,7 +12011,10 @@ typedef struct {
 static inline __attribute__((always_inline)) _cyaml_emit_head_t
 serialize_block_head(ybuf_t *b, cyaml_node_t *n, int depth, size_t *count_out,
                      int max_depth) {
-  if (b->oom) return _CYAML_EMIT_DONE;
+  if (b->oom) {
+    _CYAML_COUNT_OOM_VISIT();
+    return _CYAML_EMIT_DONE;
+  }
   if (!n) {
     yb_append_cstr(b, "~");
     return _CYAML_EMIT_DONE;
@@ -12049,6 +12059,7 @@ serialize_block_head(ybuf_t *b, cyaml_node_t *n, int depth, size_t *count_out,
       break;
     case CYAML_LIST:
       if (depth >= max_depth) {
+        _CYAML_COUNT_OOM_VISIT();
         b->oom = true;
         break;
       }
@@ -12061,6 +12072,7 @@ serialize_block_head(ybuf_t *b, cyaml_node_t *n, int depth, size_t *count_out,
       return _CYAML_EMIT_LIST;
     case CYAML_DICTIONARY:
       if (depth >= max_depth) {
+        _CYAML_COUNT_OOM_VISIT();
         b->oom = true;
         break;
       }
@@ -12327,7 +12339,10 @@ typedef struct {
 static inline __attribute__((always_inline)) _cyaml_emit_head_t
 serialize_flow_head(ybuf_t *b, cyaml_node_t *n, int depth, size_t *count_out,
                     size_t limit) {
-  if (b->oom) return _CYAML_EMIT_DONE;
+  if (b->oom) {
+    _CYAML_COUNT_OOM_VISIT();
+    return _CYAML_EMIT_DONE;
+  }
   if (!n) {
     yb_put(b, "~", 1, limit);
     return _CYAML_EMIT_DONE;
@@ -12371,6 +12386,7 @@ serialize_flow_head(ybuf_t *b, cyaml_node_t *n, int depth, size_t *count_out,
       break;
     case CYAML_LIST:
       if (depth >= CYAML_MAX_NESTING_DEPTH) {
+        _CYAML_COUNT_OOM_VISIT();
         b->oom = true;
         break;
       }
@@ -12383,6 +12399,7 @@ serialize_flow_head(ybuf_t *b, cyaml_node_t *n, int depth, size_t *count_out,
       return _CYAML_EMIT_LIST;
     case CYAML_DICTIONARY:
       if (depth >= CYAML_MAX_NESTING_DEPTH) {
+        _CYAML_COUNT_OOM_VISIT();
         b->oom = true;
         break;
       }

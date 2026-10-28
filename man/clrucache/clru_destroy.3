@@ -15,16 +15,16 @@ Waits until every in-flight resolved use of the handle has stopped,
 then evicts all the remaining entries, calling the eviction callback
 for each one with the lock of the owning segment held. After that it
 destroys the map of every segment, frees all the memory and sets name
-to CLRU_CACHE_INVALID.
+to CLRU_CACHE_NULL.
 .fi
 .SH PARAMETERS
 .nf
 name  The cache variable to destroy. The macro sets it to
-      CLRU_CACHE_INVALID after the destruction
+      CLRU_CACHE_NULL after the destruction
 .fi
 .SH NOTES
 .nf
-Calling it when name is CLRU_CACHE_INVALID is safe, and it does
+Calling it when name is CLRU_CACHE_NULL is safe, and it does
 nothing.
 A call on a stale handle is a FATAL ERROR: it calls abort() and raises
 SIGABRT, and it is never a silent double-free. A handle is stale when

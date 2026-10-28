@@ -16338,8 +16338,10 @@ static int accepts_for_two_requests(int tier, hs_srv_t *srv, const char *path,
     chttpclient_resp_free(resp);
   }
   chttp_request_free(req);
-  wait_for_async_engine_idle();
+  /* Destroy first: it closes a pooled connection at once, and the engine then
+   * goes idle without waiting for the server to time that connection out. */
   chttpclient_destroy(cli);
+  wait_for_async_engine_idle();
   return atomic_load(&srv->accepts) - before;
 }
 
@@ -16360,6 +16362,23 @@ TEST(response_framing, http10_transfer_encoding_is_never_kept_alive) {
                                                 ka_rv[tier], ka_len[tier]);
   }
   if (ok_a) hs_stop(&a);
+
+  /* A REQUIRE below names only the first value that is wrong. Print every
+   * request that went wrong first, so a failure says which tier and which
+   * request it was, and whether the server ever accepted its connection. */
+  for (int tier = 1; tier <= 3 && ok_a; tier++) {
+    for (int i = 0; i < 2; i++) {
+      if (te_rv[tier][i] != ccol_success || te_len[tier][i] != 5)
+        fprintf(stderr, "DIAG /http10-te tier %d request %d: rv %d len %zu\n",
+                tier, i, (int)te_rv[tier][i], te_len[tier][i]);
+      if (ka_rv[tier][i] != ccol_success || ka_len[tier][i] != 5)
+        fprintf(stderr, "DIAG /http11-ka tier %d request %d: rv %d len %zu\n",
+                tier, i, (int)ka_rv[tier][i], ka_len[tier][i]);
+    }
+    if (te_accepts[tier] != 2 || ka_accepts[tier] != 1)
+      fprintf(stderr, "DIAG tier %d accepts: /http10-te %d, /http11-ka %d\n",
+              tier, te_accepts[tier], ka_accepts[tier]);
+  }
 
   REQUIRE_TRUE(ok_a);
   for (int tier = 1; tier <= 3; tier++) {

@@ -76,4 +76,4 @@ tests/*/.build-flags
 # The build identity stamp of clogger's consumer view translation unit
 tests/*/.build-flags-consumer
 
-# A line with no side effects. It starts a new CI run - 1
+# A line with no side effects. It starts a new CI run - 2

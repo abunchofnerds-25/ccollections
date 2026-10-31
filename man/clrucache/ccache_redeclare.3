@@ -1,0 +1,60 @@
+.TH CCACHE_REDECLARE 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccache_redeclare \- restore the type-tracking variables for a cache that crosses scopes
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clrucache.h>
+
+ccache_redeclare(name, KeyT, ValT);
+.fi
+.SH DESCRIPTION
+.nf
+The type-dispatching macros ccache_get() and ccache_set() need the hidden
+companion variables that ccache_declare() and ccache_construct() create.
+Once you pass a ccache handle to another function those variables
+don't exist there, and ccache_redeclare() creates them again so that
+every type-inferred macro works in the new scope.
+.fi
+.SH PARAMETERS
+.nf
+name  The existing ccache variable that gets the type information
+KeyT  Key type. It must match the type of the construction
+ValT  Value type. It must match the type of the construction
+.fi
+.SH NOTES
+.nf
+Always call ccache_redeclare() before ccache_get() or ccache_set() in a new
+scope; a missing call is the most common mistake when a cache crosses
+a function boundary.
+The name argument must be a plain identifier, because the macro pastes
+it into the names of the companion variables. Any other expression,
+such as the struct member ga->cache, cannot be used, so copy such a
+handle into a local variable and redeclare that variable:
+
+    ccache c = ga->cache;
+    ccache_redeclare(c, int, double);
+
+An array key type or value type, such as int[2] or char[16], is a
+compile error whose message tells you to wrap the array in a struct.
+The macros copy a key or a value by assignment and C cannot assign an
+array, so without that error the cache would store the address of the
+caller's array instead of its elements. A struct that holds the array
+works.
+.fi
+.SH EXAMPLES
+.nf
+void use_cache(ccache c) {
+    ccache_redeclare(c, int, double);
+    double out = 0.0;
+    if (ccache_get(c, 42, &out) == ccol_success) {
+        printf("%.2f\en", out);
+    }
+}
+.fi
+.SH "SEE ALSO"
+.BR ccache_declare (3),
+.BR ccache_construct (3),
+.BR ccache_get (3),
+.BR ccache_set (3)

@@ -20,9 +20,9 @@ You can call this function at any time, and it takes effect at once.
 The engine keeps the child logger across every stop and restart until
 another call to this function replaces it.
 
-chttpclient_do_async, chttpclient_do_async_streaming and the
-pooled-sync wrappers built on them (chttpclient_do_pooled and
-chttpclient_do_pooled_streaming) share one ccol_event_loop reactor.
+chttpcli_do_async, chttpcli_do_async_streaming and the
+pooled-sync wrappers built on them (chttpcli_do_pooled and
+chttpcli_do_pooled_streaming) share one ceventloop reactor.
 That reactor serves the whole process and every chttpcli instance in
 it, the default client included, and the library starts it the first
 time it is needed. This function captures that reactor's diagnostics,
@@ -76,6 +76,6 @@ ccol_invalid_args, if cl is not CLOG_NULL but is closed or stale;
 .BR chttpcli_engine_wait (3),
 .BR chttpcli_set_engine_mem_mgmt_procs (3),
 .BR clog_create_from_fd (3),
-.BR chttpclient_do_async (3),
-.BR chttpclient_do_pooled (3),
+.BR chttpcli_do_async (3),
+.BR chttpcli_do_pooled (3),
 .BR chttpsvr_set_engine_logger (3)

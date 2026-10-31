@@ -1,0 +1,72 @@
+.TH CEVENTLOOP_SHUTDOWN 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ceventloop_shutdown \- stop an event loop's poller and dispatch worker threads
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ceventloop_shutdown(ceventloop loop);
+.fi
+.SH DESCRIPTION
+.nf
+Tells the poller thread of loop to stop and waits until it has joined
+that thread. With num_reactor_threads > 1 it then drains and joins every
+dispatch worker thread as well. The drain is graceful: every job that
+is already queued or running finishes, and nothing is cancelled. Either
+way, no dispatch can be in flight once the call returns.
+
+When nothing of loop dispatches any more, each of its queue
+registrations stops taking wakes from its queue, and a wake that it was
+holding goes on to the next listener of that queue, so the other
+listeners of a queue that loop watched keep getting every message. The
+registrations themselves stay in place until ceventloop_remove(3)
+or ceventloop_destroy(3), and their on_removed still runs then.
+Any later ceventloop_add(3) on loop is refused.
+
+The call is idempotent, so it is safe to make it several times and from
+several threads at once. Exactly one caller does the joins, and every
+other caller waits until those joins are done before it returns, so
+each caller gets its "blocks until joined" guarantee whichever one
+started the shutdown.
+
+ceventloop_destroy() runs the shutdown itself if nobody called
+this function, so calling it first is optional. Call it directly when
+stopping the threads and freeing the resources have to happen at
+different times.
+.fi
+.SH PARAMETERS
+.nf
+loop  ceventloop to shut down.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        The loop is shut down, by this call or an earlier
+                    one.
+ccol_invalid_args   loop is CEVENTLOOP_NULL, a stale handle,
+                    or a handle that has already been destroyed.
+ccol_not_permitted  The call comes from inside a callback that runs on
+                    one of the threads of loop (the poller, or a
+                    dispatch worker). See WARNINGS.
+.fi
+.SH WARNINGS
+.nf
+Do not call this function from a callback that runs on one of loop's
+threads. The call would join that thread from itself, which is
+undefined behavior and gives EDEADLK. It joins the poller thread and,
+with num_reactor_threads > 1, also drains and joins every dispatch
+worker, which is where the callbacks run in that case. The library
+detects such a call and refuses it with ccol_not_permitted rather than
+leaving undefined behavior for a caller to trigger. Hand the shutdown
+to another thread, or do it after the callback returns.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call from several threads at the same time, as long as none
+of them is one of loop's own threads: the poller thread and, with
+num_reactor_threads > 1, the dispatch worker threads.
+.fi
+.SH "SEE ALSO"
+.BR ceventloop_destroy (3),
+.BR ceventloop_create (3)

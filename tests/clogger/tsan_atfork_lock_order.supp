@@ -55,7 +55,7 @@ deadlock:_clog_atfork_prepare
 #
 # The fork-prepare handlers of this module and of cthreadcomm write-lock
 # their process-wide slot-table rwlocks (clog_slot_table.rwlock and
-# ccol_event_loop_slot_table.rwlock) on the thread that calls fork(). In the
+# ceventloop_slot_table.rwlock) on the thread that calls fork(). In the
 # child that thread has a new thread ID, and the unlock of a glibc rwlock
 # compares the recorded writer ID with the caller's, so a plain unlock would
 # return 0 and release nothing. That's why the child handlers re-initialize

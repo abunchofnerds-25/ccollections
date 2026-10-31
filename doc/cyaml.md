@@ -266,7 +266,7 @@ int main(int argc, char **argv) {
     /* After the parse, the merge key is gone from the tree and its members
      * take its place. An explicit key of the mapping wins over a merged
      * key. */
-    cyaml_dictionary_iter it;
+    cyaml_dictionary_iter_t it;
     for (bool ok = cyaml_dictionary_first(settings, &it); ok;
          ok = cyaml_dictionary_next(&it)) {
         printf("%-8s = ", it.key);
@@ -555,7 +555,7 @@ static cyaml convert(cjson j) {
     }
     case CJSON_DICTIONARY: {
         cyaml out = cyaml_create_dictionary();
-        cjson_dictionary_iter it;
+        cjson_dictionary_iter_t it;
         for (bool ok = out && cjson_dictionary_first(j, &it); ok;
              ok = cjson_dictionary_next(&it)) {
             cyaml child = convert(it.value);

@@ -27,7 +27,7 @@ SOFTWARE.
  * is what makes a task that destroys its own pool fail loudly instead of
  * freeing the pool under its own worker. A pool that can't get the key must
  * therefore not be created at all. The key is created once per process, so
- * this runs in its own binary where no other ctpool call comes first. */
+ * this runs in its own binary where no other cthrpool call comes first. */
 
 #include <cthreadpool.h>
 #include <pthread.h>
@@ -54,29 +54,29 @@ static pthread_key_t exhausted[MAX_TEST_KEYS];
  * key variable happens to name. That is somebody else's key (here the one
  * this test created first), and its destructor would get the pool when each
  * worker exits. */
-TEST(ctpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
+TEST(cthrpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
   pthread_key_t app_key;
   int app_key_ok = pthread_key_create(&app_key, app_destructor) == 0;
   int n = 0;
   while (n < MAX_TEST_KEYS && pthread_key_create(&exhausted[n], NULL) == 0) n++;
 
   char *err = NULL;
-  ctpool p = ctpool_create(1, 0, &err);
-  /* ctpool_destroy clears the handle, so we keep the outcome first. */
-  int created = p != CTPOOL_NULL;
+  cthrpool p = cthrpool_create(1, 0, &err);
+  /* cthrpool_destroy clears the handle, so we keep the outcome first. */
+  int created = p != CTHRPOOL_NULL;
   if (created) {
-    ctpool_submit(p, noop_task, NULL, NULL);
-    ctpool_shutdown_drain(p);
-    ctpool_destroy(p);
+    cthrpool_submit(p, noop_task, NULL, NULL);
+    cthrpool_shutdown_drain(p);
+    cthrpool_destroy(p);
   }
 
   /* The keys are free again but the failure stays, because the module
    * doesn't try to create its key a second time in this process. */
   for (int i = 0; i < n; i++) pthread_key_delete(exhausted[i]);
   char *err_again = NULL;
-  ctpool again = ctpool_create(1, 0, &err_again);
-  int created_again = again != CTPOOL_NULL;
-  if (created_again) ctpool_destroy(again);
+  cthrpool again = cthrpool_create(1, 0, &err_again);
+  int created_again = again != CTHRPOOL_NULL;
+  if (created_again) cthrpool_destroy(again);
   if (app_key_ok) pthread_key_delete(app_key);
 
   REQUIRE_TRUE(app_key_ok);

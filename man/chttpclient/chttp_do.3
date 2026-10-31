@@ -8,18 +8,18 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/chttpclient.h>
 
 ccol_retval_t chttp_do(const chttp_request_t *req,
-                       chttpcli_response **resp_out);
+                       chttpcli_response_t **resp_out);
 .fi
 .SH DESCRIPTION
 .nf
 This function is the same as
-chttpclient_do(chttp_default_client(), req, resp_out).
+chttpcli_do(chttp_default_client(), req, resp_out).
 .fi
 .SH RETURN VALUE
 .nf
-The same codes as chttpclient_do, or ccol_unexpected_failure when the
+The same codes as chttpcli_do, or ccol_unexpected_failure when the
 default client cannot be initialized.
 .fi
 .SH "SEE ALSO"
-.BR chttpclient_do (3),
+.BR chttpcli_do (3),
 .BR chttp_default_client (3)

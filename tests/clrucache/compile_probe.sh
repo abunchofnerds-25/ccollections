@@ -4,8 +4,8 @@
 # The cache macros copy a key or a value by assignment, and C can't assign an
 # array, so an array type would reach the cache as a pointer to the caller's
 # array and the cache would store the address instead of the elements. That's
-# why clru_declare, clru_declare_scoped, clru_construct,
-# clru_construct_scoped and clru_redeclare refuse an array key type and an
+# why ccache_declare, ccache_declare_scoped, ccache_construct,
+# ccache_construct_scoped and ccache_redeclare refuse an array key type and an
 # array value type, with a message that says to wrap the array in a struct.
 # The accept case pins that scalar, const, pointer and struct types compile,
 # including a struct that holds an array.
@@ -119,33 +119,33 @@ EOF
 ARRAY_KEY="clru: an array key type is not supported; wrap the array in a struct"
 ARRAY_VAL="clru: an array value type is not supported; wrap the array in a struct"
 
-probe 'clru_declare with an array value' reject "$ARRAY_VAL" '
-  clru_declare(a, int, char[16]);'
+probe 'ccache_declare with an array value' reject "$ARRAY_VAL" '
+  ccache_declare(a, int, char[16]);'
 
-probe 'clru_declare_scoped with an array key' reject "$ARRAY_KEY" '
-  clru_declare_scoped(a, int[2], int);'
+probe 'ccache_declare_scoped with an array key' reject "$ARRAY_KEY" '
+  ccache_declare_scoped(a, int[2], int);'
 
-probe 'clru_construct with an array value' reject "$ARRAY_VAL" '
-  clru_construct(a, int, int[2], 8, NULL, NULL, NULL);'
+probe 'ccache_construct with an array value' reject "$ARRAY_VAL" '
+  ccache_construct(a, int, int[2], 8, NULL, NULL, NULL);'
 
-probe 'clru_construct_scoped with an array key' reject "$ARRAY_KEY" '
-  clru_construct_scoped(a, char[8], int, 8, NULL, NULL, NULL);'
+probe 'ccache_construct_scoped with an array key' reject "$ARRAY_KEY" '
+  ccache_construct_scoped(a, char[8], int, 8, NULL, NULL, NULL);'
 
-probe 'clru_redeclare with a const array value' reject "$ARRAY_VAL" '
-  clru_cache c = NULL;
+probe 'ccache_redeclare with a const array value' reject "$ARRAY_VAL" '
+  ccache c = NULL;
   (void)c;
-  clru_redeclare(c, int, const char[16]);'
+  ccache_redeclare(c, int, const char[16]);'
 
 probe 'scalar, const, pointer and struct types still compile' accept - '
   struct ccol_probe_wrapped { int v[2]; };
-  clru_construct(a, int, int, 8, NULL, NULL, NULL);
-  clru_destroy(a);
-  clru_construct(b, int, const double, 8, NULL, NULL, NULL);
-  clru_destroy(b);
-  clru_construct(c, char *, struct ccol_probe_wrapped, 8, NULL, NULL, NULL);
-  clru_destroy(c);
-  clru_construct_scoped(d, long, void *, 8, NULL, NULL, NULL);
-  clru_declare(e, int, int);
+  ccache_construct(a, int, int, 8, NULL, NULL, NULL);
+  ccache_destroy(a);
+  ccache_construct(b, int, const double, 8, NULL, NULL, NULL);
+  ccache_destroy(b);
+  ccache_construct(c, char *, struct ccol_probe_wrapped, 8, NULL, NULL, NULL);
+  ccache_destroy(c);
+  ccache_construct_scoped(d, long, void *, 8, NULL, NULL, NULL);
+  ccache_declare(e, int, int);
   (void)e;'
 
 if [ "$checks" -eq 0 ]; then

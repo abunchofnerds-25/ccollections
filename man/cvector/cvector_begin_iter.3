@@ -42,7 +42,7 @@ empty result from a failure, test *err rather than the return value.
 
 A NULL v iterates as an empty vector instead of being reported as an
 error. This contract is shared across modules with chashmap_begin_iter(3)
-and cbmap_begin_iter(3): a lazily created container field that is still
+and cbstmap_begin_iter(3): a lazily created container field that is still
 NULL because nothing has been put in it can be iterated as it is, and no
 caller needs its own NULL guard first.
 
@@ -78,4 +78,4 @@ cvec_destroy(vec);
 .BR ccol_iter_destroy (3),
 .BR ccol_iter_declare (3),
 .BR chashmap_begin_iter (3),
-.BR cbmap_begin_iter (3)
+.BR cbstmap_begin_iter (3)

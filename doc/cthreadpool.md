@@ -9,7 +9,7 @@ threads run at the same time.
 
 What `cthreadpool` offers is a bounded or unbounded task queue, blocking,
 non-blocking and timed submits, an optional completion callback for each
-task, a barrier (`ctpool_wait`) and two shutdown modes. It also has futures,
+task, a barrier (`cthrpool_wait`) and two shutdown modes. It also has futures,
 which let the thread that submitted a task get back the `void *` that the
 task returned.
 
@@ -38,34 +38,34 @@ static void square(void *arg) {
 int main(void) {
     char *err = NULL;
     /* 4 worker threads, a bounded queue of 64 tasks */
-    ctpool pool = ctpool_create(4, 64, &err);
+    cthrpool pool = cthrpool_create(4, 64, &err);
     if (!pool) { fprintf(stderr, "pool: %s\n", err); return 1; }
 
     item_t items[8];
     for (int i = 0; i < 8; i++) {
         items[i].input = i + 1;
-        if (ctpool_submit(pool, square, &items[i], NULL) != ccol_success)
+        if (cthrpool_submit(pool, square, &items[i], NULL) != ccol_success)
             items[i].output = -1;
     }
 
-    ctpool_wait(pool);                 /* all submitted tasks are complete */
+    cthrpool_wait(pool);                 /* all submitted tasks are complete */
     for (int i = 0; i < 8; i++)
         printf("%d^2 = %ld\n", items[i].input, items[i].output);
 
-    ctpool_destroy(pool);              /* empties, joins, sets pool to CTPOOL_NULL */
+    cthrpool_destroy(pool);              /* empties, joins, sets pool to CTHRPOOL_NULL */
     return 0;
 }
 ```
 
 Build it with `-lccollections -lpthread`. All the workers are already
-running when `ctpool_create` returns, so the pool is ready as soon as you
+running when `cthrpool_create` returns, so the pool is ready as soon as you
 have the handle.
 
 ## Creating a pool
 
 ```c
 char *err = NULL;
-ctpool pool = ctpool_create(num_threads, queue_capacity, &err);
+cthrpool pool = cthrpool_create(num_threads, queue_capacity, &err);
 if (!pool) { /* err gives the cause */ }
 ```
 
@@ -78,8 +78,8 @@ than the workers finish it, take the bounded queue: with an unbounded one
 nothing slows the producer down, and the backlog grows until memory runs
 out.
 
-`ctpool` is an opaque value handle (an integer) and not a pointer. You
-compare it with `CTPOOL_NULL`, which is `0`, so `if (!pool)` works. Every
+`cthrpool` is an opaque value handle (an integer) and not a pointer. You
+compare it with `CTHRPOOL_NULL`, which is `0`, so `if (!pool)` works. Every
 use of the handle is checked, so a handle whose pool you already destroyed is
 detected instead of being dereferenced.
 
@@ -89,11 +89,11 @@ way to recover anyway:
 
 ```c
 /* fragment */
-ctpool_construct(pool, 4, 256);          /* you must destroy it later */
-ctpool_construct_scoped(pool2, 4, 0);    /* destroyed at the end of the scope */
+cthrpool_construct(pool, 4, 256);          /* you must destroy it later */
+cthrpool_construct_scoped(pool2, 4, 0);    /* destroyed at the end of the scope */
 ```
 
-`ctpool_create_mp` takes a custom allocator for the pool's own memory (see
+`cthrpool_create_mp` takes a custom allocator for the pool's own memory (see
 [Memory management](memory.md)). Futures always use the standard `malloc`
 and `free`.
 
@@ -104,9 +104,9 @@ usual kinds of producer:
 
 ```c
 /* fragment */
-ctpool_submit(pool, fn, arg, on_complete);              /* waits for space */
-ctpool_try_submit(pool, fn, arg, on_complete);          /* ccol_container_full immediately */
-ctpool_timed_submit(pool, fn, arg, on_complete, 50000); /* waits at most 50 ms */
+cthrpool_submit(pool, fn, arg, on_complete);              /* waits for space */
+cthrpool_try_submit(pool, fn, arg, on_complete);          /* ccol_container_full immediately */
+cthrpool_timed_submit(pool, fn, arg, on_complete, 50000); /* waits at most 50 ms */
 ```
 
 The timeout is a `uint64_t` count of microseconds on a monotonic clock, and
@@ -122,7 +122,7 @@ natural place to release it.
 `on_complete` has the prototype `void on_complete(void *arg, bool ran)` and
 may be `NULL`. The pool calls it **exactly once for every task that a submit
 accepted**. A task that ran gets `on_complete(arg, true)` on the worker right
-after `fn` returns. A task that `ctpool_shutdown_immediate` discarded before
+after `fn` returns. A task that `cthrpool_shutdown_immediate` discarded before
 any worker took it gets `on_complete(arg, false)`, and its `fn` never runs.
 
 So a task that owns a heap argument can free it in `on_complete` whatever
@@ -138,81 +138,81 @@ thread that waits on the future:
 ```c
 /* fragment */
 ccol_retval_t rv;
-ctpool_future *f = ctpool_submit_future(pool, compute, arg, &rv);
+cthrpool_future_t *f = cthrpool_submit_future(pool, compute, arg, &rv);
 if (f) {
-    void *result = ctpool_future_get(f);   /* waits until the task is complete */
+    void *result = cthrpool_future_get(f);   /* waits until the task is complete */
     /* ... use result, then free it the way compute allocated it ... */
-    ctpool_future_free(f);                 /* release your handle exactly once */
+    cthrpool_future_free(f);                 /* release your handle exactly once */
 } else {
     /* rv says why: ccol_not_permitted, ccol_container_full, ... */
 }
 ```
 
-`ctpool_submit_future` returns `NULL` when it fails and, if its last
+`cthrpool_submit_future` returns `NULL` when it fails and, if its last
 argument isn't `NULL`, stores the reason there. That reason is the same code
-that `ctpool_submit` returns for the same condition.
-`ctpool_try_submit_future` and `ctpool_timed_submit_future` are the
+that `cthrpool_submit` returns for the same condition.
+`cthrpool_try_submit_future` and `cthrpool_timed_submit_future` are the
 non-blocking and timed variants: they return the code directly and hand the
 future back through an out-parameter, so you can tell a full queue, a
 shutdown and a lack of memory apart.
 
 The result belongs to you. The pool only passes the pointer along and never
-copies or frees it, and `ctpool_future_free` frees the future, not the
+copies or frees it, and `cthrpool_future_free` frees the future, not the
 result.
 
-You must call `ctpool_future_free` exactly once for each future, also when
-you never called `ctpool_future_get`. A free without a get means "run the
+You must call `cthrpool_future_free` exactly once for each future, also when
+you never called `cthrpool_future_get`. A free without a get means "run the
 task, I don't care about the answer": the task runs and the pool
 throws its result away.
 
-Several threads can wait in `ctpool_future_get` on the same future and all of
+Several threads can wait in `cthrpool_future_get` on the same future and all of
 them get the same result. There's only one future though, so it gets one
-`ctpool_future_free` in total. `ctpool_future_done` tells you whether the
+`cthrpool_future_free` in total. `cthrpool_future_done` tells you whether the
 result is there without waiting.
 
 ## Waiting and shutting down
 
-`ctpool_wait` is a barrier that returns once the queue is empty and no task
+`cthrpool_wait` is a barrier that returns once the queue is empty and no task
 is running. The pool keeps existing afterwards, so you can go on and submit
 the next phase:
 
 ```c
 /* fragment */
-for (size_t i = 0; i < n; i++) ctpool_submit(pool, phase1, &items[i], NULL);
-ctpool_wait(pool);       /* all of phase 1 is complete */
-for (size_t i = 0; i < n; i++) ctpool_submit(pool, phase2, &items[i], NULL);
+for (size_t i = 0; i < n; i++) cthrpool_submit(pool, phase1, &items[i], NULL);
+cthrpool_wait(pool);       /* all of phase 1 is complete */
+for (size_t i = 0; i < n; i++) cthrpool_submit(pool, phase2, &items[i], NULL);
 ```
 
 Don't let another thread keep submitting while you wait, because with an
 unbounded queue the wait might never end.
 
-You can stop a pool in two ways. `ctpool_shutdown_drain` finishes every
+You can stop a pool in two ways. `cthrpool_shutdown_drain` finishes every
 queued and running task and then stops the workers.
-`ctpool_shutdown_immediate` throws the queued tasks away, calling
+`cthrpool_shutdown_immediate` throws the queued tasks away, calling
 `on_complete(arg, false)` for each of them, and marks every discarded future
-as cancelled (`ctpool_future_get` returns `NULL` and
-`ctpool_future_cancelled` is true). The tasks that are already running
+as cancelled (`cthrpool_future_get` returns `NULL` and
+`cthrpool_future_cancelled` is true). The tasks that are already running
 finish, and then the workers stop.
 
 Both functions wait, for every caller, until all workers have stopped. After
-a shutdown a submit returns `ccol_not_permitted`, and `ctpool_submit_future`
-returns `NULL` with `ccol_not_permitted` in its `rv_out`. `ctpool_destroy`
-frees the pool and sets the handle to `CTPOOL_NULL`. If you never called a
+a shutdown a submit returns `ccol_not_permitted`, and `cthrpool_submit_future`
+returns `NULL` with `ccol_not_permitted` in its `rv_out`. `cthrpool_destroy`
+frees the pool and sets the handle to `CTHRPOOL_NULL`. If you never called a
 shutdown function, it finishes the queued tasks first.
 
 ## Detached futures
 
 Sometimes the result comes from a thread that isn't a pool worker at all: a
 network thread, an event loop callback or a hardware completion. For that
-case there is the **detached future**, which is the same `ctpool_future` but
-created without a pool. The producer calls `ctpool_future_fulfill` once and
-the consumer uses `ctpool_future_get` and `ctpool_future_free` as usual.
+case there is the **detached future**, which is the same `cthrpool_future_t` but
+created without a pool. The producer calls `cthrpool_future_fulfill` once and
+the consumer uses `cthrpool_future_get` and `cthrpool_future_free` as usual.
 There's a full example further down.
 
 ## Example: counting words chapter by chapter
 
 Every chapter is its own task, a shared atomic counter adds up the words of
-the whole book, and `ctpool_wait` is the barrier before the report. The pool
+the whole book, and `cthrpool_wait` is the barrier before the report. The pool
 is scoped, so it's destroyed at the end of its block.
 
 ```c
@@ -254,11 +254,11 @@ int main(void) {
     {
         /* Scoped: destroyed at the end of this block, after every task is
            complete. 0 means an unbounded queue, so the loop does not wait. */
-        ctpool_construct_scoped(pool, 3, 0);
+        cthrpool_construct_scoped(pool, 3, 0);
         for (size_t i = 0; i < n; i++)
-            if (ctpool_submit(pool, count_chapter, &book[i], NULL) != ccol_success)
+            if (cthrpool_submit(pool, count_chapter, &book[i], NULL) != ccol_success)
                 fprintf(stderr, "could not submit %s\n", book[i].title);
-        ctpool_wait(pool);        /* barrier: the count of each chapter is done */
+        cthrpool_wait(pool);        /* barrier: the count of each chapter is done */
     }
 
     for (size_t i = 0; i < n; i++)
@@ -294,7 +294,7 @@ static int is_prime(unsigned long n) {
 }
 
 /* A future task returns void *. The pool does not free that pointer:
-   the caller of ctpool_future_get owns it. */
+   the caller of cthrpool_future_get owns it. */
 static void *count_primes(void *arg) {
     const range_t *r = arg;
     unsigned long *count = malloc(sizeof(*count));
@@ -306,31 +306,31 @@ static void *count_primes(void *arg) {
 }
 
 int main(void) {
-    ctpool pool = ctpool_create(4, 0, NULL);
+    cthrpool pool = cthrpool_create(4, 0, NULL);
     if (!pool) return 1;
 
     range_t ranges[RANGES];
-    ctpool_future *futures[RANGES];
+    cthrpool_future_t *futures[RANGES];
     for (int i = 0; i < RANGES; i++) {
         ranges[i].lo = LIMIT / RANGES * (unsigned long)i;
         ranges[i].hi = LIMIT / RANGES * (unsigned long)(i + 1);
-        futures[i] = ctpool_submit_future(pool, count_primes, &ranges[i], NULL);
+        futures[i] = cthrpool_submit_future(pool, count_primes, &ranges[i], NULL);
     }
 
     unsigned long total = 0;
     for (int i = 0; i < RANGES; i++) {
         if (!futures[i]) continue;                 /* the submit failed */
-        unsigned long *count = ctpool_future_get(futures[i]);  /* waits */
+        unsigned long *count = cthrpool_future_get(futures[i]);  /* waits */
         if (count) {
             printf("[%6lu, %6lu): %4lu primes\n", ranges[i].lo, ranges[i].hi, *count);
             total += *count;
             free(count);                           /* we own the result */
         }
-        ctpool_future_free(futures[i]);            /* exactly once for each future */
+        cthrpool_future_free(futures[i]);            /* exactly once for each future */
     }
     printf("primes below %lu: %lu\n", LIMIT, total);
 
-    ctpool_destroy(pool);
+    cthrpool_destroy(pool);
     return 0;
 }
 ```
@@ -365,14 +365,14 @@ static void run_job(void *arg) {
 }
 
 /* Called exactly once for each accepted job: ran == true after run_job,
-   ran == false when ctpool_shutdown_immediate discarded it before it ran. */
+   ran == false when cthrpool_shutdown_immediate discarded it before it ran. */
 static void job_done(void *arg, bool ran_it) {
     atomic_fetch_add(ran_it ? &ran : &skipped, 1);
     free(arg);
 }
 
 int main(void) {
-    ctpool pool = ctpool_create(2, 4, NULL);   /* 2 workers, 4 slots */
+    cthrpool pool = cthrpool_create(2, 4, NULL);   /* 2 workers, 4 slots */
     if (!pool) return 1;
 
     int accepted = 0, refused = 0;
@@ -384,7 +384,7 @@ int main(void) {
         }
         job->id = i;
         /* Wait at most 50 ms for a free slot; if none, skip this job. */
-        ccol_retval_t rc = ctpool_timed_submit(pool, run_job, job, job_done, 50000);
+        ccol_retval_t rc = cthrpool_timed_submit(pool, run_job, job, job_done, 50000);
         if (rc == ccol_success) {
             accepted++;
         } else {
@@ -395,8 +395,8 @@ int main(void) {
 
     /* Emergency stop: running jobs finish, and the pool discards the queued
        jobs, calling job_done(arg, false) for each before this call returns. */
-    ctpool_shutdown_immediate(pool);
-    ctpool_destroy(pool);
+    cthrpool_shutdown_immediate(pool);
+    cthrpool_destroy(pool);
 
     printf("accepted %d, refused %d\n", accepted, refused);
     printf("ran + skipped = %d (matches accepted: %s)\n",
@@ -419,37 +419,37 @@ int main(void) {
 #include <time.h>
 
 static void *network_thread(void *arg) {
-    ctpool_future *reply = arg;
+    cthrpool_future_t *reply = arg;
     struct timespec ts = { 0, 30 * 1000000L };   /* the "response" takes 30 ms */
     nanosleep(&ts, NULL);
-    ctpool_future_fulfill(reply, strdup("HTTP/1.1 200 OK"));  /* exactly once */
+    cthrpool_future_fulfill(reply, strdup("HTTP/1.1 200 OK"));  /* exactly once */
     return NULL;
 }
 
 int main(void) {
     char *err = NULL;
-    ctpool_future *reply = ctpool_future_create_detached(&err);
+    cthrpool_future_t *reply = cthrpool_future_create_detached(&err);
     if (!reply) { fprintf(stderr, "future: %s\n", err); return 1; }
 
     pthread_t t;
     if (pthread_create(&t, NULL, network_thread, reply) != 0) {
-        ctpool_future_fulfill(reply, NULL);      /* the producer's reference */
-        ctpool_future_free(reply);               /* our reference */
+        cthrpool_future_fulfill(reply, NULL);      /* the producer's reference */
+        cthrpool_future_free(reply);               /* our reference */
         return 1;
     }
 
-    printf("done before the wait: %s\n", ctpool_future_done(reply) ? "yes" : "no");
-    char *status = ctpool_future_get(reply);     /* waits until fulfilled */
+    printf("done before the wait: %s\n", cthrpool_future_done(reply) ? "yes" : "no");
+    char *status = cthrpool_future_get(reply);     /* waits until fulfilled */
     printf("status line: %s\n", status ? status : "(no memory for the reply)");
     free(status);                                /* the result is ours */
-    ctpool_future_free(reply);                   /* our reference */
+    cthrpool_future_free(reply);                   /* our reference */
 
     pthread_join(t, NULL);
     return 0;
 }
 ```
 
-It doesn't matter whether `ctpool_future_fulfill` runs before or after the
+It doesn't matter whether `cthrpool_future_fulfill` runs before or after the
 consumer starts waiting, and the consumer may even free its reference first.
 The future goes away when the last holder releases its reference.
 
@@ -457,24 +457,24 @@ The future goes away when the last holder releases its reference.
 
 Destroying a pool from one of its own tasks, or from the `on_complete` of one
 of its tasks, is a fatal error, and that's on purpose: the destroy would
-have to wait for the very task that called it. `ctpool_wait` and the two
+have to wait for the very task that called it. `cthrpool_wait` and the two
 shutdown functions do nothing when you call them from those places, for the
 same reason.
 
 A task that submits to its own bounded pool while the queue is full gets
 `ccol_container_full` instead of waiting, since only the workers can make
-space (`ctpool_submit_future` returns `NULL` and stores that code in its
-`rv_out`). If your tasks submit follow-up work, use `ctpool_try_submit`,
-`ctpool_timed_submit` or an unbounded queue there, so that a full queue is a
+space (`cthrpool_submit_future` returns `NULL` and stores that code in its
+`rv_out`). If your tasks submit follow-up work, use `cthrpool_try_submit`,
+`cthrpool_timed_submit` or an unbounded queue there, so that a full queue is a
 case your code handles and not a surprise.
 
-`ctpool_destroy` sets your variable to `CTPOOL_NULL`, so a second destroy
+`cthrpool_destroy` sets your variable to `CTHRPOOL_NULL`, so a second destroy
 of the same variable does nothing. A destroy through a different, older copy
 of the handle stops the program though (it doesn't corrupt memory), so don't
 keep stale copies around.
 
-`ctpool_wait` doesn't wait for the callbacks of discarded tasks. If another
-thread calls `ctpool_shutdown_immediate`, it's the return of that call that
+`cthrpool_wait` doesn't wait for the callbacks of discarded tasks. If another
+thread calls `cthrpool_shutdown_immediate`, it's the return of that call that
 tells you all the `on_complete(arg, false)` calls have finished.
 
 A custom allocator won't see one allocation per task. The pool reuses its
@@ -488,35 +488,35 @@ immediately. [Concurrency](concurrency.md) has the details.
 Overview: [cthreadpool(7)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthreadpool.7.html)
 
 Creating and destroying:
-[ctpool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_create.3.html),
-[ctpool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_create_mp.3.html),
-[ctpool_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_declare.3.html),
-[ctpool_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_declare_scoped.3.html),
-[ctpool_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_construct.3.html),
-[ctpool_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_construct_scoped.3.html),
-[ctpool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_destroy.3.html)
+[cthrpool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_create.3.html),
+[cthrpool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_create_mp.3.html),
+[cthrpool_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_declare.3.html),
+[cthrpool_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_declare_scoped.3.html),
+[cthrpool_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_construct.3.html),
+[cthrpool_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_construct_scoped.3.html),
+[cthrpool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_destroy.3.html)
 
 Submitting tasks:
-[ctpool_submit(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_submit.3.html),
-[ctpool_try_submit(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_try_submit.3.html),
-[ctpool_timed_submit(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_timed_submit.3.html)
+[cthrpool_submit(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_submit.3.html),
+[cthrpool_try_submit(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_try_submit.3.html),
+[cthrpool_timed_submit(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_timed_submit.3.html)
 
-Futures: [ctpool_submit_future(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_submit_future.3.html),
-[ctpool_try_submit_future(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_try_submit_future.3.html),
-[ctpool_timed_submit_future(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_timed_submit_future.3.html),
-[ctpool_future_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_get.3.html),
-[ctpool_future_done(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_done.3.html),
-[ctpool_future_cancelled(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_cancelled.3.html),
-[ctpool_future_free(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_free.3.html),
-[ctpool_future_create_detached(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_create_detached.3.html),
-[ctpool_future_fulfill(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_fulfill.3.html)
+Futures: [cthrpool_submit_future(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_submit_future.3.html),
+[cthrpool_try_submit_future(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_try_submit_future.3.html),
+[cthrpool_timed_submit_future(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_timed_submit_future.3.html),
+[cthrpool_future_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_future_get.3.html),
+[cthrpool_future_done(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_future_done.3.html),
+[cthrpool_future_cancelled(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_future_cancelled.3.html),
+[cthrpool_future_free(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_future_free.3.html),
+[cthrpool_future_create_detached(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_future_create_detached.3.html),
+[cthrpool_future_fulfill(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_future_fulfill.3.html)
 
 Waiting, shutting down and inspecting:
-[ctpool_wait(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_wait.3.html),
-[ctpool_shutdown_drain(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_shutdown_drain.3.html),
-[ctpool_shutdown_immediate(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_shutdown_immediate.3.html),
-[ctpool_pending_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_pending_count.3.html),
-[ctpool_active_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_active_count.3.html)
+[cthrpool_wait(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_wait.3.html),
+[cthrpool_shutdown_drain(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_shutdown_drain.3.html),
+[cthrpool_shutdown_immediate(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_shutdown_immediate.3.html),
+[cthrpool_pending_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_pending_count.3.html),
+[cthrpool_active_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_active_count.3.html)
 
 Related guides:
 [Thread communication](cthreadcomm.md),

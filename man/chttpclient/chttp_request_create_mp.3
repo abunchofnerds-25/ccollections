@@ -43,13 +43,13 @@ The expect_continue field of a new request is false, since the library
 zero-fills the struct. If you set it to true after construction (for
 example req->expect_continue = true), the client sends "Expect:
 100-continue" and waits for the server's interim response before it
-sends the body; chttpclient_do(3) describes the full protocol. The
+sends the body; chttpcli_do(3) describes the full protocol. The
 field has no effect on a request without a body, or on a request that
 already has an explicit "Expect" header from chttp_request_set_header.
-Every tier honors it the same way: chttpclient_do and
-chttpclient_do_streaming, chttpclient_do_async and
-chttpclient_do_async_streaming, and chttpclient_do_pooled and
-chttpclient_do_pooled_streaming.
+Every tier honors it the same way: chttpcli_do and
+chttpcli_do_streaming, chttpcli_do_async and
+chttpcli_do_async_streaming, and chttpcli_do_pooled and
+chttpcli_do_pooled_streaming.
 .fi
 .SH PARAMETERS
 .nf
@@ -72,7 +72,7 @@ not zero, and when an allocation fails.
 .SH NOTES
 .nf
 Every allocation goes through mprocs when mprocs is not NULL.
-The request must stay alive until every chttpclient_do call that uses
+The request must stay alive until every chttpcli_do call that uses
 it has returned, because a synchronous call like that reads the
 request's method, body and headers directly.
 
@@ -81,7 +81,7 @@ at this point the function cannot know whether that value will ever
 reach the wire: an explicit "content-type" header that you set later
 with chttp_request_set_header takes its place. If body->content_type
 holds a CR or an LF byte when the request is serialized, or any other
-byte below 0x20 except a horizontal tab, or 0x7F, the chttpclient_do,
+byte below 0x20 except a horizontal tab, or 0x7F, the chttpcli_do,
 chttp_run_query or other call that uses this request fails with
 ccol_invalid_args, and the value is never written to the wire.
 chttp_request_set_header(3) explains why.
@@ -90,4 +90,4 @@ chttp_request_set_header(3) explains why.
 .BR chttp_request_create (3),
 .BR chttp_request_set_header (3),
 .BR chttp_request_free (3),
-.BR chttpclient_do (3)
+.BR chttpcli_do (3)

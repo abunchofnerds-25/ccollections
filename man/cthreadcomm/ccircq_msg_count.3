@@ -1,0 +1,43 @@
+.TH CCIRCQ_MSG_COUNT 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccircq_msg_count \- get the current message count of a circular queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+size_t ccircq_msg_count(ccircq *cq);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the number of messages that the queue holds at the moment of
+the call. The count is read under the queue's lock, so it is a
+consistent value and never a torn read.
+
+It is still only a snapshot. Another thread can send or receive right
+after the lock is released, so by the time you look at the value it
+describes a moment that has passed. It is fine for reports and for a
+drain loop, but to find out whether the queue has room or holds a
+message, call ccircq_try_send() or ccircq_try_recv(),
+which check and act in one step that nothing can come between.
+.fi
+.SH PARAMETERS
+.nf
+cq   Circular queue to ask
+.fi
+.SH RETURN VALUE
+.nf
+The number of messages in the queue, or ccol_invalid_size
+((size_t)-1) when cq is NULL.
+.fi
+.SH NOTES
+.nf
+Zero is an ordinary result and means that the queue is empty. Only
+ccol_invalid_size reports an error.
+.fi
+.SH "SEE ALSO"
+.BR ccircq_try_recv (3),
+.BR ccircq_try_send (3),
+.BR ccircq_disable_sending (3),
+.BR cchan_msg_count (3)

@@ -988,7 +988,7 @@ bool chttp1_request_bytes_may_remain(const chttp1_parser_t *parser);
  *
  * chttpserver.c uses it internally where a worker thread drives reading the
  * body. It works on a raw file descriptor and depends on no reactor and no
- * ccol_event_loop at all. Unlike a request parser, which allocates nothing,
+ * ceventloop at all. Unlike a request parser, which allocates nothing,
  * chttp1_stream_t may allocate a heap copy of the carry-over bytes passed to
  * chttp1_stream_prepare(). Its lifetime doesn't need that same constraint,
  * since there's one instance per diverted request and the code doesn't embed

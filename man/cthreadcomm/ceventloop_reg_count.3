@@ -1,0 +1,40 @@
+.TH CEVENTLOOP_REG_COUNT 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ceventloop_reg_count \- number of currently-registered ceventloop_reg handles
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+size_t ceventloop_reg_count(ceventloop loop);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the number of live registrations, meaning
+ceventloop_add() calls whose registration has not been removed
+yet. It does not count entries in the epoll interest list, so one fd
+registered for both directions counts as 2: two independent
+ceventloop_reg handles stand behind it, even though they share one
+entry.
+.fi
+.SH PARAMETERS
+.nf
+loop  ceventloop to query.
+.fi
+.SH RETURN VALUE
+.nf
+The number of registrations, or (size_t)-1 when loop is
+CEVENTLOOP_NULL, a stale handle, or a handle that has already
+been destroyed.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call at the same time as ceventloop_add(),
+ceventloop_remove() and a dispatch on any reactor thread. The
+value is a consistent snapshot read with a single atomic load, which
+cannot tear, and no lock is taken.
+.fi
+.SH "SEE ALSO"
+.BR ceventloop_add (3),
+.BR ceventloop_remove (3)

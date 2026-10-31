@@ -47,7 +47,7 @@ Because the macro is a sequence of declarations, put it where a
 declaration is legal and end it with a semicolon of its own.
 
 The container is an AVL tree, so the key type given here also fixes the
-order in which a walk visits the elements, as cbmap_begin_iter(3)
+order in which a walk visits the elements, as cbstmap_begin_iter(3)
 describes.
 
 The companion type variables follow the scope of the handle, so a function
@@ -88,5 +88,5 @@ cbmap_destroy(sorted);
 .BR cbmap_init_full (3),
 .BR cbmap_construct (3),
 .BR cbmap_redeclare (3),
-.BR cbmap_begin_iter (3),
+.BR cbstmap_begin_iter (3),
 .BR cbmap_destroy (3)

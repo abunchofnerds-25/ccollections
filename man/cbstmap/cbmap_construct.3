@@ -30,7 +30,7 @@ The macro stops the program when an allocation fails.
 
 The map gets the default memory management and the default comparison.
 A struct key_type is ordered by a raw memcmp of its bytes; see
-cbmap_create_full(3) for the rules of the default comparison and for how
+cbstmap_create_full(3) for the rules of the default comparison and for how
 to pass a custom_comparison_proc instead. For a struct key_type the
 type-inferred macro to use is cbmap_construct_cc.
 
@@ -48,5 +48,5 @@ cbmap_insert(map, key, "hello");
 cbmap_destroy(map);
 .fi
 .SH "SEE ALSO"
-.BR cbmap_create (3),
-.BR cbmap_create_full (3)
+.BR cbstmap_create (3),
+.BR cbstmap_create_full (3)

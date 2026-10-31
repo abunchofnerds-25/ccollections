@@ -1,0 +1,64 @@
+.TH CEVENTLOOP_CREATE 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ceventloop_create \- create a ceventloop with default memory management
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ceventloop_create(max_events_per_wait, num_lock_stripes,
+                  num_reactor_threads, err_str);
+.fi
+.SH DESCRIPTION
+.nf
+The same as ceventloop_create_mp() with mmgmt_procs = NULL,
+which selects the standard malloc and free.
+.fi
+.SH PARAMETERS
+.nf
+max_events_per_wait  Size of the epoll_wait batch buffer of the
+                      poller thread, from 1 to INT_MAX inclusive, and
+                      small enough that max_events_per_wait *
+                      sizeof(struct epoll_event) fits in a size_t. It
+                      limits how many ready events one epoll_wait call
+                      drains, not how many registrations the loop can
+                      hold.
+num_lock_stripes     Number of independent lock stripes for the
+                      registry of fds and entries, at least 1. With 1
+                      there is a single shared lock. A larger value
+                      lowers the contention between
+                      ceventloop_add, ceventloop_remove and
+                      ceventloop_modify, which grows when threads
+                      work on many different fds and registrations at
+                      the same time.
+num_reactor_threads  Total number of OS threads the loop uses for
+                      polling and dispatching, at least 1. Whatever
+                      the value, exactly one dedicated thread calls
+                      epoll_wait on the shared epoll instance. With 1
+                      that thread also dispatches every callback
+                      inline; a larger value adds
+                      (num_reactor_threads - 1) separate dispatch
+                      worker threads.
+err_str               Optional pointer that gets an error string on a
+                      failure. Pass NULL to ignore it.
+.fi
+.SH RETURN VALUE
+.nf
+A new ceventloop handle on success, or CEVENTLOOP_NULL
+when an argument is invalid, an allocation failed, epoll_create1,
+eventfd or pthread_create failed, the process had no thread-specific
+key left for the dispatch of a loop, the library's process-exit
+destructors have run and the last loop is gone, or no handle slot
+could be allocated. ceventloop_create_mp(3) has the details.
+.fi
+.SH NOTES
+.nf
+All of the loop's background reactor threads are already running when
+the call returns. When you are done with the loop, destroy it with
+ceventloop_destroy().
+.fi
+.SH "SEE ALSO"
+.BR ceventloop_create_mp (3),
+.BR ceventloop_destroy (3),
+.BR ceventloop_add (3)

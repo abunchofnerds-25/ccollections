@@ -1,0 +1,26 @@
+.TH CBMAP_SIZE 3 "2026-10-31" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_size \- get the number of entries in a BST map (type-inferred wrapper)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_size(cbm);
+.fi
+.SH DESCRIPTION
+.nf
+Type-inferred wrapper for cbstmap_elem_count(). It takes the same arguments
+and gives the same result; cbstmap_elem_count(3) has the full contract.
+.fi
+.SH PARAMETERS
+.nf
+cbm    BST map to query
+.fi
+.SH RETURN VALUE
+.nf
+The number of entries in the map.
+.fi
+.SH "SEE ALSO"
+.BR cbstmap_elem_count (3)

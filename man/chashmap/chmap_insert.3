@@ -11,7 +11,7 @@ chmap_insert(hm_name, key, val);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for chmap_insert_elem() that builds the key and
+Type-inferred wrapper for chashmap_insert_elem() that builds the key and
 value cmap_pairs from the given expressions. If the map already holds
 the key, the value is updated silently. _ccol_fatal_err() is called only
 on a real failure, which means ccol_not_enough_memory,
@@ -42,7 +42,7 @@ character pointer is never a binary key. A binary key takes one of two
 forms. A fixed-length key such as a digest can be a struct that wraps an
 array, such as struct { unsigned char b[32]; }, and the map hashes and
 compares all of its bytes, zero bytes included. A key whose length is
-known only at run time goes through the raw chmap_insert_elem(3) layer,
+known only at run time goes through the raw chashmap_insert_elem(3) layer,
 with that length in cmap_pair.size.
 
 A NULL character pointer is not a string, so a NULL key or value of a
@@ -76,6 +76,6 @@ chmap_insert(map, 100, "world");   /* a literal key is fine */
 chmap_destroy(map);
 .fi
 .SH "SEE ALSO"
-.BR chmap_insert_elem (3),
+.BR chashmap_insert_elem (3),
 .BR chmap_get (3),
 .BR chmap_remove (3)

@@ -286,7 +286,7 @@ static inline cjson_node_t *list_child_at(const cjson_node_t *n, size_t index) {
 }
 
 static inline size_t dict_size_of(const cjson_node_t *n) {
-  return n->value.dictionary ? chmap_elem_count(n->value.dictionary) : 0;
+  return n->value.dictionary ? chashmap_elem_count(n->value.dictionary) : 0;
 }
 
 /* Looks key_pair up in a dictionary. Gives ccol_success with the location and
@@ -299,7 +299,7 @@ static inline ccol_retval_t dict_lookup(const cjson_node_t *n,
     vp->size = 0;
     return ccol_key_not_found;
   }
-  return chmap_get_elem_ref(n->value.dictionary, key_pair, vp);
+  return chashmap_get_elem_ref(n->value.dictionary, key_pair, vp);
 }
 
 /* The backing cvec of a list, created on the first call. NULL when the
@@ -389,11 +389,11 @@ static void destroy_worklist_push(destroy_worklist_t *wl, cjson_node_t *child) {
   wl->items[wl->len++] = child;
 }
 
-/* The destructor callback for chmap_destroy_with_dtor(), used by the
+/* The destructor callback for chashmap_destroy_with_dtor(), used by the
  * CJSON_DICTIONARY case of node_clear_value() below. It puts the child node
  * of one dictionary entry onto the worklist that dtor_ctx carries instead of
  * recursing into it, so dictionary values drain through the same iterative
- * worklist as everything else. The doc comment of chmap_destroy_with_dtor in
+ * worklist as everything else. The doc comment of chashmap_destroy_with_dtor in
  * chashmap.h explains why this is how a teardown reaches every child without
  * an allocation. The alternative, walking the dictionary with
  * chashmap_begin_iter() first, needs its own small allocation, which can fail
@@ -945,15 +945,15 @@ static void node_clear_value(cjson_node_t *n, destroy_worklist_t *wl) {
       break;
     }
     case CJSON_DICTIONARY: {
-      /* We use chmap_destroy_with_dtor from chashmap.h here and not a walk with
-       * chashmap_begin_iter followed by the destroy. That helper allocates
+      /* We use chashmap_destroy_with_dtor from chashmap.h here and not a walk
+       * with chashmap_begin_iter followed by the destroy. That helper allocates
        * its own small iterator struct, which can fail under sustained memory
        * pressure, and then there is no way left to reach the remaining
        * entries and the teardown silently leaks every child past that point.
-       * chmap_destroy_with_dtor walks the map's internal storage directly, so
-       * it can always reach a live entry. */
-      chmap_destroy_with_dtor(n->value.dictionary, _cjson_enqueue_dict_child,
-                              wl);
+       * chashmap_destroy_with_dtor walks the map's internal storage directly,
+       * so it can always reach a live entry. */
+      chashmap_destroy_with_dtor(n->value.dictionary, _cjson_enqueue_dict_child,
+                                 wl);
       n->value.dictionary = NULL;
       break;
     }
@@ -1776,7 +1776,7 @@ ccol_retval_t cjson_dictionary_remove(cjson obj, const char *key) {
   cmap_pair vp;
   if (dict_lookup(n, &kp, &vp) != ccol_success) return ccol_key_not_found;
   cjson_node_t *child = _cjson_read_child(vp.ptr);
-  ccol_retval_t r = chmap_delete_elem(n->value.dictionary, &kp);
+  ccol_retval_t r = chashmap_delete_elem(n->value.dictionary, &kp);
   if (r == ccol_success) __cjson_destroy((cjson)child);
   return r;
 }
@@ -1788,7 +1788,7 @@ ccol_retval_t cjson_dictionary_remove(cjson obj, const char *key) {
 /* The cursor reads a member's successor at the moment it steps onto that
  * member. Removing the current member frees only that member's entry, so the
  * successor the cursor holds stays valid. */
-bool cjson_dictionary_next(cjson_dictionary_iter *it) {
+bool cjson_dictionary_next(cjson_dictionary_iter_t *it) {
   if (!it) return false;
   const ccol_chmap_entry_ref *e = (const ccol_chmap_entry_ref *)it->_cjson_next;
   if (!e) {
@@ -1803,7 +1803,7 @@ bool cjson_dictionary_next(cjson_dictionary_iter *it) {
   return true;
 }
 
-bool cjson_dictionary_first(cjson dict, cjson_dictionary_iter *it) {
+bool cjson_dictionary_first(cjson dict, cjson_dictionary_iter_t *it) {
   if (!it) return false;
   cjson_node_t *n = (cjson_node_t *)dict;
   it->_cjson_next =
@@ -1967,7 +1967,7 @@ static cjson_node_t *clone_tree(cjson_node_t *src) {
       cmap_pair kp = {.ptr = (void *)parent_key, .size = parent_key_size};
       cmap_pair vp = {.ptr = &copy, .size = sizeof(copy)};
       chmap store = dict_store(parent_dst);
-      if (!store || chmap_insert_elem(store, &kp, &vp) != ccol_success) {
+      if (!store || chashmap_insert_elem(store, &kp, &vp) != ccol_success) {
         __cjson_destroy((cjson)copy);
         goto fail;
       }
@@ -3905,7 +3905,7 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
            * the map never keeps a NULL child. Deleting a key the map holds
            * always succeeds: a bucket array shrink that can't get memory is
            * skipped and the entry is still removed. */
-          chmap_delete_elem(pn->value.dictionary, &kp);
+          chashmap_delete_elem(pn->value.dictionary, &kp);
         }
       } else {
         ret = r;

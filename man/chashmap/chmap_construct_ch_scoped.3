@@ -57,11 +57,11 @@ here ends at the closing brace of the enclosing scope.
 .nf
 Stops the program through _ccol_fatal_err() if the creation fails
 Needs GCC or Clang, because it uses the cleanup attribute
-Uses the default allocator and CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
+Uses the default allocator and CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
 buckets
 A float or double key is canonicalized before the procedure sees it
 A long double key is the one case where a custom procedure changes how
-keys are handled; chmap_create_full(3) says what such a procedure has to
+keys are handled; chashmap_create_full(3) says what such a procedure has to
 do
 Leaving the scope destroys the map and clears the handle, so an explicit
 chmap_destroy(3) earlier in the scope is fine as well

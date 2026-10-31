@@ -2532,7 +2532,7 @@ TEST(serialize, dictionary_iterator_oom_never_returns_truncated_string) {
 
 TEST(oom, dictionary_destroy_never_leaks_under_sustained_allocation_failure) {
   /* node_clear is the dictionary cleanup of __cjson_destroy. It reaches each
-   * child through chmap_destroy_with_dtor from chashmap.h, which walks the
+   * child through chashmap_destroy_with_dtor from chashmap.h, which walks the
    * map's internal storage directly, so it never has to allocate and the
    * teardown finishes while memory stays exhausted. tau has no leak checker
    * so the test can't see a leak. What it does is drive this exact
@@ -3276,7 +3276,7 @@ TEST(parse, deeply_nested_array_rejected_not_crashed) {
    * the parser. We assert an explicit wall-clock bound here, as the other
    * DoS-guard tests of the codebase do (see
    * deeply_nested_explicit_keys_rejected_not_hung in cyaml, and the
-   * ccol_event_loop DoS-guard tests in cthreadcomm). */
+   * ceventloop DoS-guard tests in cthreadcomm). */
   char *json = build_nested_array(5000);
   clock_t t0 = clock();
   char *err = NULL;
@@ -4918,7 +4918,7 @@ TEST(dict_iter, walks_the_members_in_insertion_order) {
   const char *second_val = NULL;
   size_t third_len = 0;
   size_t visited = 0;
-  cjson_dictionary_iter it;
+  cjson_dictionary_iter_t it;
   for (bool ok = cjson_dictionary_first(doc, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     strncat(keys, it.key, sizeof(keys) - strlen(keys) - 1);
@@ -4946,7 +4946,7 @@ TEST(dict_iter, null_empty_and_non_dictionary_give_false_and_clear_fields) {
   cjson empty = cjson_create_dictionary();
   cjson list = cjson_create_list();
   cjson scalar = cjson_create_int(3);
-  cjson_dictionary_iter it;
+  cjson_dictionary_iter_t it;
   cjson poison = scalar;
   bool results[4];
   bool cleared[4];
@@ -4976,7 +4976,7 @@ TEST(dict_iter, removing_the_current_member_keeps_the_walk_going) {
   cjson d = cjson_parse("{\"a\":1,\"b\":{\"x\":[1,2]},\"c\":3,\"d\":4,\"e\":5}",
                         NULL);
   char seen[16] = "";
-  cjson_dictionary_iter it;
+  cjson_dictionary_iter_t it;
   for (bool ok = cjson_dictionary_first(d, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     strncat(seen, it.key, sizeof(seen) - strlen(seen) - 1);
@@ -5006,7 +5006,7 @@ TEST(dict_iter, a_walk_after_a_replace_sees_the_new_value_in_the_old_place) {
   cjson_dictionary_set(d, "b", cjson_create_string("replaced"));
   char keys[8] = "";
   const char *b_val = NULL;
-  cjson_dictionary_iter it;
+  cjson_dictionary_iter_t it;
   for (bool ok = cjson_dictionary_first(d, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     strncat(keys, it.key, sizeof(keys) - strlen(keys) - 1);
@@ -5024,7 +5024,7 @@ TEST(dict_iter, a_walk_allocates_nothing) {
   cjson d = cjson_parse_mp("{\"a\":1,\"b\":2,\"c\":3}", NULL, &g_counting_mp);
   g_alloc_remaining = 0;
   size_t visited = 0;
-  cjson_dictionary_iter it;
+  cjson_dictionary_iter_t it;
   for (bool ok = cjson_dictionary_first(d, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     visited++;
@@ -5309,7 +5309,7 @@ TEST(dict_iter, survives_replacement_of_current_and_other_values) {
   ccol_retval_t r1 = ccol_success, r2 = ccol_success, r3 = ccol_success;
   ccol_retval_t r4 = ccol_success;
   bool value_is_same_node_after_set = false;
-  cjson_dictionary_iter it;
+  cjson_dictionary_iter_t it;
   for (bool ok = cjson_dictionary_first(d, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     if (visited < sizeof(order) - 1) order[visited] = it.key[0];
@@ -5764,7 +5764,7 @@ TEST(empty_containers, every_call_reads_an_empty_container_as_empty) {
   cjson l = cjson_get(doc, "l");
   cjson fd = cjson_create_dictionary();
   cjson fl = cjson_create_list();
-  cjson_dictionary_iter it;
+  cjson_dictionary_iter_t it;
 
   bool reads_ok =
       d && l && fd && fl && cjson_dictionary_size(d) == 0 &&

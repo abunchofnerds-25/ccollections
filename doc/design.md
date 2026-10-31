@@ -101,9 +101,9 @@ names. The table uses `cvec` as the example:
 | `cvec_redeclare(v, T)` | Records the type again for a handle that comes from another scope |
 | `cvec_destroy(v)` | Destroys the vector and sets `v` to NULL |
 
-The typed containers `chmap_*`, `cbmap_*` and `clru_*` have the same set
+The typed containers `chmap_*`, `cbmap_*` and `ccache_*` have the same set
 of macros, with a key type and a value type where `T` is. Modules whose
-handle has no element type, like `cstr_*`, `ctpool_*`, `ccol_event_loop_*`
+handle has no element type, like `cstr_*`, `cthrpool_*`, `ceventloop_*`
 and `chttpsvr_*`, have the declare, construct, scoped and destroy macros but
 don't need a redeclare macro. Many modules also have an `_mp` form that
 takes a custom allocator, which [Memory management](memory.md) explains.
@@ -220,8 +220,8 @@ Every typed macro calls a raw function:
 
 | Typed macro | Raw function |
 |---|---|
-| `chmap_insert(m, k, v)` | `chmap_insert_elem(m, &key_pair, &val_pair)` |
-| `chmap_get(m, k)` | `chmap_get_elem_ref(m, &key_pair, &val_pair)` |
+| `chmap_insert(m, k, v)` | `chashmap_insert_elem(m, &key_pair, &val_pair)` |
+| `chmap_get(m, k)` | `chashmap_get_elem_ref(m, &key_pair, &val_pair)` |
 | `cvec_push(v, x)` | `cvector_push_back(v, &x)` |
 
 The macros are the convenient layer. They take values of the declared
@@ -231,6 +231,14 @@ check, so you use them when a failure is something you expect and want to
 handle. If you're writing a library of your own on top of this one, the
 raw functions are usually the right layer, because a library rarely gets
 to decide that the whole program should stop.
+
+You can tell the layers apart by the name. A typed macro uses the short
+name of the handle (`cvec_`, `cstr_`, `chmap_`, `cbmap_`, `ccache_`), and a
+raw function uses the name of the module (`cvector_`, `cstring_`,
+`chashmap_`, `cbstmap_`, `clrucache_`). Some raw calls are just as useful
+with typed code, so the typed layer has short aliases for them that behave
+the same way: `chmap_size()` is `chashmap_elem_count()`, `cbmap_reset()` is
+`cbstmap_reset()` and `ccache_destroy()` is `clrucache_destroy()`.
 
 ## Error handling
 
@@ -284,7 +292,7 @@ of them. `ccol_retval_to_str` gives you the name of a value for a message:
 static int port_of(chmap services, const char *name, int fallback) {
     cmap_pair key = { (void *)name, strlen(name) + 1 };
     int port;
-    ccol_retval_t rv = chmap_get_elem_copy(services, &key, &port, sizeof(port));
+    ccol_retval_t rv = chashmap_get_elem_copy(services, &key, &port, sizeof(port));
     if (rv == ccol_key_not_found)
         return fallback;
     if (rv != ccol_success) {
@@ -388,19 +396,19 @@ No call takes a `struct timespec` or a `time_t`.
 #include <ccollections/cthreadcomm.h>
 
 int main(void) {
-    ccol_circular_queue *q = ccol_circular_queue_create(8, NULL);
+    ccircq *q = ccircq_create(8, NULL);
     if (!q) return 1;
-    c_message_t msg;
+    cmessage_t msg;
 
     /* 0 microseconds: do not wait; this behaves like the try_ call. */
-    ccol_retval_t rv = ccol_circq_timed_recv_zc(q, &msg, 0);
+    ccol_retval_t rv = ccircq_timed_recv(q, &msg, 0);
     printf("timeout 0      -> %s\n", ccol_retval_to_str(rv));
 
     /* 50 ms, written in microseconds. */
-    rv = ccol_circq_timed_recv_zc(q, &msg, 50 * 1000);
+    rv = ccircq_timed_recv(q, &msg, 50 * 1000);
     printf("timeout 50 ms  -> %s\n", ccol_retval_to_str(rv));
 
-    ccol_circular_queue_destroy(q);
+    ccircq_destroy(q);
     return 0;
 }
 ```
@@ -533,11 +541,11 @@ Lifecycle macros, with the vector as the example:
 
 Typed layer and raw layer of the map:
 [chmap_insert(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_insert.3.html),
-[chmap_insert_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_insert_elem.3.html),
+[chashmap_insert_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_insert_elem.3.html),
 [chmap_get(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get.3.html),
 [chmap_get_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_ptr.3.html),
-[chmap_get_elem_ref(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_elem_ref.3.html),
-[chmap_get_elem_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_elem_copy.3.html)
+[chashmap_get_elem_ref(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_get_elem_ref.3.html),
+[chashmap_get_elem_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_get_elem_copy.3.html)
 
 Related guides:
 [Building and linking](building.md),

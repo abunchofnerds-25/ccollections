@@ -122,7 +122,7 @@ typedef struct bmap_node {
   bool val_is_external;
 } bmap_node;
 
-typedef struct cbinarymap {
+typedef struct cbstmap {
   size_t elem_count;
   bmap_node *root;
   ccol_memmgmt_procs_t *m_procs;
@@ -141,7 +141,7 @@ typedef struct cbinarymap {
      node. */
   size_t key_offset;
   uint8_t cmp_kind;
-} cbinarymap;
+} cbstmap;
 
 typedef struct cbmap_cmap_iterator {  // A cmap_iterator with extra fields
   /* The free function of the allocator that made this iterator, or NULL for
@@ -188,7 +188,7 @@ static void push_all_lefts_into_iter_stack(cbmap_cmap_iterator *real_iter,
 static cmap_iterator *cmap_real_iter_next(cbmap_cmap_iterator *real_iter) {
   if (real_iter->node_stack_len == 0) {
     // Nothing left to advance to
-    __cbmap_iterator_destroy(&real_iter->user_iter);
+    __cbstmap_iterator_destroy(&real_iter->user_iter);
     return NULL;
   }
   bmap_node *node = real_iter->node_stack[--real_iter->node_stack_len];
@@ -207,7 +207,7 @@ static cmap_iterator *cmap_real_iter_next(cbmap_cmap_iterator *real_iter) {
  * is empty. */
 static cmap_iterator *cbmap_iter_next(cmap_iterator *iter);
 
-cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
+cmap_iterator *cbstmap_begin_iter(cbmap cbm, char **err) {
   if (err) {
     *err = NULL;
   }
@@ -233,7 +233,7 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
   real_iter->node_stack_len = 0;
   real_iter->free_fn = cbm->m_procs ? cbm->m_procs->free : NULL;
   real_iter->user_iter._next_fn = cbmap_iter_next;
-  real_iter->user_iter._free_fn = __cbmap_iterator_destroy;
+  real_iter->user_iter._free_fn = __cbstmap_iterator_destroy;
   real_iter->user_iter._direct_ptr = false;
   push_all_lefts_into_iter_stack(real_iter, cbm->root);
   return cmap_real_iter_next(real_iter);
@@ -255,7 +255,7 @@ static cmap_iterator *cbmap_iter_next(cmap_iterator *iter) {
  * cmap_real_iter_next calls it at the end of the walk, and the caller can
  * call it earlier to stop before the end. It reads nothing of the map, so
  * it is still valid after the map is destroyed. */
-void __cbmap_iterator_destroy(cmap_iterator *iter) {
+void __cbstmap_iterator_destroy(cmap_iterator *iter) {
   if (iter) {
     cbmap_cmap_iterator *real_iter = cmapIter2CbmapIter(iter);
     ccol_free_t free_fn = real_iter->free_fn;
@@ -349,10 +349,10 @@ static bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t *mmgmt_procs,
 /* Creates an empty AVL-balanced BST map. key_type picks the default
  * comparison strategy (see compare_keys()), and a non-NULL
  * custom_comparison_proc replaces all the built-in key comparisons. */
-cbmap cbmap_create_full(ccol_data_type key_type,
-                        ccol_memmgmt_procs_t *mmgmt_procs,
-                        ccol_comparison_proc_t custom_comparison_proc,
-                        char **err) {
+cbmap cbstmap_create_full(ccol_data_type key_type,
+                          ccol_memmgmt_procs_t *mmgmt_procs,
+                          ccol_comparison_proc_t custom_comparison_proc,
+                          char **err) {
   if (err) {
     *err = NULL;
   }
@@ -361,10 +361,10 @@ cbmap cbmap_create_full(ccol_data_type key_type,
     return NULL;
   }
 
-  cbmap cbm = _ccol_mem_alloc(mmgmt_procs, sizeof(cbinarymap));
+  cbmap cbm = _ccol_mem_alloc(mmgmt_procs, sizeof(cbstmap));
   if (!cbm) {
     if (err) {
-      *err = _CCOL_ERR_STR("Failed to allocate cbinarymap area");
+      *err = _CCOL_ERR_STR("Failed to allocate cbstmap area");
     }
     return NULL;
   }
@@ -444,7 +444,7 @@ static void _clear_nodes(cbmap cbm) {
 
 /* Destroys all the nodes, then frees the map struct and its custom
  * allocator. */
-void __cbmap_destroy(cbmap cbm) {
+void __cbstmap_destroy(cbmap cbm) {
   if (cbm) {
     _clear_nodes(cbm);
 
@@ -459,7 +459,7 @@ void __cbmap_destroy(cbmap cbm) {
 }
 
 /* Returns how many key-value pairs the map holds. */
-size_t cbmap_elem_count(cbmap cbm) {
+size_t cbstmap_elem_count(cbmap cbm) {
   if (!cbm) {
     _ccol_assert(false);
   }
@@ -468,7 +468,7 @@ size_t cbmap_elem_count(cbmap cbm) {
 }
 
 /* Removes every element; the map ends up empty and stays usable. */
-ccol_retval_t cbmap_reset(cbmap cbm) {
+ccol_retval_t cbstmap_reset(cbmap cbm) {
   if (!cbm) {
     _ccol_assert(false);
   }
@@ -556,8 +556,8 @@ static inline int cmp_unsigned_small(void *ptr1, void *ptr2, size_t size) {
  * helper covers float, double and long double without a variant per type. */
 /* Both operands are read with memcpy instead of dereferencing a pointer cast
  * to T *. _ccol_typed_cmp in common.h explains why: a key pair a
- * caller built by hand and passed through cbmap_insert_elem,
- * cbmap_get_elem_ref or cbmap_delete_elem carries neither an alignment
+ * caller built by hand and passed through cbstmap_insert_elem,
+ * cbstmap_get_elem_ref or cbstmap_delete_elem carries neither an alignment
  * guarantee for T nor an effective type of T. A constant-size memcpy
  * compiles to the same single load.
  *
@@ -920,7 +920,7 @@ static inline __attribute__((always_inline)) bmap_node *cbmap_descend_with_path(
  * ccol_not_enough_memory. Instead a zero-size pair is stored as
  * ptr == NULL and size == 0, which every reader in this file handles safely
  * for a zero length: the memcmp of compare_keys, the size-guarded copies of
- * create_new_node and cbmap_get_elem_copy, and the _ccol_mem_free of
+ * create_new_node and cbstmap_get_elem_copy, and the _ccol_mem_free of
  * destroy_bmap_node. */
 static bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
                                   const cmap_pair *val_pair) {
@@ -1038,7 +1038,7 @@ static void update_bmap_node_value(cbmap cbm, bmap_node *node,
     /* This copy goes into the new storage BEFORE the old storage is freed,
        and we return here instead of falling through to the copy below,
        because val_pair->ptr may BE the storage we're about to free.
-       cbmap_get_elem_ref hands the caller a pointer into the node's own
+       cbstmap_get_elem_ref hands the caller a pointer into the node's own
        value, and a caller can perfectly well pass that pointer back to
        resize the value. Reading it after the free is a use-after-free that
        AddressSanitizer reports. */
@@ -1317,15 +1317,15 @@ static inline bool pair_bytes_are_readable(const cmap_pair *pair) {
  * bottom-up without recursion and without a heap allocation on any call.
  * Returns ccol_key_already_present when the key was already there and its
  * value was updated successfully. */
-ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
-                                const cmap_pair *val_pair) {
+ccol_retval_t cbstmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
+                                  const cmap_pair *val_pair) {
   if (!cbm) {
     _ccol_assert(false);
   }
 
   /* This function reads the caller's pair rather than just passing it on,
      so it reports a NULL pair, and a pair that promises bytes without a
-     pointer to them, without dereferencing either. chmap_insert_elem
+     pointer to them, without dereferencing either. chashmap_insert_elem
      rejects both the same way; it also rejects a zero-size key or value,
      which this module accepts for a value and for a struct key (see
      pair_bytes_are_readable and key_size_is_valid_for_type). */
@@ -1417,13 +1417,13 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
 /* Looks up key_pair and copies its value into target_buf. Returns
  * ccol_invalid_args when target_buf_size doesn't match the stored value's
  * size exactly, which prevents a silent truncation. */
-ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
-                                  void *target_buf, size_t target_buf_size) {
+ccol_retval_t cbstmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
+                                    void *target_buf, size_t target_buf_size) {
   if (!cbm) {
     _ccol_assert(false);
   }
 
-  /* See the guard in cbmap_insert_elem. */
+  /* See the guard in cbstmap_insert_elem. */
   if (!key_pair || !pair_bytes_are_readable(key_pair)) {
     return ccol_invalid_args;
   }
@@ -1453,8 +1453,8 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
   return ccol_success;
 }
 
-/* The checks and the lookup that cbmap_get_elem_ref() and
- * _cbmap_get_val_accessor() share. Gives the node of key_pair, or NULL with
+/* The checks and the lookup that cbstmap_get_elem_ref() and
+ * _cbstmap_get_val_accessor() share. Gives the node of key_pair, or NULL with
  * the failure code in *ret. */
 static bmap_node *cbmap_lookup_checked(cbmap cbm, const cmap_pair *key_pair,
                                        ccol_retval_t *ret) {
@@ -1472,15 +1472,15 @@ static bmap_node *cbmap_lookup_checked(cbmap cbm, const cmap_pair *key_pair,
  * accessor of the node's value. ptr only stays valid while the key is in
  * the map and no update gives it a value of another size. Every failure
  * with a non-NULL val_pair sets it to {NULL, 0}. */
-ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
-                                 cmap_pair *val_pair) {
+ccol_retval_t cbstmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
+                                   cmap_pair *val_pair) {
   if (!cbm) {
     _ccol_assert(false);
   }
 
   /* val_pair is the out-parameter the result goes through, so with a NULL
      val_pair there's nowhere to report a hit. See the guard in
-     cbmap_insert_elem for why the key pair gets the same answer. */
+     cbstmap_insert_elem for why the key pair gets the same answer. */
   if (!val_pair) {
     return ccol_invalid_args;
   }
@@ -1500,8 +1500,8 @@ ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
  * an entry with a string value, the only char* object is the ptr field of
  * the node's value accessor, so this hands out that accessor's address.
  * Every failure with a non-NULL val_accessor sets it to NULL. */
-ccol_retval_t _cbmap_get_val_accessor(cbmap cbm, const cmap_pair *key_pair,
-                                      const cmap_pair **val_accessor) {
+ccol_retval_t _cbstmap_get_val_accessor(cbmap cbm, const cmap_pair *key_pair,
+                                        const cmap_pair **val_accessor) {
   if (!cbm) {
     _ccol_assert(false);
   }
@@ -1559,15 +1559,15 @@ static bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
 }
 
 /* Deletes the element with key_pair from the map. It uses the same
- * explicit fixed-size path array as cbmap_insert_elem, so after removing the
+ * explicit fixed-size path array as cbstmap_insert_elem, so after removing the
  * node the ancestors can be rebalanced bottom-up without a heap allocation.
  * Returns ccol_key_not_found when the key isn't in the map. */
-ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
+ccol_retval_t cbstmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
   if (!cbm) {
     _ccol_assert(false);
   }
 
-  /* See the guard in cbmap_insert_elem. */
+  /* See the guard in cbstmap_insert_elem. */
   if (!key_pair || !pair_bytes_are_readable(key_pair)) {
     return ccol_invalid_args;
   }

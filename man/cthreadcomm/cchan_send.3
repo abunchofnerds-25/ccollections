@@ -1,0 +1,45 @@
+.TH CCHAN_SEND 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cchan_send \- send a message through the cchan (it blocks)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t cchan_send(cchan *ch, cmessage_t *msg);
+.fi
+.SH DESCRIPTION
+.nf
+Sends a message through the channel, waiting as long as it takes for
+the queue to have free space. The queue is chosen from the thread that
+calls it: the owner thread sends to the cchan_owner_to_workers queue and
+any other thread sends to the cchan_workers_to_owner queue. The data is
+not copied; its ownership moves to the channel once the message is in
+the queue.
+.fi
+.SH PARAMETERS
+.nf
+ch   Channel to send through
+msg  Message to send. On success the ownership of the data moves to the
+     channel.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       - The message was sent
+ccol_invalid_args  - ch or msg is NULL, msg->data is NULL while
+                     msg->size is not 0, or msg->data is not NULL
+                     while msg->size is 0
+ccol_not_permitted - Sends on the chosen direction are turned off
+.fi
+.SH NOTES
+.nf
+The call blocks until the chosen queue has free space. The direction
+is decided from the ID of the calling thread, which is compared with
+the ID of the owner that the channel took at creation. If the call
+fails, msg->data still belongs to the caller.
+.fi
+.SH "SEE ALSO"
+.BR cchan_try_send (3),
+.BR cchan_timed_send (3),
+.BR cchan_recv (3)

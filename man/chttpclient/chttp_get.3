@@ -8,7 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/chttpclient.h>
 
 ccol_retval_t chttp_get(const char *url,
-                        chttpcli_response **resp_out);
+                        chttpcli_response_t **resp_out);
 .fi
 .SH DESCRIPTION
 .nf
@@ -24,7 +24,7 @@ resp_out  It must not be NULL. The function sets it to NULL first,
 .fi
 .SH RETURN VALUE
 .nf
-The same codes as chttpclient_do.
+The same codes as chttpcli_do.
 .fi
 .SH "SEE ALSO"
 .BR chttp_post (3),

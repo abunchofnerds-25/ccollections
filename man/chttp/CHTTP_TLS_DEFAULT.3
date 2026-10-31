@@ -71,31 +71,31 @@ covers the leaf) into the bundle, and renews both before they expire.  A
 bundle with no CRL checks no revocation.  The library reads the bundle
 when it applies the configuration, so a renewed CRL takes effect at the
 next chttpsvr_start(3) of a server, or at the next
-chttpclient_set_tls(3) of a client.
+chttpcli_set_tls(3) of a client.
 .SH EXAMPLES
 .nf
 /* The defaults: verify the chain and the hostname. */
 chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
-chttpclient_set_tls(cli, &tls);
+chttpcli_set_tls(cli, &tls);
 
 /* The same defaults, written as a zero-initialized struct. */
 chttp_tls_config_t same = {0};
-chttpclient_set_tls(cli, &same);
+chttpcli_set_tls(cli, &same);
 
 /* Pin a private CA and skip only the hostname match. */
 chttp_tls_config_t pinned = {
     .ca_bundle_path = "/etc/myapp/ca-chain.pem",
     .insecure_skip_hostname_check = true,
 };
-chttpclient_set_tls(cli, &pinned);
+chttpcli_set_tls(cli, &pinned);
 
 /* Accept any certificate. Development and throwaway self-signed
    servers only; this gives an interceptor full control of the
    connection. */
 chttp_tls_config_t insecure = {.insecure_skip_verify = true};
-chttpclient_set_tls(cli, &insecure);
+chttpcli_set_tls(cli, &insecure);
 .fi
 .SH "SEE ALSO"
-.BR chttpclient_set_tls (3),
+.BR chttpcli_set_tls (3),
 .BR chttpsvr_start (3),
 .BR chttpsvr_req_peer_cert_verified (3)

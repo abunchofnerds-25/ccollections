@@ -1,0 +1,58 @@
+.TH CCACHE_CONSTRUCT 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccache_construct \- declare and initialise an LRU cache in one step
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clrucache.h>
+
+ccache_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb);
+.fi
+.SH DESCRIPTION
+.nf
+ccache_declare() and ccache_init() in a single statement. This is the
+usual way to create an LRU cache, and it calls _ccol_fatal_err() when
+the creation fails.
+.fi
+.SH PARAMETERS
+.nf
+name      Variable name for the cache handle
+KeyT      Key type
+ValT      Value type
+capacity  The total number of live entries; see
+          clrucache_create_full(3). It must be greater than 0
+getter    Remote getter callback, or NULL
+setter    Remote setter callback, or NULL
+evict_cb  Eviction callback, or NULL
+.fi
+.SH NOTES
+.nf
+An array key type or value type, such as int[2] or char[16], is a
+compile error, and the message says to wrap the array in a struct. The
+macros copy a key or a value by assignment, C cannot assign an array,
+and without the error the cache would store the address of the
+caller's array instead of its elements. A struct that holds the
+array works.
+.fi
+.SH EXAMPLES
+.nf
+ccache_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+int k = 42;
+double v = 3.14;
+ccache_set(cache, k, v);
+
+/* val_ptr is a pointer to the value type (double *), not cmap_pair * */
+double out = 0.0;
+if (ccache_get(cache, k, &out) == ccol_success) {
+    printf("%.2f\en", out);
+}
+
+ccache_destroy(cache);
+.fi
+.SH "SEE ALSO"
+.BR ccache_construct_scoped (3),
+.BR ccache_declare (3),
+.BR ccache_init (3),
+.BR ccache_destroy (3)

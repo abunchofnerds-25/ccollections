@@ -1,0 +1,47 @@
+.TH CMEMPOOL_CREATE 3 "2026-10-30" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cmempool_create \- create a fixed-size memory pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+cmempool_create(elem_count, elem_size, fallback_to_dynamic_memory,
+                single_threaded, err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a memory pool that manages a fixed number of elements of one
+size. The pool's own memory and its fallback entries come from the
+standard malloc and free.
+
+It is the same as calling cmempool_create_mp() with NULL memory
+management procedures, and every rule of that page applies: the
+stride, the sizing advice and the thread safety.
+.fi
+.SH PARAMETERS
+.nf
+elem_count                 Number of elements in the pool (must be > 0)
+elem_size                  Size of each element in bytes. It must be
+                           > 0. The minimum is sizeof(uintptr_t). The
+                           maximum is SIZE_MAX less the stride rounding
+fallback_to_dynamic_memory If true, allocate from the heap when the pool
+                           is empty
+single_threaded            If true, take no lock (faster, but not
+                           thread-safe)
+err                        Optional pointer that receives an error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to the new memory pool on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+The caller must destroy the pool with cmempool_destroy().
+.fi
+.SH "SEE ALSO"
+.BR cmempool_create_mp (3),
+.BR cmempool_create_from_preallocated_buffer (3),
+.BR cmempool_destroy (3)

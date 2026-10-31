@@ -1,0 +1,44 @@
+.TH CCHAN_RECV 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cchan_recv \- receive a message from the cchan (it blocks)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t cchan_recv(cchan *ch, cmessage_t *target_buf);
+.fi
+.SH DESCRIPTION
+.nf
+Receives a message from the channel, waiting as long as it takes for
+one to arrive. The queue is chosen from the thread that calls it: the
+owner thread receives from the cchan_workers_to_owner queue and any
+other thread receives from the cchan_owner_to_workers queue. The
+message's data is handed over without a copy, so its ownership moves to
+the caller.
+.fi
+.SH PARAMETERS
+.nf
+ch          Channel to receive from
+target_buf  Buffer that gets the message together with the ownership
+            of the data.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       - A message was received. The caller must free
+                     target_buf->data.
+ccol_invalid_args  - ch or target_buf is NULL
+.fi
+.SH NOTES
+.nf
+The call blocks until a message arrives in the chosen queue. The
+direction is decided from the ID of the calling thread, which is
+compared with the ID of the owner that the channel took at creation.
+target_buf->data belongs to the caller after a successful call, and the
+caller must free it.
+.fi
+.SH "SEE ALSO"
+.BR cchan_try_recv (3),
+.BR cchan_timed_recv (3),
+.BR cchan_send (3)

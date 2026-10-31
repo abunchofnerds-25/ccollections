@@ -1046,7 +1046,7 @@ cyaml cyaml_list_get(cyaml seq, size_t index);
  * so the slot never names freed memory once the call returns, and the two
  * children are never in memory at the same time. The key keeps its place in
  * the member order of the dictionary, while a new key goes after every member
- * the dictionary already holds; see cyaml_dictionary_iter.
+ * the dictionary already holds; see cyaml_dictionary_iter_t.
  *
  * @p child must not already be attached to a list or dictionary parent, and
  * it must not be @p map itself. Each of these two cases is rejected with
@@ -1150,7 +1150,7 @@ ccol_retval_t cyaml_dictionary_remove(cyaml map, const char *key);
  * @c key. cyaml_set() on the other hand updates the existing node in place,
  * so @c value stays the same node.
  */
-typedef struct cyaml_dictionary_iter {
+typedef struct cyaml_dictionary_iter_t {
   /** The key of the current member, valid until that member is removed or
    *  the dictionary is destroyed. NULL once the iteration is over. */
   const char *key;
@@ -1159,7 +1159,7 @@ typedef struct cyaml_dictionary_iter {
   cyaml value;
   /** Private: the member that the next step reads. */
   const void *_cyaml_next;
-} cyaml_dictionary_iter;
+} cyaml_dictionary_iter_t;
 
 /**
  * @brief Start an iteration over a dictionary, and step onto its first
@@ -1174,14 +1174,14 @@ typedef struct cyaml_dictionary_iter {
  *
  * Example:
  * @code
- * cyaml_dictionary_iter it;
+ * cyaml_dictionary_iter_t it;
  * for (bool ok = cyaml_dictionary_first(map, &it); ok;
  *      ok = cyaml_dictionary_next(&it)) {
  *   printf("%s: %s\n", it.key, cyaml_type_str(it.value));
  * }
  * @endcode
  */
-bool cyaml_dictionary_first(cyaml dict, cyaml_dictionary_iter *it);
+bool cyaml_dictionary_first(cyaml dict, cyaml_dictionary_iter_t *it);
 
 /**
  * @brief Step a dictionary cursor onto the next member.
@@ -1192,7 +1192,7 @@ bool cyaml_dictionary_first(cyaml dict, cyaml_dictionary_iter *it);
  *         false, and then @c key and @c value are set to NULL. false also
  *         when @p it is NULL.
  */
-bool cyaml_dictionary_next(cyaml_dictionary_iter *it);
+bool cyaml_dictionary_next(cyaml_dictionary_iter_t *it);
 
 /* ========================================================================== */
 /*                         DEEP COPY                                          */
@@ -1204,7 +1204,7 @@ bool cyaml_dictionary_next(cyaml_dictionary_iter *it);
  * The clone uses the same allocator as the source tree, carries over the
  * tag of every node that has one unchanged (see cyaml_node_tag()), and keeps
  * the source's member order in every dictionary (see
- * cyaml_dictionary_iter). The source is walked with an explicit worklist
+ * cyaml_dictionary_iter_t). The source is walked with an explicit worklist
  * instead of recursion, so the call stack this function needs is a constant
  * that doesn't grow with the nesting depth.
  *

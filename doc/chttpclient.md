@@ -33,19 +33,19 @@ helpers. You usually meet it through the client first, and the server side,
 int main(int argc, char **argv) {
     const char *url = argc > 1 ? argv[1] : "http://127.0.0.1:8080/hello";
 
-    chttpcli_response *resp = NULL;
+    chttpcli_response_t *resp = NULL;
     ccol_retval_t rc = chttp_get(url, &resp);
     if (rc != ccol_success) {
         fprintf(stderr, "GET %s failed: %s\n", url, ccol_retval_to_str(rc));
         return 1;
     }
 
-    const char *type = chttpclient_resp_header(resp, "Content-Type");
+    const char *type = chttpcli_resp_header(resp, "Content-Type");
     printf("status: %d\n", resp->status_code);
     printf("type:   %s\n", type ? type : "(none)");
     printf("body:   %s\n", resp->body ? resp->body : "(empty)");
 
-    chttpclient_resp_free(resp);
+    chttpcli_resp_free(resp);
     return 0;
 }
 ```
@@ -64,7 +64,7 @@ request returns a `ccol_retval_t` where `ccol_success` is 0, and
 `chttp_get()` runs on a process-wide *default client*, which the library
 creates the first time you use it, so you never create or destroy it
 yourself. The response is yours though, and you free it with
-`chttpclient_resp_free()`.
+`chttpcli_resp_free()`.
 
 Linking against the shared library only needs `-lccollections`, because the
 library itself links OpenSSL. A static link needs
@@ -72,7 +72,7 @@ library itself links OpenSSL. A static link needs
 
 ## Read a response
 
-A `chttpcli_response` has four fields that you read directly:
+A `chttpcli_response_t` has four fields that you read directly:
 
 | Field | Contents |
 |---|---|
@@ -84,8 +84,8 @@ A `chttpcli_response` has four fields that you read directly:
 `body` is `NULL` when the body is empty, for example after a 204, a `HEAD`
 or a `Content-Length: 0`, so check it before you print it. After a failure
 the call sets your response pointer to `NULL`, and
-`chttpclient_resp_free(NULL)` does nothing, so calling
-`chttpclient_resp_free(resp)` after every request is always correct.
+`chttpcli_resp_free(NULL)` does nothing, so calling
+`chttpcli_resp_free(resp)` after every request is always correct.
 
 A status outside 2xx is **not** an error. A 404 is a successful HTTP
 exchange whose answer happens to be "not found": the call returns
@@ -98,11 +98,11 @@ for instance, on more than one line, so you can also read them line by line
 (a fragment):
 
 ```c
-const char *type = chttpclient_resp_header(resp, "content-type");
+const char *type = chttpcli_resp_header(resp, "content-type");
 
-size_t n = chttpclient_resp_header_count(resp, "Set-Cookie");
+size_t n = chttpcli_resp_header_count(resp, "Set-Cookie");
 for (size_t i = 0; i < n; i++)
-    printf("cookie: %s\n", chttpclient_resp_header_at(resp, "Set-Cookie", i));
+    printf("cookie: %s\n", chttpcli_resp_header_at(resp, "Set-Cookie", i));
 
 /* All the headers, one entry for each name. */
 ccol_for_each(resp->headers, it, {
@@ -110,7 +110,7 @@ ccol_for_each(resp->headers, it, {
 });
 ```
 
-For a name that occurs more than once, `chttpclient_resp_header()` returns
+For a name that occurs more than once, `chttpcli_resp_header()` returns
 all the values joined with `", "`, except for `Set-Cookie` where you get only
 the first value.
 
@@ -121,7 +121,7 @@ and run it on a client that you own. Your own client can have timeouts, a
 limit on the response size and TLS settings, and all of them apply only to
 that client.
 
-A name lookup can't be cancelled, so `chttpclient_do` only notices an
+A name lookup can't be cancelled, so `chttpcli_do` only notices an
 expired timeout once its lookup returns. The async and pooled calls end the
 request at the deadline itself and let the lookup finish on its own. The
 engine wakes up at the earliest deadline of the requests in flight, so an
@@ -141,46 +141,46 @@ int main(int argc, char **argv) {
     snprintf(url, sizeof(url), "%s/items", base);
 
     chttpcli_construct(cli);                            /* stops the program on failure */
-    chttpclient_set_connect_timeout(cli, 2000000);      /* 2 s, in us */
-    chttpclient_set_request_timeout(cli, 10000000);     /* 10 s, in us */
-    chttpclient_set_max_response_body_size(cli, 1 << 20); /* 1 MiB */
+    chttpcli_set_connect_timeout(cli, 2000000);      /* 2 s, in us */
+    chttpcli_set_request_timeout(cli, 10000000);     /* 10 s, in us */
+    chttpcli_set_max_response_body_size(cli, 1 << 20); /* 1 MiB */
 
     const char *json = "{\"name\":\"widget\",\"qty\":3}";
     chttp_request_t *req = chttp_request_create(
         CHTTP_POST, url, &CHTTP_JSON_BODY(json, strlen(json)), NULL);
     if (!req) {
-        chttpclient_destroy(cli);
+        chttpcli_destroy(cli);
         return 1;
     }
     if (chttp_request_set_header(req, "Authorization", "Bearer my-token") !=
             ccol_success ||
         chttp_request_set_header(req, "X-Request-Id", "42") != ccol_success) {
         chttp_request_free(req);
-        chttpclient_destroy(cli);
+        chttpcli_destroy(cli);
         return 1;
     }
 
-    chttpcli_response *resp = NULL;
-    ccol_retval_t rc = chttpclient_do(cli, req, &resp);
+    chttpcli_response_t *resp = NULL;
+    ccol_retval_t rc = chttpcli_do(cli, req, &resp);
     chttp_request_free(req);
 
     if (rc == ccol_success) {
-        const char *where = chttpclient_resp_header(resp, "location");
+        const char *where = chttpcli_resp_header(resp, "location");
         printf("%d, location=%s\n", resp->status_code, where ? where : "-");
         printf("%.*s\n", (int)resp->body_len, resp->body ? resp->body : "");
     } else {
         fprintf(stderr, "request failed: %s\n", ccol_retval_to_str(rc));
     }
 
-    chttpclient_resp_free(resp);  /* safe: resp is NULL after a failure */
-    chttpclient_destroy(cli);
+    chttpcli_resp_free(resp);  /* safe: resp is NULL after a failure */
+    chttpcli_destroy(cli);
     return rc == ccol_success ? 0 : 1;
 }
 ```
 
 `chttpcli_construct(cli)` declares and creates a client and stops the
 program if that fails. If you'd rather handle the failure yourself, use
-`chttpclient_create()`, and inside library code that's the one to use,
+`chttpcli_create()`, and inside library code that's the one to use,
 since a library that stops its caller's program when a create fails is
 rarely what anybody wants. `chttpcli_construct_scoped(cli)` destroys the
 client at the end of the scope.
@@ -213,11 +213,11 @@ connection has gone silent: no byte in either direction for that long. A
 download that keeps moving is never cut off by it, however long it takes,
 so it's a safe default where a total limit wouldn't be. If a server of
 yours takes longer than a minute to start answering, a long poll for
-example, raise it with `chttpclient_set_inactivity_timeout()` or set it
-to 0. The request has to stay valid while `chttpclient_do()` runs, and you
+example, raise it with `chttpcli_set_inactivity_timeout()` or set it
+to 0. The request has to stay valid while `chttpcli_do()` runs, and you
 free it after the call.
 
-`chttpclient_destroy()` waits for requests that are running on other
+`chttpcli_destroy()` waits for requests that are running on other
 threads, then frees the client and sets `cli` to `CHTTPCLI_NULL`. Never
 call it from the write callback of a request of the same client: it would be
 waiting for itself, so the library stops the process instead. The write
@@ -233,10 +233,10 @@ The process-wide client can run your requests as well, through
 chmap_construct(headers, char *, char *);
 chmap_insert(headers, "X-Api-Version", "2");
 
-chttpcli_response *resp = NULL;
+chttpcli_response_t *resp = NULL;
 chttp_run_query(CHTTP_POST, url, &CHTTP_TEXT_BODY("ping", 4), headers, &resp);
 chmap_destroy(headers);          /* the call only borrowed the map */
-chttpclient_resp_free(resp);
+chttpcli_resp_free(resp);
 ```
 
 A `chttpcli` is a *value handle* (a 64-bit number) and not a pointer.
@@ -256,11 +256,11 @@ The codes you'll see most and what usually causes them:
 | `ccol_http_tls_cert_verification_failed` | The client does not trust the server certificate, or the certificate names a different host. |
 | `ccol_http_tls_cert_load_failed` | The client cannot read a CA bundle, certificate or key file that you configured. |
 | `ccol_http_transfer_aborted` | The connection broke during the transfer, or the server sent malformed HTTP. |
-| `ccol_msg_too_large` | The body exceeds the limit set by `chttpclient_set_max_response_body_size()`. |
+| `ccol_msg_too_large` | The body exceeds the limit set by `chttpcli_set_max_response_body_size()`. |
 | `ccol_http_too_many_redirects` | More than 50 redirects. |
 
 The full list, with every cause of each code, is in
-[chttpclient_do(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do.3.html).
+[chttpcli_do(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_do.3.html).
 
 ## Large downloads: stream the body
 
@@ -302,15 +302,15 @@ int main(int argc, char **argv) {
     }
 
     chttpcli_construct(cli);
-    chttpclient_set_connect_timeout(cli, 5000000);   /* 5 s */
+    chttpcli_set_connect_timeout(cli, 5000000);   /* 5 s */
 
     chttp_request_t *req = chttp_request_create(CHTTP_GET, argv[1], NULL, NULL);
     int status = 0;
-    ccol_retval_t rc = req ? chttpclient_do_streaming(cli, req, write_chunk,
-                                                      &sink, &status)
+    ccol_retval_t rc = req ? chttpcli_do_streaming(cli, req, write_chunk,
+                                                   &sink, &status)
                            : ccol_not_enough_memory;
     chttp_request_free(req);
-    chttpclient_destroy(cli);
+    chttpcli_destroy(cli);
 
     if (fclose(sink.out) != 0 && rc == ccol_success)
         rc = ccol_unexpected_failure;
@@ -355,7 +355,7 @@ req->prevent_tls_downgrade_on_redirect = true;  /* a downgrade: ccol_http_invali
 By default the client verifies the server's certificate chain against the
 system CA store and checks that the certificate names the host you asked
 for. You change that by passing a `chttp_tls_config_t` to
-`chttpclient_set_tls()`.
+`chttpcli_set_tls()`.
 
 The system CA store is OpenSSL's default CA file: the file named by the
 `SSL_CERT_FILE` environment variable, or otherwise the file OpenSSL was
@@ -366,7 +366,7 @@ the file or `SSL_CERT_FILE` later has no effect. Only if that file is
 missing or holds no certificate does the client fall back to OpenSSL's
 hashed certificate directory (`SSL_CERT_DIR`, or the built-in directory),
 whose files OpenSSL itself opens during each handshake. See
-[chttpclient_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_tls.3.html).
+[chttpcli_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_tls.3.html).
 
 In this struct **zero is the safe value**. Any field you leave unset keeps
 verification on, and every field that weakens security says so in its name
@@ -375,7 +375,7 @@ verification on, and every field that weakens security says so in its name
 ```c
 /* Trust a private CA, not the system store. The client verifies fully. */
 chttp_tls_config_t tls = {.ca_bundle_path = "/etc/myapp/ca.pem"};
-chttpclient_set_tls(cli, &tls);
+chttpcli_set_tls(cli, &tls);
 
 /* Send a client certificate (mutual TLS); set both paths together. */
 chttp_tls_config_t mtls = {
@@ -383,7 +383,7 @@ chttp_tls_config_t mtls = {
     .cert_path      = "/etc/myapp/client.pem",
     .key_path       = "/etc/myapp/client.key",
 };
-chttpclient_set_tls(cli, &mtls);
+chttpcli_set_tls(cli, &mtls);
 
 /* Keep the chain check but skip the host name check. This suits a server
    that you reach by an IP address that its certificate does not
@@ -392,20 +392,20 @@ chttp_tls_config_t by_ip = {
     .ca_bundle_path = "/etc/myapp/ca.pem",
     .insecure_skip_hostname_check = true,
 };
-chttpclient_set_tls(cli, &by_ip);
+chttpcli_set_tls(cli, &by_ip);
 
 /* Accept any certificate; use this only for temporary test servers. */
 chttp_tls_config_t insecure = {.insecure_skip_verify = true};
-chttpclient_set_tls(cli, &insecure);
+chttpcli_set_tls(cli, &insecure);
 
-chttpclient_set_tls(cli, NULL);   /* back to the defaults */
+chttpcli_set_tls(cli, NULL);   /* back to the defaults */
 ```
 
 The client reads the files the first time a request needs them, so a wrong
 path shows up as `ccol_http_tls_cert_load_failed` from the request and not
-from `chttpclient_set_tls()`. A CA bundle may also contain certificate
+from `chttpcli_set_tls()`. A CA bundle may also contain certificate
 revocation lists. See
-[chttpclient_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_tls.3.html).
+[chttpcli_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_tls.3.html).
 
 ## Many requests at the same time
 
@@ -415,9 +415,9 @@ the waiting.
 
 | Tier | Functions | Which thread waits |
 |---|---|---|
-| 1. Blocking | `chttpclient_do`, `chttpclient_do_streaming` | Your thread, for the full request. |
-| 2. Asynchronous | `chttpclient_do_async`, `chttpclient_do_async_streaming` | No thread. You get a future and collect the result from it later. |
-| 3. Pooled blocking | `chttpclient_do_pooled`, `chttpclient_do_pooled_streaming` | Your thread, while the work runs on a small shared event loop. |
+| 1. Blocking | `chttpcli_do`, `chttpcli_do_streaming` | Your thread, for the full request. |
+| 2. Asynchronous | `chttpcli_do_async`, `chttpcli_do_async_streaming` | No thread. You get a future and collect the result from it later. |
+| 3. Pooled blocking | `chttpcli_do_pooled`, `chttpcli_do_pooled_streaming` | Your thread, while the work runs on a small shared event loop. |
 
 Tiers 2 and 3 run on one per-process engine that every client shares. It
 starts the first time you use it and stops again when there's no work
@@ -433,7 +433,7 @@ releases the logger. Passing a logger handle that's already closed gives
 ### More than one thread, one client (Tier 1)
 
 A client is thread-safe, so many threads can run requests on it at once.
-`chttpclient_set_pool_size()` caps how many blocking requests run at the
+`chttpcli_set_pool_size()` caps how many blocking requests run at the
 same time, and further callers wait until one of them completes. This
 program checks a list of URLs in parallel and reports whether each server is
 up:
@@ -463,11 +463,11 @@ static void *check(void *arg) {
     check_t *c = arg;
     double t0 = now_ms();
     chttp_request_t *req = chttp_request_create(CHTTP_HEAD, c->url, NULL, NULL);
-    chttpcli_response *resp = NULL;
-    c->rc = req ? chttpclient_do(c->cli, req, &resp) : ccol_not_enough_memory;
+    chttpcli_response_t *resp = NULL;
+    c->rc = req ? chttpcli_do(c->cli, req, &resp) : ccol_not_enough_memory;
     c->status = resp ? resp->status_code : 0;
     c->ms = now_ms() - t0;
-    chttpclient_resp_free(resp);
+    chttpcli_resp_free(resp);
     chttp_request_free(req);
     return NULL;
 }
@@ -480,9 +480,9 @@ int main(int argc, char **argv) {
     int n = argc - 1;
 
     chttpcli_construct(cli);
-    chttpclient_set_pool_size(cli, 4);               /* at most 4 at once */
-    chttpclient_set_connect_timeout(cli, 3000000);   /* 3 s */
-    chttpclient_set_request_timeout(cli, 5000000);   /* 5 s */
+    chttpcli_set_pool_size(cli, 4);               /* at most 4 at once */
+    chttpcli_set_connect_timeout(cli, 3000000);   /* 3 s */
+    chttpcli_set_request_timeout(cli, 5000000);   /* 5 s */
 
     check_t   checks[n];
     pthread_t tids[n];
@@ -508,7 +508,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    chttpclient_destroy(cli);
+    chttpcli_destroy(cli);
     return down == 0 && started == n ? 0 : 1;
 }
 ```
@@ -522,16 +522,16 @@ DOWN  http://127.0.0.1:1/  (ccol_http_connection_failed)
 DOWN  http://no-such-host.invalid/  (ccol_http_host_resolution_failed)
 ```
 
-With hundreds of threads, use `chttpclient_do_pooled` in place of
-`chttpclient_do`. The arguments and the result are the same, but the network
+With hundreds of threads, use `chttpcli_do_pooled` in place of
+`chttpcli_do`. The arguments and the result are the same, but the network
 work runs on the engine's few threads instead of keeping one thread busy per
 request.
 
 ### Start now, get the result later (Tier 2)
 
-`chttpclient_do_async()` lets one thread start many requests, do something
-else and collect the answers later. Each call returns a `ctpool_future`
-straight away, and `chttpclient_async_result_get()` waits on it.
+`chttpcli_do_async()` lets one thread start many requests, do something
+else and collect the answers later. Each call returns a `cthrpool_future_t`
+straight away, and `chttpcli_async_result_get()` waits on it.
 
 ```c
 /* fanout.c: start many requests at once from one thread, then collect
@@ -545,16 +545,16 @@ int main(int argc, char **argv) {
     enum { N = sizeof(paths) / sizeof(paths[0]) };
 
     chttpcli_construct(cli);
-    chttpclient_set_request_timeout(cli, 5000000);   /* 5 s for each request */
+    chttpcli_set_request_timeout(cli, 5000000);   /* 5 s for each request */
 
-    ctpool_future *futures[N] = {0};
+    cthrpool_future_t *futures[N] = {0};
     for (int i = 0; i < N; i++) {
         char url[256];
         snprintf(url, sizeof(url), "%s%s", base, paths[i]);
         chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
         if (!req)
             continue;
-        futures[i] = chttpclient_do_async(cli, req);   /* returns immediately */
+        futures[i] = chttpcli_do_async(cli, req);   /* returns immediately */
         chttp_request_free(req);   /* the engine keeps its own copy */
     }
 
@@ -565,20 +565,20 @@ int main(int argc, char **argv) {
             printf("%-12s not submitted\n", paths[i]);
             continue;
         }
-        chttpcli_async_result_t *r = chttpclient_async_result_get(futures[i]);
+        chttpcli_async_result_t *r = chttpcli_async_result_get(futures[i]);
         if (r && r->rv == ccol_success) {
             printf("%-12s %d %zu bytes\n", paths[i], r->resp->status_code,
                    r->resp->body_len);
-            chttpclient_resp_free(r->resp);
+            chttpcli_resp_free(r->resp);
         } else {
             printf("%-12s failed: %s\n", paths[i],
                    ccol_retval_to_str(r ? r->rv : ccol_unexpected_failure));
         }
-        chttpclient_async_result_free(r);
-        ctpool_future_free(futures[i]);
+        chttpcli_async_result_free(r);
+        cthrpool_future_free(futures[i]);
     }
 
-    chttpclient_destroy(cli);
+    chttpcli_destroy(cli);
     return 0;
 }
 ```
@@ -589,9 +589,9 @@ Free a result in this order:
 2. Free the result.
 3. Free the future.
 
-The request itself can be freed as soon as `chttpclient_do_async()` returns.
+The request itself can be freed as soon as `chttpcli_do_async()` returns.
 
-With `chttpclient_do_async_streaming()` your write callback runs on one of
+With `chttpcli_do_async_streaming()` your write callback runs on one of
 the engine's threads, so it has to be quick and must not block. It also
 must not start another asynchronous request or wait for one. The callback
 never runs after the future of its request has been fulfilled, so you can
@@ -632,8 +632,8 @@ static cjson call_api(chttpcli cli, chttp_method_t method, const char *url,
         return NULL;
     }
 
-    chttpcli_response *resp = NULL;
-    ccol_retval_t rc = chttpclient_do(cli, req, &resp);
+    chttpcli_response_t *resp = NULL;
+    ccol_retval_t rc = chttpcli_do(cli, req, &resp);
     chttp_request_free(req);
     if (rc != ccol_success) {
         fprintf(stderr, "%s %s: %s\n", chttp_method_str(method), url,
@@ -649,7 +649,7 @@ static cjson call_api(chttpcli cli, chttp_method_t method, const char *url,
         if (!doc)
             fprintf(stderr, "bad JSON from %s: %s\n", url, err);
     }
-    chttpclient_resp_free(resp);
+    chttpcli_resp_free(resp);
     return doc;
 }
 
@@ -663,7 +663,7 @@ int main(int argc, char **argv) {
         return 1;
 
     chttpcli_construct(cli);
-    chttpclient_set_request_timeout(cli, 5000000);
+    chttpcli_set_request_timeout(cli, 5000000);
 
     /* 1. Get the current user. */
     snprintf(url, sizeof(url), "%s/me", base);
@@ -698,7 +698,7 @@ int main(int argc, char **argv) {
         printf("create failed with HTTP %d\n", status);
     cjson_destroy(created);
 
-    chttpclient_destroy(cli);
+    chttpcli_destroy(cli);
     free(auth);
     return 0;
 }
@@ -741,7 +741,7 @@ chttp_request_t *req = chttp_request_create(CHTTP_PUT, url,
     &CHTTP_BODY(data, len, "application/octet-stream"), NULL);
 if (req) {
     req->expect_continue = true;
-    chttpclient_do(cli, req, &resp);   /* a 413 here means that the client sent no body */
+    chttpcli_do(cli, req, &resp);   /* a 413 here means that the client sent no body */
     chttp_request_free(req);
 }
 ```
@@ -815,7 +815,7 @@ See [chttpclient(7)](https://abunchofnerds-25.github.io/ccollections/man/chttpcl
 a body, so a body you give to a GET isn't sent.
 
 A client is thread-safe, but a single `chttp_request_t` or
-`chttpcli_response` isn't a shared object, so never modify one from two
+`chttpcli_response_t` isn't a shared object, so never modify one from two
 threads at once.
 
 The streaming callbacks of Tiers 2 and 3 run on the engine, so keep them
@@ -833,22 +833,22 @@ signal settings.
 Overview: [chttpclient(7)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient.7.html)
 
 Clients:
-[chttpclient_create(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_create.3.html),
-[chttpclient_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_create_mp.3.html),
+[chttpcli_create(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_create.3.html),
+[chttpcli_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_create_mp.3.html),
 [chttpcli_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_construct.3.html),
 [chttpcli_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_construct_scoped.3.html),
 [chttpcli_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_declare.3.html),
 [chttpcli_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_declare_scoped.3.html),
-[chttpclient_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_destroy.3.html),
+[chttpcli_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_destroy.3.html),
 [chttp_default_client(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_default_client.3.html)
 
 Settings:
-[chttpclient_set_pool_size(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_pool_size.3.html),
-[chttpclient_set_connect_timeout(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_connect_timeout.3.html),
-[chttpclient_set_request_timeout(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_request_timeout.3.html),
-[chttpclient_set_inactivity_timeout(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_inactivity_timeout.3.html),
-[chttpclient_set_max_response_body_size(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_max_response_body_size.3.html),
-[chttpclient_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_tls.3.html)
+[chttpcli_set_pool_size(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_pool_size.3.html),
+[chttpcli_set_connect_timeout(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_connect_timeout.3.html),
+[chttpcli_set_request_timeout(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_request_timeout.3.html),
+[chttpcli_set_inactivity_timeout(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_inactivity_timeout.3.html),
+[chttpcli_set_max_response_body_size(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_max_response_body_size.3.html),
+[chttpcli_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_tls.3.html)
 
 Requests:
 [chttp_request_create(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_request_create.3.html),
@@ -857,14 +857,14 @@ Requests:
 [chttp_request_get_header(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_request_get_header.3.html),
 [chttp_request_free(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_request_free.3.html)
 
-Run requests: [chttpclient_do(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do.3.html),
-[chttpclient_do_streaming(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do_streaming.3.html),
-[chttpclient_do_async(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do_async.3.html),
-[chttpclient_do_async_streaming(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do_async_streaming.3.html),
-[chttpclient_async_result_get(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_async_result_get.3.html),
-[chttpclient_async_result_free(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_async_result_free.3.html),
-[chttpclient_do_pooled(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do_pooled.3.html),
-[chttpclient_do_pooled_streaming(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do_pooled_streaming.3.html)
+Run requests: [chttpcli_do(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_do.3.html),
+[chttpcli_do_streaming(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_do_streaming.3.html),
+[chttpcli_do_async(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_do_async.3.html),
+[chttpcli_do_async_streaming(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_do_async_streaming.3.html),
+[chttpcli_async_result_get(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_async_result_get.3.html),
+[chttpcli_async_result_free(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_async_result_free.3.html),
+[chttpcli_do_pooled(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_do_pooled.3.html),
+[chttpcli_do_pooled_streaming(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_do_pooled_streaming.3.html)
 
 Convenience calls on the default client:
 [chttp_do(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_do.3.html),
@@ -876,10 +876,10 @@ Convenience calls on the default client:
 [chttp_run_query(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_run_query.3.html)
 
 Responses:
-[chttpclient_resp_header(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_resp_header.3.html),
-[chttpclient_resp_header_count(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_resp_header_count.3.html),
-[chttpclient_resp_header_at(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_resp_header_at.3.html),
-[chttpclient_resp_free(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_resp_free.3.html)
+[chttpcli_resp_header(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_resp_header.3.html),
+[chttpcli_resp_header_count(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_resp_header_count.3.html),
+[chttpcli_resp_header_at(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_resp_header_at.3.html),
+[chttpcli_resp_free(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_resp_free.3.html)
 
 The shared engine of Tiers 2 and 3:
 [chttpcli_set_engine_logger(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_engine_logger.3.html),

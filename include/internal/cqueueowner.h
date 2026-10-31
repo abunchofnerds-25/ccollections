@@ -28,7 +28,7 @@ SOFTWARE.
  * @file cqueueowner.h
  * @brief INTERNAL ONLY. Sends by the owner of a queue whose sending is off.
  *
- * Once ccol_circq_disable_sending() or ccol_dynmq_disable_sending() runs,
+ * Once ccircq_disable_sending() or cdynmq_disable_sending() runs,
  * every later send is refused. A module that owns a queue and turns sending
  * off to stop new work may still have to put one last control message behind
  * what the queue already accepted, a flush request that tells it when that
@@ -43,23 +43,22 @@ SOFTWARE.
 /**
  * Sends msg to cq whether sending is on or off, and waits at most
  * timeout_us microseconds for room (0 doesn't wait). On success it owns
- * msg->data, the same way ccol_circq_send_zc() does.
+ * msg->data, the same way ccircq_send() does.
  *
  * @return ccol_success, ccol_timed_out (or ccol_container_full when
  *         timeout_us is 0) when no room appeared in time,
  *         ccol_unexpected_failure when the wait itself failed, or
  *         ccol_invalid_args.
  */
-ccol_retval_t ccol_circq_owner_send_zc(ccol_circular_queue *cq,
-                                       c_message_t *msg, uint64_t timeout_us);
+ccol_retval_t ccircq_owner_send(ccircq *cq, cmessage_t *msg,
+                                uint64_t timeout_us);
 
 /**
  * Sends msg to dq whether sending is on or off. On success it owns
- * msg->data, the same way ccol_dynmq_send_zc() does.
+ * msg->data, the same way cdynmq_send() does.
  *
  * @return ccol_success, ccol_container_full when the queue holds
  *         ccol_max_elem_count messages, ccol_not_enough_memory, or
  *         ccol_invalid_args.
  */
-ccol_retval_t ccol_dynmq_owner_send_zc(ccol_dynamic_queue *dq,
-                                       c_message_t *msg);
+ccol_retval_t cdynmq_owner_send(cdynmq *dq, cmessage_t *msg);

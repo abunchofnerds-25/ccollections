@@ -1,0 +1,95 @@
+.TH CCACHE_SET 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccache_set \- store a value by key (a type-inferred convenience wrapper)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clrucache.h>
+
+ccol_retval_t ccache_set(name, key, val);
+.fi
+.SH DESCRIPTION
+.nf
+A type-inferred GNU C statement expression that converts key and val
+to the cache's declared KeyT and ValT, the same way a plain C
+assignment does, serialises the converted values into cmap_pair values
+and calls clrucache_set_full().
+
+val is converted to ValT instead of being stored with its own
+expression type, so an int literal that goes into a double-valued
+cache stores the double value 5.0, not a 4-byte copy of the int's bit
+pattern. The compiler must be able to convert the val and key
+expressions implicitly to the cache's declared ValT and KeyT, and an
+expression that it cannot convert is a compile error at this point.
+A character-pointer KeyT or ValT is the exception: the macro keeps the
+pointer type of the expression, so a const char * key or value for a
+char * cache needs no cast.
+
+A key of a struct type is the same key as another one only when every
+byte of the two is equal, padding included; see KEYS WITH PADDING in
+clrucache_create_full(3). With GCC 11 or later the macro sets the
+padding of its own copy of the key to zero.
+
+If the caller configured a remote setter at construction, it is called
+synchronously before the cache is updated. If the setter fails, the
+macro returns ccol_unexpected_failure and nothing changes for that
+key, not even its position in the eviction order. While the setter
+runs, a concurrent insert that needs room can evict the key like any
+other entry. Every allocation of the macro happens before the remote
+setter runs, so a remote setter that succeeds is always followed by an
+update of the cache that cannot fail; see clrucache_set_full(3).
+.fi
+.SH PARAMETERS
+.nf
+name  Cache variable. It must be a plain variable, declared with
+      ccache_construct or ccache_declare, or restored with
+      ccache_redeclare() in the current scope, because that is where
+      the KeyT and the ValT for the conversion above come from. name
+      cannot be any other expression, for example a read of a struct
+      member.
+key   Key expression: any expression that the compiler can convert
+      implicitly to KeyT.
+val   Value expression: any expression that the compiler can convert
+      implicitly to ValT.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success             The macro stored the value, and the remote
+                         setter succeeded, if there is one.
+ccol_unexpected_failure  The remote setter returned false. The set
+                         changed nothing, but a concurrent insert can
+                         have evicted the key (see above).
+ccol_invalid_args        cache is CCACHE_NULL, or cache is a
+                         stale handle that a call already destroyed, or
+                         an argument is a null pointer, or an argument
+                         has a size of zero. A NULL key or value of a
+                         character-pointer type is not a string, so it
+                         gives this code.
+ccol_not_enough_memory   An allocation failed (the copy of the new
+                         value, or the record of a new key). The
+                         remote setter was not called, and nothing
+                         changed for the key.
+.fi
+.SH NOTES
+.nf
+The macro uses a GNU C statement expression ({...}), so it needs GCC
+or Clang.
+When you pass the cache handle across scopes, for example into a
+thread function, declare a local alias and call ccache_redeclare() on it
+before you call ccache_set(); ccache_get() needs the same. See
+ccache_redeclare(3).
+.fi
+.SH EXAMPLES
+.nf
+ccache_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+int k = 42;
+double v = 3.14;
+ccache_set(cache, k, v);
+
+ccache_destroy(cache);
+.fi
+.SH "SEE ALSO"
+.BR ccache_get (3),
+.BR clrucache_set_full (3)

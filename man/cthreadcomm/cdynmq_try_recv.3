@@ -1,0 +1,64 @@
+.TH CDYNMQ_TRY_RECV 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cdynmq_try_recv \- try to receive from a dynamic queue with no block
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t cdynmq_try_recv(cdynmq *dq,
+                              cmessage_t *target_buf);
+.fi
+.SH DESCRIPTION
+.nf
+Removes the message at the head of the dynamic queue and gives it back
+in target_buf. When the queue is empty the call returns
+ccol_container_empty at once; it never waits for a message.
+
+On success the message's data pointer belongs to the caller:
+target_buf->data is the pointer the sender gave and target_buf->size is
+its size in bytes, and the caller frees the data when done with it. No
+bytes are copied, only the pointer and its size move. A sender can put
+a message with a NULL data pointer and a size of zero into the queue,
+and it arrives the same way, so target_buf->data can legitimately be
+NULL with target_buf->size at 0. Check it before you dereference it.
+
+On any failure target_buf is left unchanged, and the queue keeps
+everything it held.
+
+Use this receive call immediately after a callback from cselect(),
+cselect_timed(), or an ceventloop reports that a dynamic queue
+selectable is ready. Those report readiness only and never take the
+message themselves, so another consumer can take the message first;
+ccol_container_empty covers exactly that case.
+.fi
+.SH PARAMETERS
+.nf
+dq          Dynamic queue to receive from
+target_buf  Buffer that gets the message together with the ownership
+            of the data.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success         - A message was received. The caller owns
+                       target_buf->data and must free it.
+ccol_invalid_args    - dq or target_buf is NULL
+ccol_container_empty - The queue is empty; target_buf is left
+                       unchanged.
+.fi
+.SH NOTES
+.nf
+This call never blocks. It works while sends on the queue are off,
+because turning sends off only keeps new messages out, and a receive
+still gets the ones the queue already holds. A successful receive wakes
+one write-direction waiter on the queue (a cselect() call, a
+cselect_timed() call or a ceventloop registration). The
+function is thread-safe.
+.fi
+.SH "SEE ALSO"
+.BR cdynmq_recv (3),
+.BR cdynmq_timed_recv (3),
+.BR cdynmq_send (3),
+.BR cdynmq_msg_count (3),
+.BR cselect (3)

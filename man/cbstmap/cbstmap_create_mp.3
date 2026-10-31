@@ -1,0 +1,50 @@
+.TH CBSTMAP_CREATE_MP 3 "2026-10-06" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cbstmap_create_mp \- create a BST map with custom memory management procedures
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap cbstmap_create_mp(ccol_data_type key_type,
+                        ccol_memmgmt_procs_t *mmgmt_procs, char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a self-balancing BST map that allocates through the given memory
+management procedures. It is a thin inline wrapper over
+cbstmap_create_full(3) that passes NULL for the custom comparison procedure,
+so the keys get the default order for key_type that cbstmap_create(3)
+describes.
+
+Every allocation the map makes after it is created goes through these
+procedures, the allocations of an iterator over the map included, so
+destroy the map while the procedures are valid.
+.fi
+.SH PARAMETERS
+.nf
+key_type     Type of the keys that the map stores
+mmgmt_procs  Memory management procedures, or NULL for the default
+             allocator
+err          Optional pointer that receives an error string on failure,
+             or NULL
+.fi
+.SH RETURN VALUE
+.nf
+A new map on success. On failure it returns NULL and, when err is not
+NULL, sets *err to an error string.
+.fi
+.SH NOTES
+.nf
+This function reports a failure to the caller, while the
+cbmap_construct_mp(3) and cbmap_init_mp(3) macros call _ccol_fatal_err()
+on a failure. Destroy the map with cbmap_destroy(3).
+.fi
+.SH "SEE ALSO"
+.BR cbstmap_create (3),
+.BR cbstmap_create_full (3),
+.BR cbmap_construct_mp (3),
+.BR cbmap_init_mp (3),
+.BR cbmap_destroy (3),
+.BR ccol_determine_ccol_data_type (3)

@@ -33,17 +33,17 @@ expressions, so you need GCC or Clang (`-std=gnu11` or later).
 
 int main(void) {
     /* int keys, double values, a maximum of 3 entries; no callbacks */
-    clru_construct(cache, int, double, 3, NULL, NULL, NULL);
+    ccache_construct(cache, int, double, 3, NULL, NULL, NULL);
 
     for (int k = 1; k <= 3; k++)
-        clru_set(cache, k, k * 1.5);
+        ccache_set(cache, k, k * 1.5);
 
     double out = 0.0;
-    clru_get(cache, 1, &out);          /* reading key 1 makes it recent */
-    clru_set(cache, 4, 6.0);           /* full: removes key 2, the oldest */
+    ccache_get(cache, 1, &out);          /* reading key 1 makes it recent */
+    ccache_set(cache, 4, 6.0);           /* full: removes key 2, the oldest */
 
     for (int k = 1; k <= 4; k++) {
-        if (clru_get(cache, k, &out) == ccol_success)
+        if (ccache_get(cache, k, &out) == ccol_success)
             printf("%d -> %.1f\n", k, out);
         else
             printf("%d -> (not cached)\n", k);
@@ -51,7 +51,7 @@ int main(void) {
     printf("size %zu of %zu\n", clrucache_size(cache),
            clrucache_capacity(cache));
 
-    clru_destroy(cache);               /* cache becomes CLRU_CACHE_NULL */
+    ccache_destroy(cache);               /* cache becomes CCACHE_NULL */
     return 0;
 }
 ```
@@ -66,29 +66,29 @@ Output:
 size 3 of 3
 ```
 
-`clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb)`
+`ccache_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb)`
 declares the handle and creates the cache in one statement. Like the
 library's other typed macros it records `KeyT` and `ValT`, and that lets
-`clru_get` and `clru_set` convert your arguments for you ([How the library
+`ccache_get` and `ccache_set` convert your arguments for you ([How the library
 is designed](design.md) explains how). The capacity has to be greater than
-0. A cache of capacity 0 is refused, and `clru_construct` then stops the
+0. A cache of capacity 0 is refused, and `ccache_construct` then stops the
 process, as it does for any create that fails.
 
 ## The handle
 
-A `clru_cache` is an opaque value and not a pointer. You can compare it
-with `CLRU_CACHE_NULL` or test it directly, since `CLRU_CACHE_NULL` is
+A `ccache` is an opaque value and not a pointer. You can compare it
+with `CCACHE_NULL` or test it directly, since `CCACHE_NULL` is
 0 and `if (!cache)` means "no cache". Never cast it to or from a pointer.
 
 Every handle is checked before it's used. A call on a destroyed handle
 fails safely with `ccol_invalid_args`, and the size queries return 0 for it.
 Destroying a handle twice stops the program with `abort()` rather than
-freeing memory twice. `clru_destroy` waits for calls that other threads are
+freeing memory twice. `ccache_destroy` waits for calls that other threads are
 running, so you don't have to prove that nothing else is in progress.
 
 ## Getting values out
 
-What `clru_get(cache, key, &out)` gives you depends on the value type. For
+What `ccache_get(cache, key, &out)` gives you depends on the value type. For
 every value type except `char *`, the cache converts the stored value into
 `out` the way a plain C assignment would. Nothing is allocated, so there's
 nothing to free, and when the call fails `out` is left as it was. For a
@@ -102,7 +102,7 @@ copy costs a little, but it means an eviction on another thread can't remove
 a value while you're using it.
 
 The return value is `ccol_success`, `ccol_key_not_found`, or another error
-code listed in [clru_get(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_get.3.html).
+code listed in [ccache_get(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_get.3.html).
 `ccol_key_not_found` means the key isn't in the cache and either there is
 no getter or the getter failed.
 
@@ -118,7 +118,7 @@ cache would store the address of your array, so wrap the array in a struct
 instead.
 
 A struct key is compared byte by byte, padding included. With GCC 11 or
-later `clru_get` and `clru_set` clear the padding for you. With another
+later `ccache_get` and `ccache_set` clear the padding for you. With another
 compiler, or with the raw functions, zero every byte of the key with
 `memset` before you set its fields. "KEYS WITH PADDING" on
 [clrucache_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_create_full.3.html) has the
@@ -172,20 +172,20 @@ static bool load_user(const cmap_pair *key, cmap_pair *val) {
 }
 
 typedef struct {
-    clru_cache users;
+    ccache users;
     int        id;
 } request;
 
 static void *request_handler(void *arg) {
     const request *req = arg;
-    clru_cache users = req->users;          /* a plain local copy ... */
-    clru_redeclare(users, int, char *);     /* ... gets its types again */
+    ccache users = req->users;          /* a plain local copy ... */
+    ccache_redeclare(users, int, char *);     /* ... gets its types again */
     int id = req->id;
 
     char *name = NULL;
-    if (clru_get(users, id, &name) == ccol_success) {
+    if (ccache_get(users, id, &name) == ccol_success) {
         printf("thread asked for %d: %s\n", id, name);
-        free(name);                         /* clru_get gave us a copy */
+        free(name);                         /* ccache_get gave us a copy */
     } else {
         printf("thread asked for %d: unknown\n", id);
     }
@@ -193,7 +193,7 @@ static void *request_handler(void *arg) {
 }
 
 int main(void) {
-    clru_construct(users, int, char *, 256, load_user, NULL, NULL);
+    ccache_construct(users, int, char *, 256, load_user, NULL, NULL);
 
     /* Eight threads ask at once for the same user, which is not cached. */
     request req = { users, 42 };
@@ -209,7 +209,7 @@ int main(void) {
     request_handler(&req);
     printf("database queries: %d\n", atomic_load(&queries));
 
-    clru_destroy(users);
+    ccache_destroy(users);
     return 0;
 }
 ```
@@ -220,7 +220,7 @@ time share one fetch and the ninth request is a hit.
 ## Write-through and eviction callbacks
 
 A remote setter runs before each update. When it returns `false`,
-`clru_set` returns `ccol_unexpected_failure` and the cache doesn't touch
+`ccache_set` returns `ccol_unexpected_failure` and the cache doesn't touch
 that key, so its value and its place in the eviction order stay the same.
 When it returns `true`, the cache stores the new value and the key becomes
 the most recently used one. The new value is copied before the setter is
@@ -255,22 +255,22 @@ static void on_evict(const cmap_pair *key, const cmap_pair *val) {
 }
 
 int main(void) {
-    clru_construct(limits, char *, long, 2, NULL, save_limit, on_evict);
+    ccache_construct(limits, char *, long, 2, NULL, save_limit, on_evict);
 
-    clru_set(limits, "max_connections", 100L);
-    clru_set(limits, "max_body_kib", 512L);
+    ccache_set(limits, "max_connections", 100L);
+    ccache_set(limits, "max_body_kib", 512L);
 
-    if (clru_set(limits, "max_connections", -1L) == ccol_unexpected_failure)
+    if (ccache_set(limits, "max_connections", -1L) == ccol_unexpected_failure)
         printf("rejected; the cache still holds the old value\n");
 
     long v = 0;
-    clru_get(limits, "max_connections", &v);
+    ccache_get(limits, "max_connections", &v);
     printf("max_connections = %ld\n", v);
 
     /* Capacity 2: a third key evicts the least recently used one. */
-    clru_set(limits, "idle_timeout_s", 30L);
+    ccache_set(limits, "idle_timeout_s", 30L);
 
-    clru_destroy(limits);   /* also reports each entry in the cache */
+    ccache_destroy(limits);   /* also reports each entry in the cache */
     return 0;
 }
 ```
@@ -305,8 +305,8 @@ this case in full.
 
 ## Passing a cache to other functions
 
-`clru_get` and `clru_set` need the key and value types that
-`clru_construct` recorded. In another function you call `clru_redeclare` to
+`ccache_get` and `ccache_set` need the key and value types that
+`ccache_construct` recorded. In another function you call `ccache_redeclare` to
 record them again before the first get or set. It needs a plain variable
 name, so a cache that lives in a struct gets copied into a local variable
 first.
@@ -348,24 +348,24 @@ static bool load_definition(const cmap_pair *key, cmap_pair *val) {
 }
 
 typedef struct {
-    clru_cache definitions;               /* the 500 most recent words */
+    ccache definitions;               /* the 500 most recent words */
 } dictionary_app;
 
 static void lookup_word(dictionary_app *app, const char *word) {
-    clru_cache defs = app->definitions;   /* redeclare needs a plain name */
-    clru_redeclare(defs, char *, char *);
+    ccache defs = app->definitions;   /* redeclare needs a plain name */
+    ccache_redeclare(defs, char *, char *);
 
     char *definition = NULL;
-    if (clru_get(defs, word, &definition) != ccol_success) {
+    if (ccache_get(defs, word, &definition) != ccol_success) {
         printf("%-7s (no definition)\n", word);
         return;
     }
     printf("%-7s %s\n", word, definition);
-    free(definition);                     /* each clru_get returns a new copy */
+    free(definition);                     /* each ccache_get returns a new copy */
 }
 
 int main(void) {
-    clru_construct(defs, char *, char *, 500, load_definition, NULL, NULL);
+    ccache_construct(defs, char *, char *, 500, load_definition, NULL, NULL);
     dictionary_app app = { defs };
 
     const char *session[] = { "pool", "cache", "pool", "llama", "cache",
@@ -375,7 +375,7 @@ int main(void) {
 
     printf("%zu lookups, %d slow ones\n", sizeof(session) / sizeof(session[0]),
            slow_lookups);
-    clru_destroy(defs);
+    ccache_destroy(defs);
     return 0;
 }
 ```
@@ -386,14 +386,14 @@ the unknown word a second time scans again.
 
 ## Other ways to create a cache
 
-`clru_declare` and `clru_init` split the declaration and the creation into
+`ccache_declare` and `ccache_init` split the declaration and the creation into
 two steps, so you can create the cache later in a function for example.
-`clru_construct_scoped` and `clru_declare_scoped` destroy the cache by
+`ccache_construct_scoped` and `ccache_declare_scoped` destroy the cache by
 themselves when the variable goes out of scope.
 
 The macros stop the program through `_ccol_fatal_err()` if creation fails.
 If you want to handle that failure yourself, or give the cache a custom
-allocator, call `clrucache_create_full()` and then `clru_redeclare` on the
+allocator, call `clrucache_create_full()` and then `ccache_redeclare` on the
 handle:
 
 ```c
@@ -402,25 +402,25 @@ handle:
 
 int main(void) {
     char *err = NULL;
-    clru_cache prices = clrucache_create_full(
+    ccache prices = clrucache_create_full(
         1024,
         ccol_determine_ccol_data_type((int)0),      /* key type */
         ccol_determine_ccol_data_type((double)0),   /* value type */
         NULL, NULL, NULL,                           /* no callbacks */
         NULL,                                       /* default allocator */
         &err);
-    if (prices == CLRU_CACHE_NULL) {
+    if (prices == CCACHE_NULL) {
         fprintf(stderr, "cache: %s\n", err);
         return 1;                                   /* no fatal error */
     }
 
-    clru_redeclare(prices, int, double);            /* lets clru_get/set work */
-    clru_set(prices, 7, 19.99);
+    ccache_redeclare(prices, int, double);            /* lets ccache_get/set work */
+    ccache_set(prices, 7, 19.99);
     double p = 0;
-    if (clru_get(prices, 7, &p) == ccol_success)
+    if (ccache_get(prices, 7, &p) == ccol_success)
         printf("item 7 costs %.2f\n", p);
 
-    clru_destroy(prices);
+    ccache_destroy(prices);
     return 0;
 }
 ```
@@ -472,13 +472,13 @@ allocator the cache frees its result with.
 Calling the cache from the eviction callback deadlocks, and so does getting
 or setting the key that the getter or the setter is serving.
 
-Each function that gets the handle needs `clru_redeclare`, or the typed
+Each function that gets the handle needs `ccache_redeclare`, or the typed
 macros don't compile.
 
 For a struct key with padding on a compiler other than GCC 11 or later,
 use the raw functions and give them a key whose bytes are all zero.
 
-`clru_destroy` sets your variable to `CLRU_CACHE_NULL`, so destroying
+`ccache_destroy` sets your variable to `CCACHE_NULL`, so destroying
 that variable again does nothing, but destroying another copy of the same
 handle afterwards stops the program.
 
@@ -488,24 +488,27 @@ Overview: [clrucache(7)](https://abunchofnerds-25.github.io/ccollections/man/clr
 
 Creating and destroying:
 
-- [clru_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_construct.3.html),
-  [clru_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_construct_scoped.3.html)
-- [clru_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_declare.3.html),
-  [clru_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_declare_scoped.3.html),
-  [clru_init(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_init.3.html)
-- [clru_redeclare(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_redeclare.3.html)
-- [clru_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_destroy.3.html)
+- [ccache_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_construct.3.html),
+  [ccache_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_construct_scoped.3.html)
+- [ccache_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_declare.3.html),
+  [ccache_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_declare_scoped.3.html),
+  [ccache_init(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_init.3.html)
+- [ccache_redeclare(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_redeclare.3.html)
+- [ccache_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_destroy.3.html),
+  [clrucache_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_destroy.3.html)
 - [clrucache_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_create_full.3.html)
 
 Reading and writing:
 
-- [clru_get(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_get.3.html),
-  [clru_set(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_set.3.html)
+- [ccache_get(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_get.3.html),
+  [ccache_set(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_set.3.html)
 - [clrucache_get_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_get_full.3.html),
   [clrucache_set_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_set_full.3.html)
 
 Inspecting:
 
+- [ccache_size(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_size.3.html),
+  [ccache_capacity(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/ccache_capacity.3.html)
 - [clrucache_size(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_size.3.html),
   [clrucache_capacity(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_capacity.3.html)
 

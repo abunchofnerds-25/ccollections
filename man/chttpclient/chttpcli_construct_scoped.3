@@ -11,9 +11,9 @@ chttpcli_construct_scoped(name)
 .fi
 .SH DESCRIPTION
 .nf
-This macro is chttpcli_declare_scoped followed by chttpclient_create.
+This macro is chttpcli_declare_scoped followed by chttpcli_create.
 It declares name with the GCC cleanup attribute, calls
-chttpclient_create and stores the result in name, so the client is
+chttpcli_create and stores the result in name, so the client is
 destroyed automatically when name leaves the scope. If the creation
 fails, the macro calls _ccol_fatal_err() and does not return.
 .fi

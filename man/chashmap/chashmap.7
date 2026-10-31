@@ -15,16 +15,19 @@ implementations. It uses open addressing when the key and the value are
 both integral types of eight bytes or less (long double does not count),
 and separate chaining for every other combination and for any map with a
 custom key equality procedure. The API is the same either way, and
-chmap_create_full(3) describes the selection, the hashing and how the map
+chashmap_create_full(3) describes the selection, the hashing and how the map
 resists hash flooding.
 
 The API has two layers. The type-inferred macros, such as
 chmap_construct(3), chmap_insert(3), chmap_get(3), chmap_get_ptr(3) and
 chmap_remove(3), keep the key type and the value type with the handle,
 and on a hard error they stop the program through _ccol_fatal_err(). The
-raw functions, chmap_create_full(3), chmap_insert_elem(3),
-chmap_get_elem_ref(3), chmap_get_elem_copy(3) and chmap_delete_elem(3),
-take every key and value as a cmap_pair and return a ccol_retval_t.
+raw functions, chashmap_create_full(3), chashmap_insert_elem(3),
+chashmap_get_elem_ref(3), chashmap_get_elem_copy(3) and
+chashmap_delete_elem(3), take every key and value as a cmap_pair and
+return a ccol_retval_t. The typed layer also has chmap_destroy(3),
+chmap_size(3) and chmap_reset(3), short names for chashmap_destroy(3),
+chashmap_elem_count(3) and chashmap_reset(3).
 .fi
 .SH "OWNERSHIP OF KEYS AND VALUES"
 .nf
@@ -37,7 +40,7 @@ contents together with the terminator. Your own string is yours again as
 soon as the insert returns, so you can change or free it without
 affecting the map.
 
-chmap_get(3), chmap_get_ptr(3), chmap_get_elem_ref(3) and an iterator
+chmap_get(3), chmap_get_ptr(3), chashmap_get_elem_ref(3) and an iterator
 give back string pointers into the map's storage, which you must not
 free. Such a pointer is valid until the next insert, delete, reset or
 resize of the map, or until the map is destroyed. To replace a stored
@@ -47,7 +50,7 @@ A value of any other pointer type, a struct point * for example, is
 kept as the pointer itself. The map does not copy, follow or free the
 object at that address. That object belongs to the caller and must be
 freed before or during the destroy of the map, and
-chmap_destroy_with_dtor(3) can run a destructor on each value during
+chashmap_destroy_with_dtor(3) can run a destructor on each value during
 the destroy for that purpose.
 
 An array type such as int[2] or char[16] cannot be the key or value type
@@ -58,7 +61,7 @@ struct that holds the array works.
 .fi
 .SH "REFERENCES INTO THE MAP"
 .nf
-A pointer from chmap_get_ptr(3) or chmap_get_elem_ref(3) is valid until
+A pointer from chmap_get_ptr(3) or chashmap_get_elem_ref(3) is valid until
 the map changes, which means an insert, a delete, a reset or a resize. A
 lookup invalidates nothing, so you can hold pointers to many values at
 once. With both implementations each such pointer is aligned for the
@@ -72,11 +75,11 @@ other calls on that map.
 .fi
 .SH "SEE ALSO"
 .BR chmap_construct (3),
-.BR chmap_create_full (3),
+.BR chashmap_create_full (3),
 .BR chmap_insert (3),
 .BR chmap_get_ptr (3),
-.BR chmap_get_elem_ref (3),
-.BR chmap_destroy_with_dtor (3),
+.BR chashmap_get_elem_ref (3),
+.BR chashmap_destroy_with_dtor (3),
 .BR chashmap_begin_iter (3),
 .BR cbstmap (7),
 .BR citerators (7)

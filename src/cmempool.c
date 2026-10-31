@@ -40,13 +40,13 @@ SOFTWARE.
  * records that spelling, so with the array form the recorded corpus would
  * differ between the two compilers for an object whose size, alignment and
  * linkage are identical in both. */
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
-const char _ccol_mempool_built_with_compact_layout = 0;
+#if CMEMPOOL_COMPACT_LAYOUT
+const char _cmempool_built_with_compact_layout = 0;
 #else
-const char _ccol_mempool_built_with_fast_layout = 0;
+const char _cmempool_built_with_fast_layout = 0;
 #endif
 
-const char *_ccol_mempool_mark = "ccol_mempool";
+const char *_cmempool_mark = "cmempool";
 
 typedef uintptr_t *addr_t;
 
@@ -60,7 +60,7 @@ struct ccol_mp_magazine;
  *
  * A pool entry's user-visible size is its whole stride: the rounding is the
  * pool's business, but the bytes belong to whoever holds the entry. */
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
+#if CMEMPOOL_COMPACT_LAYOUT
 #define MP_HAS_CACHE(mp) ((mp)->has_cache)
 /* The widest product the reciprocal needs. On a 32-bit target the offsets
    fit in 32 bits, so a 64-bit intermediate keeps the high half; on a 64-bit
@@ -111,8 +111,7 @@ typedef struct {
  * any object type, which is what malloc() guarantees and what a replacement
  * should match. The guarantee for a fallback entry can't be stronger than
  * what that allocator gives. */
-#define DYNAMIC_ENTRY_PREFIX_SIZE \
-  _ccol_mempool_align_up(sizeof(mp_dynamic_header))
+#define DYNAMIC_ENTRY_PREFIX_SIZE _cmempool_align_up(sizeof(mp_dynamic_header))
 
 #define DYNAMIC_ENTRY_HEADER(entry) \
   ((mp_dynamic_header *)((uint8_t *)(entry) - DYNAMIC_ENTRY_PREFIX_SIZE))
@@ -123,16 +122,16 @@ typedef struct {
 /* Defined further down, next to the free path it mainly serves, and
  * declared here because the magazine and the size helper above it ask the
  * same question. */
-static inline bool valid_mempool_addr(ccol_mempool *mp, uintptr_t c_entry);
+static inline bool valid_mempool_addr(cmempool *mp, uintptr_t c_entry);
 
-/* Defined next to ccol_mempool_alloc_entry; the thread-cache path above that
+/* Defined next to cmempool_alloc_entry; the thread-cache path above that
  * definition serves requests through it. */
 static inline __attribute__((always_inline)) void *mempool_serve_locked(
-    ccol_mempool *mp);
+    cmempool *mp);
 
 #define DYNAMIC_ENTRY_USER_SIZE(entry) (DYNAMIC_ENTRY_HEADER(entry)->user_size)
 
-struct ccol_mempool {
+struct cmempool {
   /* ---- one cache line, touched by every allocation and free -------------
    * On LP64 this group is exactly 64 bytes, and the grouping was measured,
    * not guessed. free_inst and free_elem_count belong here although they are
@@ -142,8 +141,8 @@ struct ccol_mempool {
    * here because it's the branch every operation starts with.
    * magazine_capacity doesn't: it's read once, when a thread first claims a
    * magazine, and after that each magazine keeps its own copy. */
-  const char *ccol_mempool_mark;  // Used for sanity checks
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
+  const char *cmempool_mark;  // Used for sanity checks
+#if CMEMPOOL_COMPACT_LAYOUT
   /* Turns an entry's byte offset into its ordinal. The compact stride isn't a
      power of two, so this field takes the place of the shift the default
      layout uses. It uses the eight bytes that max_magazines gives up
@@ -163,7 +162,7 @@ struct ccol_mempool {
   /* log2 of extended_elem_size in the default layout, where the stride is a
    * power of two, so the free path turns an entry's offset into its index
    * with a shift instead of a division. It's zero under
-   * CCOL_MEMPOOL_COMPACT_LAYOUT, where the stride isn't a power of two and
+   * CMEMPOOL_COMPACT_LAYOUT, where the stride isn't a power of two and
    * entry_index_magic does the conversion instead. It's a uint8_t among the
    * flags on purpose: that way it lands in padding this line had already, and
    * the group described above stays exactly 64 bytes.
@@ -172,7 +171,7 @@ struct ccol_mempool {
    * after the entries, so it starts at upper_addr_limit, which this same path
    * has loaded already for the bounds check. */
   uint8_t entry_shift;
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
+#if CMEMPOOL_COMPACT_LAYOUT
   /* The hot path only asks whether this pool caches at all. How many
      magazines it can hand out is a construction-time question, so that count
      lives below, which frees the eight bytes entry_index_magic needs on this
@@ -182,7 +181,7 @@ struct ccol_mempool {
 #endif
 
   /* ---- cold: construction, teardown, introspection --------------------- */
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
+#if CMEMPOOL_COMPACT_LAYOUT
   size_t max_magazines;
 #endif
   size_t magazine_capacity;
@@ -296,23 +295,22 @@ static const size_t elem_is_freed_dynamic_member = 0xdeadc0dedeadc0de;
 /* The shift that reduces a hash to a slot index. The table holds
  * 1 << (address bits - shift) slots, and at least MP_DYNAMIC_SET_MIN_CAPACITY
  * of them, so the shift stays below the address width. */
-static inline unsigned mp_dynamic_set_shift(const ccol_mempool *mp) {
+static inline unsigned mp_dynamic_set_shift(const cmempool *mp) {
   return (unsigned)mp->dynamic_entries[-1];
 }
 
-static inline size_t mp_dynamic_set_home(const ccol_mempool *mp,
-                                         uintptr_t key) {
+static inline size_t mp_dynamic_set_home(const cmempool *mp, uintptr_t key) {
   return (size_t)((key * MP_ADDR_HASH_MUL) >> mp_dynamic_set_shift(mp));
 }
 
 /* The slot count of the table, or 0 when the pool has none. */
-static inline size_t mp_dynamic_set_capacity(const ccol_mempool *mp) {
+static inline size_t mp_dynamic_set_capacity(const cmempool *mp) {
   if (!mp->dynamic_entries) return 0;
   return (size_t)1 << (MP_ADDR_BITS - mp_dynamic_set_shift(mp));
 }
 
 /* Places key into a table that has room for it and doesn't hold it yet. */
-static void mp_dynamic_set_place(ccol_mempool *mp, uintptr_t key) {
+static void mp_dynamic_set_place(cmempool *mp, uintptr_t key) {
   size_t mask = mp_dynamic_set_capacity(mp) - 1;
   size_t i = mp_dynamic_set_home(mp, key);
   while (mp->dynamic_entries[i] != 0) i = (i + 1) & mask;
@@ -321,8 +319,7 @@ static void mp_dynamic_set_place(ccol_mempool *mp, uintptr_t key) {
 
 /* Gives the slot that holds key, or the capacity when the set doesn't hold
  * it. The caller holds mp->lock. */
-static size_t mp_dynamic_set_find_locked(const ccol_mempool *mp,
-                                         uintptr_t key) {
+static size_t mp_dynamic_set_find_locked(const cmempool *mp, uintptr_t key) {
   size_t cap = mp_dynamic_set_capacity(mp);
   if (cap == 0) return 0;
   size_t mask = cap - 1;
@@ -333,8 +330,7 @@ static size_t mp_dynamic_set_find_locked(const ccol_mempool *mp,
   }
 }
 
-static bool mp_dynamic_set_contains_locked(const ccol_mempool *mp,
-                                           uintptr_t key) {
+static bool mp_dynamic_set_contains_locked(const cmempool *mp, uintptr_t key) {
   return mp_dynamic_set_find_locked(mp, key) != mp_dynamic_set_capacity(mp);
 }
 
@@ -344,7 +340,7 @@ static bool mp_dynamic_set_contains_locked(const ccol_mempool *mp,
  * refuses; the caller then gives the entry back and reports the allocation
  * as failed. */
 static __attribute__((noinline)) bool mp_dynamic_set_insert_locked(
-    ccol_mempool *mp, uintptr_t key) {
+    cmempool *mp, uintptr_t key) {
   size_t live = atomic_load_explicit(&mp->active_dynamic_memory_buffer_count,
                                      memory_order_relaxed);
   size_t old_cap = mp_dynamic_set_capacity(mp);
@@ -374,7 +370,7 @@ static __attribute__((noinline)) bool mp_dynamic_set_insert_locked(
 /* Removes key. Gives false when the set doesn't hold key, which means key
  * isn't a live dynamic entry of this pool. The caller holds mp->lock. */
 static __attribute__((noinline)) bool mp_dynamic_set_remove_locked(
-    ccol_mempool *mp, uintptr_t key) {
+    cmempool *mp, uintptr_t key) {
   size_t cap = mp_dynamic_set_capacity(mp);
   size_t i = mp_dynamic_set_find_locked(mp, key);
   if (i == cap) return false;
@@ -396,7 +392,7 @@ static __attribute__((noinline)) bool mp_dynamic_set_remove_locked(
 }
 
 /* Frees the table. Only a destroy calls it, once no dynamic entry is live. */
-static void mp_dynamic_set_release(ccol_mempool *mp) {
+static void mp_dynamic_set_release(cmempool *mp) {
   if (mp->dynamic_entries) _ccol_mem_free(mp->m_procs, mp->dynamic_entries - 1);
   mp->dynamic_entries = NULL;
 }
@@ -405,7 +401,7 @@ static void mp_dynamic_set_release(ccol_mempool *mp) {
  * caller holds mp->lock when the pool uses locks. Gives NULL when the
  * allocator refuses or when the size can't carry the header. */
 static __attribute__((noinline)) void *mempool_alloc_dynamic_locked(
-    ccol_mempool *mp, size_t user_size) {
+    cmempool *mp, size_t user_size) {
   if (user_size > SIZE_MAX - DYNAMIC_ENTRY_PREFIX_SIZE) return NULL;
   void *raw_block =
       _ccol_mem_alloc(mp->m_procs, DYNAMIC_ENTRY_PREFIX_SIZE + user_size);
@@ -457,7 +453,7 @@ static __attribute__((noinline)) void *mempool_alloc_dynamic_locked(
  * the lock it saves, and how often those boundaries come falls as the
  * reciprocal of the depth. */
 #define CCOL_MP_RESERVE_DIVISOR 2u
-/* The map is direct, so a ccol_r_mempool allocating across size tiers
+/* The map is direct, so a crmempool allocating across size tiers
  * doesn't thrash a single-entry cache on every call. The count is a power of
  * two, which lets mempool_tls_slot() end in a mask. */
 #define CCOL_MP_TLS_SLOTS 8u
@@ -475,13 +471,13 @@ typedef struct ccol_mp_magazine {
    * it sees one, so reading NULL must also make the unlink before it
    * visible. Otherwise the unlinking thread would still hold a pointer to
    * memory the owner just freed. */
-  _Atomic(ccol_mempool *) pool;
+  _Atomic(cmempool *) pool;
   /* A relaxed atomic instead of a plain size_t only because the
    * introspection functions read it from another thread and must not race;
    * only the owning thread ever writes it. A relaxed load or store compiles
    * to an ordinary load or store, no lock prefix and no fence, so the fast
    * path stays the same. What the atomic buys is an exact answer from
-   * ccol_mempool_used_count(), which can then report the entries the pool
+   * cmempool_used_count(), which can then report the entries the pool
    * really handed out and not the ones it just pulled out of the shared
    * list. Without it a single allocation would over-report by a whole refill
    * batch. */
@@ -493,7 +489,7 @@ typedef struct ccol_mp_magazine {
   /* The value is kept here rather than reached through the pool, because an
    * orphaned magazine outlives the pool it came from, so mp->m_procs is
    * gone already when the magazine gets freed. NULL means the pool used the
-   * default allocator. _ccol_r_mempool_destroy follows the same convention
+   * default allocator. _crmempool_destroy follows the same convention
    * for the same reason. */
   ccol_free_t free_proc;
   /* Sized for this pool's magazine capacity, not for the ceiling above that
@@ -542,10 +538,10 @@ typedef struct {
  * initial-exec is the right choice, but a library that dlopen() brings into
  * a process whose block is already full fails to load. If you
  * need the dlopen() case to work with glibc or on FreeBSD, build with
- * -DCCOL_MEMPOOL_DYNAMIC_TLS=1 to get the general model. */
+ * -DCMEMPOOL_DYNAMIC_TLS=1 to get the general model. */
 #if defined(_CCOL_EMULATE_DARWIN_TLS)
 /* No __thread object, the state is the key's value; see _mp_tls_cur(). */
-#elif defined(CCOL_MEMPOOL_DYNAMIC_TLS) && CCOL_MEMPOOL_DYNAMIC_TLS
+#elif defined(CMEMPOOL_DYNAMIC_TLS) && CMEMPOOL_DYNAMIC_TLS
 static __thread mp_tls_state_t _mp_tls;
 #else
 static __thread mp_tls_state_t _mp_tls
@@ -649,7 +645,7 @@ static void mempool_cache_geometry(size_t elem_count, size_t *max_magazines,
  * by the pool's magazine limit. It only runs on paths that hold the lock
  * already, and a pool without a cache has no magazines to walk.
  */
-static size_t mempool_live_count_locked(ccol_mempool *mp) {
+static size_t mempool_live_count_locked(cmempool *mp) {
   size_t live = mp->total_elem_count - mp->free_elem_count;
   for (ccol_mp_magazine *mag = mp->magazines; mag; mag = mag->next_in_pool) {
     size_t cached = atomic_load_explicit(&mag->count, memory_order_relaxed);
@@ -668,8 +664,7 @@ static size_t mempool_live_count_locked(ccol_mempool *mp) {
  * The caller holds mp->lock. Corruption is reported through *corrupt rather
  * than asserted here, so the caller can release the lock first, as every
  * other corruption path in this file does. */
-static void mempool_magazine_refill_locked(ccol_mempool *mp,
-                                           ccol_mp_magazine *mag,
+static void mempool_magazine_refill_locked(cmempool *mp, ccol_mp_magazine *mag,
                                            bool *corrupt) {
   /* Every entry granted here can go live later with no further lock, so what
    * must stay within the advertised count is everything that already left
@@ -686,12 +681,12 @@ static void mempool_magazine_refill_locked(ccol_mempool *mp,
    * about 1180 entries at once, not 1024.
    *
    * Even so the bound isn't exact, and no rule here can make it exact. The
-   * locked path in ccol_mempool_alloc_entry has to keep serving while callers
+   * locked path in cmempool_alloc_entry has to keep serving while callers
    * really hold fewer than advertised_elem_count entries; otherwise the pool
    * refuses a caller entries that another thread has merely cached, and that
    * guarantee is the reason the reserve exists. Since the two can't both be
    * exact, this code keeps the overshoot to a handful of entries rather than
-   * the whole reserve. The documentation of ccol_mempool_total_capacity()
+   * the whole reserve. The documentation of cmempool_total_capacity()
    * states what the pool promises.
    */
   size_t count = atomic_load_explicit(&mag->count, memory_order_relaxed);
@@ -725,8 +720,7 @@ static void mempool_magazine_refill_locked(ccol_mempool *mp,
  * here.
  *
  * The caller holds mp->lock. */
-static void mempool_magazine_flush_locked(ccol_mempool *mp,
-                                          ccol_mp_magazine *mag,
+static void mempool_magazine_flush_locked(cmempool *mp, ccol_mp_magazine *mag,
                                           size_t how_many) {
   size_t count = atomic_load_explicit(&mag->count, memory_order_relaxed);
   while (how_many-- > 0 && count > 0) {
@@ -777,7 +771,7 @@ static void mempool_tls_reap(mp_tls_state_t *tls, ccol_mp_magazine **link,
  * lookup costs one TLS resolution instead of one per field it touches. */
 /* Gives the slot of the direct map that a pool occupies.
  *
- * The map is there so that a ccol_r_mempool allocating across size tiers
+ * The map is there so that a crmempool allocating across size tiers
  * keeps one slot per tier instead of thrashing one slot. The tiers are
  * separate allocations, so their addresses differ by a stride, and which
  * address bits the index reads decides entirely whether that stride spreads
@@ -800,12 +794,12 @@ static void mempool_tls_reap(mp_tls_state_t *tls, ccol_mp_magazine **link,
  * CCOL_MP_TLS_SLOTS is a power of two, so the reduction is a mask rather
  * than a division. */
 static inline __attribute__((always_inline)) size_t
-mempool_tls_slot(const ccol_mempool *mp) {
+mempool_tls_slot(const cmempool *mp) {
   return (size_t)(((uintptr_t)mp >> 8) & (uintptr_t)(CCOL_MP_TLS_SLOTS - 1));
 }
 
 static inline __attribute__((always_inline)) ccol_mp_magazine *
-mempool_tls_magazine_hit(ccol_mempool *mp) {
+mempool_tls_magazine_hit(cmempool *mp) {
   mp_tls_state_t *tls = _mp_tls_cur();
   if (!tls) return NULL;
   size_t slot = mempool_tls_slot(mp);
@@ -820,15 +814,14 @@ mempool_tls_magazine_hit(ccol_mempool *mp) {
 /* The direct map's miss path. It walks this thread's list, reaps any
  * magazine whose pool is destroyed, and gives this thread's magazine for mp,
  * or NULL when this thread holds none. It takes no lock. */
-static ccol_mp_magazine *mempool_tls_magazine_find(ccol_mempool *mp) {
+static ccol_mp_magazine *mempool_tls_magazine_find(cmempool *mp) {
   mp_tls_state_t *tls = _mp_tls_cur();
   if (!tls) return NULL;
   ccol_mp_magazine *mag;
 
   ccol_mp_magazine **link = &tls->mags;
   while ((mag = *link) != NULL) {
-    ccol_mempool *owner =
-        atomic_load_explicit(&mag->pool, memory_order_acquire);
+    cmempool *owner = atomic_load_explicit(&mag->pool, memory_order_acquire);
     if (!owner) {
       mempool_tls_reap(tls, link, mag);
       /* The reap calls the reaped magazine's allocator, which can be built on
@@ -860,7 +853,7 @@ static ccol_mp_magazine *mempool_tls_magazine_find(ccol_mempool *mp) {
  * refused thread pays one lock per operation, exactly like a pool with no
  * cache, and allocates nothing. */
 static __attribute__((noinline)) ccol_mp_magazine *mempool_tls_magazine_create(
-    ccol_mempool *mp) {
+    cmempool *mp) {
   mp_tls_state_t *tls = _mp_tls_cur();
 
   /* A thread arms the key before building its first magazine, and builds
@@ -943,7 +936,7 @@ static __attribute__((noinline)) ccol_mp_magazine *mempool_tls_magazine_create(
 }
 
 /* Unlinks a magazine from its pool's list. The caller holds mp->lock. */
-static void mempool_magazine_unlink_locked(ccol_mempool *mp,
+static void mempool_magazine_unlink_locked(cmempool *mp,
                                            ccol_mp_magazine *mag) {
   if (mag->prev_in_pool)
     mag->prev_in_pool->next_in_pool = mag->next_in_pool;
@@ -991,7 +984,7 @@ static void _mp_tls_drain(void *arg) {
       /* The registry lock is what keeps a destroy from freeing the pool
        * between reading its pointer here and locking it below. */
       _ccol_mutex_lock(_mp_registry_lock);
-      ccol_mempool *mp = atomic_load_explicit(&mag->pool, memory_order_acquire);
+      cmempool *mp = atomic_load_explicit(&mag->pool, memory_order_acquire);
       if (mp) {
         _ccol_mutex_lock(mp->lock);
         mempool_magazine_flush_locked(
@@ -1046,12 +1039,12 @@ __attribute__((destructor)) static void _mp_cache_fini(void) {
 
 /* The paths of a pool that uses locks and can't serve a request from its
  * thread cache. They're defined next to the entry points. */
-static void *mempool_alloc_locked(ccol_mempool *mp);
-static void mempool_free_locked(ccol_mempool *mp, void *entry);
+static void *mempool_alloc_locked(cmempool *mp);
+static void mempool_free_locked(cmempool *mp, void *entry);
 
 /* The thread-cache halves of alloc and free, kept out of line on purpose:
- * an inline copy inside ccol_mempool_alloc_entry and
- * __ccol_mempool_free_entry disturbs the code those functions get for every
+ * an inline copy inside cmempool_alloc_entry and
+ * __cmempool_free_entry disturbs the code those functions get for every
  * other caller. Measured against an otherwise identical build, inlining this
  * costs a pool with no cache more than ten percent, although that pool runs
  * not one instruction of it. Out of line, a pool with no cache only sees the
@@ -1075,7 +1068,7 @@ static void mempool_free_locked(ccol_mempool *mp, void *entry);
  * whose magazine can't be created goes to the locked path. The entry point
  * ends in a tail jump to this function and needs no frame of its own. */
 static __attribute__((noinline)) void *mempool_alloc_from_cache_slow(
-    ccol_mempool *mp, ccol_mp_magazine *mag) {
+    cmempool *mp, ccol_mp_magazine *mag) {
   void *served;
   if (!mag) {
     mag = mempool_tls_magazine_find(mp);
@@ -1116,7 +1109,7 @@ static __attribute__((noinline)) void *mempool_alloc_from_cache_slow(
 }
 
 static inline __attribute__((always_inline)) void *mempool_alloc_from_cache(
-    ccol_mempool *mp) {
+    cmempool *mp) {
   /* The hit is the common case and both tests tell the compiler so, which
    * makes it lay the pop out right after the lookup, contiguous with the
    * function's entry, which starts on a 64-byte boundary. Left alone it puts
@@ -1155,7 +1148,7 @@ static inline __attribute__((always_inline)) void *mempool_alloc_from_cache(
  * write it here with no lock, and that's what leaves a double free by two
  * threads at the same instant undetected. Such a call is a data race in the
  * caller's program either way, and a general purpose allocator with a thread
- * cache has the same limit. See the note on ccol_mempool_free_entry in the
+ * cache has the same limit. See the note on cmempool_free_entry in the
  * header. */
 /* Every case a push can meet other than "there is room": either this thread
  * has no magazine for this pool yet, or the one it has is full and has to
@@ -1164,7 +1157,7 @@ static inline __attribute__((always_inline)) void *mempool_alloc_from_cache(
  * when the caller missed that lookup altogether. What it can't park goes to
  * the locked path. */
 static __attribute__((noinline)) void mempool_free_to_cache_slow(
-    ccol_mempool *mp, void *entry, size_t idx, ccol_mp_magazine *mag) {
+    cmempool *mp, void *entry, size_t idx, ccol_mp_magazine *mag) {
   if (!mag) {
     mag = mempool_tls_magazine_find(mp);
     if (!mag) {
@@ -1219,7 +1212,7 @@ static __attribute__((noinline)) void mempool_free_to_cache_slow(
 }
 
 static inline __attribute__((always_inline)) void mempool_free_to_cache(
-    ccol_mempool *mp, void *entry, uintptr_t c_entry) {
+    cmempool *mp, void *entry, uintptr_t c_entry) {
   /* Ownership comes first, since there's no header to look at before it. An
      address outside this pool's buffer isn't a pool entry; it belongs on the
      locked path, which owns the dynamic fallback. */
@@ -1268,8 +1261,8 @@ static inline __attribute__((always_inline)) void mempool_free_to_cache(
  * produce, since they exist to prove the pool catches exactly that state. So
  * the reach-in lives here rather than the test making up a way to compute
  * the address itself. */
-void _ccol_mempool_corrupt_entry_status_for_tests(ccol_mempool *mp, void *entry,
-                                                  unsigned char value) {
+void _cmempool_corrupt_entry_status_for_tests(cmempool *mp, void *entry,
+                                              unsigned char value) {
   if (!mp || !entry) return;
   if (!valid_mempool_addr(mp, (uintptr_t)entry)) return;
   ENTRY_STATUS(mp, ENTRY_INDEX(mp, (uintptr_t)entry)) = value;
@@ -1279,7 +1272,7 @@ void _ccol_mempool_corrupt_entry_status_for_tests(ccol_mempool *mp, void *entry,
  * thread's exit gives its slot back; without that, thread churn empties the
  * budget and the pool quietly stops caching while passing every functional
  * test. */
-size_t _ccol_mempool_live_magazines_for_tests(ccol_mempool *mp) {
+size_t _cmempool_live_magazines_for_tests(cmempool *mp) {
   if (!mp) return 0;
   size_t n;
   if (mp->should_use_locks) _ccol_mutex_lock(mp->lock);
@@ -1292,7 +1285,7 @@ size_t _ccol_mempool_live_magazines_for_tests(ccol_mempool *mp) {
  * that a magazine orphaned by a destroyed pool gets reaped rather than
  * piling up: such magazines stay reachable from thread-local storage, so no
  * leak checker reports them while the memory use climbs. */
-size_t _ccol_mempool_thread_magazines_for_tests(void) {
+size_t _cmempool_thread_magazines_for_tests(void) {
   size_t n = 0;
   mp_tls_state_t *tls = _mp_tls_cur();
   for (ccol_mp_magazine *mag = tls ? tls->mags : NULL; mag;
@@ -1303,11 +1296,11 @@ size_t _ccol_mempool_thread_magazines_for_tests(void) {
 
 /* Runs what the module runs at unload while the code stays mapped, so a
  * test can check what a pool and a thread do after the unload. */
-void _ccol_mempool_unload_cache_for_tests(void) { _mp_cache_fini(); }
+void _cmempool_unload_cache_for_tests(void) { _mp_cache_fini(); }
 
 /* The slots the pool allocated above the advertised count; zero for a pool
  * with no cache. */
-size_t _ccol_mempool_reserve_for_tests(ccol_mempool *mp) {
+size_t _cmempool_reserve_for_tests(cmempool *mp) {
   if (!mp) return 0;
   return mp->total_elem_count - mp->advertised_elem_count;
 }
@@ -1317,7 +1310,7 @@ size_t _ccol_mempool_reserve_for_tests(ccol_mempool *mp) {
  * some dynamic entries aren't free yet, so the leak gets noticed: a loud
  * crash is better than quietly losing memory. The backing objects buffer is
  * freed only when the caller didn't give it as a preallocated buffer. */
-void _ccol_mempool_destroy(ccol_mempool *mp) {
+void _cmempool_destroy(cmempool *mp) {
   if (mp) {
     /* Cut every magazine that's still out loose before anything else. Some
      * other thread owns each of them, and that thread may be running right
@@ -1348,7 +1341,7 @@ void _ccol_mempool_destroy(ccol_mempool *mp) {
     }
 
     if (mp->fallback_to_dynamic_memory) {
-      if (ccol_mempool_dynamic_allocs_count(mp) > 0) {
+      if (cmempool_dynamic_allocs_count(mp) > 0) {
         // This pool has dynamic entries that aren't free yet.
         // That's a leak, so make sure somebody notices.
         _ccol_assert(false);
@@ -1376,7 +1369,7 @@ void _ccol_mempool_destroy(ccol_mempool *mp) {
 }
 
 /* The distance from one entry to the next, worked out at run time from the
- * caller's element size. It matches the _ccol_mempool_stride() macro that the
+ * caller's element size. It matches the _cmempool_stride() macro that the
  * public buffer-declaring macros use, so a preallocated buffer and the pool
  * built on it always agree; the macro only exists separately because a
  * static array's size must be a constant expression.
@@ -1385,9 +1378,9 @@ void _ccol_mempool_destroy(ccol_mempool *mp) {
  * elem_size, and no value wraps. */
 static size_t mp_stride_for(size_t elem_size) {
   if (elem_size < sizeof(addr_t)) elem_size = sizeof(addr_t);
-  if (!_ccol_mempool_align_up_fits(elem_size)) return 0;
-  size_t base = _ccol_mempool_align_up(elem_size);
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
+  if (!_cmempool_align_up_fits(elem_size)) return 0;
+  size_t base = _cmempool_align_up(elem_size);
+#if CMEMPOOL_COMPACT_LAYOUT
   return base;
 #else
   size_t stride = 1;
@@ -1409,7 +1402,7 @@ static size_t mp_stride_for(size_t elem_size) {
  * size can't, so a wrapped product would turn into a small allocation that a
  * layout loop then walks elem_count entries through.
  *
- * _ccol_mempool_buffer_params_fit() checks the same expression at compile
+ * _cmempool_buffer_params_fit() checks the same expression at compile
  * time for a preallocated buffer, so a count and size the macro rejects are
  * rejected here as well. */
 static bool mp_block_bytes(size_t count, size_t stride, size_t *out) {
@@ -1418,7 +1411,7 @@ static bool mp_block_bytes(size_t count, size_t stride, size_t *out) {
   return true;
 }
 
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
+#if CMEMPOOL_COMPACT_LAYOUT
 /* Turns a division by a compact pool's stride into a multiply and a shift,
  * and proves the result before accepting it.
  *
@@ -1463,7 +1456,7 @@ static bool mp_build_reciprocal(size_t stride, size_t count, uintptr_t *magic,
 }
 #endif
 
-#if !CCOL_MEMPOOL_COMPACT_LAYOUT
+#if !CMEMPOOL_COMPACT_LAYOUT
 static uint8_t mp_log2_exact(size_t v) {
   uint8_t r = 0;
   while ((size_t)1 << r < v) ++r;
@@ -1478,14 +1471,14 @@ static uint8_t mp_log2_exact(size_t v) {
  * upper_addr_limit. */
 /* Gives false only under the compact layout, and only when no reciprocal
    for this stride and count can be proved. */
-static bool ccol_mempool_init_internal_scalars(
-    ccol_mempool *mp, size_t elem_count, size_t extended_elem_size,
-    bool fallback_to_dynamic_memory) {
+static bool cmempool_init_internal_scalars(cmempool *mp, size_t elem_count,
+                                           size_t extended_elem_size,
+                                           bool fallback_to_dynamic_memory) {
   uintptr_t base = (uintptr_t)mp->objects;
 
-  mp->ccol_mempool_mark = _ccol_mempool_mark;
+  mp->cmempool_mark = _cmempool_mark;
   mp->extended_elem_size = extended_elem_size;
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
+#if CMEMPOOL_COMPACT_LAYOUT
   mp->entry_shift = 0;
   if (!mp_build_reciprocal(extended_elem_size, elem_count,
                            &mp->entry_index_magic, &mp->entry_index_shift)) {
@@ -1520,11 +1513,10 @@ static bool ccol_mempool_init_internal_scalars(
  * a power of two. The raise is needed because a free entry keeps the
  * free-list link in its own first bytes. One status byte per entry follows
  * the entry array in the same block. */
-ccol_mempool *ccol_mempool_create(size_t elem_count, size_t elem_size,
-                                  bool fallback_to_dynamic_memory,
-                                  bool single_threaded,
-                                  ccol_memmgmt_procs_t *mmgmt_procs,
-                                  char **err) {
+cmempool *cmempool_create_mp(size_t elem_count, size_t elem_size,
+                             bool fallback_to_dynamic_memory,
+                             bool single_threaded,
+                             ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   if (err) {
     *err = NULL;
   }
@@ -1536,9 +1528,9 @@ ccol_mempool *ccol_mempool_create(size_t elem_count, size_t elem_size,
     return NULL;
   } else if (mp_stride_for(elem_size) == 0) {
     // elem_size gets two roundings here: first up to
-    // _ccol_mempool_entry_align, so that every entry after the first in the
+    // _cmempool_entry_align, so that every entry after the first in the
     // pool's contiguous buffer lands on an address aligned for any object
-    // type (the doc comment of _ccol_mempool_align_up() says why that rounding
+    // type (the doc comment of _cmempool_align_up() says why that rounding
     // is needed at all), and then up to a power of two.
     // For this elem_size the two roundings overflow size_t: the stride wraps
     // to a value smaller than elem_size itself, and every entry index the
@@ -1557,8 +1549,7 @@ ccol_mempool *ccol_mempool_create(size_t elem_count, size_t elem_size,
     return NULL;
   }
 
-  ccol_mempool *mp =
-      (ccol_mempool *)_ccol_mem_calloc(mmgmt_procs, 1, sizeof(ccol_mempool));
+  cmempool *mp = (cmempool *)_ccol_mem_calloc(mmgmt_procs, 1, sizeof(cmempool));
   if (!mp) {
     if (err) {
       *err = _CCOL_ERR_STR("failed to allocate memory pool struct");
@@ -1576,7 +1567,7 @@ ccol_mempool *ccol_mempool_create(size_t elem_count, size_t elem_size,
     if (err) {
       *err = _CCOL_ERR_STR("elem_size is too large for a pool entry");
     }
-    ccol_mempool_destroy(mp);
+    cmempool_destroy(mp);
     return NULL;
   }
 
@@ -1592,7 +1583,7 @@ ccol_mempool *ccol_mempool_create(size_t elem_count, size_t elem_size,
           "elem_count and elem_size are too large: the entries and their "
           "status bytes would overflow size_t");
     }
-    ccol_mempool_destroy(mp);
+    cmempool_destroy(mp);
     return NULL;
   }
 
@@ -1638,7 +1629,7 @@ ccol_mempool *ccol_mempool_create(size_t elem_count, size_t elem_size,
     if (err) {
       *err = _CCOL_ERR_STR("failed to allocate memory pool data area");
     }
-    ccol_mempool_destroy(mp);
+    cmempool_destroy(mp);
     return NULL;
   }
 
@@ -1650,38 +1641,38 @@ ccol_mempool *ccol_mempool_create(size_t elem_count, size_t elem_size,
         *err = _CCOL_ERR_STR("failed to initialize the mutex");
       }
       mp->should_use_locks = false;
-      ccol_mempool_destroy(mp);
+      cmempool_destroy(mp);
       return NULL;
     }
   }
 
   mp->max_magazines = max_magazines;
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
+#if CMEMPOOL_COMPACT_LAYOUT
   mp->has_cache = (max_magazines != 0);
 #endif
   mp->magazine_capacity = magazine_capacity;
   mp->advertised_elem_count = elem_count;
 
-  if (!ccol_mempool_init_internal_scalars(mp, slot_count, extended_elem_size,
-                                          fallback_to_dynamic_memory)) {
+  if (!cmempool_init_internal_scalars(mp, slot_count, extended_elem_size,
+                                      fallback_to_dynamic_memory)) {
     if (err) {
       *err = _CCOL_ERR_STR(
           "no verified reciprocal exists for this element size and count");
     }
-    ccol_mempool_destroy(mp);
+    cmempool_destroy(mp);
     return NULL;
   }
 
   return mp;
 }
 
-/* Like ccol_mempool_create, but with an outside buffer, a static array for
+/* Like cmempool_create_mp, but with an outside buffer, a static array for
  * example, as the element store. elem_count comes from buf_size divided by
  * the extended element size. The pool never frees the buffer, so its
  * lifetime stays the caller's business. Handy for an embedded pool, and for
  * a pool on the stack.
  */
-ccol_mempool *ccol_mempool_create_from_preallocated_buffer(
+cmempool *cmempool_create_from_preallocated_buffer_mp(
     void *buffer, size_t buf_size, size_t elem_size,
     bool fallback_to_dynamic_memory, bool single_threaded,
     ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
@@ -1703,19 +1694,19 @@ ccol_mempool *ccol_mempool_create_from_preallocated_buffer(
   // Entry 0 starts at the buffer's address, so the buffer decides whether
   // the entries this pool hands out meet the alignment the pool guarantees
   // for them; the stride rounding only carries that property from entry 0 to
-  // the rest. A buffer from CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER passes
+  // the rest. A buffer from CMEMPOOL_DECLARE_PREALLOCATED_BUFFER passes
   // this test already, because the macro aligns it to the same constant we
   // check here. A less aligned buffer would make the pool hand back entries a
   // caller can't store every object type in, which is undefined behavior and
   // a real fault risk on strict-alignment architectures.
-  if ((uintptr_t)buffer % _ccol_mempool_entry_align != 0) {
+  if ((uintptr_t)buffer % _cmempool_entry_align != 0) {
     if (err) {
       *err = _CCOL_ERR_STR("buffer must be aligned to at least 16 bytes");
     }
     return NULL;
   }
 
-  // This matches ccol_mempool_create's three-way elem_size handling exactly,
+  // This matches cmempool_create_mp's three-way elem_size handling exactly,
   // the ORDER of the checks included. A real zero is a caller mistake and
   // gets its own distinct error. Then comes an elem_size too large for the
   // stride rounding to apply without overflowing size_t. Only once both are
@@ -1730,12 +1721,12 @@ ccol_mempool *ccol_mempool_create_from_preallocated_buffer(
     }
     return NULL;
   } else if (mp_stride_for(elem_size) == 0) {
-    // elem_size is rounded up to _ccol_mempool_entry_align and then up to a
+    // elem_size is rounded up to _cmempool_entry_align and then up to a
     // power of two, and for this elem_size those roundings overflow size_t,
     // so the stride wraps to a value smaller than elem_size itself and every
     // entry index the free path computes would land outside the caller's
-    // buffer. See the identical check in ccol_mempool_create, and the doc
-    // comment of _ccol_mempool_align_up(), for the details.
+    // buffer. See the identical check in cmempool_create_mp, and the doc
+    // comment of _cmempool_align_up(), for the details.
     if (err) {
       *err = _CCOL_ERR_STR(
           "elem_size is too large: the stride rounding would "
@@ -1748,7 +1739,7 @@ ccol_mempool *ccol_mempool_create_from_preallocated_buffer(
 
   size_t extended_elem_size = mp_stride_for(elem_size);
   /* Each element costs its stride plus the one status byte in the same
-     buffer, which is exactly what CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER
+     buffer, which is exactly what CMEMPOOL_DECLARE_PREALLOCATED_BUFFER
      sizes for, so a buffer from that macro gives exactly the element count
      it was declared with. */
   size_t elem_count = buf_size / (extended_elem_size + 1);
@@ -1763,11 +1754,10 @@ ccol_mempool *ccol_mempool_create_from_preallocated_buffer(
     return NULL;
   }
 
-  ccol_mempool *mp =
-      (ccol_mempool *)_ccol_mem_calloc(mmgmt_procs, 1, sizeof(ccol_mempool));
+  cmempool *mp = (cmempool *)_ccol_mem_calloc(mmgmt_procs, 1, sizeof(cmempool));
   if (!mp) {
     if (err) {
-      *err = _CCOL_ERR_STR("failed to allocate ccol_mempool struct");
+      *err = _CCOL_ERR_STR("failed to allocate cmempool struct");
     }
     return NULL;
   }
@@ -1788,20 +1778,20 @@ ccol_mempool *ccol_mempool_create_from_preallocated_buffer(
         *err = _CCOL_ERR_STR("failed to init the rw lock");
       }
       mp->should_use_locks = false;
-      ccol_mempool_destroy(mp);
+      cmempool_destroy(mp);
       return NULL;
     }
   }
 
   mp->advertised_elem_count = elem_count;
 
-  if (!ccol_mempool_init_internal_scalars(mp, elem_count, extended_elem_size,
-                                          fallback_to_dynamic_memory)) {
+  if (!cmempool_init_internal_scalars(mp, elem_count, extended_elem_size,
+                                      fallback_to_dynamic_memory)) {
     if (err) {
       *err = _CCOL_ERR_STR(
           "no verified reciprocal exists for this element size and count");
     }
-    ccol_mempool_destroy(mp);
+    cmempool_destroy(mp);
     return NULL;
   }
 
@@ -1823,8 +1813,8 @@ ccol_mempool *ccol_mempool_create_from_preallocated_buffer(
  * reserve, so there a non-empty free list already means that the count is
  * not used up, and the short circuit below keeps such a pool from paying for
  * the check. */
-static inline __attribute__((always_inline)) void *mempool_serve(
-    ccol_mempool *mp, bool locked) {
+static inline __attribute__((always_inline)) void *mempool_serve(cmempool *mp,
+                                                                 bool locked) {
   void *result = NULL;
 
   bool can_serve = mp->free_inst != NULL;
@@ -1859,7 +1849,7 @@ static inline __attribute__((always_inline)) void *mempool_serve(
     // The pool's buffers are used up and the caller asked for a fallback to
     // dynamic allocation. A prefix on the allocation keeps the entry's
     // user-visible size (see DYNAMIC_ENTRY_USER_SIZE), so a later
-    // ccol_r_mempool_realloc_entry call can get that size back exactly.
+    // crmempool_realloc_entry call can get that size back exactly.
     result = mempool_alloc_dynamic_locked(mp, mp->extended_elem_size);
   }
 
@@ -1869,11 +1859,11 @@ static inline __attribute__((always_inline)) void *mempool_serve(
 /* The thread-cache path serves through this inside a critical section it
  * already holds. */
 static inline __attribute__((always_inline)) void *mempool_serve_locked(
-    ccol_mempool *mp) {
+    cmempool *mp) {
   return mempool_serve(mp, true);
 }
 
-/* The two free-list paths of ccol_mempool_alloc_entry, each in its own
+/* The two free-list paths of cmempool_alloc_entry, each in its own
  * function starting on a 64-byte boundary.
  *
  * How long an allocation takes depends on how its hot instructions fall
@@ -1889,12 +1879,12 @@ static inline __attribute__((always_inline)) void *mempool_serve_locked(
  * change here check the layout with objdump and callgrind instead of
  * trusting the source. */
 static __attribute__((noinline, aligned(64))) void *mempool_alloc_unlocked(
-    ccol_mempool *mp) {
+    cmempool *mp) {
   return mempool_serve(mp, false);
 }
 
 static __attribute__((noinline, aligned(64))) void *mempool_alloc_locked(
-    ccol_mempool *mp) {
+    cmempool *mp) {
   _ccol_mutex_lock(mp->lock);
   void *result = mempool_serve(mp, true);
   _ccol_mutex_unlock(mp->lock);
@@ -1909,7 +1899,7 @@ static __attribute__((noinline, aligned(64))) void *mempool_alloc_locked(
  * The function starts on a 64-byte boundary and the thread-cache hit is its
  * straight-line fall-through, so the hit path sits on the same lines in
  * every build. */
-__attribute__((aligned(64))) void *ccol_mempool_alloc_entry(ccol_mempool *mp) {
+__attribute__((aligned(64))) void *cmempool_alloc_entry(cmempool *mp) {
   if (!mp) {
     _ccol_assert(false);
   }
@@ -1930,8 +1920,8 @@ __attribute__((aligned(64))) void *ccol_mempool_alloc_entry(ccol_mempool *mp) {
 /* Allocates one element and zeroes it before handing it out. An entry has
  * no header, so the whole stride belongs to the caller and all of it gets
  * zeroed. */
-void *ccol_mempool_calloc_entry(ccol_mempool *mp) {
-  void *result = ccol_mempool_alloc_entry(mp);
+void *cmempool_calloc_entry(cmempool *mp) {
+  void *result = cmempool_alloc_entry(mp);
 
   if (result) {
     memset(result, 0, mp->extended_elem_size);
@@ -1956,12 +1946,12 @@ void *ccol_mempool_calloc_entry(ccol_mempool *mp) {
  * one upper comparison could cover both ends. We keep both comparisons
  * anyway: the pseudo_pool has a zero-width range, and the explicit lower
  * test says that instead of leaning on the wrap. */
-static inline bool valid_mempool_addr(ccol_mempool *mp, uintptr_t c_entry) {
+static inline bool valid_mempool_addr(cmempool *mp, uintptr_t c_entry) {
   if (c_entry < mp->lower_addr_limit || c_entry >= mp->upper_addr_limit) {
     return false;
   }
   uintptr_t off = c_entry - mp->lower_addr_limit;
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
+#if CMEMPOOL_COMPACT_LAYOUT
   return (uintptr_t)ENTRY_INDEX(mp, c_entry) *
              (uintptr_t)mp->extended_elem_size ==
          off;
@@ -1982,7 +1972,7 @@ static inline bool valid_mempool_addr(ccol_mempool *mp, uintptr_t c_entry) {
  * entry finds it gone. Only after that is the header in front of the entry
  * read. */
 static inline __attribute__((always_inline)) void
-mempool_release_dynamic_locked(ccol_mempool *mp, void *entry) {
+mempool_release_dynamic_locked(cmempool *mp, void *entry) {
   mp_dynamic_header *dyn = DYNAMIC_ENTRY_HEADER(entry);
 
   atomic_store_explicit(
@@ -2002,8 +1992,8 @@ mempool_release_dynamic_locked(ccol_mempool *mp, void *entry) {
 /* The same check and release for the ranged pool, which asks each of
  * its pools in turn. Gives false, having touched nothing, when entry isn't
  * a live dynamic entry of mp. */
-static __attribute__((noinline)) bool mempool_free_dynamic_locked(
-    ccol_mempool *mp, void *entry) {
+static __attribute__((noinline)) bool mempool_free_dynamic_locked(cmempool *mp,
+                                                                  void *entry) {
   if (!mp_dynamic_set_remove_locked(mp, (uintptr_t)entry)) return false;
   mempool_release_dynamic_locked(mp, entry);
   return true;
@@ -2023,7 +2013,7 @@ static __attribute__((noinline)) bool mempool_free_dynamic_locked(
  * mp->lock, which only a pool that uses locks does, and this function then
  * releases it. Every caller passes a constant. */
 static inline __attribute__((always_inline)) void mempool_free_body(
-    ccol_mempool *mp, void *entry, bool locked) {
+    cmempool *mp, void *entry, bool locked) {
   uintptr_t c_entry = (uintptr_t)entry;
 
   if (__builtin_expect(valid_mempool_addr(mp, c_entry), 1)) {
@@ -2078,18 +2068,18 @@ static inline __attribute__((always_inline)) void mempool_free_body(
 /* The two free-list paths of a free, each in its own function starting on a
  * 64-byte boundary, for the reason given at mempool_alloc_unlocked. */
 static __attribute__((noinline, aligned(64))) void mempool_free_unlocked(
-    ccol_mempool *mp, void *entry) {
+    cmempool *mp, void *entry) {
   mempool_free_body(mp, entry, false);
 }
 
 static __attribute__((noinline, aligned(64))) void mempool_free_locked(
-    ccol_mempool *mp, void *entry) {
+    cmempool *mp, void *entry) {
   _ccol_mutex_lock(mp->lock);
   mempool_free_body(mp, entry, true);
 }
 
-static inline __attribute__((always_inline)) void __ccol_mempool_free_entry(
-    ccol_mempool *mp, void *entry) {
+static inline __attribute__((always_inline)) void __cmempool_free_entry(
+    cmempool *mp, void *entry) {
   if (!mp) {
     _ccol_assert(false);
   }
@@ -2100,7 +2090,7 @@ static inline __attribute__((always_inline)) void __ccol_mempool_free_entry(
   }
 
   /* This test sits inside the lock test for the same reason as in
-   * ccol_mempool_alloc_entry: a pool with no cache shouldn't pay for one. */
+   * cmempool_alloc_entry: a pool with no cache shouldn't pay for one. */
   if (MP_HAS_CACHE(mp)) {
     mempool_free_to_cache(mp, entry, (uintptr_t)entry);
     return;
@@ -2109,14 +2099,14 @@ static inline __attribute__((always_inline)) void __ccol_mempool_free_entry(
 }
 
 /* The public entry point for a free. Like the standard free it accepts a
- * NULL pointer rather than asserting, checks with the ccol_mempool_mark
+ * NULL pointer rather than asserting, checks with the cmempool_mark
  * sentinel that the caller named a real pool, and then calls
- * __ccol_mempool_free_entry, which does the real release. */
+ * __cmempool_free_entry, which does the real release. */
 /* The function starts on a 64-byte boundary and the thread-cache push is
  * its straight-line fall-through, so the hit path sits on the same lines in
  * every build. */
-__attribute__((aligned(64))) void _ccol_mempool_free_entry(ccol_mempool *mp,
-                                                           void *entry) {
+__attribute__((aligned(64))) void _cmempool_free_entry(cmempool *mp,
+                                                       void *entry) {
   if (!entry) {
     // Same as with dynamic memory allocation: freeing a NULL pointer is
     // fine.
@@ -2130,19 +2120,19 @@ __attribute__((aligned(64))) void _ccol_mempool_free_entry(ccol_mempool *mp,
     _ccol_assert(false);
   }
 
-  if (mp->ccol_mempool_mark != _ccol_mempool_mark) {
+  if (mp->cmempool_mark != _cmempool_mark) {
     _ccol_assert(false);
   }
 
   // The function below decides ownership from the address, without reading
   // anything through the caller's pointer first.
-  __ccol_mempool_free_entry(mp, entry);
+  __cmempool_free_entry(mp, entry);
 }
 
 /* Gives the total number of elements the pool was sized for, the free ones
  * plus the ones in use. The read lock is taken when the pool is in
  * multi-threaded mode. */
-size_t ccol_mempool_total_capacity(ccol_mempool *mp) {
+size_t cmempool_total_capacity(cmempool *mp) {
   if (!mp) {
     _ccol_assert(false);
   }
@@ -2168,7 +2158,7 @@ size_t ccol_mempool_total_capacity(ccol_mempool *mp) {
 
 /* Gives the number of pool-owned elements in use right now, which is total
  * minus free. A dynamic fallback entry isn't counted. */
-size_t ccol_mempool_used_count(ccol_mempool *mp) {
+size_t cmempool_used_count(cmempool *mp) {
   if (!mp) {
     _ccol_assert(false);
   }
@@ -2201,7 +2191,7 @@ size_t ccol_mempool_used_count(ccol_mempool *mp) {
 
 /* Gives the number of dynamic fallback entries outstanding right now. A
  * non-zero count means the pool entries ran out at some point. */
-size_t ccol_mempool_dynamic_allocs_count(ccol_mempool *mp) {
+size_t cmempool_dynamic_allocs_count(cmempool *mp) {
   if (!mp) {
     _ccol_assert(false);
   }
@@ -2233,10 +2223,10 @@ static const size_t min_allowed_smallest_size = 16;
 // contract promises.
 static const size_t max_allowed_largest_size = _ccol_max_power_of_two_size_t;
 
-struct ccol_r_mempool {
-  ccol_mempool **mem_pools;  // The real memory pools
-  ccol_mempool pseudo_pool;
-  ccol_r_memory_fallback_policy_t fb_policy;
+struct crmempool {
+  cmempool **mem_pools;  // The real memory pools
+  cmempool pseudo_pool;
+  crmempool_fallback_policy_t fb_policy;
   bool should_use_locks;
   ccol_memmgmt_procs_t *m_procs;
   size_t number_of_mempools;
@@ -2244,19 +2234,19 @@ struct ccol_r_mempool {
   size_t largest_size;
   size_t smallest_elem_count;
   // Sits next to smallest_size, which is its linear value (1 << this), so
-  // that ccol_r_mempool_pool_index_for_size can turn the "/smallest_size"
+  // that crmempool_pool_index_for_size can turn the "/smallest_size"
   // division every size-to-tier lookup needs into an exact right shift.
   uint8_t smallest_size_power_of_two;
 };
 
 /* Destroys the ranged memory pool. It asserts when the fallback policy is
- * ccol_fallback_at_last_exhaustion and dynamic entries are still out, so the
- * leak shows; _ccol_mempool_destroy works the same way. Each internal
- * sub-pool is destroyed one at a time before the sub-pool array is freed. */
-void _ccol_r_mempool_destroy(ccol_r_mempool *rmp) {
+ * crmempool_fallback_at_last_exhaustion and dynamic entries are still out, so
+ * the leak shows; _cmempool_destroy works the same way. Each internal sub-pool
+ * is destroyed one at a time before the sub-pool array is freed. */
+void _crmempool_destroy(crmempool *rmp) {
   if (rmp) {
-    if (rmp->fb_policy == ccol_fallback_at_last_exhaustion) {
-      if (ccol_mempool_dynamic_allocs_count(&rmp->pseudo_pool) > 0) {
+    if (rmp->fb_policy == crmempool_fallback_at_last_exhaustion) {
+      if (cmempool_dynamic_allocs_count(&rmp->pseudo_pool) > 0) {
         // There are dynamic pointers that aren't free yet.
         // That's a possible leak, so make sure somebody notices.
         _ccol_assert(false);
@@ -2266,13 +2256,13 @@ void _ccol_r_mempool_destroy(ccol_r_mempool *rmp) {
     if (rmp->mem_pools) {
       for (size_t i = 0; i < rmp->number_of_mempools; ++i) {
         if (rmp->mem_pools[i]) {
-          ccol_mempool_destroy(rmp->mem_pools[i]);
+          cmempool_destroy(rmp->mem_pools[i]);
         }
       }
       _ccol_mem_free(rmp->m_procs, rmp->mem_pools);
     }
 
-    if (rmp->fb_policy == ccol_fallback_at_last_exhaustion) {
+    if (rmp->fb_policy == crmempool_fallback_at_last_exhaustion) {
       mp_dynamic_set_release(&rmp->pseudo_pool);
       if (rmp->pseudo_pool.should_use_locks) {
         _ccol_mutex_destroy(rmp->pseudo_pool.lock);
@@ -2289,17 +2279,16 @@ void _ccol_r_mempool_destroy(ccol_r_mempool *rmp) {
   }
 }
 
-/* Validates the power-of-two size parameters of a ccol_r_mempool and works
+/* Validates the power-of-two size parameters of a crmempool and works
  * out how many internal sub-pools there are. The constraint
  * smallest_elem_count_power_of_two >= (largest - smallest) makes sure every
  * larger sub-pool still gets at least one element, since the count is
  * halved for each doubling of the size. The rmp fields are filled in on
  * success. */
 static bool assess_r_mempool_create_inputs(
-    ccol_r_mempool *rmp, uint8_t smallest_size_power_of_two,
+    crmempool *rmp, uint8_t smallest_size_power_of_two,
     uint8_t largest_size_power_of_two, uint8_t smallest_elem_count_power_of_two,
-    ccol_r_memory_fallback_policy_t fb_policy, bool single_threaded,
-    char **err) {
+    crmempool_fallback_policy_t fb_policy, bool single_threaded, char **err) {
   if (smallest_size_power_of_two == 0 || largest_size_power_of_two == 0 ||
       smallest_elem_count_power_of_two == 0) {
     if (err) {
@@ -2326,7 +2315,7 @@ static bool assess_r_mempool_create_inputs(
     return false;
   }
 
-  if (fb_policy < 0 || fb_policy >= _ccol_fallback_end_place_holder) {
+  if (fb_policy < 0 || fb_policy >= _crmempool_fallback_end_place_holder) {
     if (err) {
       *err = _CCOL_ERR_STR("unknown fallback policy");
     }
@@ -2357,13 +2346,14 @@ static bool assess_r_mempool_create_inputs(
 }
 
 /* Initializes the pseudo_pool inside rmp, the sentinel and tracker for the
- * global dynamic fallback entries under the ccol_fallback_at_last_exhaustion
- * policy. In that mode the pseudo_pool's active_dynamic_memory_buffer_count
- * tracks every dynamic entry across every sub-pool. */
-static bool init_r_mempool_pseudo_pool(ccol_r_mempool *rmp) {
-  memset(&rmp->pseudo_pool, 0, sizeof(ccol_mempool));
+ * global dynamic fallback entries under the
+ * crmempool_fallback_at_last_exhaustion policy. In that mode the pseudo_pool's
+ * active_dynamic_memory_buffer_count tracks every dynamic entry across every
+ * sub-pool. */
+static bool init_r_mempool_pseudo_pool(crmempool *rmp) {
+  memset(&rmp->pseudo_pool, 0, sizeof(cmempool));
   rmp->pseudo_pool.m_procs = rmp->m_procs;
-  if (rmp->fb_policy == ccol_fallback_at_last_exhaustion) {
+  if (rmp->fb_policy == crmempool_fallback_at_last_exhaustion) {
     if (rmp->should_use_locks) {
       if (_ccol_mutex_init(rmp->pseudo_pool.lock) != 0) {
         return false;
@@ -2371,7 +2361,7 @@ static bool init_r_mempool_pseudo_pool(ccol_r_mempool *rmp) {
       rmp->pseudo_pool.should_use_locks = true;
     }
     rmp->pseudo_pool.fallback_to_dynamic_memory = true;
-    rmp->pseudo_pool.ccol_mempool_mark = _ccol_mempool_mark;
+    rmp->pseudo_pool.cmempool_mark = _cmempool_mark;
   }
 
   return true;
@@ -2379,9 +2369,9 @@ static bool init_r_mempool_pseudo_pool(ccol_r_mempool *rmp) {
 
 /* Creates every sub-pool from smallest_size to largest_size, each holding
  * half as many elements as the one before it to balance the doubled element
- * size. A sub-pool's fallback policy is ccol_fallback_at_first_exhaustion
- * only when the ccol_r_mempool's overall policy is first-exhaustion too. */
-static bool init_r_mempool_internal_pools(ccol_r_mempool *rmp, char **err) {
+ * size. A sub-pool's fallback policy is crmempool_fallback_at_first_exhaustion
+ * only when the crmempool's overall policy is first-exhaustion too. */
+static bool init_r_mempool_internal_pools(crmempool *rmp, char **err) {
   if (!init_r_mempool_pseudo_pool(rmp)) {
     if (err) {
       *err = _CCOL_ERR_STR("failed to initialize the pseudo_pool");
@@ -2389,8 +2379,8 @@ static bool init_r_mempool_internal_pools(ccol_r_mempool *rmp, char **err) {
     return false;
   }
 
-  rmp->mem_pools = (ccol_mempool **)_ccol_mem_alloc(
-      rmp->m_procs, rmp->number_of_mempools * sizeof(ccol_mempool *));
+  rmp->mem_pools = (cmempool **)_ccol_mem_alloc(
+      rmp->m_procs, rmp->number_of_mempools * sizeof(cmempool *));
   if (!rmp->mem_pools) {
     // The caller cleans up.
     if (err) {
@@ -2398,15 +2388,15 @@ static bool init_r_mempool_internal_pools(ccol_r_mempool *rmp, char **err) {
     }
     return false;
   }
-  memset(rmp->mem_pools, 0, rmp->number_of_mempools * sizeof(ccol_mempool *));
+  memset(rmp->mem_pools, 0, rmp->number_of_mempools * sizeof(cmempool *));
 
   size_t first_size = rmp->smallest_size;
   size_t first_count = rmp->smallest_elem_count;
 
   for (size_t esize = first_size, ecount = first_count, index = 0;
        index < rmp->number_of_mempools; esize *= 2, ecount /= 2, ++index) {
-    rmp->mem_pools[index] = ccol_mempool_create(
-        ecount, esize, rmp->fb_policy == ccol_fallback_at_first_exhaustion,
+    rmp->mem_pools[index] = cmempool_create_mp(
+        ecount, esize, rmp->fb_policy == crmempool_fallback_at_first_exhaustion,
         !rmp->should_use_locks, rmp->m_procs, err);
     if (!rmp->mem_pools[index]) {
       // The caller does the cleanup.
@@ -2431,10 +2421,10 @@ static bool init_r_mempool_internal_pools(ccol_r_mempool *rmp, char **err) {
  * picking a modest-looking size range like 16 bytes to 1 GiB over 26 tiers
  * would need a lookup table of about 512 MiB for it. This formula needs no
  * table and no allocation, so it only fails in the cases that
- * ccol_r_mempool_alloc_entry and the other entry points reject up front
+ * crmempool_alloc_entry and the other entry points reject up front
  * already: size == 0 and size > largest_size. */
-static inline size_t ccol_r_mempool_pool_index_for_size(ccol_r_mempool *rmp,
-                                                        size_t size) {
+static inline size_t crmempool_pool_index_for_size(crmempool *rmp,
+                                                   size_t size) {
   size_t t = (size - 1) >> rmp->smallest_size_power_of_two;
   if (t == 0) {
     // size <= smallest_size here, which is always the smallest tier, index 0.
@@ -2449,13 +2439,12 @@ static inline size_t ccol_r_mempool_pool_index_for_size(ccol_r_mempool *rmp,
  * The pool with the smallest element size holds
  * 2^smallest_elem_count_power_of_two elements, and each larger sub-pool
  * proportionally fewer. */
-ccol_r_mempool *ccol_r_mempool_create(uint8_t smallest_size_power_of_two,
-                                      uint8_t largest_size_power_of_two,
-                                      uint8_t smallest_elem_count_power_of_two,
-                                      ccol_r_memory_fallback_policy_t fb_policy,
-                                      bool single_threaded,
-                                      ccol_memmgmt_procs_t *mmgmt_procs,
-                                      char **err) {
+crmempool *crmempool_create_mp(uint8_t smallest_size_power_of_two,
+                               uint8_t largest_size_power_of_two,
+                               uint8_t smallest_elem_count_power_of_two,
+                               crmempool_fallback_policy_t fb_policy,
+                               bool single_threaded,
+                               ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   if (err) {
     *err = NULL;
   }
@@ -2464,11 +2453,11 @@ ccol_r_mempool *ccol_r_mempool_create(uint8_t smallest_size_power_of_two,
     return NULL;
   }
 
-  ccol_r_mempool *rmp = (ccol_r_mempool *)_ccol_mem_calloc(
-      mmgmt_procs, 1, sizeof(ccol_r_mempool));
+  crmempool *rmp =
+      (crmempool *)_ccol_mem_calloc(mmgmt_procs, 1, sizeof(crmempool));
   if (!rmp) {
     if (err) {
-      *err = _CCOL_ERR_STR("failed to allocate ccol_r_mempool struct");
+      *err = _CCOL_ERR_STR("failed to allocate crmempool struct");
     }
     return NULL;
   }
@@ -2481,13 +2470,13 @@ ccol_r_mempool *ccol_r_mempool_create(uint8_t smallest_size_power_of_two,
   if (!assess_r_mempool_create_inputs(
           rmp, smallest_size_power_of_two, largest_size_power_of_two,
           smallest_elem_count_power_of_two, fb_policy, single_threaded, err)) {
-    ccol_r_mempool_destroy(rmp);
+    crmempool_destroy(rmp);
     return NULL;
   }
   rmp->fb_policy = fb_policy;
 
   if (!init_r_mempool_internal_pools(rmp, err)) {
-    ccol_r_mempool_destroy(rmp);
+    crmempool_destroy(rmp);
     return NULL;
   }
 
@@ -2500,8 +2489,8 @@ ccol_r_mempool *ccol_r_mempool_create(uint8_t smallest_size_power_of_two,
  * preallocated_buffer_size, which makes sure the caller gave a buffer of
  * exactly the right size. */
 static bool init_preallocated_r_mempool_internal_pools(
-    ccol_r_mempool *rmp, void *preallocated_buffer,
-    size_t preallocated_buffer_size, char **err) {
+    crmempool *rmp, void *preallocated_buffer, size_t preallocated_buffer_size,
+    char **err) {
   if (!init_r_mempool_pseudo_pool(rmp)) {
     if (err) {
       *err = _CCOL_ERR_STR("failed to initialize the pseudo_pool");
@@ -2535,14 +2524,14 @@ static bool init_preallocated_r_mempool_internal_pools(
       return false;
     }
     size_t elem_extended_size = mp_stride_for(esize);
-    if (!_ccol_mempool_align_up_fits(ecount)) {
+    if (!_cmempool_align_up_fits(ecount)) {
       if (err) {
         *err = _CCOL_ERR_STR(
             "requested configuration's buffer size overflows size_t");
       }
       return false;
     }
-    size_t status_bytes = _ccol_mempool_align_up(ecount);
+    size_t status_bytes = _cmempool_align_up(ecount);
     if (ecount != 0 &&
         elem_extended_size > (SIZE_MAX - status_bytes) / ecount) {
       if (err) {
@@ -2568,8 +2557,8 @@ static bool init_preallocated_r_mempool_internal_pools(
     return false;
   }
 
-  rmp->mem_pools = (ccol_mempool **)_ccol_mem_calloc(
-      rmp->m_procs, rmp->number_of_mempools, sizeof(ccol_mempool *));
+  rmp->mem_pools = (cmempool **)_ccol_mem_calloc(
+      rmp->m_procs, rmp->number_of_mempools, sizeof(cmempool *));
   if (!rmp->mem_pools) {
     // The caller cleans up.
     if (err) {
@@ -2591,10 +2580,10 @@ static bool init_preallocated_r_mempool_internal_pools(
        from the stride and the status byte alone, so the extra bytes can't
        make it claim an entry the segment doesn't hold. */
     size_t sub_buffer_size =
-        ecount * mp_stride_for(esize) + _ccol_mempool_align_up(ecount);
-    rmp->mem_pools[index] = ccol_mempool_create_from_preallocated_buffer(
+        ecount * mp_stride_for(esize) + _cmempool_align_up(ecount);
+    rmp->mem_pools[index] = cmempool_create_from_preallocated_buffer_mp(
         sub_buffer, sub_buffer_size, esize,
-        rmp->fb_policy == ccol_fallback_at_first_exhaustion,
+        rmp->fb_policy == crmempool_fallback_at_first_exhaustion,
         !rmp->should_use_locks, rmp->m_procs, err);
     if (!rmp->mem_pools[index]) {
       // The caller cleans up.
@@ -2606,13 +2595,13 @@ static bool init_preallocated_r_mempool_internal_pools(
   return true;
 }
 
-/* Like ccol_r_mempool_create, but every sub-pool's element storage lives
- * in an outside buffer. The ccol_r_mempool doesn't free the buffer, its
+/* Like crmempool_create_mp, but every sub-pool's element storage lives
+ * in an outside buffer. The crmempool doesn't free the buffer, its
  * lifetime is the caller's business. */
-ccol_r_mempool *ccol_r_mempool_create_from_preallocated_buffer(
+crmempool *crmempool_create_from_preallocated_buffer_mp(
     void *buffer, size_t buf_size, uint8_t smallest_size_power_of_two,
     uint8_t largest_size_power_of_two, uint8_t smallest_elem_count_power_of_two,
-    ccol_r_memory_fallback_policy_t fb_policy, bool single_threaded,
+    crmempool_fallback_policy_t fb_policy, bool single_threaded,
     ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   if (err) {
     *err = NULL;
@@ -2626,14 +2615,14 @@ ccol_r_mempool *ccol_r_mempool_create_from_preallocated_buffer(
   }
 
   // Checked once, up front, for the same reason as in
-  // ccol_mempool_create_from_preallocated_buffer: every entry a sub-pool
-  // hands out must meet _ccol_mempool_entry_align. Each sub-pool's creation
+  // cmempool_create_from_preallocated_buffer_mp: every entry a sub-pool
+  // hands out must meet _cmempool_entry_align. Each sub-pool's creation
   // call would get to this in the end, and a sub-pool's segment always sits
   // at a multiple of that alignment from the buffer start, so a misalignment
   // can only come from the buffer's start address. But checking here gives
   // one immediate error with a clear cause, while without it the failure
   // shows up from deep inside a sub-pool's construction.
-  if ((uintptr_t)buffer % _ccol_mempool_entry_align != 0) {
+  if ((uintptr_t)buffer % _cmempool_entry_align != 0) {
     if (err) {
       *err = _CCOL_ERR_STR("buffer must be aligned to at least 16 bytes");
     }
@@ -2644,11 +2633,11 @@ ccol_r_mempool *ccol_r_mempool_create_from_preallocated_buffer(
     return NULL;
   }
 
-  ccol_r_mempool *rmp = (ccol_r_mempool *)_ccol_mem_calloc(
-      mmgmt_procs, 1, sizeof(ccol_r_mempool));
+  crmempool *rmp =
+      (crmempool *)_ccol_mem_calloc(mmgmt_procs, 1, sizeof(crmempool));
   if (!rmp) {
     if (err) {
-      *err = _CCOL_ERR_STR("failed to allocate ccol_r_mempool struct");
+      *err = _CCOL_ERR_STR("failed to allocate crmempool struct");
     }
     return NULL;
   }
@@ -2661,13 +2650,13 @@ ccol_r_mempool *ccol_r_mempool_create_from_preallocated_buffer(
   if (!assess_r_mempool_create_inputs(
           rmp, smallest_size_power_of_two, largest_size_power_of_two,
           smallest_elem_count_power_of_two, fb_policy, single_threaded, err)) {
-    ccol_r_mempool_destroy(rmp);
+    crmempool_destroy(rmp);
     return NULL;
   }
   rmp->fb_policy = fb_policy;
 
   if (!init_preallocated_r_mempool_internal_pools(rmp, buffer, buf_size, err)) {
-    ccol_r_mempool_destroy(rmp);
+    crmempool_destroy(rmp);
     return NULL;
   }
 
@@ -2676,17 +2665,17 @@ ccol_r_mempool *ccol_r_mempool_create_from_preallocated_buffer(
 
 /* Allocates a dynamic entry through the pseudo_pool and tags it as
  * elem_is_not_a_pool_member. The pseudo_pool tracks the global fallback
- * entries under the ccol_fallback_at_last_exhaustion policy; it has no
+ * entries under the crmempool_fallback_at_last_exhaustion policy; it has no
  * object buffer and keeps only the count and the registry of its dynamic
  * entries. Unlike a real sub-pool it also has no fixed element size of its
  * own, and a real sub-pool's entry always gets its size back from that
  * sub-pool's extended_elem_size. So every pseudo_pool entry records its own
  * user-visible size in the header in front of it, and a later
- * ccol_r_mempool_realloc_entry call can find out exactly how many bytes are
+ * crmempool_realloc_entry call can find out exactly how many bytes are
  * safe to copy out of it, without guessing the count or throwing the data
  * away.
  *
- * ccol_mempool_create and ccol_mempool_create_from_preallocated_buffer round
+ * cmempool_create_mp and cmempool_create_from_preallocated_buffer_mp round
  * elem_size up to sizeof(addr_t), but this function deliberately does NOT.
  * That rounding is only there so a POOL-OWNED entry is always big enough to
  * act as a free-list node, since such an entry keeps the link to the next
@@ -2694,15 +2683,14 @@ ccol_r_mempool *ccol_r_mempool_create_from_preallocated_buffer(
  * a one-off heap allocation that is never linked into a free list: it goes
  * to _ccol_mem_free once the caller releases it, so there's no such minimum
  * size. Rounding here would also make the entry's size prefix disagree with
- * what the caller really asked for. ccol_r_mempool_realloc_entry has a fast
+ * what the caller really asked for. crmempool_realloc_entry has a fast
  * path for "same size, no move needed", which for a pseudo_pool entry
  * compares the caller's newly requested size straight against the recorded
  * size, so a recorded size other than exactly what was requested would make
  * that comparison fail for any request below sizeof(addr_t) bytes, even when
  * nothing about the request changed, and quietly defeat the fast path on
  * every such call. */
-static void *ccol_mempool_pseudo_alloc_entry(ccol_mempool *mp,
-                                             size_t elem_size) {
+static void *cmempool_pseudo_alloc_entry(cmempool *mp, size_t elem_size) {
   void *result = NULL;
 
   // Checked before the allocation size is formed: for an elem_size within
@@ -2710,7 +2698,7 @@ static void *ccol_mempool_pseudo_alloc_entry(ccol_mempool *mp,
   // request that succeeds, while the size prefix a few lines below records
   // the original, huge elem_size. That gives a dangerously small block whose
   // recorded size lies about its real capacity to any later
-  // ccol_r_mempool_realloc_entry call.
+  // crmempool_realloc_entry call.
   if (elem_size > SIZE_MAX - DYNAMIC_ENTRY_PREFIX_SIZE) {
     return NULL;
   }
@@ -2729,11 +2717,12 @@ static void *ccol_mempool_pseudo_alloc_entry(ccol_mempool *mp,
 }
 
 /* Allocates a buffer of at least size bytes.
- * ccol_r_mempool_pool_index_for_size finds the smallest sub-pool whose
+ * crmempool_pool_index_for_size finds the smallest sub-pool whose
  * element size fits size, and when that sub-pool is empty the next larger
- * one is tried, and so on up the tiers. The ccol_fallback_at_last_exhaustion
- * path only runs once every sub-pool is empty. */
-void *ccol_r_mempool_alloc_entry(ccol_r_mempool *rmp, size_t size) {
+ * one is tried, and so on up the tiers. The
+ * crmempool_fallback_at_last_exhaustion path only runs once every sub-pool is
+ * empty. */
+void *crmempool_alloc_entry(crmempool *rmp, size_t size) {
   if (!rmp) {
     _ccol_assert(false);
   }
@@ -2742,28 +2731,28 @@ void *ccol_r_mempool_alloc_entry(ccol_r_mempool *rmp, size_t size) {
     return NULL;
   }
 
-  size_t pool_index = ccol_r_mempool_pool_index_for_size(rmp, size);
+  size_t pool_index = crmempool_pool_index_for_size(rmp, size);
 
   void *result = NULL;
 
   for (; pool_index < rmp->number_of_mempools; ++pool_index) {
-    result = ccol_mempool_alloc_entry(rmp->mem_pools[pool_index]);
+    result = cmempool_alloc_entry(rmp->mem_pools[pool_index]);
     if (result) {
       break;
     }
   }
 
-  if (!result && rmp->fb_policy == ccol_fallback_at_last_exhaustion) {
-    result = ccol_mempool_pseudo_alloc_entry(&rmp->pseudo_pool, size);
+  if (!result && rmp->fb_policy == crmempool_fallback_at_last_exhaustion) {
+    result = cmempool_pseudo_alloc_entry(&rmp->pseudo_pool, size);
   }
 
   return result;
 }
 
-/* Allocates a buffer of at least size bytes from the ccol_r_mempool and
+/* Allocates a buffer of at least size bytes from the crmempool and
  * zeroes it. */
-void *ccol_r_mempool_calloc_entry(ccol_r_mempool *rmp, size_t size) {
-  void *result = ccol_r_mempool_alloc_entry(rmp, size);
+void *crmempool_calloc_entry(crmempool *rmp, size_t size) {
+  void *result = crmempool_alloc_entry(rmp, size);
 
   if (result) {
     memset(result, 0, size);
@@ -2777,7 +2766,7 @@ void *ccol_r_mempool_calloc_entry(ccol_r_mempool *rmp, size_t size) {
  * entry. Any other address that gets here is a dynamic fallback entry, whose
  * size differs per allocation and is recorded in its own header.
  */
-static inline size_t entry_user_size(ccol_mempool *mp, void *entry) {
+static inline size_t entry_user_size(cmempool *mp, void *entry) {
   if (valid_mempool_addr(mp, (uintptr_t)entry)) {
     return mp->extended_elem_size;
   }
@@ -2785,12 +2774,12 @@ static inline size_t entry_user_size(ccol_mempool *mp, void *entry) {
 }
 
 /* Does this ranged pool hold any dynamic fallback entry at all? It covers
- * both policies: ccol_fallback_at_first_exhaustion keeps such entries in each
- * sub-pool and ccol_fallback_at_last_exhaustion keeps them on the
+ * both policies: crmempool_fallback_at_first_exhaustion keeps such entries in
+ * each sub-pool and crmempool_fallback_at_last_exhaustion keeps them on the
  * pseudo_pool. It's used to decide, before anything is read through the
  * address, whether an address that matched no tier can legitimately belong
  * to this pool. */
-static bool rmp_holds_dynamic_entries(ccol_r_mempool *rmp) {
+static bool rmp_holds_dynamic_entries(crmempool *rmp) {
   if (atomic_load_explicit(&rmp->pseudo_pool.active_dynamic_memory_buffer_count,
                            memory_order_acquire) > 0) {
     return true;
@@ -2811,10 +2800,9 @@ static bool rmp_holds_dynamic_entries(ccol_r_mempool *rmp) {
  * lock, one pool at a time, so no two of those locks are ever held together.
  * The answer can go stale once that lock is released, which is why the free
  * path asks its own pool again under the lock and acts on that answer. */
-static ccol_mempool *rmp_dynamic_owner_of(ccol_r_mempool *rmp,
-                                          uintptr_t c_entry) {
+static cmempool *rmp_dynamic_owner_of(crmempool *rmp, uintptr_t c_entry) {
   for (size_t i = 0; i <= rmp->number_of_mempools; ++i) {
-    ccol_mempool *mp =
+    cmempool *mp =
         i < rmp->number_of_mempools ? rmp->mem_pools[i] : &rmp->pseudo_pool;
     if (!mp || !mp->fallback_to_dynamic_memory ||
         atomic_load_explicit(&mp->active_dynamic_memory_buffer_count,
@@ -2833,10 +2821,10 @@ static ccol_mempool *rmp_dynamic_owner_of(ccol_r_mempool *rmp,
  * Each candidate is locked once, one pool at a time, and the pool holding
  * the entry frees it in that same critical section. Gives false, having read
  * nothing through entry, when no pool holds it. */
-static __attribute__((noinline)) bool rmp_free_dynamic(ccol_r_mempool *rmp,
+static __attribute__((noinline)) bool rmp_free_dynamic(crmempool *rmp,
                                                        void *entry) {
   for (size_t i = 0; i <= rmp->number_of_mempools; ++i) {
-    ccol_mempool *mp =
+    cmempool *mp =
         i < rmp->number_of_mempools ? rmp->mem_pools[i] : &rmp->pseudo_pool;
     if (!mp || !mp->fallback_to_dynamic_memory ||
         atomic_load_explicit(&mp->active_dynamic_memory_buffer_count,
@@ -2860,33 +2848,31 @@ static __attribute__((noinline)) bool rmp_free_dynamic(ccol_r_mempool *rmp,
  * some, its pools' registries answer from the address alone too. We never
  * touch the header of an address that isn't a live dynamic entry of rmp.
  * *is_dynamic says which of the two kinds was found. */
-static ccol_mempool *rmp_owner_of(ccol_r_mempool *rmp, void *entry,
-                                  bool *is_dynamic) {
+static cmempool *rmp_owner_of(crmempool *rmp, void *entry, bool *is_dynamic) {
   *is_dynamic = false;
   for (size_t i = 0; i < rmp->number_of_mempools; ++i) {
-    ccol_mempool *sub = rmp->mem_pools[i];
+    cmempool *sub = rmp->mem_pools[i];
     if (sub && valid_mempool_addr(sub, (uintptr_t)entry)) return sub;
   }
 
   if (!rmp_holds_dynamic_entries(rmp)) return NULL;
 
-  ccol_mempool *owner = rmp_dynamic_owner_of(rmp, (uintptr_t)entry);
+  cmempool *owner = rmp_dynamic_owner_of(rmp, (uintptr_t)entry);
   if (!owner) return NULL;
   *is_dynamic = true;
   return owner;
 }
 
 #ifdef RUNNING_UNIT_TESTS
-/* The ranged counterpart of _ccol_mempool_corrupt_entry_status_for_tests.
- * The corruption tests hold a ccol_r_mempool and one of its entries, and
+/* The ranged counterpart of _cmempool_corrupt_entry_status_for_tests.
+ * The corruption tests hold a crmempool and one of its entries, and
  * this resolves which sub-pool owns that entry from the address, exactly as
  * the free and realloc paths do. */
-void _ccol_r_mempool_corrupt_entry_status_for_tests(ccol_r_mempool *rmp,
-                                                    void *entry,
-                                                    unsigned char value) {
+void _crmempool_corrupt_entry_status_for_tests(crmempool *rmp, void *entry,
+                                               unsigned char value) {
   if (!rmp || !entry) return;
   for (size_t i = 0; i < rmp->number_of_mempools; ++i) {
-    ccol_mempool *sub = rmp->mem_pools[i];
+    cmempool *sub = rmp->mem_pools[i];
     if (sub && valid_mempool_addr(sub, (uintptr_t)entry)) {
       ENTRY_STATUS(sub, ENTRY_INDEX(sub, (uintptr_t)entry)) = value;
       return;
@@ -2895,7 +2881,7 @@ void _ccol_r_mempool_corrupt_entry_status_for_tests(ccol_r_mempool *rmp,
 }
 #endif /* RUNNING_UNIT_TESTS */
 
-void _ccol_r_mempool_free_entry(ccol_r_mempool *rmp, void *entry) {
+void _crmempool_free_entry(crmempool *rmp, void *entry) {
   if (!entry) {
     return;
   }
@@ -2905,9 +2891,9 @@ void _ccol_r_mempool_free_entry(ccol_r_mempool *rmp, void *entry) {
   }
 
   for (size_t i = 0; i < rmp->number_of_mempools; ++i) {
-    ccol_mempool *sub = rmp->mem_pools[i];
+    cmempool *sub = rmp->mem_pools[i];
     if (sub && valid_mempool_addr(sub, (uintptr_t)entry)) {
-      __ccol_mempool_free_entry(sub, entry);
+      __cmempool_free_entry(sub, entry);
       return;
     }
   }
@@ -2927,8 +2913,7 @@ void _ccol_r_mempool_free_entry(ccol_r_mempool *rmp, void *entry) {
  * Both questions below are about the bytes the entry really holds, so a
  * pool-owned entry and a dynamic fallback entry of the same capacity answer
  * them the same way, and neither kind is a special case. */
-void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr,
-                                   size_t size) {
+void *crmempool_realloc_entry(crmempool *rmp, void *addr, size_t size) {
   if (!rmp) {
     _ccol_assert(false);
   }
@@ -2937,7 +2922,7 @@ void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr,
     return NULL;
   }
 
-  ccol_mempool *owner = NULL;
+  cmempool *owner = NULL;
   bool owner_is_dynamic = false;
   size_t held = 0;
 
@@ -2977,7 +2962,7 @@ void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr,
      * tier boundary gives back the larger tier's slot, or the larger heap
      * block, and a grow has no choice. */
     size_t new_ext_size =
-        rmp->mem_pools[ccol_r_mempool_pool_index_for_size(rmp, size)]
+        rmp->mem_pools[crmempool_pool_index_for_size(rmp, size)]
             ->extended_elem_size;
 
     if (held == new_ext_size || held == size) {
@@ -2985,7 +2970,7 @@ void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr,
     }
   }
 
-  void *new_entry = ccol_r_mempool_alloc_entry(rmp, size);
+  void *new_entry = crmempool_alloc_entry(rmp, size);
   if (!new_entry && addr && size <= held) {
     /* The move failed, but it was never needed, because this entry already has
        room for the requested size where it is. The check above compares the
@@ -3005,10 +2990,10 @@ void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr,
     // never inferred from the *ideal* target tier for `size`, so this is
     // right for every kind of entry: a pool-owned entry, an entry that moved
     // up into a larger tier, and an entry that went through the pseudo_pool
-    // under ccol_fallback_at_last_exhaustion, which can legitimately hold far
-    // fewer bytes than the ideal tier for its own size suggests.
+    // under crmempool_fallback_at_last_exhaustion, which can legitimately hold
+    // far fewer bytes than the ideal tier for its own size suggests.
     bool new_is_dynamic = false;
-    ccol_mempool *new_owner = rmp_owner_of(rmp, new_entry, &new_is_dynamic);
+    cmempool *new_owner = rmp_owner_of(rmp, new_entry, &new_is_dynamic);
     size_t old_user_size = held;
     size_t new_user_size =
         new_owner ? entry_user_size(new_owner, new_entry) : 0;
@@ -3019,7 +3004,7 @@ void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr,
     /* Freed through the sub-pool that owns the entry rather than through rmp:
        it's an internal free of an entry this function has resolved already,
        so it doesn't need a second ownership check. */
-    ccol_mempool_free_entry(owner, addr);
+    cmempool_free_entry(owner, addr);
   }
 
   return new_entry;
@@ -3027,7 +3012,7 @@ void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr,
 
 /* Gives the used element count of the sub-pool that serves allocations of
  * the given size, or 0 for a size outside the pool's range. */
-size_t ccol_r_mempool_used_count(ccol_r_mempool *rmp, size_t size) {
+size_t crmempool_used_count(crmempool *rmp, size_t size) {
   if (!rmp) {
     _ccol_assert(false);
   }
@@ -3036,8 +3021,8 @@ size_t ccol_r_mempool_used_count(ccol_r_mempool *rmp, size_t size) {
     return 0;
   }
 
-  return ccol_mempool_used_count(
-      rmp->mem_pools[ccol_r_mempool_pool_index_for_size(rmp, size)]);
+  return cmempool_used_count(
+      rmp->mem_pools[crmempool_pool_index_for_size(rmp, size)]);
 }
 
 /* Gives the total element capacity of the sub-pool that serves allocations
@@ -3046,9 +3031,9 @@ size_t ccol_r_mempool_used_count(ccol_r_mempool *rmp, size_t size) {
  * status byte of every slot. It deliberately uses total_elem_count and not
  * advertised_elem_count, since this call is there to report the memory the
  * pool really takes, reserve included. That's the one number
- * ccol_mempool_total_capacity() can't report, because reporting it there
+ * cmempool_total_capacity() can't report, because reporting it there
  * would promise capacity the pool never hands out. */
-size_t ccol_mempool_allocated_bytes(ccol_mempool *mp) {
+size_t cmempool_allocated_bytes(cmempool *mp) {
   if (!mp) {
     _ccol_assert(false);
   }
@@ -3070,7 +3055,7 @@ size_t ccol_mempool_allocated_bytes(ccol_mempool *mp) {
 
 /* The sum over every tier. The pseudo_pool has no entry block of its own,
  * so it adds nothing. */
-size_t ccol_r_mempool_allocated_bytes(ccol_r_mempool *rmp) {
+size_t crmempool_allocated_bytes(crmempool *rmp) {
   if (!rmp) {
     _ccol_assert(false);
   }
@@ -3078,13 +3063,13 @@ size_t ccol_r_mempool_allocated_bytes(ccol_r_mempool *rmp) {
   size_t result = 0;
   for (size_t i = 0; i < rmp->number_of_mempools; ++i) {
     if (rmp->mem_pools[i]) {
-      result += ccol_mempool_allocated_bytes(rmp->mem_pools[i]);
+      result += cmempool_allocated_bytes(rmp->mem_pools[i]);
     }
   }
   return result;
 }
 
-size_t ccol_r_mempool_total_capacity(ccol_r_mempool *rmp, size_t size) {
+size_t crmempool_total_capacity(crmempool *rmp, size_t size) {
   if (!rmp) {
     _ccol_assert(false);
   }
@@ -3093,16 +3078,16 @@ size_t ccol_r_mempool_total_capacity(ccol_r_mempool *rmp, size_t size) {
     return 0;
   }
 
-  return ccol_mempool_total_capacity(
-      rmp->mem_pools[ccol_r_mempool_pool_index_for_size(rmp, size)]);
+  return cmempool_total_capacity(
+      rmp->mem_pools[crmempool_pool_index_for_size(rmp, size)]);
 }
 
 /* Gives the number of outstanding dynamic fallback allocations for the given
- * size. With ccol_fallback_at_last_exhaustion the count sits in the single
- * pseudo_pool whatever the size, and with ccol_fallback_at_first_exhaustion
- * it's per sub-pool. Gives 0 for ccol_fallback_disabled or an out-of-range
- * size. */
-size_t ccol_r_mempool_dynamic_allocs_count(ccol_r_mempool *rmp, size_t size) {
+ * size. With crmempool_fallback_at_last_exhaustion the count sits in the single
+ * pseudo_pool whatever the size, and with
+ * crmempool_fallback_at_first_exhaustion it's per sub-pool. Gives 0 for
+ * crmempool_fallback_disabled or an out-of-range size. */
+size_t crmempool_dynamic_allocs_count(crmempool *rmp, size_t size) {
   if (!rmp) {
     _ccol_assert(false);
   }
@@ -3111,14 +3096,14 @@ size_t ccol_r_mempool_dynamic_allocs_count(ccol_r_mempool *rmp, size_t size) {
     return 0;
   }
 
-  if (rmp->fb_policy == ccol_fallback_disabled) {
+  if (rmp->fb_policy == crmempool_fallback_disabled) {
     return 0;
   }
 
-  if (rmp->fb_policy == ccol_fallback_at_first_exhaustion) {
-    return ccol_mempool_dynamic_allocs_count(
-        rmp->mem_pools[ccol_r_mempool_pool_index_for_size(rmp, size)]);
+  if (rmp->fb_policy == crmempool_fallback_at_first_exhaustion) {
+    return cmempool_dynamic_allocs_count(
+        rmp->mem_pools[crmempool_pool_index_for_size(rmp, size)]);
   }
 
-  return ccol_mempool_dynamic_allocs_count(&rmp->pseudo_pool);
+  return cmempool_dynamic_allocs_count(&rmp->pseudo_pool);
 }

@@ -326,8 +326,8 @@ csort_check_sort_shape(size_t length, size_t elem_size,
   // all-or-nothing contract that ccol_memmgmt_procs_t itself documents.
   // Every other entry point in this library that takes an allocator applies
   // that contract before touching the struct (for example
-  // cvector_create_full, chmap_create_full, cbmap_create_full and
-  // ctpool_create_mp). Those functions check mprocs once when they create a
+  // cvector_create_full, chashmap_create_full, cbstmap_create_full and
+  // cthrpool_create_mp). Those functions check mprocs once when they create a
   // container and reuse it afterwards. csort_sort() is different since it
   // takes a fresh mprocs on every call, and a caller can build that struct
   // by hand: csort_sort(3) documents passing mprocs directly as a usual use

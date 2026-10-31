@@ -1,0 +1,67 @@
+.TH CDYNMQ_SEND 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cdynmq_send \- send a message to a dynamic queue (no block)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t cdynmq_send(cdynmq *dq, cmessage_t *msg);
+.fi
+.SH DESCRIPTION
+.nf
+Puts the message at the tail of the dynamic queue and returns at once.
+The queue has no size limit, so there is never a wait for free space,
+and this is the only send call of the dynamic queue: there is no
+blocking send and no send with a timeout.
+
+On success the ownership of msg->data moves to the queue, and msg->data
+is set to NULL to show it. The caller must not free, read or otherwise
+use that pointer after the call. Later a receiver takes the message out
+with cdynmq_recv(3), cdynmq_try_recv(3) or
+cdynmq_timed_recv(3), becomes its owner and frees the data. No
+bytes are copied at any point; only the pointer and its size move.
+
+On any failure msg is left exactly as the caller gave it, so the caller
+still owns msg->data and must free it or send it somewhere else.
+
+A message with msg->data == NULL and msg->size == 0 is valid and
+carries no payload. It is the usual way to send a wake-up or an
+end-of-stream sentinel through the queue.
+.fi
+.SH PARAMETERS
+.nf
+dq   Dynamic queue to send to
+msg  Message to send. On success the ownership of msg->data moves to the
+     queue.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success            - The function put the message into the queue;
+                          msg->data is set to NULL, and the queue owns
+                          what it pointed to.
+ccol_invalid_args       - dq or msg is NULL, or msg->data is NULL while
+                          msg->size is not zero, or msg->data is not
+                          NULL while msg->size is 0.
+ccol_not_permitted      - A cdynmq_disable_sending() call turned sends
+                          off
+ccol_container_full     - The queue already holds ccol_max_elem_count
+                          messages
+ccol_not_enough_memory  - The function could not allocate the list node
+                          for the message
+.fi
+.SH NOTES
+.nf
+The call never blocks; it returns a success or an error code at once.
+A successful send wakes a receiver blocked in cdynmq_recv() or
+cdynmq_timed_recv(), and also one read-direction waiter on the
+queue (a cselect() call, a cselect_timed() call or a
+ceventloop registration). The function is thread-safe.
+.fi
+.SH "SEE ALSO"
+.BR cdynmq_recv (3),
+.BR cdynmq_try_recv (3),
+.BR cdynmq_timed_recv (3),
+.BR cdynmq_disable_sending (3),
+.BR cdynmq_msg_count (3)

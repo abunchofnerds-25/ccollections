@@ -36,12 +36,12 @@ Thread-safe. The function reads no state.
 #include <ccollections/cthreadcomm.h>
 
 int main(void) {
-  ccol_circular_queue *q = ccol_circular_queue_create(4, NULL);
+  ccircq *q = ccircq_create(4, NULL);
   if (!q) return 1;
-  c_message_t msg;
-  ccol_retval_t rv = ccol_circq_try_recv_zc(q, &msg);
+  cmessage_t msg;
+  ccol_retval_t rv = ccircq_try_recv(q, &msg);
   printf("%s\en", ccol_retval_to_str(rv));   /* ccol_container_empty */
-  ccol_circular_queue_destroy(q);
+  ccircq_destroy(q);
   return 0;
 }
 .fi

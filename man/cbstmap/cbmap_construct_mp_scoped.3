@@ -48,7 +48,7 @@ allocates comes from these procedures, and the destruction at the exit of
 the scope gives all of it back to them.
 
 A walk visits the elements in ascending key order, by the order that key_t
-selects, as cbmap_begin_iter(3) and cbmap_create_full(3) describe.
+selects, as cbstmap_begin_iter(3) and cbstmap_create_full(3) describe.
 
 The exit of the scope destroys the map and clears the handle, so an
 explicit cbmap_destroy(3) earlier in the scope is fine too.
@@ -92,5 +92,5 @@ void tally(int *ids, size_t n) {
 .BR cbmap_declare_scoped (3),
 .BR cbmap_init_mp (3),
 .BR cbmap_redeclare (3),
-.BR cbmap_begin_iter (3),
+.BR cbstmap_begin_iter (3),
 .BR cbmap_destroy (3)

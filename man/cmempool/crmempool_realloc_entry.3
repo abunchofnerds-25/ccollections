@@ -1,0 +1,76 @@
+.TH CRMEMPOOL_REALLOC_ENTRY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+crmempool_realloc_entry \- reallocate an entry to a different size
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+void *crmempool_realloc_entry(crmempool *rmp, void *addr, size_t size);
+.fi
+.SH DESCRIPTION
+.nf
+Changes the size of an allocated entry. The original pointer comes
+back unchanged, and nothing is copied, when a move could not give the
+entry more bytes than it already holds. That happens in two cases:
+when the entry already holds exactly what the tier for the new size
+would give it, or when it already holds exactly the number of bytes
+the caller asked for. In every other case a new entry is allocated for
+the request, min(old_size, new_size) bytes are copied into it, and the
+old entry is freed.
+.fi
+.PP
+Both of those questions are about the bytes that the entry holds, so a
+pool-owned entry and a dynamic fallback entry that hold the same number of
+bytes behave the same way here.
+.PP
+How many bytes an entry holds does depend on where it came from, and that is
+the only difference the two representations force. A pool-owned entry holds the
+whole element size of its tier, and so does a dynamic fallback entry that a
+tier handed out after it ran out of its own slots. An entry from the shared
+fallback that crmempool_fallback_at_last_exhaustion uses holds exactly the size it
+was created for.
+.PP
+If the function can't allocate a new entry, it returns the entry unmoved when
+the request still fits inside it, and reports no failure. This is the same for
+both kinds of entry, since a shrink does not fail for want of memory that it
+doesn't need. The pointer that comes back then addresses at least the bytes
+that the caller asked for, as on every other path that succeeds.
+.SH PARAMETERS
+.nf
+rmp   Ranged memory pool
+addr  Existing entry to reallocate, or NULL to allocate a new one
+size  New size in bytes (must be > 0 and <= largest_size)
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to the reallocated entry on success
+Returns NULL on failure, and then addr stays valid, does not move and
+stays with the caller, as with realloc(3). That holds both for an
+invalid size and for a valid size that the pool cannot serve
+.fi
+.SH NOTES
+.nf
+With a NULL addr the call is the same as crmempool_alloc_entry()
+The original pointer comes back unchanged, and nothing is copied,
+  when the entry already holds as many bytes as a move could give it
+In every other case a new entry is allocated, the data is copied and
+  the old entry is freed. If that allocation fails, the function
+  returns addr unmoved, not NULL, when the request still fits inside
+  the bytes that addr already holds
+It copies min(old_user_size, new_user_size) bytes
+It frees the old entry when the reallocation succeeds
+Thread-safe if the pool was created with single_threaded=false
+It returns NULL if size is 0 or above largest_size, and it does NOT
+  touch addr: when size itself is invalid, an addr that is not NULL is
+  neither freed nor moved, so the state is the same as if you had
+  never made the call
+It asserts if addr is not NULL and did not come from this
+  crmempool. That is the check for corruption and for a foreign
+  pointer, the same one that crmempool_free_entry() makes
+It asserts if rmp is NULL
+.fi
+.SH "SEE ALSO"
+.BR crmempool_alloc_entry (3),
+.BR crmempool_free_entry (3)

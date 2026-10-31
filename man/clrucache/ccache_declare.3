@@ -1,0 +1,45 @@
+.TH CCACHE_DECLARE 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccache_declare \- declare an uninitialised LRU cache variable with type tracking
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clrucache.h>
+
+ccache_declare(name, KeyT, ValT);
+.fi
+.SH DESCRIPTION
+.nf
+Declares the ccache handle variable name, together with two hidden
+companion type variables that carry the KeyT and ValT type information
+into the later ccache_init(), ccache_get() and ccache_set() calls.
+
+Call ccache_init() on the variable before you use the cache.
+.fi
+.SH PARAMETERS
+.nf
+name  Variable name for the cache handle
+KeyT  Key type (for example int, char *, struct MyKey)
+ValT  Value type (for example double, struct MyVal)
+.fi
+.SH NOTES
+.nf
+An array key type or value type, such as int[2] or char[16], is a
+compile error, and the message says to wrap the array in a struct. The
+macros copy a key or a value by assignment, C cannot assign an array,
+and without the error the cache would store the address of the
+caller's array instead of its elements. A struct that holds the
+array works.
+.fi
+.SH EXAMPLES
+.nf
+ccache_declare(cache, int, double);
+ccache_init(cache, 128, NULL, NULL, NULL);
+/* ... use cache ... */
+ccache_destroy(cache);
+.fi
+.SH "SEE ALSO"
+.BR ccache_declare_scoped (3),
+.BR ccache_init (3),
+.BR ccache_construct (3)

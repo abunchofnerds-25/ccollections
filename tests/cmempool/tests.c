@@ -31,47 +31,46 @@ __attribute__((constructor)) static void _reset_inherited_signals(void) {
 }
 
 /* Tau's REQUIRE_* macros return from the test function as soon as one fails,
- * so a test that only destroys its pool with a ccol_mempool_destroy() call at
+ * so a test that only destroys its pool with a cmempool_destroy() call at
  * the end leaks that pool on exactly the runs that matter, and memtest then
  * reports the leak on top of the assertion that caused it. A cleanup
  * attribute on the handle destroys the pool on every way out. Each test also
  * destroys the pool explicitly, and since destroy sets the handle to NULL the
  * cleanup call then finds nothing to do. */
-static void mp_scoped_release(ccol_mempool **mp) {
-  if (*mp) ccol_mempool_destroy(*mp);
+static void mp_scoped_release(cmempool **mp) {
+  if (*mp) cmempool_destroy(*mp);
 }
-static void rmp_scoped_release(ccol_r_mempool **rmp) {
-  if (*rmp) ccol_r_mempool_destroy(*rmp);
+static void rmp_scoped_release(crmempool **rmp) {
+  if (*rmp) crmempool_destroy(*rmp);
 }
 
 #define SCOPED_MEMPOOL(name) \
-  ccol_mempool *name __attribute__((cleanup(mp_scoped_release)))
+  cmempool *name __attribute__((cleanup(mp_scoped_release)))
 #define SCOPED_R_MEMPOOL(name) \
-  ccol_r_mempool *name __attribute__((cleanup(rmp_scoped_release)))
+  crmempool *name __attribute__((cleanup(rmp_scoped_release)))
 // sets up Tau (+ main function)
 
 // C_MEMPOOL TESTS
 
 TEST(cmempools, create_fails) {
   char *err;
-  ccol_mempool *mp =
-      ccol_mempool_create(0, sizeof(int), false, false, NULL, &err);
+  cmempool *mp = cmempool_create(0, sizeof(int), false, false, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
-  mp = ccol_mempool_create(16, 0, false, false, NULL, &err);
+  mp = cmempool_create(16, 0, false, false, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = NULL};
-  mp = ccol_mempool_create(16, 0, false, false, &m_procs, &err);
+  mp = cmempool_create_mp(16, 0, false, false, &m_procs, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
 // The third case in create_fails above also passes elem_size=0, so
-// ccol_mempool_create's elem_size==0 check rejects the call before it gets
+// cmempool_create_mp's elem_size==0 check rejects the call before it gets
 // to _ccol_verify_memmgmt_procs, and that case can't exercise the
 // incomplete-procs validation. The call below uses valid size parameters so
 // that only the memmgmt-procs check can reject it.
@@ -79,39 +78,38 @@ TEST(cmempools, create_rejects_incomplete_procs_with_valid_size_params) {
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = NULL};
   char *err = NULL;
-  ccol_mempool *mp =
-      ccol_mempool_create(16, sizeof(int), false, false, &m_procs, &err);
+  cmempool *mp =
+      cmempool_create_mp(16, sizeof(int), false, false, &m_procs, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
 TEST(cmempools,
      create_from_preallocated_rejects_incomplete_procs_with_valid_params) {
-  _Alignas(_ccol_mempool_entry_align) uint8_t buf[256];
+  _Alignas(_cmempool_entry_align) uint8_t buf[256];
   ccol_memmgmt_procs_t m_procs = {
       .malloc = NULL, .calloc = calloc, .realloc = realloc, .free = free};
   char *err = NULL;
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer_mp(
       buf, sizeof(buf), 16, false, false, &m_procs, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
 TEST(cmempools, create_rejects_elem_size_whose_stride_overflows) {
-  // The stride is elem_size rounded up to _ccol_mempool_entry_align and then
+  // The stride is elem_size rounded up to _cmempool_entry_align and then
   // up to a power of two. An elem_size close enough to SIZE_MAX has no stride
   // at all, because the rounding wraps to something smaller than elem_size
   // itself, so the library must reject such an elem_size. Without that,
   // the tiny wrapped stride decides the pool's size and every entry's index,
   // and the result is a heap buffer overflow on every run.
   char *err = NULL;
-  ccol_mempool *mp =
-      ccol_mempool_create(2, SIZE_MAX - 8, false, true, NULL, &err);
+  cmempool *mp = cmempool_create(2, SIZE_MAX - 8, false, true, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   err = NULL;
-  mp = ccol_mempool_create(1, SIZE_MAX, false, true, NULL, &err);
+  mp = cmempool_create(1, SIZE_MAX, false, true, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
@@ -129,7 +127,7 @@ TEST(cmempools, create_rejects_elem_size_whose_stride_overflows) {
 // single_threaded, so the library adds no reserve and the arithmetic is
 // exactly the caller's.
 //
-// Take the check away and ccol_mempool_create doesn't
+// Take the check away and cmempool_create_mp doesn't
 // return NULL here, it corrupts the heap and dies in the layout loop.
 TEST(cmempools, create_rejects_a_count_and_size_whose_block_overflows) {
 #if SIZE_MAX > 0xFFFFFFFFu
@@ -139,17 +137,16 @@ TEST(cmempools, create_rejects_a_count_and_size_whose_block_overflows) {
   const size_t wrapping_count = (size_t)252645136u; /* (2^32+16)/17 */
 #endif
   char *err = NULL;
-  ccol_mempool *mp =
-      ccol_mempool_create(wrapping_count, 16, false, true, NULL, &err);
+  cmempool *mp = cmempool_create(wrapping_count, 16, false, true, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   // And a count that fits is accepted, so the guard rejects the overflow and
   // not the size.
   err = NULL;
-  SCOPED_MEMPOOL(ok) = ccol_mempool_create(64, 16, false, true, NULL, &err);
+  SCOPED_MEMPOOL(ok) = cmempool_create(64, 16, false, true, &err);
   bool ok_built = (ok != NULL);
-  if (ok_built) ccol_mempool_destroy(ok);
+  if (ok_built) cmempool_destroy(ok);
   REQUIRE_TRUE(ok_built);
 }
 
@@ -162,11 +159,11 @@ TEST(cmempools,
   // come out non-zero, and the loop that builds the free list then writes
   // far past the end of this 256-byte stack array, which AddressSanitizer
   // reports as a stack-buffer-overflow.
-  _Alignas(_ccol_mempool_entry_align) uint8_t buf[256];
+  _Alignas(_cmempool_entry_align) uint8_t buf[256];
   memset(buf, 0, sizeof(buf));
   char *err = NULL;
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
-      buf, sizeof(buf), SIZE_MAX - 8, false, true, NULL, &err);
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
+      buf, sizeof(buf), SIZE_MAX - 8, false, true, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
@@ -189,7 +186,7 @@ TEST(cmempools,
 // -fsanitize=alignment finds. A rounded stride keeps every entry aligned for
 // any elem_size, not just the first one.
 TEST(cmempools, pool_entries_beyond_first_are_properly_aligned) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create(8, 9, false, true, NULL, NULL);
+  SCOPED_MEMPOOL(mp) = cmempool_create(8, 9, false, true, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   /* The loop counts the outcomes instead of asserting inside it, because an
@@ -200,7 +197,7 @@ TEST(cmempools, pool_entries_beyond_first_are_properly_aligned) {
   size_t obtained = 0;
   size_t misaligned_entries = 0;
   for (size_t i = 0; i < 8; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     if (!ptrs[i]) continue;
     ++obtained;
     // We check against max_align_t directly and never the library's own
@@ -211,50 +208,50 @@ TEST(cmempools, pool_entries_beyond_first_are_properly_aligned) {
   }
 
   for (size_t i = 0; i < 8; ++i) {
-    if (ptrs[i]) ccol_mempool_free_entry(mp, ptrs[i]);
+    if (ptrs[i]) cmempool_free_entry(mp, ptrs[i]);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
 
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_EQ(obtained, (size_t)8);
   REQUIRE_EQ(misaligned_entries, (size_t)0);
 }
 
-// _ccol_mempool_buffer_params_fit is the internal guard of
-// CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER. It must reject elem_count == 0
+// _cmempool_buffer_params_fit is the internal guard of
+// CMEMPOOL_DECLARE_PREALLOCATED_BUFFER. It must reject elem_count == 0
 // outright since that's an invalid configuration for a preallocated pool, and
 // a guard that tolerated it would let the macro silently produce a
 // zero-length array, which is a GNU extension and not standard ISO C. We
 // can't put a rejected elem_count into
-// CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER itself, because this whole test
+// CMEMPOOL_DECLARE_PREALLOCATED_BUFFER itself, because this whole test
 // binary would then fail to compile, so the test exercises the guard's
 // boolean logic directly. It mirrors the
 // r_mempools.buffer_params_fit_matches_known_outcomes test for
-// _ccol_rmempool_buffer_params_fit.
+// _crmempool_buffer_params_fit.
 TEST(cmempools, buffer_params_fit_rejects_zero_elem_count) {
-  REQUIRE_FALSE(_ccol_mempool_buffer_params_fit(0, 64));
+  REQUIRE_FALSE(_cmempool_buffer_params_fit(0, 64));
 
   // The guard needs to accept every (elem_count, elem_size) pair that a real
-  // CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER call site in this file uses,
+  // CMEMPOOL_DECLARE_PREALLOCATED_BUFFER call site in this file uses,
   // otherwise this whole binary would fail to compile. We repeat those
   // assertions here directly, so a change that narrows the guard shows up as
   // an ordinary test failure and not only as a build break somebody has to
   // bisect.
-  REQUIRE_TRUE(_ccol_mempool_buffer_params_fit(100, 1));
-  REQUIRE_TRUE(_ccol_mempool_buffer_params_fit(1, 1));
-  REQUIRE_TRUE(_ccol_mempool_buffer_params_fit(32768, 256));
-  REQUIRE_TRUE(_ccol_mempool_buffer_params_fit(50, 9));
+  REQUIRE_TRUE(_cmempool_buffer_params_fit(100, 1));
+  REQUIRE_TRUE(_cmempool_buffer_params_fit(1, 1));
+  REQUIRE_TRUE(_cmempool_buffer_params_fit(32768, 256));
+  REQUIRE_TRUE(_cmempool_buffer_params_fit(50, 9));
 }
 
-// _ccol_mempool_buffer_params_fit must reject every elem_size that has no
-// stride: the rounding to _ccol_mempool_entry_align wraps for an elem_size
+// _cmempool_buffer_params_fit must reject every elem_size that has no
+// stride: the rounding to _cmempool_entry_align wraps for an elem_size
 // within that alignment of SIZE_MAX, and the rounding to a power of two gives
 // nothing at all above 2^40. A macro without this guard would treat such an
 // elem_size as one that fits, and so would the buffer declaration, because
-// the array-size expression of CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER
+// the array-size expression of CMEMPOOL_DECLARE_PREALLOCATED_BUFFER
 // repeats the same arithmetic. The run-time check inside
-// ccol_mempool_create() rejects the same elem_size range already. The guard
+// cmempool_create_mp() rejects the same elem_size range already. The guard
 // rejects every elem_size in this window for any elem_count, and must still
 // accept the boundary value exactly one byte below it.
 TEST(cmempools, buffer_params_fit_rejects_elem_size_near_size_max) {
@@ -267,8 +264,8 @@ TEST(cmempools, buffer_params_fit_rejects_elem_size_near_size_max) {
   // the guard refuses it for any count.
   for (size_t back_off = 0; back_off < 8; ++back_off) {
     size_t elem_size = SIZE_MAX - back_off;
-    REQUIRE_FALSE(_ccol_mempool_buffer_params_fit(1, elem_size));
-    REQUIRE_FALSE(_ccol_mempool_buffer_params_fit(100, elem_size));
+    REQUIRE_FALSE(_cmempool_buffer_params_fit(1, elem_size));
+    REQUIRE_FALSE(_cmempool_buffer_params_fit(100, elem_size));
   }
 
   // The guard mustn't reject too much either: it accepts the largest stride
@@ -280,8 +277,8 @@ TEST(cmempools, buffer_params_fit_rejects_elem_size_near_size_max) {
   // would shift past the width of size_t on the narrower one, which is
   // undefined and not just wrong. The compact stride has no such chain, and
   // its ceiling is where rounding up to the entry alignment would overflow.
-#if CCOL_MEMPOOL_COMPACT_LAYOUT
-  const size_t largest = SIZE_MAX - (_ccol_mempool_entry_align - 1);
+#if CMEMPOOL_COMPACT_LAYOUT
+  const size_t largest = SIZE_MAX - (_cmempool_entry_align - 1);
 #else
 #if SIZE_MAX > 0xFFFFFFFFu
 #define CCOL_TEST_LARGEST_STRIDE_EXP 40
@@ -291,13 +288,13 @@ TEST(cmempools, buffer_params_fit_rejects_elem_size_near_size_max) {
   const size_t largest = (size_t)1 << CCOL_TEST_LARGEST_STRIDE_EXP;
 #undef CCOL_TEST_LARGEST_STRIDE_EXP
 #endif
-  REQUIRE_EQ(_ccol_mempool_stride(largest), largest);
-  REQUIRE_TRUE(_ccol_mempool_buffer_params_fit(1, largest));
-  REQUIRE_FALSE(_ccol_mempool_buffer_params_fit(1, largest + 1));
+  REQUIRE_EQ(_cmempool_stride(largest), largest);
+  REQUIRE_TRUE(_cmempool_buffer_params_fit(1, largest));
+  REQUIRE_FALSE(_cmempool_buffer_params_fit(1, largest + 1));
 
   // And a count big enough that the entries alone would wrap gets rejected
   // even though each stride on its own is fine.
-  REQUIRE_FALSE(_ccol_mempool_buffer_params_fit(SIZE_MAX / 2, 64));
+  REQUIRE_FALSE(_cmempool_buffer_params_fit(SIZE_MAX / 2, 64));
 }
 
 // Every entry a pool hands out must be aligned for any object type, not
@@ -309,7 +306,7 @@ TEST(cmempools, buffer_params_fit_rejects_elem_size_near_size_max) {
 // architecture with strict alignment.
 //
 // Without rounding the stride to
-// _ccol_mempool_entry_align it fails with 4 misaligned entries out of the 72
+// _cmempool_entry_align it fails with 4 misaligned entries out of the 72
 // it checks, at elem_size 8, where the stride drops to 8 and every second
 // entry lands off a 16-byte boundary.
 //
@@ -332,20 +329,19 @@ TEST(cmempools, buffer_params_fit_rejects_elem_size_near_size_max) {
 // with exactly that much slack on purpose.
 TEST(cmempools, every_entry_position_round_trips_for_an_awkward_elem_size) {
   enum { kCount = 500, kElemSize = 96 };
-  ccol_mempool *mp =
-      ccol_mempool_create(kCount, kElemSize, false, true, NULL, NULL);
+  cmempool *mp = cmempool_create(kCount, kElemSize, false, true, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   /* The stride the layout in force implies, worked out the way a caller
      sizing a preallocated buffer would work it out. */
-  const size_t stride = _ccol_mempool_stride(kElemSize);
+  const size_t stride = _cmempool_stride(kElemSize);
 
   void *ptrs[kCount] = {0};
   size_t obtained = 0;
   size_t wrongly_spaced = 0;
   for (size_t pass = 0; pass < 2; ++pass) {
     for (size_t i = 0; i < kCount; ++i) {
-      ptrs[i] = ccol_mempool_alloc_entry(mp);
+      ptrs[i] = cmempool_alloc_entry(mp);
       if (ptrs[i]) ++obtained;
     }
     /* Sorted by address, consecutive entries sit exactly one stride
@@ -366,12 +362,12 @@ TEST(cmempools, every_entry_position_round_trips_for_an_awkward_elem_size) {
       }
     }
     for (size_t i = 0; i < kCount; ++i) {
-      if (ptrs[i]) ccol_mempool_free_entry(mp, ptrs[i]);
+      if (ptrs[i]) cmempool_free_entry(mp, ptrs[i]);
       ptrs[i] = NULL;
     }
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
 
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_EQ(obtained, (size_t)(2 * kCount));
@@ -394,11 +390,11 @@ TEST(cmempools, freeing_an_interior_pointer_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    SCOPED_MEMPOOL(mp) = ccol_mempool_create(8, 96, false, true, NULL, NULL);
-    void *entry = ccol_mempool_alloc_entry(mp);
+    SCOPED_MEMPOOL(mp) = cmempool_create(8, 96, false, true, NULL);
+    void *entry = cmempool_alloc_entry(mp);
     if (!entry) test_child_exit(2);
     void *interior = (uint8_t *)entry + 8;
-    ccol_mempool_free_entry(mp, interior);
+    cmempool_free_entry(mp, interior);
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -411,10 +407,10 @@ TEST(cmempools, freeing_an_interior_pointer_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// ccol_mempool_total_capacity reports the count the caller asked for, not
+// cmempool_total_capacity reports the count the caller asked for, not
 // the number of slots the pool holds. A pool with a thread cache carries a
 // reserve on top of that count, so its capacity understates its memory, and
-// that's why ccol_mempool_allocated_bytes exists: a caller sizing a pool
+// that's why cmempool_allocated_bytes exists: a caller sizing a pool
 // against a memory budget needs the other number, and this is the only way
 // to get it.
 //
@@ -426,16 +422,14 @@ TEST(cmempools, freeing_an_interior_pointer_is_fatal) {
 // by accident.
 TEST(cmempools, allocated_bytes_reports_the_reserve_that_capacity_hides) {
   const size_t elem_size = 64;
-  const size_t stride = _ccol_mempool_stride(elem_size);
+  const size_t stride = _cmempool_stride(elem_size);
   const size_t count = 1024;
 
   /* Every entry costs its stride plus its own status byte. */
   const size_t exactly_capacity = count * stride + count;
 
-  ccol_mempool *cached =
-      ccol_mempool_create(count, elem_size, false, false, NULL, NULL);
-  ccol_mempool *uncached =
-      ccol_mempool_create(count, elem_size, false, true, NULL, NULL);
+  cmempool *cached = cmempool_create(count, elem_size, false, false, NULL);
+  cmempool *uncached = cmempool_create(count, elem_size, false, true, NULL);
   /* We capture both outcomes and destroy both pools before asserting
      anything, because a failing assertion returns from here at once, and one
      between the two creations would leak whichever pool already exists. */
@@ -444,14 +438,14 @@ TEST(cmempools, allocated_bytes_reports_the_reserve_that_capacity_hides) {
   size_t cached_bytes = 0, uncached_bytes = 0;
   size_t cached_capacity = 0, uncached_capacity = 0;
   if (both_created) {
-    cached_bytes = ccol_mempool_allocated_bytes(cached);
-    uncached_bytes = ccol_mempool_allocated_bytes(uncached);
-    cached_capacity = ccol_mempool_total_capacity(cached);
-    uncached_capacity = ccol_mempool_total_capacity(uncached);
+    cached_bytes = cmempool_allocated_bytes(cached);
+    uncached_bytes = cmempool_allocated_bytes(uncached);
+    cached_capacity = cmempool_total_capacity(cached);
+    uncached_capacity = cmempool_total_capacity(uncached);
   }
 
-  if (cached) ccol_mempool_destroy(cached);
-  if (uncached) ccol_mempool_destroy(uncached);
+  if (cached) cmempool_destroy(cached);
+  if (uncached) cmempool_destroy(uncached);
 
   REQUIRE_TRUE(both_created);
   /* Both report the capacity the caller asked for, but the memory differs. */
@@ -465,17 +459,17 @@ TEST(cmempools, allocated_bytes_reports_the_reserve_that_capacity_hides) {
 // figure worked out by hand is least practical, since every tier has its own
 // element size, its own count and its own reserve.
 TEST(r_mempools, allocated_bytes_sums_every_tier) {
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 8, 6, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 8, 6, crmempool_fallback_disabled, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   size_t at_least = 0;
   for (size_t sz = 16; sz <= 256; sz *= 2) {
-    at_least += ccol_r_mempool_total_capacity(rmp, sz) * sz;
+    at_least += crmempool_total_capacity(rmp, sz) * sz;
   }
-  const size_t reported = ccol_r_mempool_allocated_bytes(rmp);
+  const size_t reported = crmempool_allocated_bytes(rmp);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 
   /* The report is strictly more than the tiers' capacities account for,
      because every tier that gets a cache carries a reserve and every entry
@@ -490,15 +484,14 @@ TEST(cmempools, every_entry_is_aligned_for_any_object_type) {
   bool all_created = true;
 
   for (size_t elem_size = 8; elem_size <= 72; elem_size += 8) {
-    ccol_mempool *mp =
-        ccol_mempool_create(8, elem_size, false, true, NULL, NULL);
+    cmempool *mp = cmempool_create(8, elem_size, false, true, NULL);
     if (!mp) {
       all_created = false;
       continue;
     }
     void *entries[8] = {0};
     for (size_t i = 0; i < 8; ++i) {
-      entries[i] = ccol_mempool_alloc_entry(mp);
+      entries[i] = cmempool_alloc_entry(mp);
       if (entries[i]) {
         ++checked;
         // We check against max_align_t directly and never the library's own
@@ -509,9 +502,9 @@ TEST(cmempools, every_entry_is_aligned_for_any_object_type) {
       }
     }
     for (size_t i = 0; i < 8; ++i) {
-      if (entries[i]) ccol_mempool_free_entry(mp, entries[i]);
+      if (entries[i]) cmempool_free_entry(mp, entries[i]);
     }
-    ccol_mempool_destroy(mp);
+    cmempool_destroy(mp);
   }
 
   // Everything is freed above, so an assertion that fails here leaves
@@ -539,38 +532,38 @@ TEST(cmempools, every_creation_path_yields_aligned_entries) {
   size_t checked = 0;
   bool all_created = true;
 
-  CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(pbuf, 8, 9);
-  SCOPED_MEMPOOL(pmp) = ccol_mempool_create_from_preallocated_buffer(
-      pbuf, sizeof(pbuf), 9, false, true, NULL, NULL);
+  CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(pbuf, 8, 9);
+  SCOPED_MEMPOOL(pmp) = cmempool_create_from_preallocated_buffer(
+      pbuf, sizeof(pbuf), 9, false, true, NULL);
   if (!pmp) {
     all_created = false;
   } else {
     void *e[8] = {0};
     for (size_t i = 0; i < 8; ++i) {
-      e[i] = ccol_mempool_alloc_entry(pmp);
+      e[i] = cmempool_alloc_entry(pmp);
       if (e[i]) {
         ++checked;
         if ((uintptr_t)e[i] % _Alignof(max_align_t) != 0) ++misaligned;
       }
     }
     for (size_t i = 0; i < 8; ++i) {
-      if (e[i]) ccol_mempool_free_entry(pmp, e[i]);
+      if (e[i]) cmempool_free_entry(pmp, e[i]);
     }
-    ccol_mempool_destroy(pmp);
+    cmempool_destroy(pmp);
   }
 
   /* A dynamic fallback entry comes from the allocator and not from the pool's
      buffer, and the caller gets it at a fixed offset past a prefix of its
      own, so it can lose the alignment a pool-owned entry keeps. We exhaust a
      tiny pool to force such entries. */
-  SCOPED_MEMPOOL(fmp) = ccol_mempool_create(2, 9, true, true, NULL, NULL);
+  SCOPED_MEMPOOL(fmp) = cmempool_create(2, 9, true, true, NULL);
   size_t fallback_entries = 0;
   if (!fmp) {
     all_created = false;
   } else {
     void *f[6] = {0};
     for (size_t i = 0; i < 6; ++i) {
-      f[i] = ccol_mempool_alloc_entry(fmp);
+      f[i] = cmempool_alloc_entry(fmp);
       if (f[i]) {
         ++checked;
         if ((uintptr_t)f[i] % _Alignof(max_align_t) != 0) ++misaligned;
@@ -580,27 +573,27 @@ TEST(cmempools, every_creation_path_yields_aligned_entries) {
        below. Without this count the section would be vacuous: a fallback
        that gives nothing leaves misaligned at zero, so the section would pass
        while testing nothing. */
-    fallback_entries = ccol_mempool_dynamic_allocs_count(fmp);
+    fallback_entries = cmempool_dynamic_allocs_count(fmp);
     for (size_t i = 0; i < 6; ++i) {
-      if (f[i]) ccol_mempool_free_entry(fmp, f[i]);
+      if (f[i]) cmempool_free_entry(fmp, f[i]);
     }
-    ccol_mempool_destroy(fmp);
+    cmempool_destroy(fmp);
   }
 
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 9, 5, ccol_fallback_disabled, true, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 9, 5, crmempool_fallback_disabled, true, NULL);
   if (!rmp) {
     all_created = false;
   } else {
     for (size_t sz = 16; sz <= 512; sz *= 2) {
-      void *e = ccol_r_mempool_alloc_entry(rmp, sz);
+      void *e = crmempool_alloc_entry(rmp, sz);
       if (e) {
         ++checked;
         if ((uintptr_t)e % _Alignof(max_align_t) != 0) ++misaligned;
-        ccol_r_mempool_free_entry(rmp, e);
+        crmempool_free_entry(rmp, e);
       }
     }
-    ccol_r_mempool_destroy(rmp);
+    crmempool_destroy(rmp);
   }
 
   /* A preallocated ranged pool cuts one buffer into one segment per tier,
@@ -612,24 +605,23 @@ TEST(cmempools, every_creation_path_yields_aligned_entries) {
      and 1, so such a tier's status region is smaller than the alignment
      itself. The buffer is static, so it lives in the binary's data segment
      and not on the stack. */
-  static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(prbuf, 4, 16, 12);
-  SCOPED_R_MEMPOOL(prmp) = ccol_r_mempool_create_from_preallocated_buffer(
-      prbuf, sizeof(prbuf), 4, 16, 12, ccol_fallback_disabled, true, NULL,
-      NULL);
+  static CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(prbuf, 4, 16, 12);
+  SCOPED_R_MEMPOOL(prmp) = crmempool_create_from_preallocated_buffer(
+      prbuf, sizeof(prbuf), 4, 16, 12, crmempool_fallback_disabled, true, NULL);
   size_t tiers_checked = 0;
   if (!prmp) {
     all_created = false;
   } else {
     for (size_t sz = 16; sz <= ((size_t)1 << 16); sz *= 2) {
-      void *e = ccol_r_mempool_alloc_entry(prmp, sz);
+      void *e = crmempool_alloc_entry(prmp, sz);
       if (e) {
         ++checked;
         ++tiers_checked;
         if ((uintptr_t)e % _Alignof(max_align_t) != 0) ++misaligned;
-        ccol_r_mempool_free_entry(prmp, e);
+        crmempool_free_entry(prmp, e);
       }
     }
-    ccol_r_mempool_destroy(prmp);
+    crmempool_destroy(prmp);
   }
 
   // Both pools are destroyed above, so an assertion that fails here leaves
@@ -646,201 +638,197 @@ TEST(cmempools, every_creation_path_yields_aligned_entries) {
 
 TEST(cmempools, create_succeeds) {
   char *err;
-  ccol_mempool *mp =
-      ccol_mempool_create(256, sizeof(int), false, false, NULL, &err);
+  cmempool *mp = cmempool_create(256, sizeof(int), false, false, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 
-  mp = ccol_mempool_create(256, sizeof(int), false, true, NULL, &err);
+  mp = cmempool_create(256, sizeof(int), false, true, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = free};
-  mp = ccol_mempool_create(256, sizeof(int), false, false, &m_procs, &err);
+  mp = cmempool_create_mp(256, sizeof(int), false, false, &m_procs, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 
-  mp = ccol_mempool_create(256, sizeof(int), false, true, &m_procs, &err);
+  mp = cmempool_create_mp(256, sizeof(int), false, true, &m_procs, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, allocations_and_deallocations_fallback_disabled) {
-  ccol_mempool *mp =
-      ccol_mempool_create(256, sizeof(int), false, false, NULL, NULL);
+  cmempool *mp = cmempool_create(256, sizeof(int), false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 256);
 
   int *ptrs[256] = {0};
 
   // Allocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the failure to allocate further.
-  int *tmp_ptr = ccol_mempool_alloc_entry(mp);
+  int *tmp_ptr = cmempool_alloc_entry(mp);
   REQUIRE_EQ((void *)tmp_ptr, NULL);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Reallocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the failure to allocate further again.
-  tmp_ptr = ccol_mempool_alloc_entry(mp);
+  tmp_ptr = cmempool_alloc_entry(mp);
   REQUIRE_EQ((void *)tmp_ptr, NULL);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, allocations_and_deallocations_fallback_disabled_no_locks) {
-  ccol_mempool *mp =
-      ccol_mempool_create(256, sizeof(int), false, true, NULL, NULL);
+  cmempool *mp = cmempool_create(256, sizeof(int), false, true, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 256);
 
   int *ptrs[256] = {0};
 
   // Allocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the failure to allocate further.
-  int *tmp_ptr = ccol_mempool_alloc_entry(mp);
+  int *tmp_ptr = cmempool_alloc_entry(mp);
   REQUIRE_EQ((void *)tmp_ptr, NULL);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Reallocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the failure to allocate further again.
-  tmp_ptr = ccol_mempool_alloc_entry(mp);
+  tmp_ptr = cmempool_alloc_entry(mp);
   REQUIRE_EQ((void *)tmp_ptr, NULL);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, allocations_and_deallocations_fallback_enabled) {
-  ccol_mempool *mp =
-      ccol_mempool_create(256, sizeof(int), true, false, NULL, NULL);
+  cmempool *mp = cmempool_create(256, sizeof(int), true, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 256);
 
   int *ptrs[256] = {0};
 
   // Allocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the allocation of a buffer through the fallback.
-  int *tmp_ptr = ccol_mempool_alloc_entry(mp);
+  int *tmp_ptr = cmempool_alloc_entry(mp);
   REQUIRE_NE((void *)tmp_ptr, NULL);
   // Free the fallback buffer.
-  ccol_mempool_free_entry(mp, tmp_ptr);
+  cmempool_free_entry(mp, tmp_ptr);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Reallocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the allocation of a buffer through the fallback again.
-  tmp_ptr = ccol_mempool_alloc_entry(mp);
+  tmp_ptr = cmempool_alloc_entry(mp);
   REQUIRE_NE((void *)tmp_ptr, NULL);
   // Free the fallback buffer.
-  ccol_mempool_free_entry(mp, tmp_ptr);
+  cmempool_free_entry(mp, tmp_ptr);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
@@ -850,269 +838,264 @@ TEST(cmempools,
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = free};
   char *err;
 
-  ccol_mempool *mp =
-      ccol_mempool_create(256, sizeof(int), true, false, &m_procs, &err);
+  cmempool *mp =
+      cmempool_create_mp(256, sizeof(int), true, false, &m_procs, &err);
   REQUIRE_NE((void *)mp, NULL);
 
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 256);
 
   int *ptrs[256] = {0};
 
   // Allocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the allocation of a buffer through the fallback.
-  int *tmp_ptr = ccol_mempool_alloc_entry(mp);
+  int *tmp_ptr = cmempool_alloc_entry(mp);
   REQUIRE_NE((void *)tmp_ptr, NULL);
   // Free the fallback buffer.
-  ccol_mempool_free_entry(mp, tmp_ptr);
+  cmempool_free_entry(mp, tmp_ptr);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Reallocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the allocation of a buffer through the fallback again.
-  tmp_ptr = ccol_mempool_alloc_entry(mp);
+  tmp_ptr = cmempool_alloc_entry(mp);
   REQUIRE_NE((void *)tmp_ptr, NULL);
   // Free the fallback buffer.
-  ccol_mempool_free_entry(mp, tmp_ptr);
+  cmempool_free_entry(mp, tmp_ptr);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, allocations_and_deallocations_fallback_enabled_no_locks) {
-  ccol_mempool *mp =
-      ccol_mempool_create(256, sizeof(int), true, true, NULL, NULL);
+  cmempool *mp = cmempool_create(256, sizeof(int), true, true, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 256);
 
   int *ptrs[256] = {0};
 
   // Allocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the allocation of a buffer through the fallback.
-  int *tmp_ptr = ccol_mempool_alloc_entry(mp);
+  int *tmp_ptr = cmempool_alloc_entry(mp);
   REQUIRE_NE((void *)tmp_ptr, NULL);
   // Free the fallback buffer.
-  ccol_mempool_free_entry(mp, tmp_ptr);
+  cmempool_free_entry(mp, tmp_ptr);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Reallocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the allocation of a buffer through the fallback again.
-  tmp_ptr = ccol_mempool_alloc_entry(mp);
+  tmp_ptr = cmempool_alloc_entry(mp);
   REQUIRE_NE((void *)tmp_ptr, NULL);
   // Free the fallback buffer.
-  ccol_mempool_free_entry(mp, tmp_ptr);
+  cmempool_free_entry(mp, tmp_ptr);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, c_allocations_and_deallocations_fallback_disabled) {
-  ccol_mempool *mp =
-      ccol_mempool_create(256, sizeof(int), false, false, NULL, NULL);
+  cmempool *mp = cmempool_create(256, sizeof(int), false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 256);
 
   int *ptrs[256] = {0};
 
   // Allocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_calloc_entry(mp);
+    ptrs[i] = cmempool_calloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the failure to allocate further.
-  int *tmp_ptr = ccol_mempool_calloc_entry(mp);
+  int *tmp_ptr = cmempool_calloc_entry(mp);
   REQUIRE_EQ((void *)tmp_ptr, NULL);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Reallocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_calloc_entry(mp);
+    ptrs[i] = cmempool_calloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the failure to allocate further again.
-  tmp_ptr = ccol_mempool_calloc_entry(mp);
+  tmp_ptr = cmempool_calloc_entry(mp);
   REQUIRE_EQ((void *)tmp_ptr, NULL);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, c_allocations_and_deallocations_fallback_enabled) {
-  ccol_mempool *mp =
-      ccol_mempool_create(256, sizeof(int), true, false, NULL, NULL);
+  cmempool *mp = cmempool_create(256, sizeof(int), true, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 256);
 
   int *ptrs[256] = {0};
 
   // Allocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_calloc_entry(mp);
+    ptrs[i] = cmempool_calloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the allocation of a buffer through the fallback.
-  int *tmp_ptr = ccol_mempool_calloc_entry(mp);
+  int *tmp_ptr = cmempool_calloc_entry(mp);
   REQUIRE_NE((void *)tmp_ptr, NULL);
   // Free the fallback buffer.
-  ccol_mempool_free_entry(mp, tmp_ptr);
+  cmempool_free_entry(mp, tmp_ptr);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Reallocate all buffers.
   for (size_t i = 0; i < 256; ++i) {
-    ptrs[i] = ccol_mempool_calloc_entry(mp);
+    ptrs[i] = cmempool_calloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     *ptrs[i] = i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
   // Verify the allocation of a buffer through the fallback again.
-  tmp_ptr = ccol_mempool_calloc_entry(mp);
+  tmp_ptr = cmempool_calloc_entry(mp);
   REQUIRE_NE((void *)tmp_ptr, NULL);
   // Free the fallback buffer.
-  ccol_mempool_free_entry(mp, tmp_ptr);
+  cmempool_free_entry(mp, tmp_ptr);
 
   // Deallocate all.
   for (size_t i = 0; i < 256; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 256 - (i + 1));
-    REQUIRE_EQ(ccol_mempool_total_capacity(mp), 256);
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 256 - (i + 1));
+    REQUIRE_EQ(cmempool_total_capacity(mp), 256);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, calloc_entry_zeroes_memory) {
-  // Check that ccol_mempool_calloc_entry returns memory that really is
+  // Check that cmempool_calloc_entry returns memory that really is
   // zeroed, also when the slot was used before with non-zero content.
   const size_t elem_size = sizeof(long long);
-  ccol_mempool *mp =
-      ccol_mempool_create(4, elem_size, false, false, NULL, NULL);
+  cmempool *mp = cmempool_create(4, elem_size, false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  long long *slot = ccol_mempool_alloc_entry(mp);
+  long long *slot = cmempool_alloc_entry(mp);
   REQUIRE_NE((void *)slot, NULL);
   memset(slot, 0xFF, elem_size);
-  ccol_mempool_free_entry(mp, slot);
+  cmempool_free_entry(mp, slot);
 
-  slot = ccol_mempool_calloc_entry(mp);
+  slot = cmempool_calloc_entry(mp);
   REQUIRE_NE((void *)slot, NULL);
 
   const char zeroes[sizeof(long long)] = {0};
   REQUIRE_EQ(memcmp(slot, zeroes, elem_size), 0);
 
-  ccol_mempool_free_entry(mp, slot);
-  ccol_mempool_destroy(mp);
+  cmempool_free_entry(mp, slot);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, free_null_is_noop) {
-  ccol_mempool *mp =
-      ccol_mempool_create(4, sizeof(int), false, true, NULL, NULL);
+  cmempool *mp = cmempool_create(4, sizeof(int), false, true, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   // A NULL entry is a no-op, the same as for free(), and the pool argument
   // doesn't change that.
   void *p = NULL;
-  ccol_mempool_free_entry(mp, p);
+  cmempool_free_entry(mp, p);
   bool p_still_null = (p == NULL);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
 
   REQUIRE_TRUE(p_still_null);
 }
@@ -1131,10 +1114,9 @@ TEST(cmempools, free_with_null_pool_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    ccol_mempool *mp =
-        ccol_mempool_create(4, sizeof(int), false, true, NULL, NULL);
-    void *e = mp ? ccol_mempool_alloc_entry(mp) : NULL;
-    ccol_mempool_free_entry((ccol_mempool *)NULL, e);
+    cmempool *mp = cmempool_create(4, sizeof(int), false, true, NULL);
+    void *e = mp ? cmempool_alloc_entry(mp) : NULL;
+    cmempool_free_entry((cmempool *)NULL, e);
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -1147,12 +1129,12 @@ TEST(cmempools, free_with_null_pool_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// ccol_mempool_free_entry documents that assertions catch a double free, and
-// this is the direct coverage of that contract for a plain ccol_mempool
+// cmempool_free_entry documents that assertions catch a double free, and
+// this is the direct coverage of that contract for a plain cmempool
 // entry, since every other test in this file that forks and asserts on
-// SIGABRT drives ccol_r_mempool_realloc_entry and not
-// ccol_mempool_free_entry. We call the raw function _ccol_mempool_free_entry
-// directly, because the ccol_mempool_free_entry macro sets its argument to
+// SIGABRT drives crmempool_realloc_entry and not
+// cmempool_free_entry. We call the raw function _cmempool_free_entry
+// directly, because the cmempool_free_entry macro sets its argument to
 // NULL after the free, so a second call on the same variable would be a
 // harmless no-op and not a real double free.
 TEST(cmempools, double_free_is_fatal) {
@@ -1165,13 +1147,12 @@ TEST(cmempools, double_free_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    ccol_mempool *mp =
-        ccol_mempool_create(4, sizeof(int), false, true, NULL, NULL);
-    void *p = ccol_mempool_alloc_entry(mp);
+    cmempool *mp = cmempool_create(4, sizeof(int), false, true, NULL);
+    void *p = cmempool_alloc_entry(mp);
     void *p_saved = p;
-    ccol_mempool_free_entry(mp, p); /* first free: fine */
-    _ccol_mempool_free_entry(
-        mp, p_saved);   /* second free of the same entry: fatal */
+    cmempool_free_entry(mp, p); /* first free: fine */
+    _cmempool_free_entry(mp,
+                         p_saved); /* second free of the same entry: fatal */
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -1184,7 +1165,7 @@ TEST(cmempools, double_free_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// The direct coverage of the other half of ccol_mempool_free_entry's
+// The direct coverage of the other half of cmempool_free_entry's
 // contract, that assertions catch a corrupted entry. The test simulates
 // memory corruption by an unrelated bug somewhere else in the caller, by
 // overwriting what the pool records about one entry with a value that is
@@ -1202,12 +1183,11 @@ TEST(cmempools, free_entry_with_corrupted_status_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    ccol_mempool *mp =
-        ccol_mempool_create(4, sizeof(int), false, true, NULL, NULL);
-    void *p = ccol_mempool_alloc_entry(mp);
+    cmempool *mp = cmempool_create(4, sizeof(int), false, true, NULL);
+    void *p = cmempool_alloc_entry(mp);
     /* Neither of the two states an entry can legitimately be in. */
-    _ccol_mempool_corrupt_entry_status_for_tests(mp, p, 0xAB);
-    _ccol_mempool_free_entry(mp, p);
+    _cmempool_corrupt_entry_status_for_tests(mp, p, 0xAB);
+    _cmempool_free_entry(mp, p);
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -1220,7 +1200,7 @@ TEST(cmempools, free_entry_with_corrupted_status_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// ccol_mempool_free_entry must catch a double free of a dynamic (fallback)
+// cmempool_free_entry must catch a double free of a dynamic (fallback)
 // entry by the entry's address. Checking only the count of outstanding
 // dynamic entries isn't enough, because such a guard only catches the
 // double-freed entry while it is the single outstanding dynamic entry. With
@@ -1228,7 +1208,7 @@ TEST(cmempools, free_entry_with_corrupted_status_is_fatal) {
 // although it isn't a valid one. The pool needs to forget the entry's address
 // on its first free, or the call reaches the allocator's free() a second
 // time on the same block and under-counts the outstanding dynamic entries,
-// which defeats ccol_mempool_destroy's leak detector for the entry that is
+// which defeats cmempool_destroy's leak detector for the entry that is
 // still outstanding.
 //
 // We use a custom allocator whose free() doesn't clobber the freed block's
@@ -1261,18 +1241,16 @@ TEST(cmempools, double_free_of_dynamic_entry_with_another_still_live_is_fatal) {
                                   .calloc = no_clobber_calloc,
                                   .realloc = no_clobber_realloc,
                                   .free = no_clobber_free};
-    ccol_mempool *mp =
-        ccol_mempool_create(2, sizeof(int), true, true, &procs, NULL);
-    ccol_mempool_alloc_entry(mp);
-    ccol_mempool_alloc_entry(mp);
+    cmempool *mp = cmempool_create_mp(2, sizeof(int), true, true, &procs, NULL);
+    cmempool_alloc_entry(mp);
+    cmempool_alloc_entry(mp);
     /* Two dynamic/fallback entries outstanding at once. */
-    void *d1 = ccol_mempool_alloc_entry(mp);
-    void *d2 = ccol_mempool_alloc_entry(mp);
+    void *d1 = cmempool_alloc_entry(mp);
+    void *d2 = cmempool_alloc_entry(mp);
     (void)d2; /* kept alive; never freed by this test */
     void *d1_saved = d1;
-    ccol_mempool_free_entry(mp, d1); /* first free: fine */
-    _ccol_mempool_free_entry(mp,
-                             d1_saved); /* second free, d2 still live: fatal */
+    cmempool_free_entry(mp, d1);        /* first free: fine */
+    _cmempool_free_entry(mp, d1_saved); /* second free, d2 still live: fatal */
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -1350,18 +1328,18 @@ static void *mp_guard_realloc(void *p, size_t n) {
 
 /* Builds a small single-threaded pool on the guard allocator and returns its
  * lowest-address entry, which is the first byte of its buffer. */
-static void *mp_guard_first_entry(ccol_mempool **out_pool) {
+static void *mp_guard_first_entry(cmempool **out_pool) {
   static ccol_memmgmt_procs_t procs = {.malloc = mp_guard_malloc,
                                        .calloc = mp_guard_calloc,
                                        .realloc = mp_guard_realloc,
                                        .free = mp_guard_free};
   enum { N = 4 };
-  ccol_mempool *other =
-      ccol_mempool_create(N, sizeof(int), false, true, &procs, NULL);
+  cmempool *other =
+      cmempool_create_mp(N, sizeof(int), false, true, &procs, NULL);
   if (!other) return NULL;
   void *lowest = NULL;
   for (int i = 0; i < N; ++i) {
-    void *e = ccol_mempool_alloc_entry(other);
+    void *e = cmempool_alloc_entry(other);
     if (e && (!lowest || (uintptr_t)e < (uintptr_t)lowest)) lowest = e;
   }
   *out_pool = other;
@@ -1388,16 +1366,15 @@ TEST(cmempools, free_of_another_pools_entry_asserts_without_reading_it) {
   if (pid == 0) {
     test_child_no_core();
     mp_silence_child_output();
-    ccol_mempool *other = NULL;
+    cmempool *other = NULL;
     void *foreign = mp_guard_first_entry(&other);
-    ccol_mempool *mp =
-        ccol_mempool_create(2, sizeof(int), true, false, NULL, NULL);
+    cmempool *mp = cmempool_create(2, sizeof(int), true, false, NULL);
     if (!foreign || !mp) test_child_exit(2);
-    ccol_mempool_alloc_entry(mp);
-    ccol_mempool_alloc_entry(mp);
-    void *dyn = ccol_mempool_alloc_entry(mp); /* a live dynamic entry */
-    if (!dyn || ccol_mempool_dynamic_allocs_count(mp) != 1) test_child_exit(3);
-    _ccol_mempool_free_entry(mp, foreign); /* must assert */
+    cmempool_alloc_entry(mp);
+    cmempool_alloc_entry(mp);
+    void *dyn = cmempool_alloc_entry(mp); /* a live dynamic entry */
+    if (!dyn || cmempool_dynamic_allocs_count(mp) != 1) test_child_exit(3);
+    _cmempool_free_entry(mp, foreign); /* must assert */
     test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
@@ -1410,33 +1387,33 @@ TEST(cmempools, free_of_another_pools_entry_asserts_without_reading_it) {
 // The same rule for a ranged pool, through its free and through its
 // realloc. Each child holds a live dynamic entry under each fallback policy,
 // so what's under test is resolving an address that matches no tier.
-static void mp_ranged_foreign_child(ccol_r_memory_fallback_policy_t policy,
+static void mp_ranged_foreign_child(crmempool_fallback_policy_t policy,
                                     bool through_realloc) {
   test_child_no_core();
   mp_silence_child_output();
-  ccol_mempool *other = NULL;
+  cmempool *other = NULL;
   void *foreign = mp_guard_first_entry(&other);
   /* Tiers of 16 and 32 bytes, with two and one entries. */
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 5, 1, policy, false, NULL, NULL);
+  crmempool *rmp = crmempool_create(4, 5, 1, policy, false, NULL);
   if (!foreign || !rmp) test_child_exit(2);
   /* Three entries fill both tiers, so the fourth is a dynamic entry, taken
    * from the first tier under the first-exhaustion policy and from the
    * whole pool's fallback under the last-exhaustion policy. */
   void *e = NULL;
-  for (int i = 0; i < 4; ++i) e = ccol_r_mempool_alloc_entry(rmp, 16);
+  for (int i = 0; i < 4; ++i) e = crmempool_alloc_entry(rmp, 16);
   if (!e) test_child_exit(3);
   if (through_realloc) {
-    ccol_r_mempool_realloc_entry(rmp, foreign, 16); /* must assert */
+    crmempool_realloc_entry(rmp, foreign, 16); /* must assert */
   } else {
-    _ccol_r_mempool_free_entry(rmp, foreign); /* must assert */
+    _crmempool_free_entry(rmp, foreign); /* must assert */
   }
   test_child_exit(0);
 }
 
 TEST(r_mempools, free_of_another_pools_entry_asserts_without_reading_it) {
-  ccol_r_memory_fallback_policy_t policies[] = {
-      ccol_fallback_at_first_exhaustion, ccol_fallback_at_last_exhaustion};
+  crmempool_fallback_policy_t policies[] = {
+      crmempool_fallback_at_first_exhaustion,
+      crmempool_fallback_at_last_exhaustion};
   int statuses[4] = {0};
   pid_t pids[4] = {-1, -1, -1, -1};
   for (int i = 0; i < 4; ++i) {
@@ -1458,37 +1435,36 @@ TEST(r_mempools, free_of_another_pools_entry_asserts_without_reading_it) {
 // under memtest.
 TEST(cmempools, many_dynamic_entries_free_in_any_order) {
   enum { N = 2000 };
-  ccol_mempool *mp =
-      ccol_mempool_create(2, sizeof(int), true, false, NULL, NULL);
+  cmempool *mp = cmempool_create(2, sizeof(int), true, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
-  void *owned[2] = {ccol_mempool_alloc_entry(mp), ccol_mempool_alloc_entry(mp)};
+  void *owned[2] = {cmempool_alloc_entry(mp), cmempool_alloc_entry(mp)};
   void **dyn = calloc(N, sizeof(void *));
   size_t made = 0;
   if (dyn) {
     for (; made < N; ++made) {
-      dyn[made] = ccol_mempool_alloc_entry(mp);
+      dyn[made] = cmempool_alloc_entry(mp);
       if (!dyn[made]) break;
     }
   }
-  size_t count_full = ccol_mempool_dynamic_allocs_count(mp);
+  size_t count_full = cmempool_dynamic_allocs_count(mp);
   /* A fixed stride coprime with N visits every index once, in an order far
    * from the allocation order. */
   size_t count_half = 0;
   for (size_t k = 0; k < made; ++k) {
     size_t i = (k * 7919u) % made;
-    ccol_mempool_free_entry(mp, dyn[i]);
-    if (k + 1 == made / 2) count_half = ccol_mempool_dynamic_allocs_count(mp);
+    cmempool_free_entry(mp, dyn[i]);
+    if (k + 1 == made / 2) count_half = cmempool_dynamic_allocs_count(mp);
   }
-  size_t count_empty = ccol_mempool_dynamic_allocs_count(mp);
+  size_t count_empty = cmempool_dynamic_allocs_count(mp);
   /* The record is empty again and accepts new entries. */
-  void *again = ccol_mempool_alloc_entry(mp);
+  void *again = cmempool_alloc_entry(mp);
   bool again_ok = (again != NULL);
-  size_t count_again = ccol_mempool_dynamic_allocs_count(mp);
-  ccol_mempool_free_entry(mp, again);
-  ccol_mempool_free_entry(mp, owned[0]);
-  ccol_mempool_free_entry(mp, owned[1]);
+  size_t count_again = cmempool_dynamic_allocs_count(mp);
+  cmempool_free_entry(mp, again);
+  cmempool_free_entry(mp, owned[0]);
+  cmempool_free_entry(mp, owned[1]);
   free(dyn);
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
 
   REQUIRE_EQ(made, (size_t)N);
   REQUIRE_EQ(count_full, (size_t)N);
@@ -1498,11 +1474,11 @@ TEST(cmempools, many_dynamic_entries_free_in_any_order) {
   REQUIRE_EQ(count_again, (size_t)1);
 }
 
-// ccol_mempool_destroy documents that it asserts when the dynamic fallback
+// cmempool_destroy documents that it asserts when the dynamic fallback
 // holds pointers nobody freed, and this is the direct coverage of that
 // contract. Nothing else in this suite would notice a change that weakens or
-// removes the ccol_mempool_dynamic_allocs_count(mp) > 0 check inside
-// _ccol_mempool_destroy, because every other test frees every dynamic entry
+// removes the cmempool_dynamic_allocs_count(mp) > 0 check inside
+// _cmempool_destroy, because every other test frees every dynamic entry
 // it allocates before destroying its pool.
 TEST(cmempools, destroy_with_leaked_dynamic_entry_is_fatal) {
   pid_t pid = fork();
@@ -1514,14 +1490,13 @@ TEST(cmempools, destroy_with_leaked_dynamic_entry_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    ccol_mempool *mp =
-        ccol_mempool_create(2, sizeof(int), true, true, NULL, NULL);
-    ccol_mempool_alloc_entry(mp);
-    ccol_mempool_alloc_entry(mp);
+    cmempool *mp = cmempool_create(2, sizeof(int), true, true, NULL);
+    cmempool_alloc_entry(mp);
+    cmempool_alloc_entry(mp);
     void *leaked =
-        ccol_mempool_alloc_entry(mp); /* the pool-owned slots are used up */
-    (void)leaked;                     /* never freed, on purpose */
-    ccol_mempool_destroy(mp);         /* asserts on the leak */
+        cmempool_alloc_entry(mp); /* the pool-owned slots are used up */
+    (void)leaked;                 /* never freed, on purpose */
+    cmempool_destroy(mp);         /* asserts on the leak */
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -1535,138 +1510,135 @@ TEST(cmempools, destroy_with_leaked_dynamic_entry_is_fatal) {
 }
 
 TEST(cmempools, dynamic_allocs_count_zero_without_fallback) {
-  ccol_mempool *mp =
-      ccol_mempool_create(4, sizeof(int), false, false, NULL, NULL);
+  cmempool *mp = cmempool_create(4, sizeof(int), false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 0);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 0);
 
   int *ptrs[4];
   for (size_t i = 0; i < 4; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
-    REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 0);
+    REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 0);
   }
 
-  REQUIRE_EQ((void *)ccol_mempool_alloc_entry(mp), NULL);
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 0);
+  REQUIRE_EQ((void *)cmempool_alloc_entry(mp), NULL);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 0);
 
   for (size_t i = 0; i < 4; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
+    cmempool_free_entry(mp, ptrs[i]);
   }
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 0);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 0);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, dynamic_allocs_count_tracks_correctly_with_fallback) {
-  ccol_mempool *mp =
-      ccol_mempool_create(4, sizeof(int), true, false, NULL, NULL);
+  cmempool *mp = cmempool_create(4, sizeof(int), true, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   int *ptrs[4];
   for (size_t i = 0; i < 4; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
-    REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 0);
+    REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 0);
   }
 
-  int *fallback1 = ccol_mempool_alloc_entry(mp);
+  int *fallback1 = cmempool_alloc_entry(mp);
   REQUIRE_NE((void *)fallback1, NULL);
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 1);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 1);
 
-  int *fallback2 = ccol_mempool_alloc_entry(mp);
+  int *fallback2 = cmempool_alloc_entry(mp);
   REQUIRE_NE((void *)fallback2, NULL);
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 2);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 2);
 
-  ccol_mempool_free_entry(mp, fallback1);
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 1);
+  cmempool_free_entry(mp, fallback1);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 1);
 
-  ccol_mempool_free_entry(mp, fallback2);
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 0);
+  cmempool_free_entry(mp, fallback2);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 0);
 
   for (size_t i = 0; i < 4; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
+    cmempool_free_entry(mp, ptrs[i]);
   }
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 0);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, c_allocations_and_deallocations_fallback_enabled_no_locks) {
-  ccol_mempool *mp =
-      ccol_mempool_create(4, sizeof(int), true, true, NULL, NULL);
+  cmempool *mp = cmempool_create(4, sizeof(int), true, true, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 4);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 4);
 
   int *ptrs[4];
   for (size_t i = 0; i < 4; ++i) {
-    ptrs[i] = ccol_mempool_calloc_entry(mp);
+    ptrs[i] = cmempool_calloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
     REQUIRE_EQ(*ptrs[i], 0);
     *ptrs[i] = (int)i;
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
   }
 
-  int *fallback = ccol_mempool_calloc_entry(mp);
+  int *fallback = cmempool_calloc_entry(mp);
   REQUIRE_NE((void *)fallback, NULL);
   REQUIRE_EQ(*fallback, 0);
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 1);
-  ccol_mempool_free_entry(mp, fallback);
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 0);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 1);
+  cmempool_free_entry(mp, fallback);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 0);
 
   for (size_t i = 0; i < 4; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), 4 - (i + 1));
+    cmempool_free_entry(mp, ptrs[i]);
+    REQUIRE_EQ(cmempool_used_count(mp), 4 - (i + 1));
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, create_from_preallocated_fails_null_buffer) {
   char *err;
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
-      NULL, 256, 16, false, false, NULL, &err);
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
+      NULL, 256, 16, false, false, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
-// ccol_mempool_create_from_preallocated_buffer must not reject an
+// cmempool_create_from_preallocated_buffer_mp must not reject an
 // elem_size < sizeof(uintptr_t) outright, which wouldn't match
-// ccol_mempool_create's own silent round-up for the same condition (see
+// cmempool_create_mp's own silent round-up for the same condition (see
 // create_small_elem_size_is_bumped_to_min above): both constructors round a
 // small but nonzero elem_size up to sizeof(uintptr_t) the same
 // way.
 TEST(cmempools, create_from_preallocated_small_elem_size_is_bumped_to_min) {
-  _Alignas(_ccol_mempool_entry_align) uint8_t buf[256];
+  _Alignas(_cmempool_entry_align) uint8_t buf[256];
   char *err = NULL;
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
-      buf, sizeof(buf), sizeof(uintptr_t) - 1, false, false, NULL, &err);
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
+      buf, sizeof(buf), sizeof(uintptr_t) - 1, false, false, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  void *p = ccol_mempool_alloc_entry(mp);
+  void *p = cmempool_alloc_entry(mp);
   REQUIRE_NE(p, NULL);
   memset(p, 0xAB, sizeof(uintptr_t));
-  ccol_mempool_free_entry(mp, p);
+  cmempool_free_entry(mp, p);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 // A real elem_size of zero stays a separate hard error, matching
-// ccol_mempool_create's "elem_count or elem_size is zero" rejection, and the
+// cmempool_create_mp's "elem_count or elem_size is zero" rejection, and the
 // library doesn't fold it into the small-elem_size rounding path above.
 TEST(cmempools, create_from_preallocated_fails_elem_size_zero) {
-  _Alignas(_ccol_mempool_entry_align) uint8_t buf[256];
+  _Alignas(_cmempool_entry_align) uint8_t buf[256];
   char *err = NULL;
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
-      buf, sizeof(buf), 0, false, false, NULL, &err);
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
+      buf, sizeof(buf), 0, false, false, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
@@ -1676,16 +1648,16 @@ TEST(cmempools, create_from_preallocated_fails_elem_count_zero) {
   // so a 64-byte buffer is one byte short of a single entry, and the function
   // returns NULL with the "calculated elem_count is zero" error instead
   // of building a pool with no elements in it.
-  _Alignas(_ccol_mempool_entry_align) uint8_t buf[64];
+  _Alignas(_cmempool_entry_align) uint8_t buf[64];
   char *err;
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
-      buf, sizeof(buf), 64, false, false, NULL, &err);
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
+      buf, sizeof(buf), 64, false, false, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
 // Both preallocated-buffer constructors need to check that the caller's
-// buffer meets _ccol_mempool_entry_align before reading its bytes as
+// buffer meets _cmempool_entry_align before reading its bytes as
 // entries. Entry 0 sits at the buffer's own address, so a weaker buffer
 // hands back an entry that can't hold every object type, and it also
 // misaligns the pool's own reads and writes through its entries, since a
@@ -1696,17 +1668,17 @@ TEST(cmempools, create_from_preallocated_fails_elem_count_zero) {
 // picked for the array itself, and the constructor must reject it
 // outright.
 TEST(cmempools, create_from_preallocated_fails_misaligned_buffer) {
-  _Alignas(_ccol_mempool_entry_align) uint8_t buf[257];
+  _Alignas(_cmempool_entry_align) uint8_t buf[257];
   char *err = NULL;
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
-      buf + 1, sizeof(buf) - 1, 16, false, false, NULL, &err);
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
+      buf + 1, sizeof(buf) - 1, 16, false, false, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
-// CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER must not size its buffer from the
+// CMEMPOOL_DECLARE_PREALLOCATED_BUFFER must not size its buffer from the
 // caller's raw elem_size. The macro feeds
-// ccol_mempool_create_from_preallocated_buffer, and that constructor rounds
+// cmempool_create_from_preallocated_buffer_mp, and that constructor rounds
 // elem_size up to sizeof(uintptr_t) before dividing the buffer into
 // elem_count elements. For a buffer declared for an elem_size smaller than
 // sizeof(uintptr_t), and no rounding in the macro, the buffer would be sized
@@ -1714,33 +1686,32 @@ TEST(cmempools, create_from_preallocated_fails_misaligned_buffer) {
 // the larger rounded one, so the pool would hold fewer elements than
 // elem_count promised. The macro applies the same rounding before computing
 // the buffer size, so the two always agree.
-CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(preallocated_mp_small_elem_buffer, 100,
-                                         1);
+CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(preallocated_mp_small_elem_buffer, 100, 1);
 
 TEST(cmempools,
      declare_preallocated_buffer_small_elem_size_yields_exact_elem_count) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
       preallocated_mp_small_elem_buffer,
-      sizeof(preallocated_mp_small_elem_buffer), 1, false, false, NULL, NULL);
+      sizeof(preallocated_mp_small_elem_buffer), 1, false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   // Size the buffer for the unrounded elem_size=1 and let the constructor
   // divide it with extended_elem_size for the rounded
   // elem_size=sizeof(uintptr_t). Then fewer than 100 elements fit.
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 100);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 100);
 
   void *ptrs[100];
   for (size_t i = 0; i < 100; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE(ptrs[i], NULL);
   }
-  REQUIRE_EQ((void *)ccol_mempool_alloc_entry(mp), NULL);
+  REQUIRE_EQ((void *)cmempool_alloc_entry(mp), NULL);
 
   for (size_t i = 0; i < 100; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
+    cmempool_free_entry(mp, ptrs[i]);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
@@ -1749,33 +1720,32 @@ TEST(cmempools,
 // rounding it's sized for the unrounded elem_size, 1 byte plus its status
 // byte. The constructor rounds elem_size up to sizeof(uintptr_t), so the
 // buffer is then too small for even a single element, and
-// ccol_mempool_create_from_preallocated_buffer returns NULL with
+// cmempool_create_from_preallocated_buffer_mp returns NULL with
 // "calculated elem_count is zero", although the caller followed the macro's
 // documented usage pattern exactly.
-CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(
-    preallocated_mp_single_small_elem_buffer, 1, 1);
+CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(preallocated_mp_single_small_elem_buffer,
+                                     1, 1);
 
 TEST(cmempools, declare_preallocated_buffer_single_small_elem_size_succeeds) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
       preallocated_mp_single_small_elem_buffer,
-      sizeof(preallocated_mp_single_small_elem_buffer), 1, false, false, NULL,
-      NULL);
+      sizeof(preallocated_mp_single_small_elem_buffer), 1, false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 1);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 1);
 
-  void *p = ccol_mempool_alloc_entry(mp);
+  void *p = cmempool_alloc_entry(mp);
   REQUIRE_NE(p, NULL);
-  REQUIRE_EQ((void *)ccol_mempool_alloc_entry(mp), NULL);
-  ccol_mempool_free_entry(mp, p);
+  REQUIRE_EQ((void *)cmempool_alloc_entry(mp), NULL);
+  cmempool_free_entry(mp, p);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
-// CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER must not size its buffer from
+// CMEMPOOL_DECLARE_PREALLOCATED_BUFFER must not size its buffer from
 // elem_size plus its status byte without rounding to
-// _ccol_mempool_entry_align. The macro feeds
-// ccol_mempool_create_from_preallocated_buffer, and that constructor rounds
+// _cmempool_entry_align. The macro feeds
+// cmempool_create_from_preallocated_buffer_mp, and that constructor rounds
 // the same sum up to that alignment before dividing the buffer into
 // elem_count elements; see pool_entries_beyond_first_are_properly_aligned
 // above for the hazard behind this. We use an elem_size of 9 on purpose,
@@ -1786,195 +1756,194 @@ TEST(cmempools, declare_preallocated_buffer_single_small_elem_size_succeeds) {
 // elements than elem_count promised. The macro applies the same rounding, so
 // the two always agree and every entry the pool hands out is correctly
 // aligned.
-CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(preallocated_mp_odd_elem_buffer, 50,
-                                         9);
+CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(preallocated_mp_odd_elem_buffer, 50, 9);
 
 TEST(
     cmempools,
     declare_preallocated_buffer_odd_elem_size_yields_exact_elem_count_and_alignment) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
       preallocated_mp_odd_elem_buffer, sizeof(preallocated_mp_odd_elem_buffer),
-      9, false, false, NULL, NULL);
+      9, false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   // Size the buffer for the caller's raw elem_size of 9 and let the
   // constructor divide it with the larger rounded stride. Then fewer than 50
   // elements fit.
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 50);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 50);
 
   void *ptrs[50];
   for (size_t i = 0; i < 50; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE(ptrs[i], NULL);
     REQUIRE_EQ((uintptr_t)ptrs[i] % _Alignof(max_align_t), 0);
   }
-  REQUIRE_EQ((void *)ccol_mempool_alloc_entry(mp), NULL);
+  REQUIRE_EQ((void *)cmempool_alloc_entry(mp), NULL);
 
   for (size_t i = 0; i < 50; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
+    cmempool_free_entry(mp, ptrs[i]);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 // Preallocated memory pool tests
-CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(preallocated_mp_buffer, 32768, 256);
+CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(preallocated_mp_buffer, 32768, 256);
 char *preallocated_ptrs[32768] = {0};  // 8388608 / 256 = 32768
 
 TEST(cmempools, preallocated_buffer_without_fallback) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
       preallocated_mp_buffer, sizeof(preallocated_mp_buffer), 256, false, false,
-      NULL, NULL);
+      NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  size_t capacity = ccol_mempool_total_capacity(mp);
+  size_t capacity = cmempool_total_capacity(mp);
   REQUIRE_EQ(capacity, 32768);
 
   for (size_t i = 0; i < capacity; ++i) {
-    preallocated_ptrs[i] = ccol_mempool_alloc_entry(mp);
+    preallocated_ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)preallocated_ptrs[i], NULL);
   }
 
-  REQUIRE_EQ(ccol_mempool_alloc_entry(mp), NULL);
+  REQUIRE_EQ(cmempool_alloc_entry(mp), NULL);
 
   for (size_t i = 0; i < capacity; ++i) {
-    ccol_mempool_free_entry(mp, preallocated_ptrs[i]);
+    cmempool_free_entry(mp, preallocated_ptrs[i]);
     REQUIRE_EQ((void *)preallocated_ptrs[i], NULL);
   }
 
   for (size_t i = 0; i < capacity; ++i) {
-    preallocated_ptrs[i] = ccol_mempool_calloc_entry(mp);
+    preallocated_ptrs[i] = cmempool_calloc_entry(mp);
     REQUIRE_NE((void *)preallocated_ptrs[i], NULL);
   }
 
-  REQUIRE_EQ(ccol_mempool_calloc_entry(mp), NULL);
+  REQUIRE_EQ(cmempool_calloc_entry(mp), NULL);
 
   for (size_t i = 0; i < capacity; ++i) {
-    ccol_mempool_free_entry(mp, preallocated_ptrs[i]);
+    cmempool_free_entry(mp, preallocated_ptrs[i]);
     REQUIRE_EQ((void *)preallocated_ptrs[i], NULL);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, preallocated_buffer_without_fallback_no_locks) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
       preallocated_mp_buffer, sizeof(preallocated_mp_buffer), 256, false, true,
-      NULL, NULL);
+      NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  size_t capacity = ccol_mempool_total_capacity(mp);
+  size_t capacity = cmempool_total_capacity(mp);
   REQUIRE_EQ(capacity, 32768);
 
   for (size_t i = 0; i < capacity; ++i) {
-    preallocated_ptrs[i] = ccol_mempool_alloc_entry(mp);
+    preallocated_ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)preallocated_ptrs[i], NULL);
   }
 
-  REQUIRE_EQ(ccol_mempool_alloc_entry(mp), NULL);
+  REQUIRE_EQ(cmempool_alloc_entry(mp), NULL);
 
   for (size_t i = 0; i < capacity; ++i) {
-    ccol_mempool_free_entry(mp, preallocated_ptrs[i]);
+    cmempool_free_entry(mp, preallocated_ptrs[i]);
     REQUIRE_EQ((void *)preallocated_ptrs[i], NULL);
   }
 
   for (size_t i = 0; i < capacity; ++i) {
-    preallocated_ptrs[i] = ccol_mempool_calloc_entry(mp);
+    preallocated_ptrs[i] = cmempool_calloc_entry(mp);
     REQUIRE_NE((void *)preallocated_ptrs[i], NULL);
   }
 
-  REQUIRE_EQ(ccol_mempool_calloc_entry(mp), NULL);
+  REQUIRE_EQ(cmempool_calloc_entry(mp), NULL);
 
   for (size_t i = 0; i < capacity; ++i) {
-    ccol_mempool_free_entry(mp, preallocated_ptrs[i]);
+    cmempool_free_entry(mp, preallocated_ptrs[i]);
     REQUIRE_EQ((void *)preallocated_ptrs[i], NULL);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, preallocated_buffer_with_fallback) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
       preallocated_mp_buffer, sizeof(preallocated_mp_buffer), 256, true, false,
-      NULL, NULL);
+      NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  size_t capacity = ccol_mempool_total_capacity(mp);
+  size_t capacity = cmempool_total_capacity(mp);
   REQUIRE_EQ(capacity, 32768);
 
   for (size_t i = 0; i < capacity; ++i) {
-    preallocated_ptrs[i] = ccol_mempool_alloc_entry(mp);
+    preallocated_ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)preallocated_ptrs[i], NULL);
   }
 
-  void *tmp = ccol_mempool_alloc_entry(mp);
+  void *tmp = cmempool_alloc_entry(mp);
   REQUIRE_NE(tmp, NULL);
-  ccol_mempool_free_entry(mp, tmp);
+  cmempool_free_entry(mp, tmp);
 
   for (size_t i = 0; i < capacity; ++i) {
-    ccol_mempool_free_entry(mp, preallocated_ptrs[i]);
+    cmempool_free_entry(mp, preallocated_ptrs[i]);
     REQUIRE_EQ((void *)preallocated_ptrs[i], NULL);
   }
 
   for (size_t i = 0; i < capacity; ++i) {
-    preallocated_ptrs[i] = ccol_mempool_calloc_entry(mp);
+    preallocated_ptrs[i] = cmempool_calloc_entry(mp);
     REQUIRE_NE((void *)preallocated_ptrs[i], NULL);
   }
 
-  tmp = ccol_mempool_calloc_entry(mp);
+  tmp = cmempool_calloc_entry(mp);
   REQUIRE_NE(tmp, NULL);
-  ccol_mempool_free_entry(mp, tmp);
+  cmempool_free_entry(mp, tmp);
 
   for (size_t i = 0; i < capacity; ++i) {
-    ccol_mempool_free_entry(mp, preallocated_ptrs[i]);
+    cmempool_free_entry(mp, preallocated_ptrs[i]);
     REQUIRE_EQ((void *)preallocated_ptrs[i], NULL);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(cmempools, preallocated_buffer_with_fallback_no_locks) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
+  SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer(
       preallocated_mp_buffer, sizeof(preallocated_mp_buffer), 256, true, true,
-      NULL, NULL);
+      NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  size_t capacity = ccol_mempool_total_capacity(mp);
+  size_t capacity = cmempool_total_capacity(mp);
   REQUIRE_EQ(capacity, 32768);
 
   for (size_t i = 0; i < capacity; ++i) {
-    preallocated_ptrs[i] = ccol_mempool_alloc_entry(mp);
+    preallocated_ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)preallocated_ptrs[i], NULL);
   }
 
-  void *tmp = ccol_mempool_alloc_entry(mp);
+  void *tmp = cmempool_alloc_entry(mp);
   REQUIRE_NE(tmp, NULL);
-  ccol_mempool_free_entry(mp, tmp);
+  cmempool_free_entry(mp, tmp);
 
   for (size_t i = 0; i < capacity; ++i) {
-    ccol_mempool_free_entry(mp, preallocated_ptrs[i]);
+    cmempool_free_entry(mp, preallocated_ptrs[i]);
     REQUIRE_EQ((void *)preallocated_ptrs[i], NULL);
   }
 
   for (size_t i = 0; i < capacity; ++i) {
-    preallocated_ptrs[i] = ccol_mempool_calloc_entry(mp);
+    preallocated_ptrs[i] = cmempool_calloc_entry(mp);
     REQUIRE_NE((void *)preallocated_ptrs[i], NULL);
   }
 
-  tmp = ccol_mempool_calloc_entry(mp);
+  tmp = cmempool_calloc_entry(mp);
   REQUIRE_NE(tmp, NULL);
-  ccol_mempool_free_entry(mp, tmp);
+  cmempool_free_entry(mp, tmp);
 
   for (size_t i = 0; i < capacity; ++i) {
-    ccol_mempool_free_entry(mp, preallocated_ptrs[i]);
+    cmempool_free_entry(mp, preallocated_ptrs[i]);
     REQUIRE_EQ((void *)preallocated_ptrs[i], NULL);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
@@ -1984,82 +1953,78 @@ TEST(r_mempools, create_fails) {
   char *err;
 
   // SC = 0
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 17, 0, ccol_fallback_disabled, false, NULL, &err);
+  SCOPED_R_MEMPOOL(rmp) =
+      crmempool_create(4, 17, 0, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   // LS = 0
-  rmp = ccol_r_mempool_create(4, 0, 17, ccol_fallback_disabled, false, NULL,
-                              &err);
+  rmp = crmempool_create(4, 0, 17, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   // SS = 0
-  rmp = ccol_r_mempool_create(0, 17, 17, ccol_fallback_disabled, false, NULL,
-                              &err);
+  rmp = crmempool_create(0, 17, 17, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   // LS < SS
-  rmp = ccol_r_mempool_create(4, 3, 17, ccol_fallback_disabled, false, NULL,
-                              &err);
+  rmp = crmempool_create(4, 3, 17, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   // LS == SS
-  rmp = ccol_r_mempool_create(4, 4, 17, ccol_fallback_disabled, false, NULL,
-                              &err);
+  rmp = crmempool_create(4, 4, 17, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   // SC positive but smaller than LS - SS: SC=2, LS-SS=3 (7-4=3 > 2).
   // This exercises the (SC < LS-SS) branch of assess_r_mempool_create_inputs,
   // which is a different one from the SC=0 zero-check tested above.
-  rmp =
-      ccol_r_mempool_create(4, 7, 2, ccol_fallback_disabled, false, NULL, &err);
+  rmp = crmempool_create(4, 7, 2, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   // invalid fallback policy
-  rmp = ccol_r_mempool_create(4, 6, 17, -1, false, NULL, &err);
+  rmp = crmempool_create(4, 6, 17, -1, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
-  rmp = ccol_r_mempool_create(4, 6, 17, _ccol_fallback_end_place_holder, false,
-                              NULL, &err);
+  rmp = crmempool_create(4, 6, 17, _crmempool_fallback_end_place_holder, false,
+                         &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
-  rmp = ccol_r_mempool_create(4, 6, 17, _ccol_fallback_end_place_holder + 1,
-                              false, NULL, &err);
+  rmp = crmempool_create(4, 6, 17, _crmempool_fallback_end_place_holder + 1,
+                         false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
 // Pairs size parameters that are valid otherwise with an incomplete
-// ccol_memmgmt_procs_t, for both ccol_r_mempool_create and
-// ccol_r_mempool_create_from_preallocated_buffer, so a weakened
+// ccol_memmgmt_procs_t, for both crmempool_create_mp and
+// crmempool_create_from_preallocated_buffer_mp, so a weakened
 // _ccol_verify_memmgmt_procs call site in either function can't go
 // unnoticed.
 TEST(r_mempools, create_rejects_incomplete_procs_with_valid_size_params) {
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = NULL, .realloc = realloc, .free = free};
   char *err = NULL;
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled,
-                                                false, &m_procs, &err);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_mp(
+      4, 6, 7, crmempool_fallback_disabled, false, &m_procs, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
 TEST(r_mempools,
      create_from_preallocated_rejects_incomplete_procs_with_valid_params) {
-  static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(buf, 4, 6, 7);
+  static CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(buf, 4, 6, 7);
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = NULL, .free = free};
   char *err = NULL;
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
-      buf, sizeof(buf), 4, 6, 7, ccol_fallback_disabled, true, &m_procs, &err);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer_mp(
+      buf, sizeof(buf), 4, 6, 7, crmempool_fallback_disabled, true, &m_procs,
+      &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
@@ -2069,132 +2034,131 @@ TEST(r_mempools, create_succeeds_with_minimum_sc) {
   // gets exactly one element (2^SC / 2^(LS-SS) = 1).
   // SS=4, LS=6, SC=2: pool[0]=4x16B, pool[1]=2x32B, pool[2]=1x64B.
   char *err = NULL;
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 2, ccol_fallback_disabled, false, NULL, &err);
+  crmempool *rmp =
+      crmempool_create(4, 6, 2, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  REQUIRE_EQ(ccol_r_mempool_total_capacity(rmp, 16), 4);
-  REQUIRE_EQ(ccol_r_mempool_total_capacity(rmp, 32), 2);
-  REQUIRE_EQ(ccol_r_mempool_total_capacity(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_total_capacity(rmp, 16), 4);
+  REQUIRE_EQ(crmempool_total_capacity(rmp, 32), 2);
+  REQUIRE_EQ(crmempool_total_capacity(rmp, 64), 1);
 
   // Allocate from each tier and check the accounting.
-  void *p16 = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *p16 = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE(p16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
 
-  void *p32 = ccol_r_mempool_alloc_entry(rmp, 32);
+  void *p32 = crmempool_alloc_entry(rmp, 32);
   REQUIRE_NE(p32, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 1);
 
   // The 64-byte pool has exactly one slot; a second request returns NULL.
-  void *p64 = ccol_r_mempool_alloc_entry(rmp, 64);
+  void *p64 = crmempool_alloc_entry(rmp, 64);
   REQUIRE_NE(p64, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 1);
 
-  REQUIRE_EQ((void *)ccol_r_mempool_alloc_entry(rmp, 64), NULL);
+  REQUIRE_EQ((void *)crmempool_alloc_entry(rmp, 64), NULL);
 
-  ccol_r_mempool_free_entry(rmp, p16);
-  ccol_r_mempool_free_entry(rmp, p32);
-  ccol_r_mempool_free_entry(rmp, p64);
+  crmempool_free_entry(rmp, p16);
+  crmempool_free_entry(rmp, p32);
+  crmempool_free_entry(rmp, p64);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools, create_succeeds) {
   char *err;
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 17, 17, ccol_fallback_disabled, false, NULL, &err);
+  SCOPED_R_MEMPOOL(rmp) =
+      crmempool_create(4, 17, 17, crmempool_fallback_disabled, false, &err);
   REQUIRE_NE((void *)rmp, NULL);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 
-  rmp = ccol_r_mempool_create(4, 17, 17, ccol_fallback_disabled, true, NULL,
-                              &err);
+  rmp = crmempool_create(4, 17, 17, crmempool_fallback_disabled, true, &err);
   REQUIRE_NE((void *)rmp, NULL);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools, simple_allocations) {
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
   char *ptr = NULL;
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  ptr = ccol_r_mempool_alloc_entry(rmp, 1);  // has to come from the 16s
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  ptr = crmempool_alloc_entry(rmp, 1);  // has to come from the 16s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  ptr = ccol_r_mempool_alloc_entry(rmp, 16);  // still the 16s
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  ptr = crmempool_alloc_entry(rmp, 16);  // still the 16s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  ptr = ccol_r_mempool_alloc_entry(rmp, 17);  // the 32s now
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  ptr = crmempool_alloc_entry(rmp, 17);  // the 32s now
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  ptr = ccol_r_mempool_alloc_entry(rmp, 32);  // still the 32s
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  ptr = crmempool_alloc_entry(rmp, 32);  // still the 32s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 0);
-  ptr = ccol_r_mempool_alloc_entry(rmp, 33);  // the 64s now
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 0);
+  ptr = crmempool_alloc_entry(rmp, 33);  // the 64s now
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 0);
-  ptr = ccol_r_mempool_alloc_entry(rmp, 63);  // still the 64s
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 0);
+  ptr = crmempool_alloc_entry(rmp, 63);  // still the 64s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 0);
-  ptr = ccol_r_mempool_alloc_entry(rmp, 64);  // still the 64s
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 0);
+  ptr = crmempool_alloc_entry(rmp, 64);  // still the 64s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ((void *)ccol_r_mempool_alloc_entry(rmp, 0), NULL);
-  REQUIRE_EQ((void *)ccol_r_mempool_alloc_entry(rmp, 65), NULL);
+  REQUIRE_EQ((void *)crmempool_alloc_entry(rmp, 0), NULL);
+  REQUIRE_EQ((void *)crmempool_alloc_entry(rmp, 65), NULL);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
-// The ccol_r_mempool_pool_index_for_size formula is O(1) and needs no table:
+// The crmempool_pool_index_for_size formula is O(1) and needs no table:
 // it's a shift plus a bit-scan and not a lookup table of
 // O(largest_size/smallest_size) entries, which would be exponential in the
 // number of tiers. This test checks the formula against every size boundary
 // across a 7-tier pool, while the other tests only touch a few sizes.
 //
-// ccol_r_mempool_total_capacity is the probe this test can watch from
+// crmempool_total_capacity is the probe this test can watch from
 // outside. Every tier has its own fixed capacity, which the test knows by
-// itself because ccol_r_mempool_create halves the element count for each
+// itself because crmempool_create_mp halves the element count for each
 // doubling of the size. That capacity stays constant across a size
 // range and jump to the next tier's capacity exactly at the next boundary,
 // the next power of two times smallest_size, never one byte early or one
@@ -2202,8 +2166,8 @@ TEST(r_mempools, simple_allocations) {
 TEST(r_mempools, pool_index_boundaries_exhaustive) {
   // SS=4, LS=10, SC=6: tiers of 16/32/64/128/256/512/1024 bytes holding
   // 64/32/16/8/4/2/1 elements (each one half of the previous one).
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 10, 6, ccol_fallback_disabled, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) =
+      crmempool_create(4, 10, 6, crmempool_fallback_disabled, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   const size_t tier_sizes[] = {16, 32, 64, 128, 256, 512, 1024};
@@ -2211,13 +2175,13 @@ TEST(r_mempools, pool_index_boundaries_exhaustive) {
   const size_t num_tiers = sizeof(tier_sizes) / sizeof(tier_sizes[0]);
 
   for (size_t t = 0; t < num_tiers; ++t) {
-    REQUIRE_EQ(ccol_r_mempool_total_capacity(rmp, tier_sizes[t]), tier_caps[t]);
+    REQUIRE_EQ(crmempool_total_capacity(rmp, tier_sizes[t]), tier_caps[t]);
   }
 
   size_t prev_boundary = 0;
   for (size_t t = 0; t < num_tiers; ++t) {
     for (size_t size = prev_boundary + 1; size <= tier_sizes[t]; ++size) {
-      REQUIRE_EQ(ccol_r_mempool_total_capacity(rmp, size), tier_caps[t]);
+      REQUIRE_EQ(crmempool_total_capacity(rmp, size), tier_caps[t]);
     }
     prev_boundary = tier_sizes[t];
   }
@@ -2226,20 +2190,20 @@ TEST(r_mempools, pool_index_boundaries_exhaustive) {
   // reporting the right capacity for that tier isn't enough.
   for (size_t t = 0; t < num_tiers; ++t) {
     size_t just_over_prev = (t == 0) ? 1 : tier_sizes[t - 1] + 1;
-    void *p = ccol_r_mempool_alloc_entry(rmp, just_over_prev);
+    void *p = crmempool_alloc_entry(rmp, just_over_prev);
     REQUIRE_NE(p, NULL);
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, tier_sizes[t]), 1);
-    ccol_r_mempool_free_entry(rmp, p);
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, tier_sizes[t]), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, tier_sizes[t]), 1);
+    crmempool_free_entry(rmp, p);
+    REQUIRE_EQ(crmempool_used_count(rmp, tier_sizes[t]), 0);
 
-    p = ccol_r_mempool_alloc_entry(rmp, tier_sizes[t]);
+    p = crmempool_alloc_entry(rmp, tier_sizes[t]);
     REQUIRE_NE(p, NULL);
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, tier_sizes[t]), 1);
-    ccol_r_mempool_free_entry(rmp, p);
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, tier_sizes[t]), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, tier_sizes[t]), 1);
+    crmempool_free_entry(rmp, p);
+    REQUIRE_EQ(crmempool_used_count(rmp, tier_sizes[t]), 0);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
@@ -2255,8 +2219,8 @@ TEST(r_mempools, pool_index_boundaries_exhaustive) {
 // allocation request above 4096 bytes. A table for this configuration is
 // 2^12 * sizeof(size_t) = 32768 bytes, so it fails outright under this
 // allocator, while every allocation the constructor really makes stays far
-// under that cap: the ccol_r_mempool struct itself, the mem_pools array,
-// and one small ccol_mempool struct per tier.
+// under that cap: the crmempool struct itself, the mem_pools array,
+// and one small cmempool struct per tier.
 static void *no_huge_alloc_malloc(size_t size) {
   return size > 4096 ? NULL : malloc(size);
 }
@@ -2270,42 +2234,41 @@ static void no_huge_alloc_free(void *ptr) { free(ptr); }
 
 TEST(preallocated_r_mempools, create_needs_no_exponential_heap_allocation) {
   // SS=4, LS=16, SC=12, the minimum allowed value of LS-SS, gives 13 tiers.
-  // The linear _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE formula
+  // The linear _CRMEMPOOL_CALCULATE_PREALLOCATED_BUFFER_SIZE formula
   // sizes the buffer, which stays well under 1 MiB. The buffer is static so
   // it lives in the binary's data segment, because a buffer on the stack
   // would risk a stack overflow.
-  static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(buf, 4, 16, 12);
+  static CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(buf, 4, 16, 12);
 
   ccol_memmgmt_procs_t m_procs = {.malloc = no_huge_alloc_malloc,
                                   .calloc = no_huge_alloc_calloc,
                                   .realloc = no_huge_alloc_realloc,
                                   .free = no_huge_alloc_free};
   char *err = NULL;
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
-      buf, sizeof(buf), 4, 16, 12, ccol_fallback_disabled, false, &m_procs,
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer_mp(
+      buf, sizeof(buf), 4, 16, 12, crmempool_fallback_disabled, false, &m_procs,
       &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  void *p = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *p = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE(p, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
-  ccol_r_mempool_free_entry(rmp, p);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
+  crmempool_free_entry(rmp, p);
 
-  p = ccol_r_mempool_alloc_entry(rmp,
-                                 1 << 16); /* the largest tier, 65536 bytes */
+  p = crmempool_alloc_entry(rmp, 1 << 16); /* the largest tier, 65536 bytes */
   REQUIRE_NE(p, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 1 << 16), 1);
-  ccol_r_mempool_free_entry(rmp, p);
+  REQUIRE_EQ(crmempool_used_count(rmp, 1 << 16), 1);
+  crmempool_free_entry(rmp, p);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-// ccol_r_mempool_create_from_preallocated_buffer validates the buffer size,
+// crmempool_create_from_preallocated_buffer_mp validates the buffer size,
 // and it must compute the expected total with an explicit overflow check,
 // never with a plain loop that multiplies and accumulates. The closed-form
-// _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE macro has to agree with
+// _CRMEMPOOL_CALCULATE_PREALLOCATED_BUFFER_SIZE macro has to agree with
 // the same total, and the macro itself avoids an intermediate size_t
 // overflow.
 //
@@ -2352,10 +2315,10 @@ TEST(preallocated_r_mempools,
    * on a 32-bit platform SS=4, LS=63, SC=62 mean something else: they give a
    * different rejection reason that doesn't apply here, so it's not just a
    * question of timing. */
-  _Alignas(_ccol_mempool_entry_align) uint8_t buf[256];
+  _Alignas(_cmempool_entry_align) uint8_t buf[256];
   char *err = NULL;
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
-      buf, sizeof(buf), 4, 63, 62, ccol_fallback_disabled, true, NULL, &err);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer(
+      buf, sizeof(buf), 4, 63, 62, crmempool_fallback_disabled, true, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
   REQUIRE_NE(strstr(err, "overflow"), NULL);
@@ -2370,25 +2333,25 @@ TEST(preallocated_r_mempools,
 }
 
 TEST(r_mempools, simple_reallocations) {
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
   char *ptr = NULL;
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  ptr = ccol_r_mempool_realloc_entry(rmp, ptr, 3);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  ptr = crmempool_realloc_entry(rmp, ptr, 3);
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
 
   for (int i = 0; i < 3; ++i) {
     ptr[i] = i;
   }
 
   char *orig = ptr;
-  ptr = ccol_r_mempool_realloc_entry(rmp, ptr, 6);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
+  ptr = crmempool_realloc_entry(rmp, ptr, 6);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
   // The block size stays 16, so no real "reallocation" happened
   REQUIRE_EQ((void *)orig, (void *)ptr);
   for (int i = 0; i < 6; ++i) {
@@ -2399,9 +2362,9 @@ TEST(r_mempools, simple_reallocations) {
     }
   }
 
-  ptr = ccol_r_mempool_realloc_entry(rmp, ptr, 20);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 1);
+  ptr = crmempool_realloc_entry(rmp, ptr, 20);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 1);
   REQUIRE_NE((void *)orig, (void *)ptr);
   for (int i = 0; i < 20; ++i) {
     if (i < 6) {
@@ -2412,157 +2375,157 @@ TEST(r_mempools, simple_reallocations) {
   }
 
   orig = ptr;
-  ptr = ccol_r_mempool_realloc_entry(rmp, ptr, 5);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
+  ptr = crmempool_realloc_entry(rmp, ptr, 5);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
   REQUIRE_NE((void *)orig, (void *)ptr);
   for (int i = 0; i < 5; ++i) {
     REQUIRE_EQ(ptr[i], i);
   }
 
-  ccol_r_mempool_free_entry(rmp, ptr);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, simple_c_allocations) {
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
   char *ptr = NULL;
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  ptr = ccol_r_mempool_calloc_entry(rmp, 1);  // from the 16s
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  ptr = crmempool_calloc_entry(rmp, 1);  // from the 16s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  ptr = ccol_r_mempool_calloc_entry(rmp, 16);  // from the 16s
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  ptr = crmempool_calloc_entry(rmp, 16);  // from the 16s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  ptr = ccol_r_mempool_calloc_entry(rmp, 17);  // from the 32s
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  ptr = crmempool_calloc_entry(rmp, 17);  // from the 32s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  ptr = ccol_r_mempool_calloc_entry(rmp, 32);  // from the 32s
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  ptr = crmempool_calloc_entry(rmp, 32);  // from the 32s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 0);
-  ptr = ccol_r_mempool_calloc_entry(rmp, 33);  // has to come from the 64s
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 0);
+  ptr = crmempool_calloc_entry(rmp, 33);  // has to come from the 64s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 0);
-  ptr = ccol_r_mempool_calloc_entry(rmp, 63);  // from the 64s
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 0);
+  ptr = crmempool_calloc_entry(rmp, 63);  // from the 64s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 0);
-  ptr = ccol_r_mempool_calloc_entry(rmp, 64);  // from the 64s
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 0);
+  ptr = crmempool_calloc_entry(rmp, 64);  // from the 64s
   REQUIRE_NE((void *)ptr, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, ptr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, ptr);
 
-  REQUIRE_EQ((void *)ccol_r_mempool_calloc_entry(rmp, 0), NULL);
-  REQUIRE_EQ((void *)ccol_r_mempool_calloc_entry(rmp, 65), NULL);
+  REQUIRE_EQ((void *)crmempool_calloc_entry(rmp, 0), NULL);
+  REQUIRE_EQ((void *)crmempool_calloc_entry(rmp, 65), NULL);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, exhaust_all_fallback_disabled) {
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
   void *ptrs[ptrs_len];
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ptrs[i] = ccol_r_mempool_alloc_entry(rmp, 8);
+    ptrs[i] = crmempool_alloc_entry(rmp, 8);
     REQUIRE_NE((void *)ptrs[i], NULL);
     // It hands out 32 and 64 sized buffers too to serve our request.
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
   // It doesn't take more memory from the heap. Once the preallocated
   // buffers run out that's it, and there's no new memory until some come
   // back.
-  void *tmp_ptr = ccol_r_mempool_alloc_entry(rmp, 8);
+  void *tmp_ptr = crmempool_alloc_entry(rmp, 8);
   REQUIRE_EQ((void *)tmp_ptr, NULL);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, c_exhaust_all_fallback_disabled) {
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
   void *ptrs[ptrs_len];
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ptrs[i] = ccol_r_mempool_calloc_entry(rmp, 8);
+    ptrs[i] = crmempool_calloc_entry(rmp, 8);
     REQUIRE_NE((void *)ptrs[i], NULL);
     // It hands out 32 and 64 sized buffers too to serve our request.
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
   // It doesn't take more memory from the heap. Once the preallocated
   // buffers run out that's it, and there's no new memory until some come
   // back.
-  void *tmp_ptr = ccol_r_mempool_calloc_entry(rmp, 8);
+  void *tmp_ptr = crmempool_calloc_entry(rmp, 8);
   REQUIRE_EQ((void *)tmp_ptr, NULL);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, exhaust_last_subpool_returns_null_fallback_disabled) {
-  // ccol_r_mempool_alloc_entry's escalation loop must stop at
+  // crmempool_alloc_entry's escalation loop must stop at
   // `pool_index < number_of_mempools` and never at `pool_index <=
   // number_of_mempools`. With the off-by-one condition, a full last sub-pool
   // at index number_of_mempools-1 lets the loop push pool_index up to
@@ -2574,39 +2537,38 @@ TEST(r_mempools, exhaust_last_subpool_returns_null_fallback_disabled) {
   // The test goes straight for pool 2, which holds 32 entries of 64-byte
   // slots, so the cascade starts at the last valid pool index and the loop
   // gets to an increment past the limit immediately.
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
 
   // 2^7 smallest / 2^2 scale-down = 32 slots in the 64-byte pool
   size_t capacity = 32;
   void *ptrs[32];
 
   for (size_t i = 0; i < capacity; ++i) {
-    ptrs[i] = ccol_r_mempool_alloc_entry(rmp, 64);
+    ptrs[i] = crmempool_alloc_entry(rmp, 64);
     REQUIRE_NE((void *)ptrs[i], NULL);
   }
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64),
-             ccol_r_mempool_total_capacity(rmp, 64));
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), crmempool_total_capacity(rmp, 64));
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
 
   // Expect NULL here, not a crash.
-  void *tmp = ccol_r_mempool_alloc_entry(rmp, 64);
+  void *tmp = crmempool_alloc_entry(rmp, 64);
   REQUIRE_EQ((void *)tmp, NULL);
 
   for (size_t i = 0; i < capacity; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, try_exhausting_with_fallback_at_first_exhaustion) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_first_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_first_exhaustion, false, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
@@ -2614,64 +2576,64 @@ TEST(r_mempools, try_exhausting_with_fallback_at_first_exhaustion) {
   uint ptr_iterator = 0;
 
   for (size_t i = 0; i < 128; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 16);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 16);
   }
 
   for (size_t i = 0; i < 64; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 32);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 32);
   }
 
   for (size_t i = 0; i < 32; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 64);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 64);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
   // The preallocated buffers can run out, and since the fallback is on the
   // pool then takes more memory from the heap to serve the request. Those
   // allocations come from separate internal memory pools, so
-  // ccol_r_mempool_alloc_entry returns distinct values for different
+  // crmempool_alloc_entry returns distinct values for different
   // sizes.
-  void *tmp_ptr_16 = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *tmp_ptr_16 = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
 
-  void *tmp_ptr_32 = ccol_r_mempool_alloc_entry(rmp, 32);
+  void *tmp_ptr_32 = crmempool_alloc_entry(rmp, 32);
   REQUIRE_NE((void *)tmp_ptr_32, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
 
-  void *tmp_ptr_64 = ccol_r_mempool_alloc_entry(rmp, 64);
+  void *tmp_ptr_64 = crmempool_alloc_entry(rmp, 64);
   REQUIRE_NE((void *)tmp_ptr_64, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, tmp_ptr_16);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_32);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
+  crmempool_free_entry(rmp, tmp_ptr_32);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
 
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_64);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, tmp_ptr_64);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, c_try_exhausting_with_fallback_at_first_exhaustion) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_first_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_first_exhaustion, false, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
@@ -2679,64 +2641,64 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_first_exhaustion) {
   uint ptr_iterator = 0;
 
   for (size_t i = 0; i < 128; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 16);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 16);
   }
 
   for (size_t i = 0; i < 64; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 32);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 32);
   }
 
   for (size_t i = 0; i < 32; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 64);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 64);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
   // The preallocated buffers can run out, and since the fallback is on the
   // pool then takes more memory from the heap to serve the request. Those
   // allocations come from separate internal memory pools, so
-  // ccol_r_mempool_calloc_entry returns distinct values for different
+  // crmempool_calloc_entry returns distinct values for different
   // sizes.
-  void *tmp_ptr_16 = ccol_r_mempool_calloc_entry(rmp, 16);
+  void *tmp_ptr_16 = crmempool_calloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
 
-  void *tmp_ptr_32 = ccol_r_mempool_calloc_entry(rmp, 32);
+  void *tmp_ptr_32 = crmempool_calloc_entry(rmp, 32);
   REQUIRE_NE((void *)tmp_ptr_32, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
 
-  void *tmp_ptr_64 = ccol_r_mempool_calloc_entry(rmp, 64);
+  void *tmp_ptr_64 = crmempool_calloc_entry(rmp, 64);
   REQUIRE_NE((void *)tmp_ptr_64, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, tmp_ptr_16);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_32);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
+  crmempool_free_entry(rmp, tmp_ptr_32);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
 
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_64);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, tmp_ptr_64);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, c_try_exhausting_with_fallback_at_first_exhaustion_no_locks) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_first_exhaustion, true, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_first_exhaustion, true, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
@@ -2744,64 +2706,64 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_first_exhaustion_no_locks) {
   uint ptr_iterator = 0;
 
   for (size_t i = 0; i < 128; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 16);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 16);
   }
 
   for (size_t i = 0; i < 64; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 32);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 32);
   }
 
   for (size_t i = 0; i < 32; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 64);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 64);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
   // The preallocated buffers can run out, and since the fallback is on the
   // pool then takes more memory from the heap to serve the request. Those
   // allocations come from separate internal memory pools, so
-  // ccol_r_mempool_calloc_entry returns distinct values for different
+  // crmempool_calloc_entry returns distinct values for different
   // sizes.
-  void *tmp_ptr_16 = ccol_r_mempool_calloc_entry(rmp, 16);
+  void *tmp_ptr_16 = crmempool_calloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
 
-  void *tmp_ptr_32 = ccol_r_mempool_calloc_entry(rmp, 32);
+  void *tmp_ptr_32 = crmempool_calloc_entry(rmp, 32);
   REQUIRE_NE((void *)tmp_ptr_32, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
 
-  void *tmp_ptr_64 = ccol_r_mempool_calloc_entry(rmp, 64);
+  void *tmp_ptr_64 = crmempool_calloc_entry(rmp, 64);
   REQUIRE_NE((void *)tmp_ptr_64, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, tmp_ptr_16);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_32);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
+  crmempool_free_entry(rmp, tmp_ptr_32);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
 
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_64);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, tmp_ptr_64);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, try_exhausting_with_fallback_at_last_exhaustion) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, false, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
@@ -2809,75 +2771,75 @@ TEST(r_mempools, try_exhausting_with_fallback_at_last_exhaustion) {
   uint ptr_iterator = 0;
 
   for (size_t i = 0; i < 128; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 16);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 16);
   }
 
   for (size_t i = 0; i < 64; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 32);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 32);
   }
 
   for (size_t i = 0; i < 32; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 64);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 64);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
   // Once the preallocated buffers are used up the fallback is on, so the
   // pool takes more memory from the heap to serve the request, and
-  // ccol_r_mempool_dynamic_allocs_count keeps climbing whatever the size is.
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
-  void *tmp_ptr_16 = ccol_r_mempool_alloc_entry(rmp, 16);
+  // crmempool_dynamic_allocs_count keeps climbing whatever the size is.
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
+  void *tmp_ptr_16 = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
 
-  void *tmp_ptr_32 = ccol_r_mempool_alloc_entry(rmp, 32);
+  void *tmp_ptr_32 = crmempool_alloc_entry(rmp, 32);
   REQUIRE_NE((void *)tmp_ptr_32, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 2);
 
-  void *tmp_ptr_64 = ccol_r_mempool_alloc_entry(rmp, 64);
+  void *tmp_ptr_64 = crmempool_alloc_entry(rmp, 64);
   REQUIRE_NE((void *)tmp_ptr_64, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 3);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 3);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 3);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 3);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 3);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 3);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  // ccol_r_mempool_dynamic_allocs_count holds the cumulative number of
+  // crmempool_dynamic_allocs_count holds the cumulative number of
   // dynamic allocations, whatever the size.
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 2);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_32);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_64);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
+  crmempool_free_entry(rmp, tmp_ptr_16);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 2);
+  crmempool_free_entry(rmp, tmp_ptr_32);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, tmp_ptr_64);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, c_try_exhausting_with_fallback_at_last_exhaustion) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, false, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
@@ -2885,75 +2847,75 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_last_exhaustion) {
   uint ptr_iterator = 0;
 
   for (size_t i = 0; i < 128; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 16);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 16);
   }
 
   for (size_t i = 0; i < 64; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 32);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 32);
   }
 
   for (size_t i = 0; i < 32; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 64);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 64);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
   // Once the preallocated buffers are used up the fallback is on, so the
   // pool takes more memory from the heap to serve the request, and
-  // ccol_r_mempool_dynamic_allocs_count keeps climbing whatever the size is.
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
-  void *tmp_ptr_16 = ccol_r_mempool_calloc_entry(rmp, 16);
+  // crmempool_dynamic_allocs_count keeps climbing whatever the size is.
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
+  void *tmp_ptr_16 = crmempool_calloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
 
-  void *tmp_ptr_32 = ccol_r_mempool_calloc_entry(rmp, 32);
+  void *tmp_ptr_32 = crmempool_calloc_entry(rmp, 32);
   REQUIRE_NE((void *)tmp_ptr_32, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 2);
 
-  void *tmp_ptr_64 = ccol_r_mempool_calloc_entry(rmp, 64);
+  void *tmp_ptr_64 = crmempool_calloc_entry(rmp, 64);
   REQUIRE_NE((void *)tmp_ptr_64, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 3);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 3);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 3);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 3);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 3);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 3);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  // ccol_r_mempool_dynamic_allocs_count holds the cumulative number of
+  // crmempool_dynamic_allocs_count holds the cumulative number of
   // dynamic allocations, whatever the size.
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 2);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_32);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_64);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
+  crmempool_free_entry(rmp, tmp_ptr_16);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 2);
+  crmempool_free_entry(rmp, tmp_ptr_32);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, tmp_ptr_64);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, c_try_exhausting_with_fallback_at_last_exhaustion_no_locks) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, true, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, true, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
@@ -2961,70 +2923,70 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_last_exhaustion_no_locks) {
   uint ptr_iterator = 0;
 
   for (size_t i = 0; i < 128; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 16);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 16);
   }
 
   for (size_t i = 0; i < 64; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 32);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 32);
   }
 
   for (size_t i = 0; i < 32; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_calloc_entry(rmp, 64);
+    ptrs[ptr_iterator++] = crmempool_calloc_entry(rmp, 64);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
   // Once the preallocated buffers are used up the fallback is on, so the
   // pool takes more memory from the heap to serve the request, and
-  // ccol_r_mempool_dynamic_allocs_count keeps climbing whatever the size is.
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
-  void *tmp_ptr_16 = ccol_r_mempool_calloc_entry(rmp, 16);
+  // crmempool_dynamic_allocs_count keeps climbing whatever the size is.
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
+  void *tmp_ptr_16 = crmempool_calloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
 
-  void *tmp_ptr_32 = ccol_r_mempool_calloc_entry(rmp, 32);
+  void *tmp_ptr_32 = crmempool_calloc_entry(rmp, 32);
   REQUIRE_NE((void *)tmp_ptr_32, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 2);
 
-  void *tmp_ptr_64 = ccol_r_mempool_calloc_entry(rmp, 64);
+  void *tmp_ptr_64 = crmempool_calloc_entry(rmp, 64);
   REQUIRE_NE((void *)tmp_ptr_64, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 3);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 3);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 3);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 3);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 3);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 3);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  // ccol_r_mempool_dynamic_allocs_count holds the cumulative number of
+  // crmempool_dynamic_allocs_count holds the cumulative number of
   // dynamic allocations, whatever the size.
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 2);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_32);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_64);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
+  crmempool_free_entry(rmp, tmp_ptr_16);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 2);
+  crmempool_free_entry(rmp, tmp_ptr_32);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, tmp_ptr_64);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 // Preallocated rmempool tests
@@ -3034,18 +2996,16 @@ TEST(r_mempools, create_fails_power_exceeds_size_t_width) {
   // that would cause that shift.
   char *err;
 
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      64, 65, 65, ccol_fallback_disabled, false, NULL, &err);
+  SCOPED_R_MEMPOOL(rmp) =
+      crmempool_create(64, 65, 65, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
-  rmp = ccol_r_mempool_create(4, 64, 64, ccol_fallback_disabled, false, NULL,
-                              &err);
+  rmp = crmempool_create(4, 64, 64, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
-  rmp = ccol_r_mempool_create(4, 6, 64, ccol_fallback_disabled, false, NULL,
-                              &err);
+  rmp = crmempool_create(4, 6, 64, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
@@ -3097,14 +3057,14 @@ TEST(r_mempools, largest_size_power_of_two_at_true_maximum_passes_validation) {
                                   .realloc = max_size_test_realloc,
                                   .free = max_size_test_free};
   char *err = NULL;
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 63, 59, ccol_fallback_disabled, true, &m_procs, &err);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_mp(
+      4, 63, 59, crmempool_fallback_disabled, true, &m_procs, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
   REQUIRE_EQ(strstr(err, "beyond limits"), NULL);
 }
 
-// _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE must not compute its
+// _CRMEMPOOL_CALCULATE_PREALLOCATED_BUFFER_SIZE must not compute its
 // second term as the full, unreduced product 2 * 2^SC * (2^N - 1) and only
 // divide by 2^N at the very end, because for a big enough pair of SC and N
 // that intermediate product overflows size_t and wraps before the division
@@ -3140,7 +3100,7 @@ TEST(r_mempools, calculate_preallocated_buffer_size_no_premature_overflow) {
     ecount /= 2;
   }
 
-  REQUIRE_EQ(_CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(ss, ls, sc),
+  REQUIRE_EQ(_CRMEMPOOL_CALCULATE_PREALLOCATED_BUFFER_SIZE(ss, ls, sc),
              expected);
 
   // This confirms that these parameters really reach the overflow the test
@@ -3158,30 +3118,30 @@ TEST(r_mempools, calculate_preallocated_buffer_size_no_premature_overflow) {
 #undef CCOL_TEST_PREMATURE_OVERFLOW_SC
 
 TEST(r_mempools, realloc_first_exhaustion_entry_grows) {
-  // A ccol_fallback_at_first_exhaustion dynamic entry belongs to a tier with
-  // a nonzero element size. When
-  // the library reallocates such an entry into a larger pool, min_user_size
-  // must be bounded by the old slot's user size and not by the new
-  // requested size, because copying new_size bytes out of a smaller
-  // allocation is a heap over-read, which Valgrind and AddressSanitizer report.
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_first_exhaustion, false, NULL, NULL);
+  // A crmempool_fallback_at_first_exhaustion dynamic entry belongs to a tier
+  // with a nonzero element size. When the library reallocates such an entry
+  // into a larger pool, min_user_size must be bounded by the old slot's user
+  // size and not by the new requested size, because copying new_size bytes out
+  // of a smaller allocation is a heap over-read, which Valgrind and
+  // AddressSanitizer report.
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_first_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   // Exhaust pool 0 completely (128 x 16-byte slots).
   void *fill[128];
   for (size_t i = 0; i < 128; ++i) {
-    fill[i] = ccol_r_mempool_alloc_entry(rmp, 16);
+    fill[i] = crmempool_alloc_entry(rmp, 16);
     REQUIRE_NE(fill[i], NULL);
   }
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 128);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 128);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
   // The next 16-byte request spills to the heap (pool[0] fallback). This
   // entry belongs to pool[0] and has a 16-byte user area.
-  char *entry = ccol_r_mempool_alloc_entry(rmp, 16);
+  char *entry = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE((void *)entry, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
 
   for (int i = 0; i < 16; ++i) {
     entry[i] = (char)(i + 1);
@@ -3189,70 +3149,68 @@ TEST(r_mempools, realloc_first_exhaustion_entry_grows) {
 
   // Realloc to 32 bytes (pool[1]). Only the first 16 bytes of the old entry
   // are valid, and reading 32 bytes would overrun the original allocation.
-  char *grown = ccol_r_mempool_realloc_entry(rmp, entry, 32);
+  char *grown = crmempool_realloc_entry(rmp, entry, 32);
   REQUIRE_NE((void *)grown, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 1);
 
   for (int i = 0; i < 16; ++i) {
     REQUIRE_EQ(grown[i], (char)(i + 1));
   }
 
-  ccol_r_mempool_free_entry(rmp, grown);
+  crmempool_free_entry(rmp, grown);
   for (size_t i = 0; i < 128; ++i) {
-    ccol_r_mempool_free_entry(rmp, fill[i]);
+    crmempool_free_entry(rmp, fill[i]);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools, realloc_last_exhaustion_pseudo_pool_entry_shrinks) {
-  // A ccol_fallback_at_last_exhaustion pseudo_pool entry belongs to no tier
-  // and has no element size of its own. ccol_r_mempool_realloc_entry must
+  // A crmempool_fallback_at_last_exhaustion pseudo_pool entry belongs to no
+  // tier and has no element size of its own. crmempool_realloc_entry must
   // recognize such an entry and get its real user-visible size from the
   // dynamic entry's size prefix, without reading past the original
   // allocation. The data in a pseudo_pool entry has to survive a realloc that
   // shrinks it, up to the new, smaller capacity.
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   // Exhaust all three sub-pools so the next allocation uses the pseudo_pool.
   void *fill[224];
   size_t iter = 0;
   for (size_t i = 0; i < 128; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 16);
-  for (size_t i = 0; i < 64; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 32);
-  for (size_t i = 0; i < 32; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 64);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
+    fill[iter++] = crmempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 64);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
 
   // Ask for 32 bytes while all pools are exhausted -> a pseudo_pool entry,
   // which records exactly the 32 bytes we asked for.
-  char *entry = ccol_r_mempool_alloc_entry(rmp, 32);
+  char *entry = crmempool_alloc_entry(rmp, 32);
   REQUIRE_NE((void *)entry, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
   for (int i = 0; i < 32; ++i) entry[i] = (char)(i + 1);
 
   // Shrink to 16 bytes. The old entry is freed and a new one comes back, and
   // the first 16 bytes of the original data are preserved.
-  char *shrunk = ccol_r_mempool_realloc_entry(rmp, entry, 16);
+  char *shrunk = crmempool_realloc_entry(rmp, entry, 16);
   REQUIRE_NE((void *)shrunk, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
   for (int i = 0; i < 16; ++i) {
     REQUIRE_EQ(shrunk[i], (char)(i + 1));
   }
 
-  ccol_r_mempool_free_entry(rmp, shrunk);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, shrunk);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
   for (size_t i = 0; i < 224; ++i) {
-    ccol_r_mempool_free_entry(rmp, fill[i]);
+    crmempool_free_entry(rmp, fill[i]);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
@@ -3263,53 +3221,51 @@ TEST(r_mempools, realloc_last_exhaustion_pseudo_pool_entry_grows) {
   // exactly those 16 bytes forward, and the rest of the new, bigger buffer
   // stays newly allocated memory with no known
   // values.
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   // Exhaust all three sub-pools.
   void *fill[224];
   size_t iter = 0;
   for (size_t i = 0; i < 128; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 16);
-  for (size_t i = 0; i < 64; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 32);
-  for (size_t i = 0; i < 32; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 64);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+    fill[iter++] = crmempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 64);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
   // Allocate 16 bytes from pseudo_pool (all pools full).
-  char *entry = ccol_r_mempool_alloc_entry(rmp, 16);
+  char *entry = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE((void *)entry, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
   for (int i = 0; i < 16; ++i) entry[i] = (char)(i + 1);
 
   // Grow to 32 bytes, and the original 16 bytes survive.
-  // ccol_fallback_at_last_exhaustion uses one shared pseudo_pool counter for
-  // every size, so after the realloc the old 16-byte entry is free, the new
+  // crmempool_fallback_at_last_exhaustion uses one shared pseudo_pool counter
+  // for every size, so after the realloc the old 16-byte entry is free, the new
   // 32-byte entry is live and the total pseudo_pool count stays at 1.
-  char *grown = ccol_r_mempool_realloc_entry(rmp, entry, 32);
+  char *grown = crmempool_realloc_entry(rmp, entry, 32);
   REQUIRE_NE((void *)grown, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
   for (int i = 0; i < 16; ++i) {
     REQUIRE_EQ(grown[i], (char)(i + 1));
   }
 
-  ccol_r_mempool_free_entry(rmp, grown);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
+  crmempool_free_entry(rmp, grown);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
 
   for (size_t i = 0; i < 224; ++i) {
-    ccol_r_mempool_free_entry(rmp, fill[i]);
+    crmempool_free_entry(rmp, fill[i]);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-// ccol_r_mempool_realloc_entry has a same-size-class fast path that returns
+// crmempool_realloc_entry has a same-size-class fast path that returns
 // the original pointer unchanged, and it needs to run for a pseudo_pool entry
-// too, which is the ccol_fallback_at_last_exhaustion case.
+// too, which is the crmempool_fallback_at_last_exhaustion case.
 // pseudo_pool.extended_elem_size is always 0, since unlike a real sub-pool
 // the pseudo_pool has no fixed size per tier, so a fast path that compared
 // against a real sub-pool's nonzero extended_elem_size would never match
@@ -3325,8 +3281,8 @@ TEST(r_mempools, realloc_last_exhaustion_pseudo_pool_entry_grows) {
 // of keeping its oversized block.
 TEST(r_mempools,
      realloc_last_exhaustion_pseudo_pool_entry_same_size_is_a_noop) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   // Exhaust all three sub-pools so further allocations go through the shared
@@ -3334,57 +3290,55 @@ TEST(r_mempools,
   void *fill[224];
   size_t iter = 0;
   for (size_t i = 0; i < 128; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 16);
-  for (size_t i = 0; i < 64; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 32);
-  for (size_t i = 0; i < 32; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 64);
+    fill[iter++] = crmempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 64);
 
-  char *entry = ccol_r_mempool_alloc_entry(rmp, 20);
+  char *entry = crmempool_alloc_entry(rmp, 20);
   REQUIRE_NE((void *)entry, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 20), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 20), 1);
   for (int i = 0; i < 20; ++i) {
     entry[i] = (char)(i + 1);
   }
 
   // Asking for the exact same size again is a real no-op: the same
   // pointer, the same content and no extra pseudo_pool allocation.
-  char *same = ccol_r_mempool_realloc_entry(rmp, entry, 20);
+  char *same = crmempool_realloc_entry(rmp, entry, 20);
   REQUIRE_EQ((void *)same, (void *)entry);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 20), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 20), 1);
   for (int i = 0; i < 20; ++i) {
     REQUIRE_EQ(same[i], (char)(i + 1));
   }
 
   // A really different size moves the entry.
-  char *moved = ccol_r_mempool_realloc_entry(rmp, same, 10);
+  char *moved = crmempool_realloc_entry(rmp, same, 10);
   REQUIRE_NE((void *)moved, (void *)same);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 10), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 10), 1);
   for (int i = 0; i < 10; ++i) {
     REQUIRE_EQ(moved[i], (char)(i + 1));
   }
 
-  ccol_r_mempool_free_entry(rmp, moved);
+  crmempool_free_entry(rmp, moved);
   for (size_t i = 0; i < 224; ++i) {
-    ccol_r_mempool_free_entry(rmp, fill[i]);
+    crmempool_free_entry(rmp, fill[i]);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-// ccol_mempool_pseudo_alloc_entry must not round elem_size up to
+// cmempool_pseudo_alloc_entry must not round elem_size up to
 // sizeof(addr_t) before recording it in the entry's dynamic-size prefix,
 // because with a rounded prefix entry_user_size() reports the rounded
 // capacity and not the size the caller asked for.
 //
-// ccol_r_mempool_realloc_entry's pseudo_pool same-size fast path, in the
+// crmempool_realloc_entry's pseudo_pool same-size fast path, in the
 // test right above, compares the caller's raw requested size directly with
 // that recorded value. So with a rounded prefix, repeating a request for
 // the same size below sizeof(uintptr_t), 3 bytes say, doesn't match on any
 // mainstream platform, where 3 isn't 8. The call then takes the slow
 // allocate, copy and free path instead of returning the original pointer
-// unchanged, which goes against ccol_r_mempool_realloc_entry's documented
+// unchanged, which goes against crmempool_realloc_entry's documented
 // contract that it needs no allocation for a same-size request, and it does
 // that on every such call.
 //
@@ -3395,8 +3349,8 @@ TEST(r_mempools,
 TEST(
     r_mempools,
     realloc_last_exhaustion_pseudo_pool_entry_below_word_size_same_size_is_a_noop) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   // Exhaust all three sub-pools so further allocations go through the shared
@@ -3404,15 +3358,13 @@ TEST(
   void *fill[224];
   size_t iter = 0;
   for (size_t i = 0; i < 128; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 16);
-  for (size_t i = 0; i < 64; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 32);
-  for (size_t i = 0; i < 32; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 64);
+    fill[iter++] = crmempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 64);
 
-  char *entry = ccol_r_mempool_alloc_entry(rmp, 3); /* < sizeof(uintptr_t) */
+  char *entry = crmempool_alloc_entry(rmp, 3); /* < sizeof(uintptr_t) */
   REQUIRE_NE((void *)entry, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 3), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 3), 1);
   for (int i = 0; i < 3; ++i) {
     entry[i] = (char)(i + 1);
   }
@@ -3420,27 +3372,27 @@ TEST(
   // Asking for exactly the same sub-word size should be a real no-op. The
   // pointer and the content stay the same and the pseudo_pool makes no more
   // allocations.
-  char *same = ccol_r_mempool_realloc_entry(rmp, entry, 3);
+  char *same = crmempool_realloc_entry(rmp, entry, 3);
   REQUIRE_EQ((void *)same, (void *)entry);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 3), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 3), 1);
   for (int i = 0; i < 3; ++i) {
     REQUIRE_EQ(same[i], (char)(i + 1));
   }
 
   // A different size, also below one word, has to move the entry.
-  char *moved = ccol_r_mempool_realloc_entry(rmp, same, 5);
+  char *moved = crmempool_realloc_entry(rmp, same, 5);
   REQUIRE_NE((void *)moved, (void *)same);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 5), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 5), 1);
   for (int i = 0; i < 3; ++i) {
     REQUIRE_EQ(moved[i], (char)(i + 1));
   }
 
-  ccol_r_mempool_free_entry(rmp, moved);
+  crmempool_free_entry(rmp, moved);
   for (size_t i = 0; i < 224; ++i) {
-    ccol_r_mempool_free_entry(rmp, fill[i]);
+    crmempool_free_entry(rmp, fill[i]);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
@@ -3467,11 +3419,11 @@ static void mp_rc_free(void *p) {
   free(p);
 }
 
-// ccol_r_mempool_realloc_entry decides whether an entry has to move from the
+// crmempool_realloc_entry decides whether an entry has to move from the
 // number of bytes the entry holds, never from
 // which of the two representations it has. A tier hands out a dynamic
-// fallback entry on the ccol_fallback_at_first_exhaustion path, and such an
-// entry holds the tier's whole stride, exactly like a pool-owned entry of
+// fallback entry on the crmempool_fallback_at_first_exhaustion path, and such
+// an entry holds the tier's whole stride, exactly like a pool-owned entry of
 // that tier, so every request the tier would serve is already satisfied
 // where the entry sits, and the call is a pure no-op: the pointer and the
 // contents stay the same and the allocator sees no traffic.
@@ -3491,8 +3443,8 @@ TEST(r_mempools,
                                 .realloc = mp_rc_realloc};
   /* Tiers of 16, 32 and 64 bytes holding 8, 4 and 2 entries. Single-threaded,
    * so no thread cache adds allocator traffic of its own. */
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 3, ccol_fallback_at_first_exhaustion, true, &procs, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_mp(
+      4, 6, 3, crmempool_fallback_at_first_exhaustion, true, &procs, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   /* Exhaust the 32-byte tier, so the next request it would serve falls back
@@ -3500,13 +3452,13 @@ TEST(r_mempools,
   void *fill[4];
   bool filled = true;
   for (size_t i = 0; i < 4; ++i) {
-    fill[i] = ccol_r_mempool_alloc_entry(rmp, 32);
+    fill[i] = crmempool_alloc_entry(rmp, 32);
     if (!fill[i]) filled = false;
   }
 
-  char *dyn = (char *)ccol_r_mempool_alloc_entry(rmp, 20);
+  char *dyn = (char *)crmempool_alloc_entry(rmp, 20);
   bool is_dynamic =
-      (dyn != NULL) && (ccol_r_mempool_dynamic_allocs_count(rmp, 20) == 1);
+      (dyn != NULL) && (crmempool_dynamic_allocs_count(rmp, 20) == 1);
   if (dyn) {
     for (int i = 0; i < 20; ++i) {
       dyn[i] = (char)(i + 1);
@@ -3517,9 +3469,8 @@ TEST(r_mempools,
   size_t frees_before = atomic_load(&mp_rc_frees);
   /* 20 is the size it was created for and 32 is the tier's whole stride.
    * It has both already, so neither may move it. */
-  char *same = dyn ? (char *)ccol_r_mempool_realloc_entry(rmp, dyn, 20) : NULL;
-  char *still =
-      same ? (char *)ccol_r_mempool_realloc_entry(rmp, same, 32) : NULL;
+  char *same = dyn ? (char *)crmempool_realloc_entry(rmp, dyn, 20) : NULL;
+  char *still = same ? (char *)crmempool_realloc_entry(rmp, same, 32) : NULL;
   /* Whichever of the three the caller owns at this point. A failed
    * reallocation leaves addr with the caller, so the free below needs to find
    * it there and not leave a dynamic entry outstanding for the destroy to
@@ -3535,12 +3486,11 @@ TEST(r_mempools,
 
   /* A pool-owned entry of the same tier answers the same request the same
    * way, and that symmetry is what this test is here to pin. */
-  ccol_r_mempool_free_entry(rmp, fill[0]);
-  char *pool_owned = (char *)ccol_r_mempool_alloc_entry(rmp, 20);
+  crmempool_free_entry(rmp, fill[0]);
+  char *pool_owned = (char *)crmempool_alloc_entry(rmp, 20);
   size_t pool_allocs_before = atomic_load(&mp_rc_allocs);
   char *pool_same =
-      pool_owned ? (char *)ccol_r_mempool_realloc_entry(rmp, pool_owned, 20)
-                 : NULL;
+      pool_owned ? (char *)crmempool_realloc_entry(rmp, pool_owned, 20) : NULL;
   bool pool_is_noop = (pool_same == pool_owned) && (pool_owned != NULL) &&
                       (atomic_load(&mp_rc_allocs) == pool_allocs_before);
 
@@ -3551,12 +3501,12 @@ TEST(r_mempools,
 
   /* Everything is freed before the first assertion, so a failure only
    * reports itself and doesn't also leak the pool it checked. */
-  if (pool_same) ccol_r_mempool_free_entry(rmp, pool_same);
-  if (owned) ccol_r_mempool_free_entry(rmp, owned);
+  if (pool_same) crmempool_free_entry(rmp, pool_same);
+  if (owned) crmempool_free_entry(rmp, owned);
   for (size_t i = 1; i < 4; ++i) {
-    if (fill[i]) ccol_r_mempool_free_entry(rmp, fill[i]);
+    if (fill[i]) crmempool_free_entry(rmp, fill[i]);
   }
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 
   REQUIRE_TRUE(filled);
   REQUIRE_TRUE(is_dynamic);
@@ -3600,8 +3550,8 @@ TEST(r_mempools, realloc_that_already_fits_survives_an_allocation_failure) {
                                 .realloc = mp_rd_realloc};
   atomic_store(&mp_rd_deny, false);
   /* Tiers of 16, 32 and 64 bytes holding 8, 4 and 2 entries. */
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 3, ccol_fallback_at_first_exhaustion, true, &procs, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_mp(
+      4, 6, 3, crmempool_fallback_at_first_exhaustion, true, &procs, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   /* Every tier is exhausted, so no replacement can come from the pool. */
@@ -3610,21 +3560,21 @@ TEST(r_mempools, realloc_that_already_fits_survives_an_allocation_failure) {
   void *f64[2];
   bool filled = true;
   for (size_t i = 0; i < 8; ++i) {
-    f16[i] = ccol_r_mempool_alloc_entry(rmp, 16);
+    f16[i] = crmempool_alloc_entry(rmp, 16);
     if (!f16[i]) filled = false;
   }
   for (size_t i = 0; i < 4; ++i) {
-    f32[i] = ccol_r_mempool_alloc_entry(rmp, 32);
+    f32[i] = crmempool_alloc_entry(rmp, 32);
     if (!f32[i]) filled = false;
   }
   for (size_t i = 0; i < 2; ++i) {
-    f64[i] = ccol_r_mempool_alloc_entry(rmp, 64);
+    f64[i] = crmempool_alloc_entry(rmp, 64);
     if (!f64[i]) filled = false;
   }
 
-  char *dyn = (char *)ccol_r_mempool_alloc_entry(rmp, 32);
+  char *dyn = (char *)crmempool_alloc_entry(rmp, 32);
   bool is_dynamic =
-      (dyn != NULL) && (ccol_r_mempool_dynamic_allocs_count(rmp, 32) == 1);
+      (dyn != NULL) && (crmempool_dynamic_allocs_count(rmp, 32) == 1);
   if (dyn) {
     for (int i = 0; i < 32; ++i) {
       dyn[i] = (char)(i + 1);
@@ -3635,12 +3585,12 @@ TEST(r_mempools, realloc_that_already_fits_survives_an_allocation_failure) {
   /* The entry holds 32 bytes and the request is for 8, so this needs no
    * memory at all. A pool-owned entry holding more than the request answers
    * the same way, which the code below checks. */
-  char *shrunk = dyn ? (char *)ccol_r_mempool_realloc_entry(rmp, dyn, 8) : NULL;
+  char *shrunk = dyn ? (char *)crmempool_realloc_entry(rmp, dyn, 8) : NULL;
   /* A failed reallocation leaves addr with the caller, so the free below has
    * to find it there and not leave a dynamic entry outstanding for the
    * destroy to report. */
   char *owned = shrunk ? shrunk : dyn;
-  char *pool_shrunk = (char *)ccol_r_mempool_realloc_entry(rmp, f64[0], 8);
+  char *pool_shrunk = (char *)crmempool_realloc_entry(rmp, f64[0], 8);
   atomic_store(&mp_rd_deny, false);
 
   bool contents_kept = (shrunk != NULL);
@@ -3650,22 +3600,22 @@ TEST(r_mempools, realloc_that_already_fits_survives_an_allocation_failure) {
   /* The entry belongs to the caller and to this pool, so freeing it is
    * clean, while an entry that had moved out would produce the fatal report
    * for a foreign pointer. */
-  bool still_countable = (ccol_r_mempool_dynamic_allocs_count(rmp, 32) == 1);
+  bool still_countable = (crmempool_dynamic_allocs_count(rmp, 32) == 1);
   /* We record these before the frees below, which set every handle they get
    * to NULL. */
   bool dynamic_kept_its_buffer = (shrunk == dyn);
   bool pool_kept_its_buffer = (pool_shrunk == f64[0]);
 
-  if (owned) ccol_r_mempool_free_entry(rmp, owned);
+  if (owned) crmempool_free_entry(rmp, owned);
   for (size_t i = 0; i < 8; ++i) {
-    if (f16[i]) ccol_r_mempool_free_entry(rmp, f16[i]);
+    if (f16[i]) crmempool_free_entry(rmp, f16[i]);
   }
   for (size_t i = 0; i < 4; ++i) {
-    if (f32[i]) ccol_r_mempool_free_entry(rmp, f32[i]);
+    if (f32[i]) crmempool_free_entry(rmp, f32[i]);
   }
-  if (pool_shrunk) ccol_r_mempool_free_entry(rmp, pool_shrunk);
-  if (f64[1]) ccol_r_mempool_free_entry(rmp, f64[1]);
-  ccol_r_mempool_destroy(rmp);
+  if (pool_shrunk) crmempool_free_entry(rmp, pool_shrunk);
+  if (f64[1]) crmempool_free_entry(rmp, f64[1]);
+  crmempool_destroy(rmp);
 
   REQUIRE_TRUE(filled);
   REQUIRE_TRUE(is_dynamic);
@@ -3677,224 +3627,222 @@ TEST(r_mempools, realloc_that_already_fits_survives_an_allocation_failure) {
 
 TEST(r_mempools, custom_allocator_propagated_to_pseudo_pool) {
   // init_r_mempool_pseudo_pool needs to copy rmp->m_procs into
-  // pseudo_pool.m_procs. Without that copy ccol_fallback_at_last_exhaustion
-  // pseudo_pool entries are allocated with NULL m_procs (plain malloc) but
-  // freed with the custom allocator, an allocator mismatch that Valgrind
-  // detects.
+  // pseudo_pool.m_procs. Without that copy
+  // crmempool_fallback_at_last_exhaustion pseudo_pool entries are allocated
+  // with NULL m_procs (plain malloc) but freed with the custom allocator, an
+  // allocator mismatch that Valgrind detects.
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = free};
 
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, false, &m_procs, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_mp(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, false, &m_procs, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   void *fill[224];
   size_t iter = 0;
   for (size_t i = 0; i < 128; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 16);
-  for (size_t i = 0; i < 64; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 32);
-  for (size_t i = 0; i < 32; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 64);
+    fill[iter++] = crmempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 64);
 
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
-  void *entry = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *entry = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE(entry, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
 
-  ccol_r_mempool_free_entry(rmp, entry);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, entry);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
   for (size_t i = 0; i < 224; ++i) {
-    ccol_r_mempool_free_entry(rmp, fill[i]);
+    crmempool_free_entry(rmp, fill[i]);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools, custom_allocator_with_fallback_at_first_exhaustion) {
-  // Checks that ccol_r_mempool passes a custom allocator on to each sub-pool
-  // under the ccol_fallback_at_first_exhaustion policy: alloc and free have
-  // to go through the same custom functions, and Valgrind/ASan would catch
+  // Checks that crmempool passes a custom allocator on to each sub-pool
+  // under the crmempool_fallback_at_first_exhaustion policy: alloc and free
+  // have to go through the same custom functions, and Valgrind/ASan would catch
   // it if the allocators didn't match.
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = free};
 
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_first_exhaustion, false, &m_procs, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_mp(
+      4, 6, 7, crmempool_fallback_at_first_exhaustion, false, &m_procs, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   void *fill[128];
   for (size_t i = 0; i < 128; ++i) {
-    fill[i] = ccol_r_mempool_alloc_entry(rmp, 16);
+    fill[i] = crmempool_alloc_entry(rmp, 16);
     REQUIRE_NE(fill[i], NULL);
   }
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 128);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 128);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
-  void *dyn = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *dyn = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE(dyn, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
 
-  ccol_r_mempool_free_entry(rmp, dyn);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, dyn);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
   for (size_t i = 0; i < 128; ++i) {
-    ccol_r_mempool_free_entry(rmp, fill[i]);
+    crmempool_free_entry(rmp, fill[i]);
   }
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(preallocated_r_mempools, exhaust_all_fallback_disabled) {
-  static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(
+  static CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(
       preallocated_rmp_buffer,  // The name of the buffer.
       4,  // The size of the smallest element in the pool - 2^4 : 16
       6,  // The size of the largest element in the pool - 2^6 : 64
       7   // The number of smallest elements in the pool - 2^7 : 128
   );
 
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer(
       preallocated_rmp_buffer, sizeof(preallocated_rmp_buffer), 4, 6, 7,
-      ccol_fallback_disabled, false, NULL, NULL);
+      crmempool_fallback_disabled, false, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
   void *ptrs[ptrs_len];
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ptrs[i] = ccol_r_mempool_alloc_entry(rmp, 8);
+    ptrs[i] = crmempool_alloc_entry(rmp, 8);
     REQUIRE_NE((void *)ptrs[i], NULL);
     // It hands out 32 and 64 sized buffers too to serve our request.
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
   // It doesn't take more memory from the heap. Once the preallocated
   // buffers run out that's it, and there's no new memory until some come
   // back.
-  void *tmp_ptr = ccol_r_mempool_alloc_entry(rmp, 8);
+  void *tmp_ptr = crmempool_alloc_entry(rmp, 8);
   REQUIRE_EQ((void *)tmp_ptr, NULL);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(preallocated_r_mempools, exhaust_all_fallback_disabled_no_locks) {
-  static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(
+  static CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(
       preallocated_rmp_buffer,  // The name of the buffer.
       4,  // The size of the smallest element in the pool - 2^4 : 16
       6,  // The size of the largest element in the pool - 2^6 : 64
       7   // The number of smallest elements in the pool - 2^7 : 128
   );
 
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer(
       preallocated_rmp_buffer, sizeof(preallocated_rmp_buffer), 4, 6, 7,
-      ccol_fallback_disabled, true, NULL, NULL);
+      crmempool_fallback_disabled, true, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
   void *ptrs[ptrs_len];
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ptrs[i] = ccol_r_mempool_alloc_entry(rmp, 8);
+    ptrs[i] = crmempool_alloc_entry(rmp, 8);
     REQUIRE_NE((void *)ptrs[i], NULL);
     // It hands out 32 and 64 sized buffers too to serve our request.
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
   // It doesn't take more memory from the heap. Once the preallocated
   // buffers run out that's it, and there's no new memory until some come
   // back.
-  void *tmp_ptr = ccol_r_mempool_alloc_entry(rmp, 8);
+  void *tmp_ptr = crmempool_alloc_entry(rmp, 8);
   REQUIRE_EQ((void *)tmp_ptr, NULL);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, calloc_entry_zeroes_memory) {
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  char *p = ccol_r_mempool_alloc_entry(rmp, 16);
+  char *p = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE((void *)p, NULL);
   memset(p, 0xFF, 16);
-  ccol_r_mempool_free_entry(rmp, p);
+  crmempool_free_entry(rmp, p);
 
-  p = ccol_r_mempool_calloc_entry(rmp, 16);
+  p = crmempool_calloc_entry(rmp, 16);
   REQUIRE_NE((void *)p, NULL);
   for (size_t i = 0; i < 16; ++i) {
     REQUIRE_EQ(p[i], 0);
   }
-  ccol_r_mempool_free_entry(rmp, p);
+  crmempool_free_entry(rmp, p);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools, realloc_null_addr_acts_like_alloc) {
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  void *p = ccol_r_mempool_realloc_entry(rmp, NULL, 8);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  void *p = crmempool_realloc_entry(rmp, NULL, 8);
   REQUIRE_NE(p, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
 
-  ccol_r_mempool_free_entry(rmp, p);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, p);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools, realloc_returns_null_for_invalid_size) {
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  REQUIRE_EQ((void *)ccol_r_mempool_realloc_entry(rmp, NULL, 0), NULL);
-  REQUIRE_EQ((void *)ccol_r_mempool_realloc_entry(rmp, NULL, 65), NULL);
+  REQUIRE_EQ((void *)crmempool_realloc_entry(rmp, NULL, 0), NULL);
+  REQUIRE_EQ((void *)crmempool_realloc_entry(rmp, NULL, 65), NULL);
 
-  void *p = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *p = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE(p, NULL);
-  ccol_r_mempool_free_entry(rmp, p);
+  crmempool_free_entry(rmp, p);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 // realloc_returns_null_for_invalid_size above only tries an invalid size
 // with a NULL addr, so it pins nothing about a live, non-NULL addr in the
-// same situation. ccol_r_mempool_realloc_entry deliberately leaves such an
+// same situation. crmempool_realloc_entry deliberately leaves such an
 // addr completely alone, neither freeing nor moving it. It treats an invalid
 // size exactly like any other failed reallocation, so the original entry
 // stays valid and belongs to the caller, and it never treats an invalid size
@@ -3904,26 +3852,26 @@ TEST(r_mempools, realloc_returns_null_for_invalid_size) {
 // size > largest_size".
 TEST(r_mempools,
      realloc_invalid_size_with_non_null_addr_leaves_addr_untouched) {
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  char *addr = ccol_r_mempool_alloc_entry(rmp, 16);
+  char *addr = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE((void *)addr, NULL);
   addr[0] = 0x5a;
 
-  REQUIRE_EQ((void *)ccol_r_mempool_realloc_entry(rmp, addr, 0), NULL);
+  REQUIRE_EQ((void *)crmempool_realloc_entry(rmp, addr, 0), NULL);
   REQUIRE_EQ(addr[0], (char)0x5a);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
 
-  REQUIRE_EQ((void *)ccol_r_mempool_realloc_entry(rmp, addr, 65), NULL);
+  REQUIRE_EQ((void *)crmempool_realloc_entry(rmp, addr, 65), NULL);
   REQUIRE_EQ(addr[0], (char)0x5a);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 1);
 
-  ccol_r_mempool_free_entry(rmp, addr);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, addr);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
@@ -3932,12 +3880,12 @@ TEST(r_mempools,
   // SS=4, LS=5, SC=4: pool[0] = 16x16-byte, pool[1] = 8x32-byte.
   // With every pool exhausted and no fallback, realloc returns NULL
   // without freeing or touching the original pointer.
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 5, 4, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 5, 4, crmempool_fallback_disabled, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  size_t cap16 = ccol_r_mempool_total_capacity(rmp, 16);
-  size_t cap32 = ccol_r_mempool_total_capacity(rmp, 32);
+  size_t cap16 = crmempool_total_capacity(rmp, 16);
+  size_t cap32 = crmempool_total_capacity(rmp, 32);
   REQUIRE_EQ(cap16, 16);
   REQUIRE_EQ(cap32, 8);
 
@@ -3945,23 +3893,23 @@ TEST(r_mempools,
   void *fill32[8];
 
   for (size_t i = 0; i < cap16; ++i) {
-    fill16[i] = ccol_r_mempool_alloc_entry(rmp, 16);
+    fill16[i] = crmempool_alloc_entry(rmp, 16);
     REQUIRE_NE(fill16[i], NULL);
   }
   for (size_t i = 0; i < cap32; ++i) {
-    fill32[i] = ccol_r_mempool_alloc_entry(rmp, 32);
+    fill32[i] = crmempool_alloc_entry(rmp, 32);
     REQUIRE_NE(fill32[i], NULL);
   }
 
   void *orig = fill16[0];
-  void *result = ccol_r_mempool_realloc_entry(rmp, fill16[0], 32);
+  void *result = crmempool_realloc_entry(rmp, fill16[0], 32);
   REQUIRE_EQ(result, NULL);
   REQUIRE_EQ(fill16[0], orig);
 
-  for (size_t i = 0; i < cap16; ++i) ccol_r_mempool_free_entry(rmp, fill16[i]);
-  for (size_t i = 0; i < cap32; ++i) ccol_r_mempool_free_entry(rmp, fill32[i]);
+  for (size_t i = 0; i < cap16; ++i) crmempool_free_entry(rmp, fill16[i]);
+  for (size_t i = 0; i < cap32; ++i) crmempool_free_entry(rmp, fill32[i]);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
@@ -3978,12 +3926,12 @@ TEST(r_mempools,
 // the two behaviours apart.
 TEST(r_mempools, realloc_shrink_with_no_room_keeps_the_entry_it_already_fits) {
   // SS=4, LS=5, SC=4: pool[0] = 16x16-byte, pool[1] = 8x32-byte.
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 5, 4, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 5, 4, crmempool_fallback_disabled, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  size_t cap16 = ccol_r_mempool_total_capacity(rmp, 16);
-  size_t cap32 = ccol_r_mempool_total_capacity(rmp, 32);
+  size_t cap16 = crmempool_total_capacity(rmp, 16);
+  size_t cap32 = crmempool_total_capacity(rmp, 32);
 
   /* The arrays bound the loops, not the capacities they should equal, so a
      capacity that stops matching can't write past these frames without
@@ -3995,11 +3943,11 @@ TEST(r_mempools, realloc_shrink_with_no_room_keeps_the_entry_it_already_fits) {
   if (cap16 > FILL16) cap16 = FILL16;
   if (cap32 > FILL32) cap32 = FILL32;
   for (size_t i = 0; i < cap16; ++i) {
-    fill16[i] = ccol_r_mempool_alloc_entry(rmp, 16);
+    fill16[i] = crmempool_alloc_entry(rmp, 16);
     if (!fill16[i]) alloc_ok = false;
   }
   for (size_t i = 0; i < cap32; ++i) {
-    fill32[i] = ccol_r_mempool_alloc_entry(rmp, 32);
+    fill32[i] = crmempool_alloc_entry(rmp, 32);
     if (!fill32[i]) alloc_ok = false;
   }
 
@@ -4011,7 +3959,7 @@ TEST(r_mempools, realloc_shrink_with_no_room_keeps_the_entry_it_already_fits) {
   // fill produced, so on a run where the fill already failed such a realloc
   // would add a leak on top of the real failure, and the leak would hide it.
   void *orig = alloc_ok ? fill32[0] : NULL;
-  void *result = orig ? ccol_r_mempool_realloc_entry(rmp, orig, 16) : NULL;
+  void *result = orig ? crmempool_realloc_entry(rmp, orig, 16) : NULL;
   // The array keeps naming the live entry. A realloc that MOVES frees
   // the old entry, so keeping the old pointer here would make the cleanup
   // loop free that entry a second time, exactly on the wrong library
@@ -4032,15 +3980,14 @@ TEST(r_mempools, realloc_shrink_with_no_room_keeps_the_entry_it_already_fits) {
   // function's size guard before the branch and the check would then prove
   // nothing. A 16-byte entry growing to 32 gets to the branch, and since the
   // 32-byte tier is exhausted the move can't happen.
-  void *grow =
-      alloc_ok ? ccol_r_mempool_realloc_entry(rmp, fill16[0], 32) : NULL;
+  void *grow = alloc_ok ? crmempool_realloc_entry(rmp, fill16[0], 32) : NULL;
   bool grow_refused = (alloc_ok && grow == NULL);
   // Same reason as for the shrink above, track whatever is live now.
   if (grow) fill16[0] = grow;
 
-  for (size_t i = 0; i < cap16; ++i) ccol_r_mempool_free_entry(rmp, fill16[i]);
-  for (size_t i = 0; i < cap32; ++i) ccol_r_mempool_free_entry(rmp, fill32[i]);
-  ccol_r_mempool_destroy(rmp);
+  for (size_t i = 0; i < cap16; ++i) crmempool_free_entry(rmp, fill16[i]);
+  for (size_t i = 0; i < cap32; ++i) crmempool_free_entry(rmp, fill32[i]);
+  crmempool_destroy(rmp);
 
   REQUIRE_TRUE(alloc_ok);
   REQUIRE_TRUE(kept);
@@ -4048,9 +3995,9 @@ TEST(r_mempools, realloc_shrink_with_no_room_keeps_the_entry_it_already_fits) {
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-// ccol_r_mempool_realloc_entry must make sure addr belongs to this
-// ccol_r_mempool before it reads anything through it, like the
-// foreign-pointer detection of _ccol_mempool_free_entry. Otherwise a foreign
+// crmempool_realloc_entry must make sure addr belongs to this
+// crmempool before it reads anything through it, like the
+// foreign-pointer detection of _cmempool_free_entry. Otherwise a foreign
 // or corrupted addr causes an unchecked read instead of a controlled assert.
 // It runs in a forked child since _ccol_assert() aborts the whole process.
 TEST(r_mempools, realloc_foreign_pointer_is_fatal) {
@@ -4063,11 +4010,11 @@ TEST(r_mempools, realloc_foreign_pointer_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-        4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+    SCOPED_R_MEMPOOL(rmp) =
+        crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
     int junk[8] = {0};
-    void *foreign_ptr = &junk[2]; /* never came from this ccol_r_mempool */
-    ccol_r_mempool_realloc_entry(rmp, foreign_ptr, 16);
+    void *foreign_ptr = &junk[2]; /* never came from this crmempool */
+    crmempool_realloc_entry(rmp, foreign_ptr, 16);
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -4081,12 +4028,12 @@ TEST(r_mempools, realloc_foreign_pointer_is_fatal) {
 }
 
 // A pointer can be a valid live entry and still not belong to THIS
-// ccol_r_mempool, and ccol_r_mempool_realloc_entry must reject it.
+// crmempool, and crmempool_realloc_entry must reject it.
 // Checking that the pointer is a live entry of SOME pool isn't enough,
-// because a pointer from a different ccol_r_mempool passes that check
+// because a pointer from a different crmempool passes that check
 // without trouble and the call then silently succeeds instead of asserting,
 // which goes against the documented contract that the caller must not pass
-// an address that came from another ccol_r_mempool.
+// an address that came from another crmempool.
 TEST(r_mempools, realloc_pointer_from_a_different_r_mempool_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -4097,12 +4044,12 @@ TEST(r_mempools, realloc_pointer_from_a_different_r_mempool_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    SCOPED_R_MEMPOOL(rmp1) = ccol_r_mempool_create(
-        4, 6, 7, ccol_fallback_disabled, true, NULL, NULL);
-    SCOPED_R_MEMPOOL(rmp2) = ccol_r_mempool_create(
-        4, 6, 7, ccol_fallback_disabled, true, NULL, NULL);
-    void *from_rmp2 = ccol_r_mempool_alloc_entry(rmp2, 16);
-    ccol_r_mempool_realloc_entry(rmp1, from_rmp2, 16); /* wrong rmp */
+    SCOPED_R_MEMPOOL(rmp1) =
+        crmempool_create(4, 6, 7, crmempool_fallback_disabled, true, NULL);
+    SCOPED_R_MEMPOOL(rmp2) =
+        crmempool_create(4, 6, 7, crmempool_fallback_disabled, true, NULL);
+    void *from_rmp2 = crmempool_alloc_entry(rmp2, 16);
+    crmempool_realloc_entry(rmp1, from_rmp2, 16); /* wrong rmp */
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -4115,7 +4062,7 @@ TEST(r_mempools, realloc_pointer_from_a_different_r_mempool_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// ccol_r_mempool_realloc_entry has to reject an addr that is already free,
+// crmempool_realloc_entry has to reject an addr that is already free,
 // even when the requested size maps to the same sub-pool tier the entry came
 // from. That case must not take a fast "return addr unchanged" path that
 // skips checking the entry's state, because such a path hands the caller
@@ -4133,14 +4080,13 @@ TEST(r_mempools, realloc_already_freed_pointer_same_tier_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-        4, 6, 7, ccol_fallback_disabled, true, NULL, NULL);
-    void *a = ccol_r_mempool_alloc_entry(rmp, 16);
-    ccol_r_mempool_alloc_entry(rmp, 16); /* keep a second entry live */
+    SCOPED_R_MEMPOOL(rmp) =
+        crmempool_create(4, 6, 7, crmempool_fallback_disabled, true, NULL);
+    void *a = crmempool_alloc_entry(rmp, 16);
+    crmempool_alloc_entry(rmp, 16); /* keep a second entry live */
     void *a_saved = a;
-    ccol_r_mempool_free_entry(rmp, a); /* a is now free-listed */
-    ccol_r_mempool_realloc_entry(rmp, a_saved,
-                                 8); /* 8 still maps to the 16B tier */
+    crmempool_free_entry(rmp, a);             /* a is now free-listed */
+    crmempool_realloc_entry(rmp, a_saved, 8); /* 8 still maps to the 16B tier */
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -4153,8 +4099,8 @@ TEST(r_mempools, realloc_already_freed_pointer_same_tier_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// ccol_r_mempool_realloc_entry's doc comment promises an assert on a
-// foreign or corrupted addr, the same as ccol_mempool_free_entry. The
+// crmempool_realloc_entry's doc comment promises an assert on a
+// foreign or corrupted addr, the same as cmempool_free_entry. The
 // address decides ownership: an address that lands in none of the pool's
 // tiers only belongs to the pool when the pool holds dynamic fallback
 // entries. This pool holds none, so the address is foreign and the call has
@@ -4175,9 +4121,9 @@ TEST(r_mempools, realloc_address_outside_every_tier_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-        4, 6, 7, ccol_fallback_disabled, true, NULL, NULL);
-    void *real = ccol_r_mempool_alloc_entry(rmp, 16);
+    SCOPED_R_MEMPOOL(rmp) =
+        crmempool_create(4, 6, 7, crmempool_fallback_disabled, true, NULL);
+    void *real = crmempool_alloc_entry(rmp, 16);
     /* Not a REQUIRE_* macro, because that returns from the test function,
        and returning here would drop this child back into the harness loop,
        where it would run every remaining test in the binary next to its
@@ -4185,10 +4131,10 @@ TEST(r_mempools, realloc_address_outside_every_tier_is_fatal) {
        instead. */
     if (!real) test_child_exit(2);
 
-    _Alignas(_ccol_mempool_entry_align) uint8_t foreign[256];
+    _Alignas(_cmempool_entry_align) uint8_t foreign[256];
     memset(foreign, 0, sizeof(foreign));
 
-    ccol_r_mempool_realloc_entry(rmp, foreign + 128, 16);
+    crmempool_realloc_entry(rmp, foreign + 128, 16);
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -4205,7 +4151,7 @@ TEST(r_mempools, realloc_address_outside_every_tier_is_fatal) {
 // properly inside its tier's buffer, but corruption sets its recorded state
 // to a value that is neither of the two valid ones. The address resolves to
 // a real sub-pool, so the tier check alone sees nothing wrong, and
-// ccol_r_mempool_realloc_entry also needs to confirm that the entry is taken
+// crmempool_realloc_entry also needs to confirm that the entry is taken
 // before reallocating it. Without that the library copies out of an entry
 // that is already free and frees it a second time.
 TEST(r_mempools, realloc_pool_owned_entry_with_corrupted_status_is_fatal) {
@@ -4218,16 +4164,16 @@ TEST(r_mempools, realloc_pool_owned_entry_with_corrupted_status_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-        4, 6, 2, ccol_fallback_at_first_exhaustion, true, NULL, NULL);
-    void *pool_owned = ccol_r_mempool_alloc_entry(rmp, 16);
+    SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+        4, 6, 2, crmempool_fallback_at_first_exhaustion, true, NULL);
+    void *pool_owned = crmempool_alloc_entry(rmp, 16);
     /* See realloc_address_outside_every_tier_is_fatal for why there's no
        REQUIRE_* inside a forked child. */
     if (!pool_owned) test_child_exit(2);
 
-    _ccol_r_mempool_corrupt_entry_status_for_tests(rmp, pool_owned, 0xAB);
+    _crmempool_corrupt_entry_status_for_tests(rmp, pool_owned, 0xAB);
 
-    ccol_r_mempool_realloc_entry(rmp, pool_owned, 16);
+    crmempool_realloc_entry(rmp, pool_owned, 16);
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -4241,45 +4187,41 @@ TEST(r_mempools, realloc_pool_owned_entry_with_corrupted_status_is_fatal) {
 }
 
 TEST(r_mempools, realloc_escalated_to_pseudo_pool_does_not_overflow_buffer) {
-  // ccol_r_mempool_realloc_entry must work out how many bytes to copy from
-  // the *actual* new entry ccol_r_mempool_alloc_entry handed out, never
+  // crmempool_realloc_entry must work out how many bytes to copy from
+  // the *actual* new entry crmempool_alloc_entry handed out, never
   // from the *ideal* target tier for the requested size, because
   // that tier rounds the size up to its own capacity, which is
   // usually bigger.
   //
-  // Under ccol_fallback_at_last_exhaustion the ideal tier and every larger
+  // Under crmempool_fallback_at_last_exhaustion the ideal tier and every larger
   // real tier can be exhausted, and then the pseudo_pool serves the new entry
   // with exactly `size` real bytes, fewer than the ideal tier's capacity, so
   // copying the ideal tier's capacity writes past the end of that smaller
   // real allocation, a heap buffer overflow that AddressSanitizer reports.
   // SS=4, LS=6, SC=7 give pool0=128x16B, pool1=64x32B and
   // pool2=32x64B.
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   // Fill pool1 (32B tier) completely.
   void *pool1_fill[64];
-  for (int i = 0; i < 64; ++i)
-    pool1_fill[i] = ccol_r_mempool_alloc_entry(rmp, 32);
+  for (int i = 0; i < 64; ++i) pool1_fill[i] = crmempool_alloc_entry(rmp, 32);
 
   // Fill pool2 (64B tier) completely, keeping one entry to shrink.
   void *pool2_fill[32];
-  for (int i = 0; i < 32; ++i)
-    pool2_fill[i] = ccol_r_mempool_alloc_entry(rmp, 64);
+  for (int i = 0; i < 32; ++i) pool2_fill[i] = crmempool_alloc_entry(rmp, 64);
   char *old_entry = (char *)pool2_fill[0];
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32),
-             ccol_r_mempool_total_capacity(rmp, 32));
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64),
-             ccol_r_mempool_total_capacity(rmp, 64));
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), crmempool_total_capacity(rmp, 32));
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), crmempool_total_capacity(rmp, 64));
 
   // Shrink to 17 bytes. The ideal tier is pool1 at 32B and it's full, the
   // escalation target is pool2 at 64B and it's full too, since old_entry
   // itself counts as taken, so the new entry lands in the pseudo_pool
   // with exactly 17 real bytes.
-  char *shrunk = ccol_r_mempool_realloc_entry(rmp, old_entry, 17);
+  char *shrunk = crmempool_realloc_entry(rmp, old_entry, 17);
   REQUIRE_NE((void *)shrunk, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 17), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 17), 1);
 
   // Writing the full real 17-byte capacity must not corrupt anything next to
   // it. make memtest and AddressSanitizer check this directly, and the
@@ -4291,19 +4233,19 @@ TEST(r_mempools, realloc_escalated_to_pseudo_pool_does_not_overflow_buffer) {
     REQUIRE_EQ(shrunk[i], (char)0x5a);
   }
 
-  ccol_r_mempool_free_entry(rmp, shrunk);
-  for (int i = 0; i < 64; ++i) ccol_r_mempool_free_entry(rmp, pool1_fill[i]);
-  for (int i = 1; i < 32; ++i) ccol_r_mempool_free_entry(rmp, pool2_fill[i]);
+  crmempool_free_entry(rmp, shrunk);
+  for (int i = 0; i < 64; ++i) crmempool_free_entry(rmp, pool1_fill[i]);
+  for (int i = 1; i < 32; ++i) crmempool_free_entry(rmp, pool2_fill[i]);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-// The ccol_r_mempool counterpart of
+// The crmempool counterpart of
 // cmempools.double_free_of_dynamic_entry_with_another_still_live_is_fatal. A
-// pseudo_pool entry belongs to the ccol_fallback_at_last_exhaustion policy,
-// and the library frees it through the same __ccol_mempool_free_entry
-// function it uses for a plain ccol_mempool's dynamic fallback entries, so it
+// pseudo_pool entry belongs to the crmempool_fallback_at_last_exhaustion
+// policy, and the library frees it through the same __cmempool_free_entry
+// function it uses for a plain cmempool's dynamic fallback entries, so it
 // needs exactly the same protection. We use the same no-clobber
 // allocator so the assertion runs deterministically, independent of one
 // particular libc's free-list poisoning.
@@ -4322,26 +4264,26 @@ TEST(r_mempools,
                                   .calloc = no_clobber_calloc,
                                   .realloc = no_clobber_realloc,
                                   .free = no_clobber_free};
-    SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-        4, 6, 7, ccol_fallback_at_last_exhaustion, true, &procs, NULL);
+    SCOPED_R_MEMPOOL(rmp) = crmempool_create_mp(
+        4, 6, 7, crmempool_fallback_at_last_exhaustion, true, &procs, NULL);
 
     // Exhaust all three sub-pools so further allocations go through the
     // shared pseudo_pool. The test never frees the filled entries on purpose:
     // the process aborts before it gets to any cleanup code below, so nothing
     // needs their pointers after this loop.
-    for (size_t i = 0; i < 128; ++i) ccol_r_mempool_alloc_entry(rmp, 16);
-    for (size_t i = 0; i < 64; ++i) ccol_r_mempool_alloc_entry(rmp, 32);
-    for (size_t i = 0; i < 32; ++i) ccol_r_mempool_alloc_entry(rmp, 64);
+    for (size_t i = 0; i < 128; ++i) crmempool_alloc_entry(rmp, 16);
+    for (size_t i = 0; i < 64; ++i) crmempool_alloc_entry(rmp, 32);
+    for (size_t i = 0; i < 32; ++i) crmempool_alloc_entry(rmp, 64);
 
     /* Two pseudo_pool entries outstanding at once. */
-    void *e1 = ccol_r_mempool_alloc_entry(rmp, 16);
-    void *e2 = ccol_r_mempool_alloc_entry(rmp, 32);
+    void *e1 = crmempool_alloc_entry(rmp, 16);
+    void *e2 = crmempool_alloc_entry(rmp, 32);
     (void)e2; /* kept alive; never freed by this test */
     void *e1_saved = e1;
-    ccol_r_mempool_free_entry(rmp, e1); /* first free: fine */
+    crmempool_free_entry(rmp, e1); /* first free: fine */
     /* This goes through the ranged entry point, which is what a caller has,
        since the test can't name the sub-pool the entry came from. */
-    _ccol_r_mempool_free_entry(rmp, e1_saved); /* second free, e2 live: fatal */
+    _crmempool_free_entry(rmp, e1_saved); /* second free, e2 live: fatal */
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -4354,13 +4296,13 @@ TEST(r_mempools,
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// The documented leak-detection contract of ccol_r_mempool_destroy under the
-// ccol_fallback_at_first_exhaustion policy. Under that policy the leak check
-// happens once per sub-pool, in each sub-pool's ccol_mempool_destroy() call
-// inside the teardown loop of _ccol_r_mempool_destroy, and there's no
-// separate check at the ccol_r_mempool level for this policy, unlike the
-// pseudo_pool of ccol_fallback_at_last_exhaustion, which has one. Nothing else
-// in this suite would notice a change that broke the per-sub-pool check.
+// The documented leak-detection contract of crmempool_destroy under the
+// crmempool_fallback_at_first_exhaustion policy. Under that policy the leak
+// check happens once per sub-pool, in each sub-pool's cmempool_destroy() call
+// inside the teardown loop of _crmempool_destroy, and there's no
+// separate check at the crmempool level for this policy, unlike the
+// pseudo_pool of crmempool_fallback_at_last_exhaustion, which has one. Nothing
+// else in this suite would notice a change that broke the per-sub-pool check.
 TEST(r_mempools, destroy_with_leaked_first_exhaustion_entry_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -4371,13 +4313,13 @@ TEST(r_mempools, destroy_with_leaked_first_exhaustion_entry_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-        4, 6, 7, ccol_fallback_at_first_exhaustion, true, NULL, NULL);
-    for (size_t i = 0; i < 128; ++i) ccol_r_mempool_alloc_entry(rmp, 16);
-    void *leaked = ccol_r_mempool_alloc_entry(rmp, 16); /* spills to pool[0]'s
+    SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+        4, 6, 7, crmempool_fallback_at_first_exhaustion, true, NULL);
+    for (size_t i = 0; i < 128; ++i) crmempool_alloc_entry(rmp, 16);
+    void *leaked = crmempool_alloc_entry(rmp, 16); /* spills to pool[0]'s
                                                         own fallback */
-    (void)leaked;                                       /* never freed */
-    ccol_r_mempool_destroy(rmp); /* must assert on the leak */
+    (void)leaked;                                  /* never freed */
+    crmempool_destroy(rmp);                        /* must assert on the leak */
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -4390,10 +4332,10 @@ TEST(r_mempools, destroy_with_leaked_first_exhaustion_entry_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// The same leak-detection contract under ccol_fallback_at_last_exhaustion.
+// The same leak-detection contract under crmempool_fallback_at_last_exhaustion.
 // This one exercises the explicit
-// ccol_mempool_dynamic_allocs_count(&rmp->pseudo_pool) > 0 check at the top
-// of _ccol_r_mempool_destroy directly.
+// cmempool_dynamic_allocs_count(&rmp->pseudo_pool) > 0 check at the top
+// of _crmempool_destroy directly.
 TEST(r_mempools,
      destroy_with_leaked_last_exhaustion_pseudo_pool_entry_is_fatal) {
   pid_t pid = fork();
@@ -4405,16 +4347,15 @@ TEST(r_mempools,
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-        4, 6, 7, ccol_fallback_at_last_exhaustion, true, NULL, NULL);
-    for (size_t i = 0; i < 128; ++i) ccol_r_mempool_alloc_entry(rmp, 16);
-    for (size_t i = 0; i < 64; ++i) ccol_r_mempool_alloc_entry(rmp, 32);
-    for (size_t i = 0; i < 32; ++i) ccol_r_mempool_alloc_entry(rmp, 64);
-    void *leaked =
-        ccol_r_mempool_alloc_entry(rmp, 16); /* all tiers full, spills
-                                             to the pseudo_pool */
-    (void)leaked;                            /* never freed */
-    ccol_r_mempool_destroy(rmp);             /* must assert on the leak */
+    SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+        4, 6, 7, crmempool_fallback_at_last_exhaustion, true, NULL);
+    for (size_t i = 0; i < 128; ++i) crmempool_alloc_entry(rmp, 16);
+    for (size_t i = 0; i < 64; ++i) crmempool_alloc_entry(rmp, 32);
+    for (size_t i = 0; i < 32; ++i) crmempool_alloc_entry(rmp, 64);
+    void *leaked = crmempool_alloc_entry(rmp, 16); /* all tiers full, spills
+                                                        to the pseudo_pool */
+    (void)leaked;                                  /* never freed */
+    crmempool_destroy(rmp);                        /* must assert on the leak */
     test_child_exit(0); /* unreachable if _ccol_assert() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -4430,298 +4371,290 @@ TEST(r_mempools,
 TEST(r_mempools, create_fails_smallest_size_below_minimum) {
   // SS=3 => smallest_size=8 < min_allowed_smallest_size=16, so it must fail.
   char *err;
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      3, 10, 10, ccol_fallback_disabled, false, NULL, &err);
+  SCOPED_R_MEMPOOL(rmp) =
+      crmempool_create(3, 10, 10, crmempool_fallback_disabled, false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
 TEST(r_mempools, create_preallocated_buffer_fails) {
   // SS=4, LS=5, SC=4: the right buffer size is 896 bytes.
-  CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(correct_buf, 4, 5, 4);
+  CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(correct_buf, 4, 5, 4);
   char *err;
 
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
-      NULL, sizeof(correct_buf), 4, 5, 4, ccol_fallback_disabled, false, NULL,
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer(
+      NULL, sizeof(correct_buf), 4, 5, 4, crmempool_fallback_disabled, false,
       &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
-  _Alignas(_ccol_mempool_entry_align)
-      uint8_t small_buf[sizeof(correct_buf) - 1];
-  rmp = ccol_r_mempool_create_from_preallocated_buffer(
-      small_buf, sizeof(small_buf), 4, 5, 4, ccol_fallback_disabled, false,
-      NULL, &err);
+  _Alignas(_cmempool_entry_align) uint8_t small_buf[sizeof(correct_buf) - 1];
+  rmp = crmempool_create_from_preallocated_buffer(
+      small_buf, sizeof(small_buf), 4, 5, 4, crmempool_fallback_disabled, false,
+      &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
-  _Alignas(_ccol_mempool_entry_align)
-      uint8_t large_buf[sizeof(correct_buf) + 1];
-  rmp = ccol_r_mempool_create_from_preallocated_buffer(
-      large_buf, sizeof(large_buf), 4, 5, 4, ccol_fallback_disabled, false,
-      NULL, &err);
+  _Alignas(_cmempool_entry_align) uint8_t large_buf[sizeof(correct_buf) + 1];
+  rmp = crmempool_create_from_preallocated_buffer(
+      large_buf, sizeof(large_buf), 4, 5, 4, crmempool_fallback_disabled, false,
+      &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   // Invalid params: SS >= LS.
-  rmp = ccol_r_mempool_create_from_preallocated_buffer(
-      correct_buf, sizeof(correct_buf), 5, 4, 4, ccol_fallback_disabled, false,
-      NULL, &err);
+  rmp = crmempool_create_from_preallocated_buffer(
+      correct_buf, sizeof(correct_buf), 5, 4, 4, crmempool_fallback_disabled,
+      false, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
-// ccol_r_mempool_create_from_preallocated_buffer rejects a misaligned
+// crmempool_create_from_preallocated_buffer_mp rejects a misaligned
 // top-level buffer at once, like the same check in
-// ccol_mempool_create_from_preallocated_buffer does, instead of letting the
+// cmempool_create_from_preallocated_buffer_mp does, instead of letting the
 // problem show up later, deep inside the construction of one sub-pool, or
 // never.
 TEST(r_mempools, create_preallocated_buffer_fails_misaligned) {
-  _Alignas(_ccol_mempool_entry_align) uint8_t buf[897];  // 896 + 1
+  _Alignas(_cmempool_entry_align) uint8_t buf[897];  // 896 + 1
   char *err = NULL;
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
-      buf + 1, sizeof(buf) - 1, 4, 5, 4, ccol_fallback_disabled, false, NULL,
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer(
+      buf + 1, sizeof(buf) - 1, 4, 5, 4, crmempool_fallback_disabled, false,
       &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
 TEST(preallocated_r_mempools, exhaust_all_fallback_at_first_exhaustion) {
-  static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(buf, 4, 6, 7);
+  static CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(buf, 4, 6, 7);
 
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
-      buf, sizeof(buf), 4, 6, 7, ccol_fallback_at_first_exhaustion, false, NULL,
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer(
+      buf, sizeof(buf), 4, 6, 7, crmempool_fallback_at_first_exhaustion, false,
       NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   void *fill[224];
   size_t iter = 0;
   for (size_t i = 0; i < 128; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 16);
-  for (size_t i = 0; i < 64; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 32);
-  for (size_t i = 0; i < 32; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 64);
+    fill[iter++] = crmempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 64);
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
-  void *dyn16 = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *dyn16 = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE(dyn16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
 
-  void *dyn32 = ccol_r_mempool_alloc_entry(rmp, 32);
+  void *dyn32 = crmempool_alloc_entry(rmp, 32);
   REQUIRE_NE(dyn32, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
 
-  ccol_r_mempool_free_entry(rmp, dyn16);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, dyn16);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
-  ccol_r_mempool_free_entry(rmp, dyn32);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
+  crmempool_free_entry(rmp, dyn32);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
 
-  for (size_t i = 0; i < 224; ++i) ccol_r_mempool_free_entry(rmp, fill[i]);
+  for (size_t i = 0; i < 224; ++i) crmempool_free_entry(rmp, fill[i]);
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(preallocated_r_mempools, exhaust_all_fallback_at_last_exhaustion) {
-  static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(buf, 4, 6, 7);
+  static CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(buf, 4, 6, 7);
 
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
-      buf, sizeof(buf), 4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL,
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer(
+      buf, sizeof(buf), 4, 6, 7, crmempool_fallback_at_last_exhaustion, false,
       NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   void *fill[224];
   size_t iter = 0;
   for (size_t i = 0; i < 128; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 16);
-  for (size_t i = 0; i < 64; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 32);
-  for (size_t i = 0; i < 32; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 64);
+    fill[iter++] = crmempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 64);
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
 
-  void *dyn16 = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *dyn16 = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE(dyn16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
 
-  ccol_r_mempool_free_entry(rmp, dyn16);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, dyn16);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
-  for (size_t i = 0; i < 224; ++i) ccol_r_mempool_free_entry(rmp, fill[i]);
+  for (size_t i = 0; i < 224; ++i) crmempool_free_entry(rmp, fill[i]);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools, query_functions_return_zero_for_invalid_sizes) {
-  // ccol_r_mempool_used_count, ccol_r_mempool_total_capacity and
-  // ccol_r_mempool_dynamic_allocs_count return 0 for size=0 and for
+  // crmempool_used_count, crmempool_total_capacity and
+  // crmempool_dynamic_allocs_count return 0 for size=0 and for
   // size > largest_size, as their documented contracts say.
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_first_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_first_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 0), 0);
-  REQUIRE_EQ(ccol_r_mempool_total_capacity(rmp, 0), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 0), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 0), 0);
+  REQUIRE_EQ(crmempool_total_capacity(rmp, 0), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 0), 0);
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 65), 0);
-  REQUIRE_EQ(ccol_r_mempool_total_capacity(rmp, 65), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 65), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 65), 0);
+  REQUIRE_EQ(crmempool_total_capacity(rmp, 65), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 65), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(cmempools, create_small_elem_size_is_bumped_to_min) {
   // An elem_size < sizeof(uintptr_t) is bumped silently to
   // sizeof(uintptr_t). This exercises the `else if (elem_size <
-  // sizeof(addr_t))` branch of ccol_mempool_create, which the normal test
+  // sizeof(addr_t))` branch of cmempool_create_mp, which the normal test
   // paths never reach.
   char *err = NULL;
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create(8, 1, false, false, NULL, &err);
+  SCOPED_MEMPOOL(mp) = cmempool_create(8, 1, false, false, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)mp, NULL);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 8);
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 8);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
 
   void *ptrs[8];
   for (size_t i = 0; i < 8; ++i) {
-    ptrs[i] = ccol_mempool_alloc_entry(mp);
+    ptrs[i] = cmempool_alloc_entry(mp);
     REQUIRE_NE((void *)ptrs[i], NULL);
-    REQUIRE_EQ(ccol_mempool_used_count(mp), i + 1);
+    REQUIRE_EQ(cmempool_used_count(mp), i + 1);
   }
-  REQUIRE_EQ((void *)ccol_mempool_alloc_entry(mp), NULL);
+  REQUIRE_EQ((void *)cmempool_alloc_entry(mp), NULL);
 
   for (size_t i = 0; i < 8; ++i) {
-    ccol_mempool_free_entry(mp, ptrs[i]);
+    cmempool_free_entry(mp, ptrs[i]);
   }
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
 TEST(r_mempools, dynamic_allocs_count_always_zero_when_fallback_disabled) {
-  // ccol_r_mempool_dynamic_allocs_count returns 0 for any valid size
-  // when the pool was created with ccol_fallback_disabled, even after
+  // crmempool_dynamic_allocs_count returns 0 for any valid size
+  // when the pool was created with crmempool_fallback_disabled, even after
   // allocations.
-  ccol_r_mempool *rmp =
-      ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
+  crmempool *rmp =
+      crmempool_create(4, 6, 7, crmempool_fallback_disabled, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
 
-  void *p = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *p = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE(p, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
 
-  ccol_r_mempool_free_entry(rmp, p);
+  crmempool_free_entry(rmp, p);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools, calloc_entry_zeroes_fallback_at_first_exhaustion) {
-  // ccol_r_mempool_calloc_entry zeroes exactly the requested number of
+  // crmempool_calloc_entry zeroes exactly the requested number of
   // bytes when the allocation comes from the heap fallback
-  // (ccol_fallback_at_first_exhaustion).
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_first_exhaustion, false, NULL, NULL);
+  // (crmempool_fallback_at_first_exhaustion).
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_first_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   // Exhaust pool[0] (128 x 16-byte slots).
   void *fill[128];
   for (size_t i = 0; i < 128; ++i) {
-    fill[i] = ccol_r_mempool_alloc_entry(rmp, 16);
+    fill[i] = crmempool_alloc_entry(rmp, 16);
     REQUIRE_NE(fill[i], NULL);
     memset(fill[i], 0xFF, 16);
   }
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 128);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 128);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
   // The next calloc comes from the heap fallback, fully zeroed.
-  char *p = ccol_r_mempool_calloc_entry(rmp, 16);
+  char *p = crmempool_calloc_entry(rmp, 16);
   REQUIRE_NE((void *)p, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
   for (size_t i = 0; i < 16; ++i) {
     REQUIRE_EQ(p[i], 0);
   }
 
-  ccol_r_mempool_free_entry(rmp, p);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, p);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
   for (size_t i = 0; i < 128; ++i) {
-    ccol_r_mempool_free_entry(rmp, fill[i]);
+    crmempool_free_entry(rmp, fill[i]);
   }
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools, calloc_entry_zeroes_fallback_at_last_exhaustion) {
-  // ccol_r_mempool_calloc_entry has to zero exactly the requested number of
+  // crmempool_calloc_entry has to zero exactly the requested number of
   // bytes when the allocation comes from the pseudo_pool
-  // (ccol_fallback_at_last_exhaustion).
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  // (crmempool_fallback_at_last_exhaustion).
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   // Exhaust all three sub-pools.
   void *fill[224];
   size_t iter = 0;
   for (size_t i = 0; i < 128; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 16);
-  for (size_t i = 0; i < 64; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 32);
-  for (size_t i = 0; i < 32; ++i)
-    fill[iter++] = ccol_r_mempool_alloc_entry(rmp, 64);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
+    fill[iter++] = crmempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i) fill[iter++] = crmempool_alloc_entry(rmp, 64);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
 
   // The next calloc should come from the pseudo_pool, fully zeroed.
-  char *p = ccol_r_mempool_calloc_entry(rmp, 32);
+  char *p = crmempool_calloc_entry(rmp, 32);
   REQUIRE_NE((void *)p, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
   for (size_t i = 0; i < 32; ++i) {
     REQUIRE_EQ(p[i], 0);
   }
 
-  ccol_r_mempool_free_entry(rmp, p);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
+  crmempool_free_entry(rmp, p);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
 
   for (size_t i = 0; i < 224; ++i) {
-    ccol_r_mempool_free_entry(rmp, fill[i]);
+    crmempool_free_entry(rmp, fill[i]);
   }
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools, try_exhausting_with_fallback_at_first_exhaustion_no_locks) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_first_exhaustion, true, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_first_exhaustion, true, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
@@ -4729,57 +4662,57 @@ TEST(r_mempools, try_exhausting_with_fallback_at_first_exhaustion_no_locks) {
   uint ptr_iterator = 0;
 
   for (size_t i = 0; i < 128; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 16);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 16);
   }
 
   for (size_t i = 0; i < 64; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 32);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 32);
   }
 
   for (size_t i = 0; i < 32; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 64);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 64);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
-  void *tmp_ptr_16 = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *tmp_ptr_16 = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
 
-  void *tmp_ptr_32 = ccol_r_mempool_alloc_entry(rmp, 32);
+  void *tmp_ptr_32 = crmempool_alloc_entry(rmp, 32);
   REQUIRE_NE((void *)tmp_ptr_32, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
 
-  void *tmp_ptr_64 = ccol_r_mempool_alloc_entry(rmp, 64);
+  void *tmp_ptr_64 = crmempool_alloc_entry(rmp, 64);
   REQUIRE_NE((void *)tmp_ptr_64, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, tmp_ptr_16);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_32);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
+  crmempool_free_entry(rmp, tmp_ptr_32);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
 
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_64);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
+  crmempool_free_entry(rmp, tmp_ptr_64);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(r_mempools, try_exhausting_with_fallback_at_last_exhaustion_no_locks) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, true, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, true, NULL);
 
   size_t ptrs_len = 224;  // 16: 128, 32: 64, 64: 32 => 128 + 64 + 32 = 224
 
@@ -4787,141 +4720,141 @@ TEST(r_mempools, try_exhausting_with_fallback_at_last_exhaustion_no_locks) {
   uint ptr_iterator = 0;
 
   for (size_t i = 0; i < 128; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 16);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 16);
   }
 
   for (size_t i = 0; i < 64; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 32);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 32);
   }
 
   for (size_t i = 0; i < 32; ++i) {
-    ptrs[ptr_iterator++] = ccol_r_mempool_alloc_entry(rmp, 64);
+    ptrs[ptr_iterator++] = crmempool_alloc_entry(rmp, 64);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size),
-               ccol_r_mempool_total_capacity(rmp, size));
+    REQUIRE_EQ(crmempool_used_count(rmp, size),
+               crmempool_total_capacity(rmp, size));
   }
 
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 0);
 
-  void *tmp_ptr_16 = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *tmp_ptr_16 = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 1);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 1);
 
-  void *tmp_ptr_32 = ccol_r_mempool_alloc_entry(rmp, 32);
+  void *tmp_ptr_32 = crmempool_alloc_entry(rmp, 32);
   REQUIRE_NE((void *)tmp_ptr_32, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 2);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 2);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 64), 2);
 
   for (size_t i = 0; i < ptrs_len; ++i) {
-    ccol_r_mempool_free_entry(rmp, ptrs[i]);
+    crmempool_free_entry(rmp, ptrs[i]);
   }
 
   for (size_t size = 16; size <= 64; size *= 2) {
-    REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
+    REQUIRE_EQ(crmempool_used_count(rmp, size), 0);
   }
 
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
-  ccol_r_mempool_free_entry(rmp, tmp_ptr_32);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, tmp_ptr_16);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
+  crmempool_free_entry(rmp, tmp_ptr_32);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 }
 
 TEST(preallocated_r_mempools, custom_allocator_propagated) {
-  // Checks that ccol_r_mempool_create_from_preallocated_buffer passes a
+  // Checks that crmempool_create_from_preallocated_buffer_mp passes a
   // custom allocator on to the sub-pool structs and to the reverse lookup
   // array, so every heap allocation and free goes through the same
   // functions.
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = free};
 
-  static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(buf, 4, 6, 7);
+  static CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(buf, 4, 6, 7);
 
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
-      buf, sizeof(buf), 4, 6, 7, ccol_fallback_at_first_exhaustion, false,
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer_mp(
+      buf, sizeof(buf), 4, 6, 7, crmempool_fallback_at_first_exhaustion, false,
       &m_procs, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   void *fill[128];
   for (size_t i = 0; i < 128; ++i) {
-    fill[i] = ccol_r_mempool_alloc_entry(rmp, 16);
+    fill[i] = crmempool_alloc_entry(rmp, 16);
     REQUIRE_NE(fill[i], NULL);
   }
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 128);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 128);
 
-  void *dyn = ccol_r_mempool_alloc_entry(rmp, 16);
+  void *dyn = crmempool_alloc_entry(rmp, 16);
   REQUIRE_NE(dyn, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 1);
 
-  ccol_r_mempool_free_entry(rmp, dyn);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  crmempool_free_entry(rmp, dyn);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
   for (size_t i = 0; i < 128; ++i) {
-    ccol_r_mempool_free_entry(rmp, fill[i]);
+    crmempool_free_entry(rmp, fill[i]);
   }
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 TEST(r_mempools,
      fallback_at_last_exhaustion_escalation_not_counted_as_fallback) {
   // SS=4, LS=6, SC=7: pool[0]=128x16-byte, pool[1]=64x32-byte.
-  // Under ccol_fallback_at_last_exhaustion, escalating from pool[0] to
+  // Under crmempool_fallback_at_last_exhaustion, escalating from pool[0] to
   // pool[1] must NOT increment the pseudo_pool counter, because that
   // escalation is just a reallocation inside the preallocated budget and not
   // a heap fallback.
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 7, crmempool_fallback_at_last_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   void *fill[128];
   for (size_t i = 0; i < 128; ++i) {
-    fill[i] = ccol_r_mempool_alloc_entry(rmp, 16);
+    fill[i] = crmempool_alloc_entry(rmp, 16);
     REQUIRE_NE(fill[i], NULL);
   }
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 128);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 128);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
   // pool[0] is full, so this request escalates to pool[1], no pseudo_pool.
-  void *escalated = ccol_r_mempool_alloc_entry(rmp, 8);
+  void *escalated = crmempool_alloc_entry(rmp, 8);
   REQUIRE_NE(escalated, NULL);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 1);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 1);
 
-  ccol_r_mempool_free_entry(rmp, escalated);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
+  crmempool_free_entry(rmp, escalated);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
 
-  for (size_t i = 0; i < 128; ++i) ccol_r_mempool_free_entry(rmp, fill[i]);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
+  for (size_t i = 0; i < 128; ++i) crmempool_free_entry(rmp, fill[i]);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-// CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER rejects some combinations at
-// compile time through the internal _ccol_rmempool_buffer_params_fit guard.
+// CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER rejects some combinations at
+// compile time through the internal _crmempool_buffer_params_fit guard.
 // The combination is (smallest_size_power_of_two, largest_size_power_of_two,
 // number_of_smallest_size_elems_power_of_two), and the guard rejects one that
-// makes the arithmetic of _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
+// makes the arithmetic of _CRMEMPOOL_CALCULATE_PREALLOCATED_BUFFER_SIZE
 // overflow size_t, and one that breaks the "SC >= LS - SS" precondition the
 // division inside that macro needs in order to stay exact. The sibling macro
-// CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER's _Static_assert gives the same
+// CMEMPOOL_DECLARE_PREALLOCATED_BUFFER's _Static_assert gives the same
 // coverage for a plain pool.
 //
 // We can't put a rejected combination into
-// CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER itself, because this whole test
+// CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER itself, because this whole test
 // binary would then fail to compile, so the test exercises the guard's
 // boolean logic directly and cross-checks it against cases this file already
 // knows the run time accepts or rejects for the same reason.
@@ -4935,42 +4868,42 @@ TEST(preallocated_r_mempools, buffer_params_fit_matches_known_outcomes) {
   // short-circuiting past it, which breaks the compile of this whole binary
   // rather than failing a test.
 #if SIZE_MAX > 0xFFFFFFFFu
-  REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(4, 63, 62));
+  REQUIRE_FALSE(_crmempool_buffer_params_fit(4, 63, 62));
 #else
   // The equivalent shape for a 32-bit size_t, with the largest exponent the
   // guard accepts and a count that overruns what the type can hold
   // anyway.
-  REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(4, 31, 30));
+  REQUIRE_FALSE(_crmempool_buffer_params_fit(4, 31, 30));
 #endif
 
   // SC < LS - SS breaks the precondition for the exact division, although no
   // single term overflows.
-  REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(4, 6, 1));
+  REQUIRE_FALSE(_crmempool_buffer_params_fit(4, 6, 1));
 
   // LS <= SS isn't a valid pool shape at all, because it leaves no room for
   // even one tier above the smallest one.
-  REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(8, 4, 10));
-  REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(6, 6, 10));
+  REQUIRE_FALSE(_crmempool_buffer_params_fit(8, 4, 10));
+  REQUIRE_FALSE(_crmempool_buffer_params_fit(6, 6, 10));
 
   // The guard should accept every (SS, LS, SC) triple that a real
-  // CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER call site in this file uses,
+  // CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER call site in this file uses,
   // otherwise this whole binary would fail to compile. We repeat those
   // assertions here directly, so a change that narrows the guard shows up as
   // an ordinary test failure and not only as a build break that needs
   // bisecting.
-  REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 6, 7));
-  REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 16, 12));
-  REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 5, 4));
+  REQUIRE_TRUE(_crmempool_buffer_params_fit(4, 6, 7));
+  REQUIRE_TRUE(_crmempool_buffer_params_fit(4, 16, 12));
+  REQUIRE_TRUE(_crmempool_buffer_params_fit(4, 5, 4));
 
   // Exactly the triple that
   // calculate_preallocated_buffer_size_no_premature_overflow runs through
-  // _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE, so the guard and the
+  // _CRMEMPOOL_CALCULATE_PREALLOCATED_BUFFER_SIZE, so the guard and the
   // size macro must agree on the one case that is big enough to matter.
   // The element count differs by width, for the same reason as in that test.
 #if SIZE_MAX > 0xFFFFFFFFu
-  REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 11, 56));
+  REQUIRE_TRUE(_crmempool_buffer_params_fit(4, 11, 56));
 #else
-  REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 11, 24));
+  REQUIRE_TRUE(_crmempool_buffer_params_fit(4, 11, 24));
 #endif
 
   // The guard rejects a largest_size_power_of_two at or above the width of
@@ -4980,17 +4913,17 @@ TEST(preallocated_r_mempools, buffer_params_fit_matches_known_outcomes) {
   // isn't a defect of the guard but a real difference in what "fits" means
   // there.
 #if SIZE_MAX > 0xFFFFFFFFu
-  REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 33, 30));
+  REQUIRE_TRUE(_crmempool_buffer_params_fit(4, 33, 30));
 #else
-  REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(4, 33, 30));
+  REQUIRE_FALSE(_crmempool_buffer_params_fit(4, 33, 30));
 #endif
 
   // The tightest valid shape, where SC == LS - SS exactly, like the boundary
   // in create_succeeds_with_minimum_sc.
-  REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 6, 2));
+  REQUIRE_TRUE(_crmempool_buffer_params_fit(4, 6, 2));
 }
 
-// Every other CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER call site in this
+// Every other CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER call site in this
 // file puts a `static` storage-class prefix in front of the macro at function
 // scope so the buffer gets static storage duration instead of stack storage,
 // and the guard's _Static_assert must not break that usage: with the
@@ -4998,29 +4931,29 @@ TEST(preallocated_r_mempools, buffer_params_fit_matches_known_outcomes) {
 // the assertion statement instead of the array, which is a hard compile
 // error at every one of those call sites. This test compiles and passes
 // exactly at the minimum-SC boundary, which is what pins the placement,
-// while the _ccol_rmempool_buffer_params_fit test above only checks that
+// while the _crmempool_buffer_params_fit test above only checks that
 // boundary in the abstract.
 TEST(preallocated_r_mempools,
      declare_with_static_prefix_at_minimum_sc_boundary) {
-  static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(min_sc_buf, 4, 6, 2);
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
-      min_sc_buf, sizeof(min_sc_buf), 4, 6, 2, ccol_fallback_disabled, false,
-      NULL, NULL);
+  static CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(min_sc_buf, 4, 6, 2);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create_from_preallocated_buffer(
+      min_sc_buf, sizeof(min_sc_buf), 4, 6, 2, crmempool_fallback_disabled,
+      false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
-  void *p = ccol_r_mempool_alloc_entry(rmp, 64);
+  void *p = crmempool_alloc_entry(rmp, 64);
   REQUIRE_NE(p, NULL);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 1);
-  ccol_r_mempool_free_entry(rmp, p);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 1);
+  crmempool_free_entry(rmp, p);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
 // C_MEMPOOL / C_R_MEMPOOL CONCURRENCY STRESS TESTS
 //
-// These tests exercise real concurrent access to ccol_mempool and
-// ccol_r_mempool, which are both documented as thread-safe when created with
+// These tests exercise real concurrent access to cmempool and
+// crmempool, which are both documented as thread-safe when created with
 // single_threaded=false. Each thread records a failure in its own argument
 // struct, which the main thread checks once every worker has joined, so only
 // the main thread ever calls a tau REQUIRE_* macro. It's the same pattern as
@@ -5030,7 +4963,7 @@ TEST(preallocated_r_mempools,
 #define MP_STRESS_ITERS 2000
 
 typedef struct {
-  ccol_mempool *mp;
+  cmempool *mp;
   int thread_idx;
   bool ok;
 } mp_stress_arg_t;
@@ -5039,7 +4972,7 @@ static void *mp_stress_worker(void *arg) {
   mp_stress_arg_t *a = (mp_stress_arg_t *)arg;
   a->ok = true;
   for (int i = 0; i < MP_STRESS_ITERS; ++i) {
-    int64_t *slot = (int64_t *)ccol_mempool_alloc_entry(a->mp);
+    int64_t *slot = (int64_t *)cmempool_alloc_entry(a->mp);
     if (!slot) {
       /* fallback_to_dynamic_memory is on below, so a NULL here can only mean
        * a real system out-of-memory or a corrupted pool. */
@@ -5053,10 +4986,10 @@ static void *mp_stress_worker(void *arg) {
      * clobber this one before this point. */
     if (*slot != marker) {
       a->ok = false;
-      ccol_mempool_free_entry(a->mp, slot);
+      cmempool_free_entry(a->mp, slot);
       break;
     }
-    ccol_mempool_free_entry(a->mp, slot);
+    cmempool_free_entry(a->mp, slot);
   }
   return NULL;
 }
@@ -5066,8 +4999,7 @@ TEST(cmempools, concurrent_alloc_free_stress) {
   // 8, each running MP_STRESS_ITERS of 2000, so the threads really contend on
   // the free list and the dynamic fallback path runs too, instead of churn
   // on one thread with no contention.
-  ccol_mempool *mp =
-      ccol_mempool_create(64, sizeof(int64_t), true, false, NULL, NULL);
+  cmempool *mp = cmempool_create(64, sizeof(int64_t), true, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   pthread_t tids[MP_STRESS_THREADS];
@@ -5095,11 +5027,11 @@ TEST(cmempools, concurrent_alloc_free_stress) {
     REQUIRE_TRUE(args[i].ok);
   }
 
-  REQUIRE_EQ(ccol_mempool_used_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_dynamic_allocs_count(mp), 0);
-  REQUIRE_EQ(ccol_mempool_total_capacity(mp), 64);
+  REQUIRE_EQ(cmempool_used_count(mp), 0);
+  REQUIRE_EQ(cmempool_dynamic_allocs_count(mp), 0);
+  REQUIRE_EQ(cmempool_total_capacity(mp), 64);
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
   REQUIRE_EQ((void *)mp, NULL);
 }
 
@@ -5107,7 +5039,7 @@ TEST(cmempools, concurrent_alloc_free_stress) {
 #define RMP_STRESS_ITERS 1500
 
 typedef struct {
-  ccol_r_mempool *rmp;
+  crmempool *rmp;
   int thread_idx;
   bool ok;
 } rmp_stress_arg_t;
@@ -5118,7 +5050,7 @@ static void *rmp_stress_worker(void *arg) {
   a->ok = true;
   for (int i = 0; i < RMP_STRESS_ITERS; ++i) {
     size_t size = sizes[i % 3];
-    int64_t *p = (int64_t *)ccol_r_mempool_alloc_entry(a->rmp, size);
+    int64_t *p = (int64_t *)crmempool_alloc_entry(a->rmp, size);
     if (!p) {
       a->ok = false;
       break;
@@ -5127,10 +5059,10 @@ static void *rmp_stress_worker(void *arg) {
     *p = marker;
     if (*p != marker) {
       a->ok = false;
-      ccol_r_mempool_free_entry(a->rmp, p);
+      crmempool_free_entry(a->rmp, p);
       break;
     }
-    ccol_r_mempool_free_entry(a->rmp, p);
+    crmempool_free_entry(a->rmp, p);
   }
   return NULL;
 }
@@ -5139,10 +5071,10 @@ TEST(r_mempools, concurrent_alloc_free_stress) {
   // SS=4, LS=6, SC=4 give pool0=16x16B, pool1=8x32B and pool2=4x64B, which is
   // small compared to RMP_STRESS_THREADS, so three things really happen:
   // contention between threads, tier escalation, and the pseudo_pool
-  // fallback of ccol_fallback_at_last_exhaustion, instead of free-list churn
-  // on one thread.
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 4, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  // fallback of crmempool_fallback_at_last_exhaustion, instead of free-list
+  // churn on one thread.
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 4, crmempool_fallback_at_last_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   pthread_t tids[RMP_STRESS_THREADS];
@@ -5170,12 +5102,12 @@ TEST(r_mempools, concurrent_alloc_free_stress) {
     REQUIRE_TRUE(args[i].ok);
   }
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 0);
-  REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 0);
+  REQUIRE_EQ(crmempool_dynamic_allocs_count(rmp, 16), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
@@ -5183,7 +5115,7 @@ TEST(r_mempools, concurrent_alloc_free_stress) {
 #define RMP_REALLOC_STRESS_ITERS 800
 
 typedef struct {
-  ccol_r_mempool *rmp;
+  crmempool *rmp;
   int thread_idx;
   bool ok;
 } rmp_realloc_stress_arg_t;
@@ -5198,7 +5130,7 @@ static void *rmp_realloc_stress_worker(void *arg) {
     // included, so the test doesn't exercise that scenario on
     // purpose.
     size_t size = 8 + (size_t)(i % 3) * 16; /* 8, 24, 40 -> 16/32/64 tiers */
-    char *p = (char *)ccol_r_mempool_alloc_entry(a->rmp, size);
+    char *p = (char *)crmempool_alloc_entry(a->rmp, size);
     if (!p) {
       a->ok = false;
       break;
@@ -5206,24 +5138,24 @@ static void *rmp_realloc_stress_worker(void *arg) {
     p[0] = (char)(a->thread_idx & 0x7f);
 
     size_t grown_size = 8 + (size_t)((i + 1) % 3) * 16;
-    p = (char *)ccol_r_mempool_realloc_entry(a->rmp, p, grown_size);
+    p = (char *)crmempool_realloc_entry(a->rmp, p, grown_size);
     if (!p) {
       a->ok = false;
       break;
     }
     if (p[0] != (char)(a->thread_idx & 0x7f)) {
       a->ok = false;
-      ccol_r_mempool_free_entry(a->rmp, p);
+      crmempool_free_entry(a->rmp, p);
       break;
     }
-    ccol_r_mempool_free_entry(a->rmp, p);
+    crmempool_free_entry(a->rmp, p);
   }
   return NULL;
 }
 
 TEST(r_mempools, concurrent_realloc_stress) {
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 4, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 4, crmempool_fallback_at_last_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   pthread_t tids[RMP_REALLOC_STRESS_THREADS];
@@ -5253,11 +5185,11 @@ TEST(r_mempools, concurrent_realloc_stress) {
     REQUIRE_TRUE(args[i].ok);
   }
 
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 32), 0);
+  REQUIRE_EQ(crmempool_used_count(rmp, 64), 0);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
@@ -5310,15 +5242,15 @@ TEST(cmempool_oom, fixed_pool_construction_unwinds_at_every_allocation) {
   for (int n = 1; n <= MP_SWEEP_DEPTH; n++) {
     _mp_arm(n);
     char *err = NULL;
-    SCOPED_MEMPOOL(mp) = ccol_mempool_create(32, sizeof(int), false, false,
-                                             &g_mp_sweep_procs, &err);
+    SCOPED_MEMPOOL(mp) = cmempool_create_mp(32, sizeof(int), false, false,
+                                            &g_mp_sweep_procs, &err);
     _mp_disarm();
     if (mp) {
       /* Past the failed allocation, so expect a really usable pool. */
-      void *e = ccol_mempool_alloc_entry(mp);
+      void *e = cmempool_alloc_entry(mp);
       if (!e) all_handled = false;
-      if (e) ccol_mempool_free_entry(mp, e);
-      ccol_mempool_destroy(mp);
+      if (e) cmempool_free_entry(mp, e);
+      cmempool_destroy(mp);
     } else if (!err) {
       all_handled = false;
     }
@@ -5332,11 +5264,11 @@ TEST(cmempool_oom, fixed_pool_with_fallback_unwinds_at_every_allocation) {
   for (int n = 1; n <= MP_SWEEP_DEPTH; n++) {
     _mp_arm(n);
     char *err = NULL;
-    SCOPED_MEMPOOL(mp) = ccol_mempool_create(16, sizeof(long long), true, true,
-                                             &g_mp_sweep_procs, &err);
+    SCOPED_MEMPOOL(mp) = cmempool_create_mp(16, sizeof(long long), true, true,
+                                            &g_mp_sweep_procs, &err);
     _mp_disarm();
     if (mp)
-      ccol_mempool_destroy(mp);
+      cmempool_destroy(mp);
     else if (!err)
       all_handled = false;
   }
@@ -5352,11 +5284,11 @@ TEST(cmempool_oom, preallocated_buffer_pool_unwinds_at_every_allocation) {
     memset(buf, 0xA5, sizeof(buf));
     _mp_arm(n);
     char *err = NULL;
-    SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
+    SCOPED_MEMPOOL(mp) = cmempool_create_from_preallocated_buffer_mp(
         buf, sizeof(buf), 32, false, false, &g_mp_sweep_procs, &err);
     _mp_disarm();
     if (mp)
-      ccol_mempool_destroy(mp);
+      cmempool_destroy(mp);
     else if (!err)
       all_handled = false;
   }
@@ -5371,11 +5303,11 @@ TEST(cmempool_oom, ranged_pool_construction_unwinds_at_every_allocation) {
   for (int n = 1; n <= 40; n++) {
     _mp_arm(n);
     char *err = NULL;
-    SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-        4, 8, 4, ccol_fallback_disabled, false, &g_mp_sweep_procs, &err);
+    SCOPED_R_MEMPOOL(rmp) = crmempool_create_mp(
+        4, 8, 4, crmempool_fallback_disabled, false, &g_mp_sweep_procs, &err);
     _mp_disarm();
     if (rmp)
-      ccol_r_mempool_destroy(rmp);
+      crmempool_destroy(rmp);
     else if (!err)
       all_handled = false;
   }
@@ -5387,12 +5319,12 @@ TEST(cmempool_oom, ranged_pool_with_fallback_unwinds_at_every_allocation) {
   for (int n = 1; n <= 40; n++) {
     _mp_arm(n);
     char *err = NULL;
-    ccol_r_mempool *rmp =
-        ccol_r_mempool_create(4, 7, 3, ccol_fallback_at_last_exhaustion, true,
-                              &g_mp_sweep_procs, &err);
+    crmempool *rmp =
+        crmempool_create_mp(4, 7, 3, crmempool_fallback_at_last_exhaustion,
+                            true, &g_mp_sweep_procs, &err);
     _mp_disarm();
     if (rmp)
-      ccol_r_mempool_destroy(rmp);
+      crmempool_destroy(rmp);
     else if (!err)
       all_handled = false;
   }
@@ -5404,15 +5336,15 @@ TEST(cmempool_oom, a_pool_built_under_a_late_failure_still_serves_entries) {
   bool built = false, usable = false;
   for (int n = 20; n <= 80 && !built; n++) {
     _mp_arm(n);
-    SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-        4, 8, 4, ccol_fallback_disabled, false, &g_mp_sweep_procs, NULL);
+    SCOPED_R_MEMPOOL(rmp) = crmempool_create_mp(
+        4, 8, 4, crmempool_fallback_disabled, false, &g_mp_sweep_procs, NULL);
     _mp_disarm();
     if (rmp) {
       built = true;
-      void *e = ccol_r_mempool_alloc_entry(rmp, 16);
+      void *e = crmempool_alloc_entry(rmp, 16);
       usable = (e != NULL);
-      if (e) ccol_r_mempool_free_entry(rmp, e);
-      ccol_r_mempool_destroy(rmp);
+      if (e) crmempool_free_entry(rmp, e);
+      crmempool_destroy(rmp);
     }
   }
   REQUIRE_TRUE(built);
@@ -5460,7 +5392,7 @@ static void mp_test_short_sleep(void) {
 #define RMP_DYN_STRESS_ITERS 400
 
 typedef struct {
-  ccol_r_mempool *rmp;
+  crmempool *rmp;
   int idx;
   bool ok;
 } rmp_dyn_stress_arg_t;
@@ -5480,7 +5412,7 @@ static void *rmp_dyn_stress_worker(void *arg) {
   for (int i = 0; i < RMP_DYN_STRESS_ITERS; ++i) {
     /* 8, 24 and 40 name the 16, 32 and 64 byte tiers. */
     size_t size = 8 + (size_t)(i % 3) * 16;
-    char *p = (char *)ccol_r_mempool_alloc_entry(a->rmp, size);
+    char *p = (char *)crmempool_alloc_entry(a->rmp, size);
     if (!p) {
       /* The fallback is enabled, so only a real heap failure gets here. */
       a->ok = false;
@@ -5488,15 +5420,15 @@ static void *rmp_dyn_stress_worker(void *arg) {
     }
     p[0] = (char)(a->idx & 0x7f);
     size_t next = 8 + (size_t)((i + 1) % 3) * 16;
-    char *q = (char *)ccol_r_mempool_realloc_entry(a->rmp, p, next);
+    char *q = (char *)crmempool_realloc_entry(a->rmp, p, next);
     if (!q) {
       /* addr stays with the caller on a failed reallocation. */
-      ccol_r_mempool_free_entry(a->rmp, p);
+      crmempool_free_entry(a->rmp, p);
       a->ok = false;
       break;
     }
     if (q[0] != (char)(a->idx & 0x7f)) a->ok = false;
-    ccol_r_mempool_free_entry(a->rmp, q);
+    crmempool_free_entry(a->rmp, q);
     if (!a->ok) break;
   }
   return NULL;
@@ -5505,8 +5437,8 @@ static void *rmp_dyn_stress_worker(void *arg) {
 TEST(r_mempools, concurrent_dynamic_fallback_churn) {
   /* The smallest pool the constructor accepts for this range, 4, 2 and 1
      entries against six threads, so the fallback does most of the work. */
-  SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
-      4, 6, 2, ccol_fallback_at_first_exhaustion, false, NULL, NULL);
+  SCOPED_R_MEMPOOL(rmp) = crmempool_create(
+      4, 6, 2, crmempool_fallback_at_first_exhaustion, false, NULL);
   REQUIRE_NE((void *)rmp, NULL);
 
   atomic_store(&rmp_dyn_arrived, 0);
@@ -5542,12 +5474,12 @@ TEST(r_mempools, concurrent_dynamic_fallback_churn) {
   for (int i = 0; i < started; ++i) {
     if (!args[i].ok) all_ok = false;
   }
-  size_t leaked_16 = ccol_r_mempool_dynamic_allocs_count(rmp, 16);
-  size_t leaked_32 = ccol_r_mempool_dynamic_allocs_count(rmp, 32);
-  size_t leaked_64 = ccol_r_mempool_dynamic_allocs_count(rmp, 64);
-  size_t used_16 = ccol_r_mempool_used_count(rmp, 16);
+  size_t leaked_16 = crmempool_dynamic_allocs_count(rmp, 16);
+  size_t leaked_32 = crmempool_dynamic_allocs_count(rmp, 32);
+  size_t leaked_64 = crmempool_dynamic_allocs_count(rmp, 64);
+  size_t used_16 = crmempool_used_count(rmp, 16);
 
-  ccol_r_mempool_destroy(rmp);
+  crmempool_destroy(rmp);
 
   REQUIRE_EQ(started, RMP_DYN_STRESS_THREADS);
   REQUIRE_EQ(join_rv, 0);
@@ -5566,7 +5498,7 @@ TEST(r_mempools, concurrent_dynamic_fallback_churn) {
 // that silently hangs. Counting only the threads that really started keeps
 // it an ordinary failure.
 typedef struct {
-  ccol_mempool *mp;
+  cmempool *mp;
   size_t count;
   bool ok;
   _Atomic int *filled;   /* the worker increments it once its cache is full */
@@ -5582,11 +5514,11 @@ static void *mp_cache_fill_and_exit(void *arg) {
   if (!p) return NULL;
   bool ok = true;
   for (size_t i = 0; i < a->count; ++i) {
-    p[i] = ccol_mempool_alloc_entry(a->mp);
+    p[i] = cmempool_alloc_entry(a->mp);
     if (!p[i]) ok = false;
   }
   for (size_t i = 0; i < a->count; ++i) {
-    if (p[i]) ccol_mempool_free_entry(a->mp, p[i]);
+    if (p[i]) cmempool_free_entry(a->mp, p[i]);
   }
   free(p);
   a->ok = ok;
@@ -5594,8 +5526,8 @@ static void *mp_cache_fill_and_exit(void *arg) {
 }
 
 TEST(cmempools, thread_cache_is_returned_when_its_thread_exits) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int),
-                                           false, false, NULL, NULL);
+  SCOPED_MEMPOOL(mp) =
+      cmempool_create(MP_CACHE_POOL_ELEMS, sizeof(int), false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   mp_cache_arg_t arg = {.mp = mp, .count = 64, .ok = false};
@@ -5605,8 +5537,8 @@ TEST(cmempools, thread_cache_is_returned_when_its_thread_exits) {
 
   // POSIX runs a thread's cleanup before pthread_join returns, so the cache
   // the thread held has been drained back into the pool already.
-  size_t used_after_exit = ccol_mempool_used_count(mp);
-  size_t live_mags_after_exit = _ccol_mempool_live_magazines_for_tests(mp);
+  size_t used_after_exit = cmempool_used_count(mp);
+  size_t live_mags_after_exit = _cmempool_live_magazines_for_tests(mp);
 
   // After that the pool can also serve its full advertised capacity, and a
   // drain that lost the entries fails this check.
@@ -5615,16 +5547,16 @@ TEST(cmempools, thread_cache_is_returned_when_its_thread_exits) {
   size_t got = 0;
   if (all_ok) {
     for (size_t i = 0; i < MP_CACHE_POOL_ELEMS; ++i) {
-      all[i] = ccol_mempool_alloc_entry(mp);
+      all[i] = cmempool_alloc_entry(mp);
       if (all[i]) got++;
     }
     for (size_t i = 0; i < MP_CACHE_POOL_ELEMS; ++i) {
-      if (all[i]) ccol_mempool_free_entry(mp, all[i]);
+      if (all[i]) cmempool_free_entry(mp, all[i]);
     }
     free(all);
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
 
   // Every outcome is captured and every resource freed before the first
   // assertion, because a failing REQUIRE_* returns from this function at once,
@@ -5646,10 +5578,10 @@ static void *mp_cache_hold(void *arg) {
   void **p = calloc(a->count, sizeof(void *));
   if (p) {
     for (size_t i = 0; i < a->count; ++i) {
-      p[i] = ccol_mempool_alloc_entry(a->mp);
+      p[i] = cmempool_alloc_entry(a->mp);
     }
     for (size_t i = 0; i < a->count; ++i) {
-      if (p[i]) ccol_mempool_free_entry(a->mp, p[i]);
+      if (p[i]) cmempool_free_entry(a->mp, p[i]);
     }
   }
   /* We arrive here on every path, including the one where the scratch array
@@ -5673,8 +5605,8 @@ static void *mp_cache_hold(void *arg) {
 // must never make the pool refuse a caller who is within its advertised
 // capacity.
 TEST(cmempools, advertised_capacity_is_reachable_despite_other_thread_caches) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int),
-                                           false, false, NULL, NULL);
+  SCOPED_MEMPOOL(mp) =
+      cmempool_create(MP_CACHE_POOL_ELEMS, sizeof(int), false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   enum { HOLDERS = 4 };
@@ -5703,7 +5635,7 @@ TEST(cmempools, advertised_capacity_is_reachable_despite_other_thread_caches) {
     while (atomic_load_explicit(&filled, memory_order_acquire) < started)
       mp_test_short_sleep();
     for (size_t i = 0; i < MP_CACHE_POOL_ELEMS; ++i) {
-      all[i] = ccol_mempool_alloc_entry(mp);
+      all[i] = cmempool_alloc_entry(mp);
       if (all[i]) got++;
     }
   }
@@ -5718,11 +5650,11 @@ TEST(cmempools, advertised_capacity_is_reachable_despite_other_thread_caches) {
   for (int i = 0; i < started; ++i) pthread_join(th[i], NULL);
   if (all) {
     for (size_t i = 0; i < MP_CACHE_POOL_ELEMS; ++i) {
-      if (all[i]) ccol_mempool_free_entry(mp, all[i]);
+      if (all[i]) cmempool_free_entry(mp, all[i]);
     }
     free(all);
   }
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
 
   REQUIRE_EQ(started, HOLDERS);
   REQUIRE_EQ(got, (size_t)MP_CACHE_POOL_ELEMS);
@@ -5734,8 +5666,8 @@ TEST(cmempools, advertised_capacity_is_reachable_despite_other_thread_caches) {
 // thread and falls back to a lock on every operation, while still behaving
 // correctly.
 TEST(cmempools, magazine_slots_are_reclaimed_across_thread_churn) {
-  SCOPED_MEMPOOL(mp) = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int),
-                                           false, false, NULL, NULL);
+  SCOPED_MEMPOOL(mp) =
+      cmempool_create(MP_CACHE_POOL_ELEMS, sizeof(int), false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   bool all_ok = true;
@@ -5749,11 +5681,11 @@ TEST(cmempools, magazine_slots_are_reclaimed_across_thread_churn) {
     }
     pthread_join(th, NULL);
     if (!arg.ok) all_ok = false;
-    size_t live = _ccol_mempool_live_magazines_for_tests(mp);
+    size_t live = _cmempool_live_magazines_for_tests(mp);
     if (live > peak) peak = live;
   }
 
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
 
   REQUIRE_TRUE(all_ok);
   // Far more threads than the pool's magazine budget have come and gone, so
@@ -5797,7 +5729,7 @@ static void *mp_deny_realloc(void *ptr, size_t size) {
 static void mp_deny_free(void *ptr) { free(ptr); }
 
 typedef struct {
-  ccol_mempool *mp;
+  cmempool *mp;
   atomic_bool claimed;
   atomic_bool release;
   bool ok;
@@ -5808,9 +5740,9 @@ typedef struct {
  * makes. */
 static void *mp_deny_hold(void *arg) {
   mp_deny_arg_t *a = (mp_deny_arg_t *)arg;
-  void *e = ccol_mempool_alloc_entry(a->mp);
+  void *e = cmempool_alloc_entry(a->mp);
   a->ok = (e != NULL);
-  if (e) ccol_mempool_free_entry(a->mp, e);
+  if (e) cmempool_free_entry(a->mp, e);
   /* We always arrive, the failure path above included, so the main thread's
    * wait is bounded by this thread's own progress and not by an
    * outcome. */
@@ -5829,8 +5761,7 @@ TEST(cmempools, a_pool_with_no_magazine_to_give_does_not_allocate_per_call) {
                                 .calloc = mp_deny_calloc,
                                 .realloc = mp_deny_realloc,
                                 .free = mp_deny_free};
-  ccol_mempool *mp =
-      ccol_mempool_create(8, sizeof(int), false, false, &procs, NULL);
+  cmempool *mp = cmempool_create_mp(8, sizeof(int), false, false, &procs, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   mp_deny_arg_t arg = {.mp = mp, .ok = false};
@@ -5848,12 +5779,12 @@ TEST(cmempools, a_pool_with_no_magazine_to_give_does_not_allocate_per_call) {
     }
     size_t before = atomic_load(&mp_deny_allocs);
     for (int i = 0; i < OPS; ++i) {
-      void *e = ccol_mempool_alloc_entry(mp);
+      void *e = cmempool_alloc_entry(mp);
       if (!e) {
         served = false;
         break;
       }
-      ccol_mempool_free_entry(mp, e);
+      cmempool_free_entry(mp, e);
     }
     allocs_during_ops = atomic_load(&mp_deny_allocs) - before;
     atomic_store(&arg.release, true);
@@ -5861,7 +5792,7 @@ TEST(cmempools, a_pool_with_no_magazine_to_give_does_not_allocate_per_call) {
   }
 
   bool holder_ok = arg.ok;
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
 
   REQUIRE_TRUE(started);
   REQUIRE_TRUE(holder_ok);
@@ -5903,7 +5834,7 @@ static atomic_bool mp_test_lock_count_ready;
 // sits at the start of one ARM_INNER_STRIDE entry of the inner pool, and the
 // only mutex inside that entry is the pool's lock.
 #define ARM_INNER_STRIDE 4096
-static ccol_mempool *g_arm_outer, *g_arm_inner;
+static cmempool *g_arm_outer, *g_arm_inner;
 static atomic_bool g_arm_b_exiting;
 static pthread_t g_arm_b_self;
 static atomic_bool g_arm_b_wants_outer_lock;
@@ -5939,8 +5870,7 @@ TEST(cmempools, a_refused_thread_takes_one_lock_per_operation) {
   enum { OPS = 1024, CACHED_OPS = 256 };
   /* Eight entries is the smallest pool that caches, and it grants exactly
    * one magazine. The holder takes it, so this thread gets refused. */
-  ccol_mempool *mp =
-      ccol_mempool_create(8, sizeof(int), false, false, NULL, NULL);
+  cmempool *mp = cmempool_create(8, sizeof(int), false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
   mp_deny_arg_t arg = {.mp = mp, .ok = false};
@@ -5961,12 +5891,12 @@ TEST(cmempools, a_refused_thread_takes_one_lock_per_operation) {
     }
     unsigned long before = mp_test_locks_taken;
     for (int i = 0; i < OPS; ++i) {
-      void *e = ccol_mempool_alloc_entry(mp);
+      void *e = cmempool_alloc_entry(mp);
       if (!e) {
         refused_served = false;
         break;
       }
-      ccol_mempool_free_entry(mp, e);
+      cmempool_free_entry(mp, e);
     }
     refused_locks = mp_test_locks_taken - before;
 
@@ -5976,23 +5906,23 @@ TEST(cmempools, a_refused_thread_takes_one_lock_per_operation) {
 
     /* The first pair claims the magazine and fills it, and every later pair
      * pops from it and pushes back into it with no lock at all. */
-    void *warm = ccol_mempool_alloc_entry(mp);
-    if (warm) ccol_mempool_free_entry(mp, warm);
-    magazines_after = _ccol_mempool_live_magazines_for_tests(mp);
+    void *warm = cmempool_alloc_entry(mp);
+    if (warm) cmempool_free_entry(mp, warm);
+    magazines_after = _cmempool_live_magazines_for_tests(mp);
     before = mp_test_locks_taken;
     for (int i = 0; i < CACHED_OPS; ++i) {
-      void *e = ccol_mempool_alloc_entry(mp);
+      void *e = cmempool_alloc_entry(mp);
       if (!e) {
         cached_served = false;
         break;
       }
-      ccol_mempool_free_entry(mp, e);
+      cmempool_free_entry(mp, e);
     }
     cached_locks = mp_test_locks_taken - before;
   }
 
   bool holder_ok = arg.ok;
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
 
   REQUIRE_TRUE(started);
   REQUIRE_TRUE(holder_ok);
@@ -6009,24 +5939,23 @@ TEST(cmempools, a_refused_thread_takes_one_lock_per_operation) {
 // it on every request that passes an exhausted tier.
 TEST(cmempools, an_exhausted_cached_pool_refuses_with_one_lock) {
   enum { COUNT = 64, TRIES = 16 };
-  ccol_mempool *mp =
-      ccol_mempool_create(COUNT, sizeof(int), false, false, NULL, NULL);
+  cmempool *mp = cmempool_create(COUNT, sizeof(int), false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
   void *held[COUNT + 8];
   size_t n = 0;
   while (n < COUNT + 8) {
-    void *e = ccol_mempool_alloc_entry(mp);
+    void *e = cmempool_alloc_entry(mp);
     if (!e) break;
     held[n++] = e;
   }
   unsigned long before = mp_test_locks_taken;
   size_t refused = 0;
   for (int i = 0; i < TRIES; ++i) {
-    if (!ccol_mempool_alloc_entry(mp)) ++refused;
+    if (!cmempool_alloc_entry(mp)) ++refused;
   }
   unsigned long locks = mp_test_locks_taken - before;
-  for (size_t i = 0; i < n; ++i) ccol_mempool_free_entry(mp, held[i]);
-  ccol_mempool_destroy(mp);
+  for (size_t i = 0; i < n; ++i) cmempool_free_entry(mp, held[i]);
+  cmempool_destroy(mp);
 
   REQUIRE_EQ(n, (size_t)COUNT);
   REQUIRE_EQ(refused, (size_t)TRIES);
@@ -6034,7 +5963,7 @@ TEST(cmempools, an_exhausted_cached_pool_refuses_with_one_lock) {
 }
 
 typedef struct {
-  ccol_mempool *mp;
+  cmempool *mp;
   atomic_bool parked;
   atomic_bool release;
   bool ok;
@@ -6045,9 +5974,9 @@ typedef struct {
  * stays parked in this thread's cache until the thread exits. */
 static void *mp_park_batch(void *arg) {
   mp_park_arg_t *a = (mp_park_arg_t *)arg;
-  void *e = ccol_mempool_alloc_entry(a->mp);
+  void *e = cmempool_alloc_entry(a->mp);
   a->ok = (e != NULL);
-  if (e) ccol_mempool_free_entry(a->mp, e);
+  if (e) cmempool_free_entry(a->mp, e);
   atomic_store(&a->parked, true);
   while (!atomic_load(&a->release)) {
     mp_test_short_sleep();
@@ -6063,10 +5992,9 @@ static void *mp_park_batch(void *arg) {
 // same as for a pool with no cache.
 TEST(cmempools, an_empty_refill_serves_the_request_in_the_same_lock) {
   enum { ELEMS = 64 };
-  ccol_mempool *mp =
-      ccol_mempool_create(ELEMS, sizeof(int), false, false, NULL, NULL);
+  cmempool *mp = cmempool_create(ELEMS, sizeof(int), false, false, NULL);
   REQUIRE_NE((void *)mp, NULL);
-  size_t reserve = _ccol_mempool_reserve_for_tests(mp);
+  size_t reserve = _cmempool_reserve_for_tests(mp);
 
   mp_park_arg_t arg = {.mp = mp, .ok = false};
   atomic_init(&arg.parked, false);
@@ -6085,24 +6013,24 @@ TEST(cmempools, an_empty_refill_serves_the_request_in_the_same_lock) {
     }
     /* The first allocation creates this thread's magazine, a one-time cost
      * that isn't what this test measures. */
-    held[got] = ccol_mempool_alloc_entry(mp);
+    held[got] = cmempool_alloc_entry(mp);
     if (held[got]) ++got;
     while (got <= ELEMS) {
       unsigned long before = mp_test_locks_taken;
-      void *e = ccol_mempool_alloc_entry(mp);
+      void *e = cmempool_alloc_entry(mp);
       if (!e) break;
       unsigned long taken = mp_test_locks_taken - before;
       if (taken > max_locks_per_alloc) max_locks_per_alloc = taken;
       held[got++] = e;
     }
-    used_at_end = ccol_mempool_used_count(mp);
-    for (size_t i = 0; i < got; ++i) ccol_mempool_free_entry(mp, held[i]);
+    used_at_end = cmempool_used_count(mp);
+    for (size_t i = 0; i < got; ++i) cmempool_free_entry(mp, held[i]);
     atomic_store(&arg.release, true);
     pthread_join(th, NULL);
   }
 
   bool parked_ok = arg.ok;
-  ccol_mempool_destroy(mp);
+  cmempool_destroy(mp);
 
   REQUIRE_TRUE(started);
   REQUIRE_TRUE(parked_ok);
@@ -6116,28 +6044,28 @@ TEST(cmempools, an_empty_refill_serves_the_request_in_the_same_lock) {
 }
 
 TEST(cmempools, orphaned_magazines_do_not_accumulate) {
-  size_t before = _ccol_mempool_thread_magazines_for_tests();
+  size_t before = _cmempool_thread_magazines_for_tests();
 
   // Failures are recorded and not asserted inside the loop, because a firing
   // REQUIRE_* there would return with that iteration's pool still alive.
   bool all_ok = true;
   for (int i = 0; i < 256; ++i) {
-    SCOPED_MEMPOOL(mp) = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int),
-                                             false, false, NULL, NULL);
+    SCOPED_MEMPOOL(mp) =
+        cmempool_create(MP_CACHE_POOL_ELEMS, sizeof(int), false, false, NULL);
     if (!mp) {
       all_ok = false;
       break;
     }
-    void *p = ccol_mempool_alloc_entry(mp);
+    void *p = cmempool_alloc_entry(mp);
     if (p)
-      ccol_mempool_free_entry(mp, p);
+      cmempool_free_entry(mp, p);
     else
       all_ok = false;
-    ccol_mempool_destroy(mp);
+    cmempool_destroy(mp);
     if (!all_ok) break;
   }
 
-  size_t after = _ccol_mempool_thread_magazines_for_tests();
+  size_t after = _cmempool_thread_magazines_for_tests();
   REQUIRE_TRUE(all_ok);
   // One live magazine for the pool in hand is expected, 256 would be the bug.
   REQUIRE_LT(after, before + 4);
@@ -6152,7 +6080,7 @@ TEST(cmempools, orphaned_magazines_do_not_accumulate) {
 // magazine count stays above zero after every thread has exited.
 #define MP_NESTED_BACKING_ELEM 1024
 #define MP_NESTED_MAX_BIG 8
-static ccol_mempool *mp_nested_backing;
+static cmempool *mp_nested_backing;
 static void *mp_nested_big[MP_NESTED_MAX_BIG];
 static pthread_mutex_t mp_nested_big_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic size_t mp_nested_backing_allocs;
@@ -6160,7 +6088,7 @@ static _Atomic size_t mp_nested_backing_allocs;
 static void *mp_nested_malloc(size_t n) {
   if (n <= MP_NESTED_BACKING_ELEM) {
     atomic_fetch_add(&mp_nested_backing_allocs, 1);
-    return ccol_mempool_alloc_entry(mp_nested_backing);
+    return cmempool_alloc_entry(mp_nested_backing);
   }
   void *p = malloc(n);
   if (!p) return NULL;
@@ -6201,7 +6129,7 @@ static void mp_nested_free(void *p) {
   if (big)
     free(p);
   else
-    ccol_mempool_free_entry(mp_nested_backing, p);
+    cmempool_free_entry(mp_nested_backing, p);
 }
 
 static void *mp_nested_realloc(void *p, size_t n) {
@@ -6211,24 +6139,24 @@ static void *mp_nested_realloc(void *p, size_t n) {
 }
 
 static void *mp_nested_worker(void *arg) {
-  ccol_mempool *front = arg;
-  void *e = ccol_mempool_alloc_entry(front);
+  cmempool *front = arg;
+  void *e = cmempool_alloc_entry(front);
   if (!e) return NULL;
   // The free macro clears e, so the result is a marker and not the entry.
-  ccol_mempool_free_entry(front, e);
+  cmempool_free_entry(front, e);
   return front;
 }
 
 TEST(cmempools, exit_drain_takes_magazines_that_a_nested_free_builds) {
-  mp_nested_backing = ccol_mempool_create(
-      MP_CACHE_POOL_ELEMS, MP_NESTED_BACKING_ELEM, false, false, NULL, NULL);
+  mp_nested_backing = cmempool_create(
+      MP_CACHE_POOL_ELEMS, MP_NESTED_BACKING_ELEM, false, false, NULL);
   REQUIRE_NE((void *)mp_nested_backing, NULL);
   ccol_memmgmt_procs_t procs = {mp_nested_malloc, mp_nested_free,
                                 mp_nested_calloc, mp_nested_realloc};
-  ccol_mempool *front =
-      ccol_mempool_create(MP_CACHE_POOL_ELEMS, 32, false, false, &procs, NULL);
+  cmempool *front =
+      cmempool_create_mp(MP_CACHE_POOL_ELEMS, 32, false, false, &procs, NULL);
   if (!front) {
-    ccol_mempool_destroy(mp_nested_backing);
+    cmempool_destroy(mp_nested_backing);
     REQUIRE_NE((void *)front, NULL);
   }
 
@@ -6236,7 +6164,7 @@ TEST(cmempools, exit_drain_takes_magazines_that_a_nested_free_builds) {
   // Creating the front pool on this thread took a magazine of the backing
   // pool for this thread, and it stays until this thread exits.
   size_t backing_mags_before =
-      _ccol_mempool_live_magazines_for_tests(mp_nested_backing);
+      _cmempool_live_magazines_for_tests(mp_nested_backing);
   pthread_t th;
   void *served = NULL;
   int create_rv = pthread_create(&th, NULL, mp_nested_worker, front);
@@ -6244,12 +6172,11 @@ TEST(cmempools, exit_drain_takes_magazines_that_a_nested_free_builds) {
   size_t allocs_in_thread =
       atomic_load(&mp_nested_backing_allocs) - allocs_before;
   // The worker has exited, so neither pool may count a magazine of it.
-  size_t backing_mags =
-      _ccol_mempool_live_magazines_for_tests(mp_nested_backing);
-  size_t front_mags = _ccol_mempool_live_magazines_for_tests(front);
+  size_t backing_mags = _cmempool_live_magazines_for_tests(mp_nested_backing);
+  size_t front_mags = _cmempool_live_magazines_for_tests(front);
 
-  ccol_mempool_destroy(front);
-  ccol_mempool_destroy(mp_nested_backing);
+  cmempool_destroy(front);
+  cmempool_destroy(mp_nested_backing);
 
   REQUIRE_EQ(create_rv, 0);
   REQUIRE_NE(served, NULL);
@@ -6275,8 +6202,8 @@ TEST(cmempools, exit_drain_takes_magazines_that_a_nested_free_builds) {
 static void *mp_reap_parked[MP_REAP_MAX_PARKED];
 static size_t mp_reap_parked_count;
 static bool mp_reap_park_overflow;
-static ccol_mempool *mp_reap_y;
-static ccol_mempool *mp_reap_q;
+static cmempool *mp_reap_y;
+static cmempool *mp_reap_q;
 static bool mp_reap_hook_armed;
 static bool mp_reap_hook_ran;
 
@@ -6317,24 +6244,24 @@ static void mp_reap_hook_free(void *p) {
   if (mp_reap_hook_armed) {
     mp_reap_hook_armed = false;
     mp_reap_hook_ran = true;
-    ccol_mempool_destroy(mp_reap_y);
-    void *e = ccol_mempool_alloc_entry(mp_reap_q);
-    if (e) ccol_mempool_free_entry(mp_reap_q, e);
+    cmempool_destroy(mp_reap_y);
+    void *e = cmempool_alloc_entry(mp_reap_q);
+    if (e) cmempool_free_entry(mp_reap_q, e);
   }
   free(p);
 }
 
 typedef struct {
-  ccol_mempool *m;
-  ccol_mempool *x;
+  cmempool *m;
+  cmempool *x;
   bool ok;
   size_t m_mags;
 } mp_reap_arg_t;
 
-static void touch_pool(ccol_mempool *mp, bool *ok) {
-  void *e = ccol_mempool_alloc_entry(mp);
+static void touch_pool(cmempool *mp, bool *ok) {
+  void *e = cmempool_alloc_entry(mp);
   if (e)
-    ccol_mempool_free_entry(mp, e);
+    cmempool_free_entry(mp, e);
   else
     *ok = false;
 }
@@ -6349,10 +6276,10 @@ static void *mp_reap_worker(void *arg) {
   touch_pool(a->x, &ok);
   touch_pool(mp_reap_y, &ok);
   // X's magazine is orphaned and stays on this thread's list.
-  ccol_mempool_destroy(a->x);
+  cmempool_destroy(a->x);
   mp_reap_hook_armed = true;
   touch_pool(a->m, &ok);
-  a->m_mags = _ccol_mempool_live_magazines_for_tests(a->m);
+  a->m_mags = _cmempool_live_magazines_for_tests(a->m);
   a->ok = ok;
   return NULL;
 }
@@ -6368,14 +6295,14 @@ TEST(cmempools, a_reap_that_reenters_the_lookup_restarts_the_walk) {
   mp_reap_park_overflow = false;
   mp_reap_hook_armed = false;
   mp_reap_hook_ran = false;
-  mp_reap_q = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int), false,
-                                  false, &plain, NULL);
-  ccol_mempool *m = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int), false,
-                                        false, &plain, NULL);
-  ccol_mempool *x = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int), false,
-                                        false, &hook, NULL);
-  mp_reap_y = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int), false,
-                                  false, &quarantine, NULL);
+  mp_reap_q = cmempool_create_mp(MP_CACHE_POOL_ELEMS, sizeof(int), false, false,
+                                 &plain, NULL);
+  cmempool *m = cmempool_create_mp(MP_CACHE_POOL_ELEMS, sizeof(int), false,
+                                   false, &plain, NULL);
+  cmempool *x = cmempool_create_mp(MP_CACHE_POOL_ELEMS, sizeof(int), false,
+                                   false, &hook, NULL);
+  mp_reap_y = cmempool_create_mp(MP_CACHE_POOL_ELEMS, sizeof(int), false, false,
+                                 &quarantine, NULL);
   bool created = mp_reap_q && m && x && mp_reap_y;
   // Every pool shares one slot of the direct map, which reads address bits
   // 8 to 10.
@@ -6394,10 +6321,10 @@ TEST(cmempools, a_reap_that_reenters_the_lookup_restarts_the_walk) {
   bool x_destroyed = created && create_rv == 0;
   bool y_destroyed = mp_reap_hook_ran;
 
-  if (!x_destroyed && x) ccol_mempool_destroy(x);
-  if (!y_destroyed && mp_reap_y) ccol_mempool_destroy(mp_reap_y);
-  if (m) ccol_mempool_destroy(m);
-  if (mp_reap_q) ccol_mempool_destroy(mp_reap_q);
+  if (!x_destroyed && x) cmempool_destroy(x);
+  if (!y_destroyed && mp_reap_y) cmempool_destroy(mp_reap_y);
+  if (m) cmempool_destroy(m);
+  if (mp_reap_q) cmempool_destroy(mp_reap_q);
   for (size_t i = 0; i < mp_reap_parked_count; ++i) free(mp_reap_parked[i]);
   mp_reap_parked_count = 0;
 
@@ -6459,7 +6386,7 @@ TEST(cmempools, a_reap_that_reenters_the_lookup_restarts_the_walk) {
 #define MP_BOUND_PER_THREAD 4096
 
 typedef struct {
-  ccol_mempool *mp;
+  cmempool *mp;
   void **slots;
   size_t taken;
 } mp_bound_arg_t;
@@ -6480,7 +6407,7 @@ static void *mp_bound_drain(void *arg) {
     mp_test_short_sleep();
   size_t k = 0;
   for (; k < MP_BOUND_PER_THREAD; k++) {
-    void *p = ccol_mempool_alloc_entry(a->mp);
+    void *p = cmempool_alloc_entry(a->mp);
     if (!p) break;
     a->slots[k] = p;
   }
@@ -6498,13 +6425,12 @@ TEST(cmempools, concurrent_hand_out_stays_near_the_advertised_count) {
   int short_started = 0;
 
   for (int round = 0; round < ROUNDS && fixtures_ok && pools_ok; ++round) {
-    ccol_mempool *mp =
-        ccol_mempool_create(MP_BOUND_ELEMS, 32, false, false, NULL, NULL);
+    cmempool *mp = cmempool_create(MP_BOUND_ELEMS, 32, false, false, NULL);
     if (!mp) {
       pools_ok = false;
       break;
     }
-    reserve = _ccol_mempool_reserve_for_tests(mp);
+    reserve = _cmempool_reserve_for_tests(mp);
 
     mp_bound_arg_t args[MP_BOUND_THREADS];
     pthread_t th[MP_BOUND_THREADS];
@@ -6538,10 +6464,10 @@ TEST(cmempools, concurrent_hand_out_stays_near_the_advertised_count) {
 
     for (int i = 0; i < MP_BOUND_THREADS; ++i) {
       for (size_t k = 0; k < args[i].taken; ++k)
-        ccol_mempool_free_entry(mp, args[i].slots[k]);
+        cmempool_free_entry(mp, args[i].slots[k]);
       free(args[i].slots);
     }
-    ccol_mempool_destroy(mp);
+    cmempool_destroy(mp);
   }
 
   // Every resource is freed in the round that allocated it, so a firing
@@ -6584,24 +6510,23 @@ TEST(cmempools, concurrent_hand_out_stays_near_the_advertised_count) {
 TEST(cmempools, pools_without_a_thread_cache_carry_no_reserve) {
   // Both pools are created, measured and destroyed before the first
   // assertion, so a firing REQUIRE_* leaves neither of them alive.
-  ccol_mempool *tiny =
-      ccol_mempool_create(4, sizeof(int), false, false, NULL, NULL);
+  cmempool *tiny = cmempool_create(4, sizeof(int), false, false, NULL);
   bool tiny_ok = (tiny != NULL);
   size_t tiny_reserve = 0, tiny_cap = 0;
   if (tiny_ok) {
-    tiny_reserve = _ccol_mempool_reserve_for_tests(tiny);
-    tiny_cap = ccol_mempool_total_capacity(tiny);
-    ccol_mempool_destroy(tiny);
+    tiny_reserve = _cmempool_reserve_for_tests(tiny);
+    tiny_cap = cmempool_total_capacity(tiny);
+    cmempool_destroy(tiny);
   }
 
-  SCOPED_MEMPOOL(st) = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int),
-                                           false, true, NULL, NULL);
+  SCOPED_MEMPOOL(st) =
+      cmempool_create(MP_CACHE_POOL_ELEMS, sizeof(int), false, true, NULL);
   bool st_ok = (st != NULL);
   size_t st_reserve = 0, st_cap = 0;
   if (st_ok) {
-    st_reserve = _ccol_mempool_reserve_for_tests(st);
-    st_cap = ccol_mempool_total_capacity(st);
-    ccol_mempool_destroy(st);
+    st_reserve = _cmempool_reserve_for_tests(st);
+    st_cap = cmempool_total_capacity(st);
+    cmempool_destroy(st);
   }
 
   REQUIRE_TRUE(tiny_ok);
@@ -6626,13 +6551,12 @@ TEST(cmempools, double_free_of_a_cached_entry_is_fatal) {
     }
     // This pool is thread-safe and big enough for a cache, unlike the
     // single-threaded pool of the uncached double-free test.
-    SCOPED_MEMPOOL(mp) = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int),
-                                             false, false, NULL, NULL);
-    void *p = ccol_mempool_alloc_entry(mp);
+    SCOPED_MEMPOOL(mp) =
+        cmempool_create(MP_CACHE_POOL_ELEMS, sizeof(int), false, false, NULL);
+    void *p = cmempool_alloc_entry(mp);
     void *saved = p;
-    ccol_mempool_free_entry(mp, p); /* parked in this thread's cache */
-    _ccol_mempool_free_entry(mp,
-                             saved); /* second free of the same entry: fatal */
+    cmempool_free_entry(mp, p);      /* parked in this thread's cache */
+    _cmempool_free_entry(mp, saved); /* second free of the same entry: fatal */
     test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
@@ -6651,7 +6575,7 @@ TEST(cmempools, double_free_of_a_cached_entry_is_fatal) {
 // the new pool and serves entries that belong to the dead one. The allocator
 // below makes sure that reuse happens, malloc would only produce it by luck.
 //
-// ccol_mempool is opaque, so the test can't pick the block to recycle by its
+// cmempool is opaque, so the test can't pick the block to recycle by its
 // type. Instead the allocator remembers the size it handed out for each
 // pointer and recycles the block it freed last whenever a request for that
 // same size comes in, which reproduces the address reuse without knowing
@@ -6733,30 +6657,30 @@ TEST(cmempools, pool_address_reuse_does_not_resurrect_a_stale_cache) {
 
   bool ok = true;
   for (int i = 0; i < 64; ++i) {
-    SCOPED_MEMPOOL(mp) = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int),
-                                             false, false, &procs, NULL);
+    SCOPED_MEMPOOL(mp) = cmempool_create_mp(MP_CACHE_POOL_ELEMS, sizeof(int),
+                                            false, false, &procs, NULL);
     if (!mp) {
       ok = false;
       break;
     }
     // Fill this thread's cache for this pool, then leave entries in it.
     void *p[8];
-    for (int k = 0; k < 8; ++k) p[k] = ccol_mempool_alloc_entry(mp);
+    for (int k = 0; k < 8; ++k) p[k] = cmempool_alloc_entry(mp);
     for (int k = 0; k < 8; ++k) {
       if (!p[k]) ok = false;
     }
     for (int k = 0; k < 8; ++k) {
-      if (p[k]) ccol_mempool_free_entry(mp, p[k]);
+      if (p[k]) cmempool_free_entry(mp, p[k]);
     }
     // Every entry should belong to the pool in hand. A stale cache from an
     // earlier pool at the same address could match, and used_count would then
     // not settle back to zero, with the entries belonging to that earlier pool.
-    if (ccol_mempool_used_count(mp) != 0) ok = false;
-    if (ccol_mempool_total_capacity(mp) != MP_CACHE_POOL_ELEMS) ok = false;
-    void *fresh = ccol_mempool_alloc_entry(mp);
-    if (!fresh || ccol_mempool_used_count(mp) != 1) ok = false;
-    if (fresh) ccol_mempool_free_entry(mp, fresh);
-    ccol_mempool_destroy(mp);
+    if (cmempool_used_count(mp) != 0) ok = false;
+    if (cmempool_total_capacity(mp) != MP_CACHE_POOL_ELEMS) ok = false;
+    void *fresh = cmempool_alloc_entry(mp);
+    if (!fresh || cmempool_used_count(mp) != 1) ok = false;
+    if (fresh) cmempool_free_entry(mp, fresh);
+    cmempool_destroy(mp);
   }
   mp_aba_recycling = false;
   free(mp_aba_block);
@@ -6774,17 +6698,17 @@ TEST(cmempools, pool_address_reuse_does_not_resurrect_a_stale_cache) {
  *
  * Drop that clause and the first expectation below
  * flips, the predicate accepts the shape, and the macro sizes a buffer for a
- * pool that ccol_r_mempool_create_from_preallocated_buffer refuses. */
+ * pool that crmempool_create_from_preallocated_buffer_mp refuses. */
 TEST(cmempools, ranged_buffer_params_reject_an_element_size_below_the_floor) {
   /* Below the floor it's refused, whatever the other two parameters say. */
-  REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(3, 6, 10));
-  REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(0, 4, 4));
-  REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(3, 4, 1));
+  REQUIRE_FALSE(_crmempool_buffer_params_fit(3, 6, 10));
+  REQUIRE_FALSE(_crmempool_buffer_params_fit(0, 4, 4));
+  REQUIRE_FALSE(_crmempool_buffer_params_fit(3, 4, 1));
 
   /* At and above the floor it's accepted, exactly as without the clause. */
-  REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 6, 2));
-  REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 8, 10));
-  REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(5, 10, 12));
+  REQUIRE_TRUE(_crmempool_buffer_params_fit(4, 6, 2));
+  REQUIRE_TRUE(_crmempool_buffer_params_fit(4, 8, 10));
+  REQUIRE_TRUE(_crmempool_buffer_params_fit(5, 10, 12));
 
   /* The floor is the run time's own and not a separate number: the smallest
      size the predicate accepts is the smallest one the constructor serves. */
@@ -6797,12 +6721,11 @@ TEST(cmempools, ranged_buffer_params_reject_an_element_size_below_the_floor) {
  * which frees every second entry, clears the others without freeing them,
  * and leaves the used count at half the entries. */
 TEST(cmempools, free_and_destroy_macros_evaluate_their_argument_once) {
-  ccol_mempool *mps[2] = {ccol_mempool_create(8, 16, false, false, NULL, NULL),
-                          ccol_mempool_create(8, 16, false, false, NULL, NULL)};
-  ccol_r_mempool *rmps[2] = {
-      ccol_r_mempool_create(4, 8, 6, ccol_fallback_disabled, false, NULL, NULL),
-      ccol_r_mempool_create(4, 8, 6, ccol_fallback_disabled, false, NULL,
-                            NULL)};
+  cmempool *mps[2] = {cmempool_create(8, 16, false, false, NULL),
+                      cmempool_create(8, 16, false, false, NULL)};
+  crmempool *rmps[2] = {
+      crmempool_create(4, 8, 6, crmempool_fallback_disabled, false, NULL),
+      crmempool_create(4, 8, 6, crmempool_fallback_disabled, false, NULL)};
   bool created = mps[0] && mps[1] && rmps[0] && rmps[1];
   void *e[4] = {NULL, NULL, NULL, NULL};
   void *re[4] = {NULL, NULL, NULL, NULL};
@@ -6810,22 +6733,22 @@ TEST(cmempools, free_and_destroy_macros_evaluate_their_argument_once) {
   bool entries_cleared = true;
   if (created) {
     for (int i = 0; i < 4; i++) {
-      e[i] = ccol_mempool_alloc_entry(mps[0]);
-      re[i] = ccol_r_mempool_alloc_entry(rmps[0], 8);
+      e[i] = cmempool_alloc_entry(mps[0]);
+      re[i] = crmempool_alloc_entry(rmps[0], 8);
     }
     int k = 4;
-    while (k > 0) ccol_mempool_free_entry(mps[0], e[--k]);
+    while (k > 0) cmempool_free_entry(mps[0], e[--k]);
     k = 4;
-    while (k > 0) ccol_r_mempool_free_entry(rmps[0], re[--k]);
-    used_after = ccol_mempool_used_count(mps[0]);
-    r_used_after = ccol_r_mempool_used_count(rmps[0], 8);
+    while (k > 0) crmempool_free_entry(rmps[0], re[--k]);
+    used_after = cmempool_used_count(mps[0]);
+    r_used_after = crmempool_used_count(rmps[0], 8);
     for (int i = 0; i < 4; i++)
       if (e[i] || re[i]) entries_cleared = false;
   }
   int k = 2;
-  while (k > 0) ccol_mempool_destroy(mps[--k]);
+  while (k > 0) cmempool_destroy(mps[--k]);
   k = 2;
-  while (k > 0) ccol_r_mempool_destroy(rmps[--k]);
+  while (k > 0) crmempool_destroy(rmps[--k]);
   REQUIRE_TRUE(created);
   REQUIRE_EQ(used_after, (size_t)0);
   REQUIRE_EQ(r_used_after, (size_t)0);
@@ -6867,7 +6790,7 @@ static void *arm_malloc(size_t s) {
              (now.tv_sec == end.tv_sec && now.tv_nsec < end.tv_nsec));
     atomic_store(&g_arm_overlapped, atomic_load(&g_arm_b_wants_outer_lock));
   }
-  return ccol_mempool_alloc_entry(g_arm_inner);
+  return cmempool_alloc_entry(g_arm_inner);
 }
 static void *arm_calloc(size_t n, size_t s) {
   void *p = arm_malloc(n * s);
@@ -6880,7 +6803,7 @@ static void *arm_realloc(void *p, size_t s) {
   return NULL;
 }
 static void arm_free(void *p) {
-  if (p) ccol_mempool_free_entry(g_arm_inner, p);
+  if (p) cmempool_free_entry(g_arm_inner, p);
 }
 
 /* Takes every entry of the outer pool through its thread cache and then
@@ -6888,7 +6811,7 @@ static void arm_free(void *p) {
 static void *arm_thread_b(void *a) {
   (void)a;
   for (int i = 0; i < 8; i++)
-    atomic_store(&g_arm_held[i], ccol_mempool_alloc_entry(g_arm_outer));
+    atomic_store(&g_arm_held[i], cmempool_alloc_entry(g_arm_outer));
   while (!atomic_load(&g_arm_b_may_exit)) usleep(1000);
   g_arm_b_self = pthread_self();
   atomic_store_explicit(&g_arm_b_exiting, true, memory_order_release);
@@ -6901,7 +6824,7 @@ static void *arm_thread_b(void *a) {
 static void *arm_thread_a(void *a) {
   (void)a;
   g_arm_is_a = 1;
-  void *e = ccol_mempool_alloc_entry(g_arm_outer);
+  void *e = cmempool_alloc_entry(g_arm_outer);
   return e;
 }
 
@@ -6922,11 +6845,10 @@ TEST(cmempools, a_pool_drawing_from_a_pool_does_not_deadlock_a_thread_exit) {
   if (pid == 0) {
     close(pfd[0]);
     char verdict = '0';
-    g_arm_inner =
-        ccol_mempool_create(1024, ARM_INNER_STRIDE, false, false, NULL, NULL);
+    g_arm_inner = cmempool_create(1024, ARM_INNER_STRIDE, false, false, NULL);
     ccol_memmgmt_procs_t procs = {arm_malloc, arm_free, arm_calloc,
                                   arm_realloc};
-    g_arm_outer = ccol_mempool_create(8, 16, true, false, &procs, NULL);
+    g_arm_outer = cmempool_create_mp(8, 16, true, false, &procs, NULL);
     pthread_t b, ta;
     if (g_arm_inner && g_arm_outer &&
         pthread_create(&b, NULL, arm_thread_b, NULL) == 0) {

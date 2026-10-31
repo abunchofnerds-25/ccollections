@@ -41,12 +41,12 @@ stale handle (one whose client was destroyed) is detected and refused.
 A stale handle gives:
   - ccol_invalid_args from a function.
   - NULL from a function that returns a future.
-  - A fatal error from chttpclient_destroy.
+  - A fatal error from chttpcli_destroy.
 It never leads to a read of freed memory.
 
-chttpclient_create and chttpclient_create_mp make a client, and
+chttpcli_create and chttpcli_create_mp make a client, and
 chttpcli_construct, chttpcli_construct_scoped, chttpcli_declare and
-chttpcli_declare_scoped are wrappers around them. chttpclient_destroy
+chttpcli_declare_scoped are wrappers around them. chttpcli_destroy
 destroys a client.
 
 chttp_default_client returns a single client for the whole process,
@@ -67,9 +67,9 @@ set in microseconds and turned off by 0:
   - The request timeout bounds the whole request. It is off by
     default.
 A request that runs out of any of them ends with ccol_timed_out. See
-chttpclient_set_connect_timeout(3),
-chttpclient_set_inactivity_timeout(3) and
-chttpclient_set_request_timeout(3).
+chttpcli_set_connect_timeout(3),
+chttpcli_set_inactivity_timeout(3) and
+chttpcli_set_request_timeout(3).
 .fi
 .SS Requests
 .nf
@@ -91,7 +91,7 @@ Authorization header just as it does everywhere else.
 .fi
 .SS Responses
 .nf
-chttpcli_response has four public fields:
+chttpcli_response_t has four public fields:
 
   status_code  the HTTP status of the final response.
   body         a heap buffer that ends with a NUL, or NULL.
@@ -108,28 +108,28 @@ after a success.
 
 When the server sends a name on more than one line, the name maps to
 its values joined with ", ", except Set-Cookie, which maps to its first
-value; see chttpclient_resp_header(3). chttpclient_resp_free frees the
+value; see chttpcli_resp_header(3). chttpcli_resp_free frees the
 response. A response does not depend on the client that made it, so
-you can free it before or after chttpclient_destroy.
+you can free it before or after chttpcli_destroy.
 
 Every entry point that takes a resp_out sets *resp_out to NULL before
 anything else and leaves it NULL on every return that is not a
-success. Since chttpclient_resp_free(NULL) does nothing, calling it
+success. Since chttpcli_resp_free(NULL) does nothing, calling it
 after such a request is always safe.
 .fi
 .SS Three ways to run a request
 .nf
-Tier 1 is chttpclient_do and chttpclient_do_streaming. The request runs
+Tier 1 is chttpcli_do and chttpcli_do_streaming. The request runs
 on the calling thread, which blocks until it ends. The client's pool
-size (chttpclient_set_pool_size) caps how many Tier 1 requests run at
+size (chttpcli_set_pool_size) caps how many Tier 1 requests run at
 the same time, and a caller over that cap waits for a slot.
 
-Tier 2 is chttpclient_do_async and chttpclient_do_async_streaming. The
+Tier 2 is chttpcli_do_async and chttpcli_do_async_streaming. The
 request goes to a shared reactor engine and the call returns a
-ctpool_future at once; chttpclient_async_result_get waits for the
+cthrpool_future_t at once; chttpcli_async_result_get waits for the
 result.
 
-Tier 3 is chttpclient_do_pooled and chttpclient_do_pooled_streaming.
+Tier 3 is chttpcli_do_pooled and chttpcli_do_pooled_streaming.
 The request is submitted through the same engine and the call blocks
 until it ends, with the same call shape as Tier 1. Many callers then
 share the engine's few threads, instead of each request tying up a
@@ -144,8 +144,8 @@ chttpserver's reactor. The engine stops on its own thread after the
 last client lets go of it, and chttpcli_engine_wait blocks until that
 stop is complete; once it returns, the engine makes no call to its
 allocator or through its logger. The write_fn of
-chttpclient_do_async_streaming and chttpclient_do_pooled_streaming runs
-on an engine thread, so calling chttpclient_destroy on any client, or
+chttpcli_do_async_streaming and chttpcli_do_pooled_streaming runs
+on an engine thread, so calling chttpcli_destroy on any client, or
 chttpcli_engine_wait, from there is fatal: each of them waits for work
 that those threads run.
 
@@ -199,7 +199,7 @@ The client never keeps these connections:
     a final status as the answer.
   - A connection whose HTTP/1.0 response has Transfer-Encoding, which
     RFC 9112 section 6.1 calls faulty framing.
-chttpclient_set_tls closes all of the client's idle HTTPS connections,
+chttpcli_set_tls closes all of the client's idle HTTPS connections,
 because the pool key does not include the TLS settings of a handshake.
 .fi
 .SS Unix domain sockets
@@ -217,10 +217,10 @@ and a request can set its own Host header. A path too long for
 sockaddr_un.sun_path gives ccol_http_invalid_url; on Linux that limit
 is 108 bytes, the terminating NUL included.
 
-There is no "https+unix://", and chttpclient_set_tls has no effect on
+There is no "https+unix://", and chttpcli_set_tls has no effect on
 such a request. A URL of this form carries no credentials. A redirect
 can never move a request onto this transport, or from one socket to
-another; see chttpclient_do(3).
+another; see chttpcli_do(3).
 .fi
 .SS Default request headers
 .nf
@@ -250,10 +250,10 @@ the application starts (system, popen, posix_spawn, fork and exec)
 inherits no connection and no file of the client. The one exception is
 a system with no default CA file, where OpenSSL itself opens the files
 of its hashed certificate directory during a handshake; see
-chttpclient_set_tls(3).
+chttpcli_set_tls(3).
 
 The client never changes the SIGPIPE disposition, and none of its
-writes raises SIGPIPE; see chttpclient_do(3).
+writes raises SIGPIPE; see chttpcli_do(3).
 
 There are two supported ways to use fork(2) with the client:
   - Call fork(2) before you create a client and before the first
@@ -280,26 +280,26 @@ Every function that takes a chttpcli is thread-safe, so many threads
 can run requests on one client and change its settings at the same
 time.
 
-chttpclient_destroy can run while other threads use the client, and it
+chttpcli_destroy can run while other threads use the client, and it
 waits for the requests in progress. Two overlapping destroys of the
 same handle are a fatal error, so the application must serialize the
 destroy, and the destroy must be the last thing any thread does with
 that handle.
 
-A chttp_request_t and a chttpcli_response have no lock. A thread that
+A chttp_request_t and a chttpcli_response_t have no lock. A thread that
 changes one of them needs exclusive access, and so does a thread that
 reads one while another thread changes it.
 .fi
 .SH "SEE ALSO"
-.BR chttpclient_do (3),
+.BR chttpcli_do (3),
 .BR chttpcli_engine_wait (3),
-.BR chttpclient_do_async (3),
-.BR chttpclient_do_pooled (3),
-.BR chttpclient_set_tls (3),
-.BR chttpclient_set_inactivity_timeout (3),
+.BR chttpcli_do_async (3),
+.BR chttpcli_do_pooled (3),
+.BR chttpcli_set_tls (3),
+.BR chttpcli_set_inactivity_timeout (3),
 .BR chttp_request_create (3),
 .BR chttp_default_client (3),
-.BR chttpclient_resp_header (3),
+.BR chttpcli_resp_header (3),
 .BR CHTTP_TLS_DEFAULT (3),
 .BR CHTTP_STATUS (3),
 .BR chttp (7),

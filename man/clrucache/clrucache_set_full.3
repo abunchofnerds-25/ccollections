@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clrucache.h>
 
-ccol_retval_t clrucache_set_full(clru_cache cache,
+ccol_retval_t clrucache_set_full(ccache cache,
                                  const cmap_pair *key_pair,
                                  const cmap_pair *val_pair);
 .fi
@@ -66,7 +66,7 @@ ccol_success             The function stored the value, and the remote
 ccol_unexpected_failure  The remote setter returned false. The set
                          changed nothing, but a concurrent insert can
                          have evicted the key (see above).
-ccol_invalid_args        cache is CLRU_CACHE_NULL, or cache is a
+ccol_invalid_args        cache is CCACHE_NULL, or cache is a
                          stale handle that a call already destroyed, or
                          key_pair is NULL, or val_pair is NULL, or
                          val_pair->size is 0, or key_pair->size does
@@ -87,11 +87,11 @@ cache is an opaque VALUE handle, which the library resolves through a
 slot table of its own before it touches the cache object behind it.
 The resolve takes a pin, and the call holds it for its whole duration,
 including any time spent blocked inside a remote setter callback, so
-a concurrent clru_destroy() on the same handle waits for this call to
+a concurrent ccache_destroy() on the same handle waits for this call to
 finish instead of freeing the cache under it.
 The average-case complexity of the hash map operations is O(1).
 .fi
 .SH "SEE ALSO"
-.BR clru_set (3),
+.BR ccache_set (3),
 .BR clrucache_get_full (3),
 .BR clrucache_create_full (3)

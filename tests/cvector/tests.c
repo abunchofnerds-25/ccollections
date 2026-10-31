@@ -2032,7 +2032,7 @@ TEST(cvectors, iterator_empty_vector) {
 
 // cvector_begin_iter(NULL, ...) must behave like an empty vector: return
 // NULL, set err to NULL and not assert. chashmap_begin_iter() and
-// cbmap_begin_iter() tolerate NULL in the same deliberate way, so the three
+// cbstmap_begin_iter() tolerate NULL in the same deliberate way, so the three
 // container modules stay consistent here, and a container field can stay a
 // null pointer while there's nothing in it yet: the caller can iterate such
 // a field directly with no NULL guard of its

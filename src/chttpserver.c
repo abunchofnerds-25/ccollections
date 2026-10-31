@@ -77,7 +77,7 @@ typedef struct chttpsvr_mw_node chttpsvr_mw_node_t;
  * routes_lock held and every write appends under the write-lock, so the lock
  * already gives us the ordering and we don't need atomics here. */
 struct chttpsvr_mw_node {
-  chttpsvr_middleware_fn fn;
+  chttpsvr_middleware_fn_t fn;
   void *ctx;
   chttpsvr_mw_node_t *next;
 };
@@ -89,13 +89,13 @@ typedef struct chttpsvr_route {
   int seg_count;
   char **param_names; /* comes from the {name} segments */
   int param_count;
-  chttpsvr_handler_fn fn;
+  chttpsvr_handler_fn_t fn;
   void *ctx;
   bool is_streaming;
 } chttpsvr_route_t;
 
 /** Sub-router (also used as the root router). */
-struct chttpsvr_router {
+struct chttpsvr_router_t {
   char *prefix; /* for example "/api/v1"; "" for the root */
   size_t prefix_len;
   /* How many '/'-delimited segments the prefix has. It's 0 for the root's own
@@ -133,7 +133,7 @@ struct chttpsvr_router {
   ccol_memmgmt_procs_t *m_procs; /* The server's allocator. It only serves the
                                   * CONTENTS this router owns: the prefix, the
                                   * mw list, the routes array and the route
-                                  * data. The chttpsvr_router struct itself
+                                  * data. The chttpsvr_router_t struct itself
                                   * (this shell) is on purpose not allocated
                                   * through it; see _create_router. */
   /* The chttpsvr handle that owns this router. There are only two cases where
@@ -141,7 +141,7 @@ struct chttpsvr_router {
    * _create_router runs before we mint a handle and chttpsvr_create_mp stores
    * the fresh handle here afterwards. The other is any router, the root
    * included, whose server is already destroyed (see _destroy_router). The
-   * root router is never handed to a caller as a chttpsvr_router*, so
+   * root router is never handed to a caller as a chttpsvr_router_t*, so
    * chttpsvr_router_on, _on_stream and _use never resolve this field for it.
    * We set it for the root anyway for a single reason: the exit-time
    * destructor of the shell registry below needs to tell a live root from a
@@ -197,7 +197,7 @@ typedef struct {
  * We keep the response headers in a flat dynamic array instead of a linked
  * list, so the duplicate scan of chttpsvr_resp_set_header stays cache-friendly
  * and a header doesn't cost a node allocation. */
-struct chttpsvr_resp {
+struct chttpsvr_resp_t {
   int status_code;
   resp_header_t *headers; /* flat array; it grows to 2x+8 when it is full */
   size_t header_count;
@@ -305,7 +305,7 @@ static inline unsigned _internal_write_ceiling_ms(void) {
  * unbounded like CHTTPSVR_QUEUE_UNBOUNDED (0), since otherwise a flood of
  * rejected connections that never stops grows reject_pool's backlog without
  * limit, and that backlog is our own memory (one queued chttpsvr_conn_t per
- * waiting reject-close). When the queue is full ctpool_try_submit fails and
+ * waiting reject-close). When the queue is full cthrpool_try_submit fails and
  * _conn_reject_via_pool falls back to closing synchronously on the calling
  * thread, the same fallback that runs when reject_pool isn't there at all,
  * during a shutdown for example. The size is generous because every
@@ -314,7 +314,7 @@ static inline unsigned _internal_write_ceiling_ms(void) {
 
 /* Snapshot entry for one middleware step. */
 typedef struct {
-  chttpsvr_middleware_fn fn;
+  chttpsvr_middleware_fn_t fn;
   void *ctx;
 } _mw_entry_t;
 
@@ -324,7 +324,7 @@ typedef struct {
  * like the other per-request scratch fields of that struct. */
 typedef struct dispatch_ctx {
   struct chttpserver *srv;
-  chttpsvr_router *router;
+  chttpsvr_router_t *router;
   chttpsvr_route_t *route;
   _mw_entry_t
       mw_snap[_CHTTPSVR_MAX_MW]; /* fn and ctx pairs, copied under the lock */
@@ -347,9 +347,9 @@ typedef enum {
   CONN_ST_TLS_HANDSHAKE,
   CONN_ST_READING_HEADERS,
   CONN_ST_DIVERTED, /* A worker thread owns the fd. If there is a reactor
-                     * registration we pause it with ccol_event_loop_pause
+                     * registration we pause it with ceventloop_pause
                      * instead of removing it, so no events fire but the
-                     * registration stays alive and ccol_event_loop_resume
+                     * registration stays alive and ceventloop_resume
                      * brings it back cheaply for the next request. We never
                      * rebuild it from scratch. */
   CONN_ST_CLOSING
@@ -359,13 +359,13 @@ typedef enum {
  * the connection, and _conn_reset_for_request() clears its per-request
  * scratch fields (method, path, headers, route, dispatch state, response and
  * body buffers) before each new request. It's on the heap and owned either by
- * the reactor's ccol_event_reg or by a worker's ctpool task, never by both at
+ * the reactor's ceventloop_reg or by a worker's cthrpool task, never by both at
  * once. The header-reading callback and _task_worker are the two places
  * where it changes hands. */
 typedef struct chttpsvr_conn {
   int fd;
   struct chttpserver *srv;
-  ccol_event_reg reg; /* current registration, CCOL_EVENT_REG_NULL while
+  ceventloop_reg reg; /* current registration, CEVENTLOOP_REG_NULL while
                        * the connection is diverted */
   ctls_conn_t *tls;
   conn_state_t state;
@@ -393,11 +393,11 @@ typedef struct chttpsvr_conn {
   char *raw_query; /* owned, or NULL */
   char **hdr_names, **hdr_values;
   size_t hdr_count, hdr_cap;
-  chttpsvr_router *matched_router;
+  chttpsvr_router_t *matched_router;
   chttpsvr_route_t *matched_route;
   char **matched_param_values;
   dispatch_ctx_t dispatch;
-  chttpsvr_resp resp;
+  chttpsvr_resp_t resp;
   bool req_rejected;
   int reject_status;
   /* allowed_methods of the route match, for the Allow header of a 405.
@@ -520,11 +520,11 @@ typedef struct chttpsvr_conn {
   bool in_diverted_list;
 
   /* This counter tells us when the struct can be freed. It follows the
-   * refcount design of ccol_event_reg in cthreadcomm.c, which is 1 while the
+   * refcount design of ceventloop_reg in cthreadcomm.c, which is 1 while the
    * object is registered plus 1 per callback in flight. It starts at 1, which
    * stands for "the application hasn't closed this connection yet" (see
    * _conn_create), and gets +1 for every conn->reg registration we create for
-   * the connection, so for every successful ccol_event_loop_add call site
+   * the connection, so for every successful ceventloop_add call site
    * below. It gets -1 exactly once from _conn_close, the application's "done
    * with conn" decision, and -1 exactly once per on_removed that fires
    * (_conn_on_removed). cthreadcomm promises that on_removed fires exactly
@@ -591,8 +591,8 @@ typedef struct chttpsvr_conn {
    * is about to park the connection. */
   uint8_t park;
   uint8_t park_pending;
-  /* The direction (a ccol_select_dir value) reg was last added or modified
-   * with, so a wait in the same direction skips the ccol_event_loop_modify
+  /* The direction (a cselect_dir_t value) reg was last added or modified
+   * with, so a wait in the same direction skips the ceventloop_modify
    * call; see _conn_reg_modify. Like reg, only the connection's owner touches
    * it. */
   uint8_t reg_dir;
@@ -721,7 +721,7 @@ typedef struct {
   _chttpsvr_ctx_pair_t pairs[];
 } _chttpsvr_ctx_more_t;
 
-struct chttpsvr_req {
+struct chttpsvr_req_t {
   chttpsvr_conn_t *conn;
   chttp1_stream_t *stream;  /* the worker's own; NULL until the worker sets
                              * it up */
@@ -824,20 +824,20 @@ static void _chttpsvr_slot_table_init_globals(void) {
    * that thread doesn't exist in the child the lock stays locked forever.
    *
    * These three calls make the _ccol_at_fork() triples of cthreadcomm (owner
-   * of ccol_event_loop), cthreadpool and clogger register NOW, strictly
+   * of ceventloop), cthreadpool and clogger register NOW, strictly
    * before this module's own _ccol_at_fork() call below. pthread_atfork runs
    * prepare handlers in REVERSE registration order, so with this order
    * _chttpsvr_atfork_prepare always runs FIRST at every later fork(). It
    * takes our own locks first (srv_engine_bundler.mutex,
    * servers_bundler.mutex, the mutex of each live server and so on), and only
-   * after that do the prepare handlers of ccol_event_loop, ctpool or clogger
-   * take theirs: ccol_event_loop_slot_table.mutex, ctpool_slot_table.mutex,
-   * clog_slot_table.rwlock, and the internal locks of a live ccol_event_loop,
+   * after that do the prepare handlers of ceventloop, cthrpool or clogger
+   * take theirs: ceventloop_slot_table.mutex, cthrpool_slot_table.mutex,
+   * clog_slot_table.rwlock, and the internal locks of a live ceventloop,
    * a live pool or a live clog_shared_t.
    *
    * Every ordinary call in this file already nests the locks in that order.
    * _engine_acquire holds srv_engine_bundler.mutex for its whole body, which
-   * includes its nested call into ccol_event_loop_create_mp() and its own
+   * includes its nested call into ceventloop_create_mp() and its own
    * direct clog_create_from_fd_mp() call when there is no engine-wide logger
    * yet. The _SRV_ENGINE_LOG macro holds the same mutex around every
    * clog_info, clog_warn and similar call it makes through an open logger.
@@ -845,10 +845,10 @@ static void _chttpsvr_slot_table_init_globals(void) {
    * Without these calls the lock order at fork() time would depend on which
    * subsystem the embedding application happens to use FIRST, which is pure
    * chance and can come out reversed against this nesting. For
-   * ccol_event_loop and ctpool that gives two real lock-order-inversion
+   * ceventloop and cthrpool that gives two real lock-order-inversion
    * cycles, srv_engine_bundler.mutex against
-   * ccol_event_loop_slot_table.mutex and a three-way one that also contains
-   * ctpool_slot_table.mutex. ThreadSanitizer reports both through the
+   * ceventloop_slot_table.mutex and a three-way one that also contains
+   * cthrpool_slot_table.mutex. ThreadSanitizer reports both through the
    * test_engine_stop_tsan target of tests/chttpserver.
    *
    * clogger has the same shape of hazard, and you can hit it without
@@ -868,11 +868,11 @@ static void _chttpsvr_slot_table_init_globals(void) {
    *
    * Calling all three every time this function runs is harmless since each
    * has its own _ccol_call_once guard. The caller may already have forced
-   * some of them through its own unrelated use of ccol_event_loop, ctpool or
+   * some of them through its own unrelated use of ceventloop, cthrpool or
    * clog, in which case the call sees the handler registered and returns
    * at once. */
   _cthreadcomm_ensure_atfork_registered_before_caller();
-  _ctpool_ensure_atfork_registered_before_caller();
+  _cthrpool_ensure_atfork_registered_before_caller();
   _clog_ensure_atfork_registered_before_caller();
   _ccol_at_fork(_chttpsvr_atfork_prepare, _chttpsvr_atfork_release,
                 _chttpsvr_atfork_child_release);
@@ -938,13 +938,13 @@ struct chttpserver {
   /* [0] is the root and [1..n] are the sub-routers, kept sorted by
    * prefix_seg_count from the largest to the smallest (see the sorted insert
    * in chttpsvr_subrouter and the walk order in _find_route). */
-  chttpsvr_router **routers;
+  chttpsvr_router_t **routers;
   /* routers[0], copied once at create time. The root router shell never
    * moves and never goes away while the server lives, so we write this field
    * once before the handle is published and read it without routes_lock.
    * Reading routers[0] itself does need the lock, because chttpsvr_subrouter
    * may realloc the routers array under the write lock. */
-  chttpsvr_router *root_router;
+  chttpsvr_router_t *root_router;
   size_t router_count;
   size_t router_cap;
   /* The running maximum of prefix_seg_count over the non-root routers of
@@ -963,7 +963,7 @@ struct chttpserver {
    * controls, and not by the request path's real segment count, which the
    * client fully controls, for the same reason as max_route_seg_count. */
   int max_prefix_seg_count;
-  ctpool worker_pool;
+  cthrpool worker_pool;
   /* A pool of dedicated threads with a bounded queue. It has the larger of
    * _CHTTPSVR_REJECT_POOL_MIN_THREADS and half of worker_pool's resolved
    * thread count (see the comment of that constant), and a queue of
@@ -981,7 +981,7 @@ struct chttpserver {
    * without limit. When the queue is full _conn_reject_via_pool falls back to
    * closing synchronously on the calling thread; the comment of that function
    * explains why the pool exists in the first place. */
-  ctpool reject_pool;
+  cthrpool reject_pool;
   ctls_ctx_t *tls_ctx; /* not NULL when the caller configures TLS */
   _ccol_mutex_t mutex;
   _ccol_cond_var_t requests_done_cv;
@@ -1004,7 +1004,7 @@ struct chttpserver {
    * Every user of a chttpsvr handle holds this pin for its whole synchronous
    * call, so we never wait on the two counters together. That's
    * different from the pending_resolve_count and in_flight_count pair in
-   * chttpclient.c, where chttpclient_do has requests that stay in flight for
+   * chttpclient.c, where chttpcli_do has requests that stay in flight for
    * a long time; nothing here hands protection over, half way through a call,
    * to some other mechanism that drains later. */
   _Atomic size_t pending_resolve_count;
@@ -1034,7 +1034,7 @@ struct chttpserver {
    * registration holds one srv->lifetime_refs reference, and its on_removed
    * (_listener_on_removed) only releases it once no dispatch of that
    * registration can still run (see the comment of that field).
-   * ccol_event_loop_remove() doesn't wait for a dispatch that has already
+   * ceventloop_remove() doesn't wait for a dispatch that has already
    * started, so without that reference a destroy would free srv under such a
    * dispatch.
    *
@@ -1060,12 +1060,12 @@ struct chttpserver {
    * so the waiting thread is never the one that needs to run for the counter to
    * reach 0 and the wait can't self-deadlock like a wait on the other two.
    * _chttpsvr_stop_internal waits for it right after its own
-   * ccol_event_loop_remove() of the listener and strictly before closing the
+   * ceventloop_remove() of the listener and strictly before closing the
    * listener fd; the doc comment of that function describes the real fd-reuse
-   * race this closes. Once ccol_event_loop_remove() has run no NEW dispatch
+   * race this closes. Once ceventloop_remove() has run no NEW dispatch
    * can start, so the wait is only ever for a dispatch that is live at that
    * moment, never a fresh one, and there is at most one of those because the
-   * per-registration dispatch_lock of ccol_event_loop already makes sure a
+   * per-registration dispatch_lock of ceventloop already makes sure a
    * registration's callback never runs concurrently with itself.
    * __chttpsvr_destroy also checks this counter, next to
    * servers_bundler_pins, right before freeing the contents of raw. By then
@@ -1082,8 +1082,8 @@ struct chttpserver {
    * accept() and never takes srv->mutex. With a plain int and bool that is a
    * real data race against the locked writes of chttpsvr_start and
    * chttpsvr_stop, and ThreadSanitizer confirms it. chttpsvr_start also sets
-   * both BEFORE registering the listener with ccol_event_loop_add, not after,
-   * since the registration is live as soon as ccol_event_loop_add makes it
+   * both BEFORE registering the listener with ceventloop_add, not after,
+   * since the registration is live as soon as ceventloop_add makes it
    * and a connection can arrive before the fields are written. Otherwise
    * that connection reaches _listener_on_readable while it still sees the
    * pre-start listen_fd of -1. */
@@ -1100,7 +1100,7 @@ struct chttpserver {
    * the listener while lifecycle is CHTTPSVR_LC_RUNNING. */
   uint16_t bound_port;
   char bound_host[INET6_ADDRSTRLEN];
-  ccol_event_reg listen_reg;
+  ceventloop_reg listen_reg;
   /* CHTTPSVR_LC_IDLE -> CHTTPSVR_LC_STARTING -> CHTTPSVR_LC_RUNNING ->
    * CHTTPSVR_LC_STOPPING -> CHTTPSVR_LC_IDLE. Every read and write of this
    * field is under raw->mutex. The top of chttpsvr_start()'s retry loop
@@ -1133,11 +1133,11 @@ struct chttpserver {
    * _chttpsvr_stop_internal() call on this handle. It begins as soon as that
    * call has confirmed the server was RUNNING, in the same critical section
    * that leaves CHTTPSVR_LC_RUNNING, and ends when the call has finished its
-   * ccol_event_loop_remove(), close() and unlink() sequence. chttpsvr_start()'s
+   * ceventloop_remove(), close() and unlink() sequence. chttpsvr_start()'s
    * retry loop checks it.
    *
    * We need CHTTPSVR_LC_STOPPING because chttpsvr_stop() leaves
-   * CHTTPSVR_LC_RUNNING BEFORE its blocking ccol_event_loop_remove() of the
+   * CHTTPSVR_LC_RUNNING BEFORE its blocking ceventloop_remove() of the
    * OLD listener registration returns, not after. chttpsvr_destroy() and
    * chttpsvr_engine_stop() are different here since both go through
    * _quiesce_server_once and its quiesce_state interlock below. Without this
@@ -1147,7 +1147,7 @@ struct chttpserver {
    * touches quiesce_state) and goes straight into _make_listen_socket() and
    * bind() for a NEW listener on the same host and port while the OLD
    * listener's fd is still open, because the stopping thread hasn't run
-   * ccol_event_loop_remove() and close() yet. The race is narrow and fails
+   * ceventloop_remove() and close() yet. The race is narrow and fails
    * gracefully, with a spurious ccol_unexpected_failure from a concurrent
    * EADDRINUSE, but it's real, and this state guards against it just like
    * the equivalent guard between chttpsvr_engine_stop() and chttpsvr_start().
@@ -1301,7 +1301,7 @@ struct chttpserver {
   /* Unlike the three fields above this is a plain bool. Its only reader is
    * _listener_on_readable, through _apply_accepted_socket_options, which only
    * runs while a listener registration is live. chttpsvr_stop()'s
-   * ccol_event_loop_remove(listen_reg) blocks until any listener callback in
+   * ceventloop_remove(listen_reg) blocks until any listener callback in
    * flight returns and makes sure none fires afterwards, and the new listener
    * is registered well after chttpsvr_start() writes this field, so a reader
    * and a writer of it never run at the same time. max_body_size and
@@ -1341,7 +1341,7 @@ struct chttpserver {
    * ENFILE (the process or the system is out of file descriptors), logs the
    * same line on every reactor dispatch for as long as it lasts, and the
    * diagnostic floods the log it was meant to help with. Plain fields are
-   * fine since the per-registration dispatch_lock of ccol_event_loop already
+   * fine since the per-registration dispatch_lock of ceventloop already
    * makes sure this listener's registration is never dispatched concurrently
    * with itself (see cthreadcomm.h). So one server's _listener_on_readable
    * never runs on two threads at once, however many reactor threads are
@@ -1373,7 +1373,7 @@ struct chttpserver {
    * a connection's fd once its own graceful wait runs out, so one stalled
    * peer can't hang chttpsvr_destroy(), a chttpsvr_stop() plus
    * chttpsvr_start() restart or chttpsvr_engine_wait() forever, which is what
-   * an unconditional ctpool_shutdown_drain() with no timeout would do here.
+   * an unconditional cthrpool_shutdown_drain() with no timeout would do here.
    * That function's comment explains why. diverted_mutex
    * guards these fields the same way idle_mutex guards idle_head and
    * idle_tail above. */
@@ -1392,7 +1392,7 @@ struct chttpserver {
    * reasoning). It starts at 1, standing for "the application hasn't
    * destroyed this server yet" (see chttpsvr_create_mp). It gets +1 for every
    * conn->reg registration we create for any connection this server accepts,
-   * i.e. every successful ccol_event_loop_add call site in _conn_pump and
+   * i.e. every successful ceventloop_add call site in _conn_pump and
    * _task_worker, and +1 for the listener registration each chttpsvr_start
    * creates. It gets -1 exactly once from __chttpsvr_destroy, the
    * application's "done with this server" decision, and -1 exactly once per
@@ -1404,13 +1404,13 @@ struct chttpserver {
    * real _ccol_mutex_destroy, the free and the slot release. That's exactly
    * why it lives outside __chttpsvr_destroy: a connection's on_removed can
    * fire well after the caller of __chttpsvr_destroy has returned (the doc
-   * comment of ccol_event_loop_remove() explains why that step can't be made
+   * comment of ceventloop_remove() explains why that step can't be made
    * synchronous without risking a lock-ordering cycle). It covers one
    * specific case, a registration removed too close to the async teardown of
    * the shared reactor, which the engine's reaper drives, and which therefore
    * never reaches the poller's ordinary reclaim pass. Without the deferral
    * __chttpsvr_destroy would free raw synchronously at the wrong moment,
-   * while the final unconditional sweep of _ccol_event_loop_teardown_raw
+   * while the final unconditional sweep of _ceventloop_teardown_raw
    * still has this exact connection's on_removed pending on the reaper
    * thread, an intermittent use-after-free that valgrind catches.
    * __chttpsvr_destroy itself must never block waiting for the counter to
@@ -1442,7 +1442,7 @@ struct chttpserver {
    * as worker_pool, since _conn_start_diverted and the detach of a stop or a
    * destroy read and write it under that lock. It's created by the first
    * streaming request, see _stream_pool_get. */
-  ctpool stream_pool;
+  cthrpool stream_pool;
   /* Changes every time stream_pool goes out of service (a restart or a stop),
    * under wait_mutex and together with the sq_tokens reset. A
    * _stream_token_task task carries the value from when it was submitted,
@@ -1616,32 +1616,32 @@ static bool _chttpsvr_slot_table_released(void) {
  * once at the top of _task_worker and _reject_task, the only two functions we
  * ever submit to a server's worker_pool or reject_pool, and nothing sets or
  * clears it again for the rest of that thread's life. Same idea as
- * ctpool_worker_key_bundle and _ctpool_is_self_call in cthreadpool.c, and for
- * the same reason: a worker thread of srv->worker_pool or srv->reject_pool
- * belongs to one server privately and for its whole life, because ctpool
+ * cthrpool_worker_key_bundle and _cthrpool_is_self_call in cthreadpool.c, and
+ * for the same reason: a worker thread of srv->worker_pool or srv->reject_pool
+ * belongs to one server privately and for its whole life, because cthrpool
  * always spawns its own dedicated threads and never shares them between
  * pools, and a restart destroys a server's pools and builds them again with
  * new OS threads. So there's no per-task set-and-clear to manage, unlike the
- * key of a ccol_event_loop dispatch-pool worker in cthreadcomm.c, which does
+ * key of a ceventloop dispatch-pool worker in cthreadcomm.c, which does
  * need one.
  *
  * The key is there to catch a request handler, a middleware or the
- * handler's chttpsvr_next_fn continuation calling chttpsvr_destroy(), or
+ * handler's chttpsvr_next_fn_t continuation calling chttpsvr_destroy(), or
  * chttpsvr_stop() directly followed by chttpsvr_start(), on the very server
  * whose worker pool is running that code. Without it the call goes into
  * _wait_in_flight_bounded's bounded wait for in_flight_requests to reach 0,
  * about a minute once the current_connections poll of
  * _drain_and_close_all_connections is counted. in_flight_requests can never
  * reach 0 since this very call stack is the one that decrements it, so the
- * call then goes into ctpool_destroy() on the pool this thread is a worker
+ * call then goes into cthrpool_destroy() on the pool this thread is a worker
  * of, which ends in an unrelated _ccol_fatal_err() and abort() from
- * cthreadpool.c (see the comment of ctpool_worker_key_bundle there). The
+ * cthreadpool.c (see the comment of cthrpool_worker_key_bundle there). The
  * symptoms are indirect and hard to trace back: a handler that calls
  * chttpsvr_destroy() on its own server hangs the whole process for about a
  * minute and then aborts it, with a crash pointing into cthreadpool.c rather
  * than this file. If a concurrent chttpsvr_engine_stop() for the same server
  * races in, it deadlocks forever with no abort at all, because the reaper
- * thread's ctpool_shutdown_drain isn't a self-call, has no timeout and waits
+ * thread's cthrpool_shutdown_drain isn't a self-call, has no timeout and waits
  * forever for the self-deadlocked handler to return. With the key we catch
  * the case right here, cheaply, with one thread-local read and no lock,
  * before any of that can happen, and a clear error at the call is much
@@ -1717,7 +1717,7 @@ static bool _chttpsvr_is_self_call(struct chttpserver *srv) {
  * server, while this one exists for chttpsvr_engine_wait(), which is
  * engine-wide. _engine_force_stop_quiesce_all drains the worker pool of every
  * registered server in turn, inside _quiesce_server_once, with a plain
- * ctpool_shutdown_drain that has no timeout. So a handler of ANY server that
+ * cthrpool_shutdown_drain that has no timeout. So a handler of ANY server that
  * blocks in chttpsvr_engine_wait() runs into the same kind of self-deadlock
  * that _chttpsvr_is_self_call already protects chttpsvr_destroy() and
  * chttpsvr_start() from: the reaper thread can never finish draining that
@@ -1735,8 +1735,8 @@ static bool _chttpsvr_is_any_worker_call(void) {
 /* ========================================================================== */
 
 /*
- * One static ccol_event_loop reactor for the whole process, shared by every
- * chttpsvr instance in it. chttpclient has its own static ccol_event_loop
+ * One static ceventloop reactor for the whole process, shared by every
+ * chttpsvr instance in it. chttpclient has its own static ceventloop
  * (see chttpclient.c), so there are two separate reactors and the server and
  * the client never share one. That's why this lifecycle wrapper needs no
  * coordination between the two modules, just a refcount over the chttpsvr
@@ -1747,7 +1747,7 @@ static bool _chttpsvr_is_any_worker_call(void) {
 static struct {
   /* Only written under srv_engine_bundler.mutex: _engine_acquire creates it
    * (its rollback branch for a failed allocation included) and
-   * _engine_reaper_fn sets it to CCOL_EVENT_LOOP_NULL. Dozens of places in
+   * _engine_reaper_fn sets it to CEVENTLOOP_NULL. Dozens of places in
    * this file read it without a lock though, every connection site, every
    * reactor callback and every listener site. That is safe by construction
    * and doesn't rely on a uint64_t load or store happening to be atomic on
@@ -1760,7 +1760,7 @@ static struct {
    * resolve mechanisms that guard every chttpsvr handle. If some future path
    * reads the field OUTSIDE that invariant, i.e. without holding a live
    * engine reference of its own first, the field must become _Atomic. */
-  ccol_event_loop reactor;
+  ceventloop reactor;
   size_t reactor_refs;
   _ccol_mutex_t mutex;
   _ccol_cond_var_t stopped_cv;
@@ -1779,11 +1779,11 @@ static struct {
    * before the first start or after a full stop. */
   size_t num_reactor_threads;
   /* The value, auto-detected or explicit, passed to
-   * ccol_event_loop_create_mp the last time the reactor was created. It only
+   * ceventloop_create_mp the last time the reactor was created. It only
    * exists for test instrumentation, see
    * _chttpsvr_engine_num_reactor_threads_for_tests below. */
   size_t last_resolved_num_reactor_threads;
-  /* Engine-wide diagnostics logger. The ccol_event_loop reactor has no log
+  /* Engine-wide diagnostics logger. The ceventloop reactor has no log
    * of its own to forward, so this one captures the diagnostics of
    * chttpserver's own reactor thread (TLS handshake failures, listener bind
    * errors, idle-timeout closes) for every chttpsvr instance sharing the
@@ -2103,7 +2103,7 @@ static void *_engine_reaper_fn(void *arg) {
    * function that touches the primitive directly instead of relying on
    * call-graph reasoning, so we carry our own guard here. */
   _ccol_call_once(srv_engine_bundler.once, _engine_globals_init);
-  ccol_event_loop loop_to_destroy;
+  ceventloop loop_to_destroy;
   _ccol_mutex_lock(srv_engine_bundler.mutex);
   loop_to_destroy = srv_engine_bundler.reactor;
   _ccol_mutex_unlock(srv_engine_bundler.mutex);
@@ -2119,10 +2119,10 @@ static void *_engine_reaper_fn(void *arg) {
    * _engine_force_stop_quiesce_all). */
   _engine_force_stop_quiesce_all();
   /* Stop the idle sweep thread before tearing down the reactor, since the
-   * sweep calls into it through _conn_close and ccol_event_loop_remove (see
+   * sweep calls into it through _conn_close and ceventloop_remove (see
    * the doc comment of _idle_sweep_stop_if_running). */
   _idle_sweep_stop_if_running();
-  if (loop_to_destroy) ccol_event_loop_destroy(loop_to_destroy);
+  if (loop_to_destroy) ceventloop_destroy(loop_to_destroy);
 
   /* servers_bundler.servers is a plain realloc'ed buffer, not tied to the
    * lifetime of any one server. Every server that contributed a reference to
@@ -2144,7 +2144,7 @@ static void *_engine_reaper_fn(void *arg) {
   _ccol_mutex_unlock(servers_bundler.mutex);
 
   _ccol_mutex_lock(srv_engine_bundler.mutex);
-  srv_engine_bundler.reactor = CCOL_EVENT_LOOP_NULL;
+  srv_engine_bundler.reactor = CEVENTLOOP_NULL;
   atomic_store(&srv_engine_bundler.generation, (uintptr_t)0);
   srv_engine_bundler.stopping = false;
   /* The fallback logger _engine_acquire installed lives exactly as long as
@@ -2358,8 +2358,8 @@ static ccol_retval_t _engine_acquire(bool *out_currently_stopping,
     if (nthreads == 0) nthreads = 1;
     srv_engine_bundler.last_resolved_num_reactor_threads = nthreads;
     char *err = NULL;
-    srv_engine_bundler.reactor = ccol_event_loop_create_mp(
-        256, 4, nthreads, srv_engine_bundler.mprocs, &err);
+    srv_engine_bundler.reactor =
+        ceventloop_create_mp(256, 4, nthreads, srv_engine_bundler.mprocs, &err);
     if (!srv_engine_bundler.reactor) {
       _ccol_mutex_unlock(srv_engine_bundler.mutex);
       return ccol_not_enough_memory;
@@ -2384,16 +2384,16 @@ static ccol_retval_t _engine_acquire(bool *out_currently_stopping,
          * this window. That's ordinary contention and no deadlock risk,
          * because nobody waiting on this mutex needs THIS thread to make
          * progress before getting the lock. What matters for the synchronous
-         * join inside ccol_event_loop_destroy() below is that nothing can
+         * join inside ceventloop_destroy() below is that nothing can
          * call back INTO this mutex from under it. The idle-timeout sweep
          * thread is only started by chttpsvr_start(), strictly AFTER this
-         * function has returned success, and the ccol_event_loop reactor
+         * function has returned success, and the ceventloop reactor
          * threads know nothing about srv_engine_bundler. So nothing can
          * re-enter _SRV_ENGINE_LOG or chttpsvr_set_engine_logger() (both lock
          * this mutex) from inside the join and deadlock against the lock this
          * thread holds. */
-        ccol_event_loop_destroy(srv_engine_bundler.reactor);
-        srv_engine_bundler.reactor = CCOL_EVENT_LOOP_NULL;
+        ceventloop_destroy(srv_engine_bundler.reactor);
+        srv_engine_bundler.reactor = CEVENTLOOP_NULL;
         _ccol_mutex_unlock(srv_engine_bundler.mutex);
         return ccol_not_enough_memory;
       }
@@ -2504,10 +2504,10 @@ static void _engine_force_stop_now(uintptr_t gen) {
    * teardown, when srv_engine_bundler.stopping is already true but
    * srv_engine_bundler.reactor isn't NULL yet. The reaper only clears it near
    * its very end, well after _engine_force_stop_quiesce_all,
-   * _idle_sweep_stop_if_running and ccol_event_loop_destroy have run, which
+   * _idle_sweep_stop_if_running and ceventloop_destroy have run, which
    * can take real wall-clock time. The second call would spawn a SECOND
-   * reaper holding the same live ccol_event_loop handle, and both reapers
-   * would call ccol_event_loop_destroy() on it. The contract in cthreadcomm.h
+   * reaper holding the same live ceventloop handle, and both reapers
+   * would call ceventloop_destroy() on it. The contract in cthreadcomm.h
    * makes that fatal every time, with a _ccol_fatal_err() and a SIGABRT,
    * whether the two destroys are sequential or overlap.
    * chttpsvr_engine_stop() is documented as the thing to wire into a signal
@@ -2631,7 +2631,7 @@ static void _engine_forget_inherited_locked(void) {
   srv_engine_bundler.log = CLOG_NULL;
   if (inherited_log && inherited_log != srv_engine_bundler.user_log)
     clog_close(inherited_log);
-  srv_engine_bundler.reactor = CCOL_EVENT_LOOP_NULL;
+  srv_engine_bundler.reactor = CEVENTLOOP_NULL;
   srv_engine_bundler.reactor_refs = 0;
   srv_engine_bundler.stopping = false;
   srv_engine_bundler.reaper_joinable = false;
@@ -2964,7 +2964,7 @@ static void _conn_end_parked_write(chttpsvr_conn_t *conn);
 static void _conn_dispatch_reject(chttpsvr_conn_t *conn);
 static void _parked_unlink_locked(struct chttpserver *srv, chttpsvr_conn_t *c);
 static void _task_park_body(chttpsvr_conn_t *conn, struct chttpserver *srv,
-                            chttp1_stream_t *stream, chttpsvr_req *req);
+                            chttp1_stream_t *stream, chttpsvr_req_t *req);
 
 /* Target capacity for a doubling pointer array backed by plain realloc: cap*2,
  * or `initial` the first time when cap is 0. It returns 0 when the doubling
@@ -3106,7 +3106,7 @@ static void _servers_unregister(struct chttpserver *srv) {
 /* Undoes the _servers_register() and the engine reference of a
  * chttpsvr_start() that registered raw, may have acquired the shared engine,
  * and then failed further down, in the listen socket setup or in
- * ccol_event_loop_add for example. That way a failed start leaves raw exactly
+ * ceventloop_add for example. That way a failed start leaves raw exactly
  * as it was before the call. Without it the start would quietly keep the
  * shared reactor alive and raw registered with the idle-timeout sweep until
  * some later chttpsvr_destroy() reclaimed it, which the application may
@@ -3178,7 +3178,7 @@ static void _chttpsvr_undo_start_registration(struct chttpserver *raw,
  *
  * _idle_sweep_fn's per-server loop below calls it unconditionally once per
  * sweep tick, with no gate on idle_timeout_ms, and _conn_free never calls it
- * synchronously when a connection closes. Calling ccol_event_loop_resume
+ * synchronously when a connection closes. Calling ceventloop_resume
  * straight from _conn_free right after its atomic_fetch_sub of
  * current_connections would be immediate and correct alone, but combined
  * with __chttpsvr_destroy's teardown it's a real use-after-free, and
@@ -3205,10 +3205,10 @@ static void _listener_resume_if_capacity_freed(struct chttpserver *srv) {
   size_t cap = atomic_load(&srv->max_connections);
   if (!cap || atomic_load(&srv->current_connections) >= cap) return;
   _ccol_mutex_lock(srv->mutex);
-  ccol_event_reg lreg = srv->listen_reg;
+  ceventloop_reg lreg = srv->listen_reg;
   _ccol_mutex_unlock(srv->mutex);
   if (!lreg) return;
-  ccol_event_loop_resume(srv_engine_bundler.reactor, lreg);
+  ceventloop_resume(srv_engine_bundler.reactor, lreg);
 }
 
 /* Resumes srv's listener registration when _listener_on_readable_impl paused
@@ -3225,7 +3225,7 @@ static void _listener_resume_if_capacity_freed(struct chttpserver *srv) {
  * to verify that two flags' values really exclude each other before merging
  * them). atomic_exchange reads and clears the flag in one step. A fresh pause
  * from a new failure on the very next dispatch can race this resume and land
- * between the exchange and the ccol_event_loop_resume below, so we un-pause a
+ * between the exchange and the ceventloop_resume below, so we un-pause a
  * registration the reactor thread rightly paused a moment ago. That's
  * harmless and fixes itself: that same dispatch has set the flag to true
  * again, so the next sweep tick repeats the cycle, or more likely a new
@@ -3236,10 +3236,10 @@ static void _listener_resume_if_resource_pressure_cleared(
   if (!atomic_exchange(&srv->listener_paused_for_resource_pressure, false))
     return;
   _ccol_mutex_lock(srv->mutex);
-  ccol_event_reg lreg = srv->listen_reg;
+  ceventloop_reg lreg = srv->listen_reg;
   _ccol_mutex_unlock(srv->mutex);
   if (!lreg) return;
-  ccol_event_loop_resume(srv_engine_bundler.reactor, lreg);
+  ceventloop_resume(srv_engine_bundler.reactor, lreg);
 }
 
 /* The nanoseconds from earlier to later, negative when later comes first. */
@@ -3383,7 +3383,7 @@ static size_t _sweep_server(struct chttpserver *srv, struct timespec now) {
    * the same connection (see _idle_list_try_claim).
    *
    * We collect the expired connections under idle_mutex and act on them
-   * outside it, because _conn_close ends up in ccol_event_loop_remove and a
+   * outside it, because _conn_close ends up in ceventloop_remove and a
    * 408 goes through the reject pool, and neither may run while we hold a lock
    * a callback of that removal might also need. A parked body gets 408
    * Request Timeout since no response byte has gone out yet, while a parked
@@ -3715,7 +3715,7 @@ static bool _idle_sweep_start_if_needed(void) {
 
 /* Stops and joins the idle sweep thread if it's running. It's tied to the
  * shared engine's lifetime, so the engine reaper calls it next to
- * ccol_event_loop_destroy, and not to the stop or destroy of a single server,
+ * ceventloop_destroy, and not to the stop or destroy of a single server,
  * since the sweep thread walks all registered servers. A sweep thread still
  * running and unjoined at process exit produces exactly the "possibly lost"
  * false positive for glibc's TLS allocation (allocate_dtv) that the other
@@ -3762,7 +3762,7 @@ static void _parked_unlink_locked(struct chttpserver *srv, chttpsvr_conn_t *c) {
 
 /* Points conn->reg at dir, and skips the call when it already points there.
  * Every direction change of conn->reg goes through here and every
- * ccol_event_loop_add of conn->reg records its direction in reg_dir, so
+ * ceventloop_add of conn->reg records its direction in reg_dir, so
  * reg_dir always tells what the registration is waiting for. */
 #ifdef RUNNING_UNIT_TESTS
 static _Atomic size_t g_conn_reg_modify_calls_for_tests = 0;
@@ -3771,14 +3771,14 @@ size_t _chttpsvr_conn_reg_modify_calls_for_tests(void) {
 }
 #endif /* RUNNING_UNIT_TESTS */
 static inline ccol_retval_t _conn_reg_modify(chttpsvr_conn_t *conn,
-                                             ccol_select_dir dir) {
+                                             cselect_dir_t dir) {
   if (conn->reg_dir == (uint8_t)dir) return ccol_success;
 #ifdef RUNNING_UNIT_TESTS
   atomic_fetch_add_explicit(&g_conn_reg_modify_calls_for_tests, 1,
                             memory_order_relaxed);
 #endif /* RUNNING_UNIT_TESTS */
   ccol_retval_t rv =
-      ccol_event_loop_modify(srv_engine_bundler.reactor, conn->reg, dir);
+      ceventloop_modify(srv_engine_bundler.reactor, conn->reg, dir);
   if (rv == ccol_success) conn->reg_dir = (uint8_t)dir;
   return rv;
 }
@@ -3921,8 +3921,8 @@ static void _force_unblock_diverted_connections(struct chttpserver *srv) {
  * immediately fatal, since there a read() and a close() race each other
  * instead of freeing live OpenSSL state.
  *
- * A connection only goes into the idle list AFTER the ccol_event_loop_add or
- * ccol_event_loop_modify call that makes it dispatchable has returned (see the
+ * A connection only goes into the idle list AFTER the ceventloop_add or
+ * ceventloop_modify call that makes it dispatchable has returned (see the
  * handshake-wait branch of _conn_pump, the EWOULDBLOCK branch of its main read
  * loop and the keep-alive re-arm of _task_worker). So in a narrow window a
  * dispatch can fire before the idle-list add, and the claim here fails.
@@ -4142,8 +4142,8 @@ static bool _strip_absolute_form(const char *target, size_t target_len,
  * reads conn->matched_route, handles the request as a buffered route. Its
  * handler never runs because _task_worker answers the request itself (see the
  * options_star branch there). */
-static void _options_star_unused_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                         void *ctx) {
+static void _options_star_unused_handler(chttpsvr_req_t *req,
+                                         chttpsvr_resp_t *resp, void *ctx) {
   (void)req;
   (void)resp;
   (void)ctx;
@@ -4155,7 +4155,7 @@ static chttpsvr_route_t _options_star_route = {
 /*                         FORWARD DECLARATIONS                               */
 /* ========================================================================== */
 
-static void _chttpsvr_next(chttpsvr_req *req, chttpsvr_resp *resp);
+static void _chttpsvr_next(chttpsvr_req_t *req, chttpsvr_resp_t *resp);
 static void _task_worker(void *arg);
 #ifdef RUNNING_UNIT_TESTS
 /* How many requests _conn_start_diverted has handed to the worker pool, so a
@@ -4164,15 +4164,15 @@ atomic_size_t _chttpsvr_worker_submits_for_tests;
 #endif /* RUNNING_UNIT_TESTS */
 static void _task_resume(void *arg);
 static void _reject_task(void *arg);
-static void _destroy_resp(chttpsvr_resp *resp, ccol_memmgmt_procs_t *mp);
-static void _conn_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                              ccol_selectable *sel, void *arg);
-static void _conn_on_writable(ccol_event_loop loop, ccol_event_reg reg,
-                              ccol_selectable *sel, void *arg);
-static void _conn_on_error(ccol_event_loop loop, ccol_event_reg reg,
-                           ccol_selectable *sel, void *arg);
-static void _listener_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                  ccol_selectable *sel, void *arg);
+static void _destroy_resp(chttpsvr_resp_t *resp, ccol_memmgmt_procs_t *mp);
+static void _conn_on_readable(ceventloop loop, ceventloop_reg reg,
+                              cselectable_t *sel, void *arg);
+static void _conn_on_writable(ceventloop loop, ceventloop_reg reg,
+                              cselectable_t *sel, void *arg);
+static void _conn_on_error(ceventloop loop, ceventloop_reg reg,
+                           cselectable_t *sel, void *arg);
+static void _listener_on_readable(ceventloop loop, ceventloop_reg reg,
+                                  cselectable_t *sel, void *arg);
 
 /* ========================================================================== */
 /*                         PATTERN COMPILATION                                */
@@ -4333,7 +4333,7 @@ typedef struct {
    * ROUTE_MATCH_METHOD and ROUTE_MATCH_NONE, the sub-router that owns the
    * path and whose middleware runs for the rejection, or NULL when no mount
    * owns it and the root does the rejecting. */
-  chttpsvr_router *router;
+  chttpsvr_router_t *router;
   chttpsvr_route_t *route;
   char **param_values; /* on OK the caller must free it */
   route_match_t result;
@@ -4636,7 +4636,7 @@ no_match:
  *   0  the prefix doesn't own the path.
  *  -1  an allocation failed, which is fatal to the whole route search, just
  *      like in _seg_cache_get. */
-static int _prefix_matches(_seg_cache_t *cache, chttpsvr_router *router,
+static int _prefix_matches(_seg_cache_t *cache, chttpsvr_router_t *router,
                            const char **sub_path_out) {
   const char *pp = router->prefix + 1;
 
@@ -4749,10 +4749,10 @@ static match_result_t _find_route(struct chttpserver *srv, const char *path,
    * the root last. Once there's an owner, the first router with a smaller
    * segment count ends the owning group, because two different prefixes with
    * the same segment count can never both own one path. */
-  chttpsvr_router *owner = NULL;
+  chttpsvr_router_t *owner = NULL;
   for (size_t visit = 0; visit < srv->router_count; visit++) {
     size_t ri = (visit + 1 < srv->router_count) ? visit + 1 : 0;
-    chttpsvr_router *router = srv->routers[ri];
+    chttpsvr_router_t *router = srv->routers[ri];
 
     /* Every path that gets to the cache build below sets this. The
      * initializer is only there for a compiler that can't follow
@@ -4899,7 +4899,7 @@ static chttp_method_t _parse_method(const char *s, size_t len) {
 /*                         RESPONSE HELPERS                                   */
 /* ========================================================================== */
 
-static void _destroy_resp(chttpsvr_resp *resp, ccol_memmgmt_procs_t *mp) {
+static void _destroy_resp(chttpsvr_resp_t *resp, ccol_memmgmt_procs_t *mp) {
   for (size_t i = 0; i < resp->header_count; i++) {
     _ccol_mem_free(mp, resp->headers[i].name);
     _ccol_mem_free(mp, resp->headers[i].value);
@@ -4914,7 +4914,7 @@ static void _destroy_resp(chttpsvr_resp *resp, ccol_memmgmt_procs_t *mp) {
   resp->body_cap = 0;
 }
 
-static void _destroy_req_scratch(chttpsvr_req *req) {
+static void _destroy_req_scratch(chttpsvr_req_t *req) {
   ccol_memmgmt_procs_t *mp = req->m_procs;
   if (req->_qparams) {
     chttpsvr_qparams_t *qp = req->_qparams;
@@ -5208,14 +5208,14 @@ static bool _head_builder_append_bytes(_head_builder_t *b, const char *s,
  * atomic.
  *
  * Its TLS model is the same as the library's other thread-local fast paths:
- * initial-exec, unless CCOL_MEMPOOL_DYNAMIC_TLS picks the general model for a
+ * initial-exec, unless CMEMPOOL_DYNAMIC_TLS picks the general model for a
  * library that dlopen() loads late (see the same switch in cmempool.c). */
 typedef struct {
   int64_t sec;
   char text[_CHTTPSVR_IMF_FIXDATE_LEN + 1];
 } _chttpsvr_date_cache_t;
 
-#if defined(CCOL_MEMPOOL_DYNAMIC_TLS) && CCOL_MEMPOOL_DYNAMIC_TLS
+#if defined(CMEMPOOL_DYNAMIC_TLS) && CMEMPOOL_DYNAMIC_TLS
 static __thread _chttpsvr_date_cache_t _chttpsvr_date_cache = {.sec =
                                                                    INT64_MIN};
 #else
@@ -5534,7 +5534,7 @@ void _chttpsvr_force_short_response_write_for_tests(size_t n) {
  *
  * The `if (conn && ...)` checks below just defend this internal helper's
  * signature, since no real caller passes NULL. */
-static bool _send_response(chttp1_stream_t *stream, chttpsvr_resp *resp,
+static bool _send_response(chttp1_stream_t *stream, chttpsvr_resp_t *resp,
                            bool keep_alive, unsigned timeout_ms,
                            bool suppress_body, chttpsvr_conn_t *conn,
                            bool is_reject) {
@@ -5928,7 +5928,7 @@ static int _write_interim_continue(chttpsvr_conn_t *conn,
 /*                         MIDDLEWARE DISPATCH                                */
 /* ========================================================================== */
 
-static void _chttpsvr_next(chttpsvr_req *req, chttpsvr_resp *resp) {
+static void _chttpsvr_next(chttpsvr_req_t *req, chttpsvr_resp_t *resp) {
   dispatch_ctx_t *ctx = &req->conn->dispatch;
   if (ctx->mw_idx < ctx->mw_count) {
     _mw_entry_t entry = ctx->mw_snap[ctx->mw_idx++];
@@ -5987,7 +5987,7 @@ static bool _reject_status_runs_middleware(int status) {
  * Returns false when the two chains together have more than _CHTTPSVR_MAX_MW
  * entries, and the caller answers that with a 500, whatever the request would
  * have got otherwise. */
-static bool _snapshot_chain(struct chttpserver *srv, chttpsvr_router *router,
+static bool _snapshot_chain(struct chttpserver *srv, chttpsvr_router_t *router,
                             dispatch_ctx_t *dispatch) {
   int mc = 0;
   chttpsvr_mw_node_t *n;
@@ -6242,8 +6242,8 @@ static void _conn_free(chttpsvr_conn_t *conn) {
 /* The on_removed handler of every conn->reg registration created below. It
  * fires exactly once per registration, asynchronously, from cthreadcomm's
  * reclaim path, and only once neither a dispatch of that registration nor any
- * other ccol_event_loop call resolving it can touch conn any more. The doc
- * comment of ccol_event_loop_remove() explains why that call can't promise
+ * other ceventloop call resolving it can touch conn any more. The doc
+ * comment of ceventloop_remove() explains why that call can't promise
  * the same synchronously: a synchronous version risks a lock-ordering cycle
  * against conn->srv's locks, which _conn_on_readable, _conn_on_writable and
  * _conn_on_error take.
@@ -6279,17 +6279,17 @@ static void _conn_close(chttpsvr_conn_t *conn) {
   _diverted_list_remove(conn);
 
   if (conn->reg) {
-    ccol_event_reg reg = conn->reg;
-    conn->reg = CCOL_EVENT_REG_NULL;
+    ceventloop_reg reg = conn->reg;
+    conn->reg = CEVENTLOOP_REG_NULL;
     /* On purpose we do NOT free conn here. This may be the registration
      * removing itself with no dispatch in flight, where freeing would be
      * right for THIS registration alone, but conn->lifetime_refs can still
      * hold a contribution from an earlier registration episode whose
      * on_removed hasn't fired yet (see that field's comment). The on_removed
-     * that ccol_event_loop_remove() delivers for this exact registration
+     * that ceventloop_remove() delivers for this exact registration
      * accounts for the count correctly whatever the order, and it goes
      * through the shared decrement-and-maybe-free path just below. */
-    ccol_event_loop_remove(srv_engine_bundler.reactor, reg);
+    ceventloop_remove(srv_engine_bundler.reactor, reg);
   }
 
   conn->state = CONN_ST_CLOSING;
@@ -6893,7 +6893,7 @@ typedef enum {
   _SRV_POOL_STREAM = 2
 } _srv_pool_kind_t;
 
-static ctpool _stream_pool_get(struct chttpserver *srv);
+static cthrpool _stream_pool_get(struct chttpserver *srv);
 
 /* Starts a new streaming pool run. The caller holds srv->mutex and has just
  * taken stream_pool out of service. The token task count starts from zero
@@ -6910,10 +6910,10 @@ static void _stream_new_run_locked(struct chttpserver *srv) {
 
 /* srv's current pool of that kind. The streaming pool is created on demand,
  * the same as for any streaming request. */
-static ctpool _srv_current_pool(struct chttpserver *srv, _srv_pool_kind_t k) {
+static cthrpool _srv_current_pool(struct chttpserver *srv, _srv_pool_kind_t k) {
   if (k == _SRV_POOL_STREAM) return _stream_pool_get(srv);
   _ccol_mutex_lock(srv->mutex);
-  ctpool p = k == _SRV_POOL_WORKER ? srv->worker_pool : srv->reject_pool;
+  cthrpool p = k == _SRV_POOL_WORKER ? srv->worker_pool : srv->reject_pool;
   _ccol_mutex_unlock(srv->mutex);
   return p;
 }
@@ -6964,13 +6964,13 @@ static void _divert_submit_hook_wait_if_armed(void) {
  * restart. A refusal from the current pool (a full queue) is the final
  * answer. */
 static __attribute__((noinline, cold)) bool _srv_submit_retry(
-    struct chttpserver *srv, _srv_pool_kind_t k, ctpool pool,
+    struct chttpserver *srv, _srv_pool_kind_t k, cthrpool pool,
     void (*fn)(void *), void *arg) {
   for (;;) {
-    ctpool cur = _srv_current_pool(srv, k);
+    cthrpool cur = _srv_current_pool(srv, k);
     if (!cur || cur == pool) return false;
     pool = cur;
-    if (ctpool_try_submit(pool, fn, arg, NULL) == ccol_success) {
+    if (cthrpool_try_submit(pool, fn, arg, NULL) == ccol_success) {
 #ifdef RUNNING_UNIT_TESTS
       atomic_fetch_add(&g_divert_submit_hook.retried, 1);
 #endif /* RUNNING_UNIT_TESTS */
@@ -6983,10 +6983,10 @@ static __attribute__((noinline, cold)) bool _srv_submit_retry(
  * and retries on the current pool of the same kind if a restart retired pool
  * in the meantime (see _srv_submit_retry). */
 static inline __attribute__((always_inline)) bool _srv_submit(
-    struct chttpserver *srv, _srv_pool_kind_t k, ctpool pool,
+    struct chttpserver *srv, _srv_pool_kind_t k, cthrpool pool,
     void (*fn)(void *), void *arg) {
   if (__builtin_expect(
-          pool && ctpool_try_submit(pool, fn, arg, NULL) == ccol_success, 1))
+          pool && cthrpool_try_submit(pool, fn, arg, NULL) == ccol_success, 1))
     return true;
   return _srv_submit_retry(srv, k, pool, fn, arg);
 }
@@ -7042,11 +7042,11 @@ static void _conn_pause_reg(chttpsvr_conn_t *conn) {
     paused = false;
   else
 #endif
-    paused = ccol_event_loop_pause(srv_engine_bundler.reactor, conn->reg) ==
-             ccol_success;
+    paused =
+        ceventloop_pause(srv_engine_bundler.reactor, conn->reg) == ccol_success;
   if (!paused) {
-    ccol_event_loop_remove(srv_engine_bundler.reactor, conn->reg);
-    conn->reg = CCOL_EVENT_REG_NULL;
+    ceventloop_remove(srv_engine_bundler.reactor, conn->reg);
+    conn->reg = CEVENTLOOP_REG_NULL;
 #ifdef RUNNING_UNIT_TESTS
     atomic_fetch_add(&g_pause_fallback_count_for_tests, 1);
 #endif
@@ -7086,7 +7086,7 @@ void _chttpsvr_force_reject_inline_for_tests(bool force) {
 static void _conn_reject_via_pool(chttpsvr_conn_t *conn) {
   struct chttpserver *srv = conn->srv;
   _ccol_mutex_lock(srv->mutex);
-  ctpool reject_pool = srv->reject_pool;
+  cthrpool reject_pool = srv->reject_pool;
   _ccol_mutex_unlock(srv->mutex);
 
   bool inline_only = false;
@@ -7125,7 +7125,7 @@ static void _conn_reject_via_pool(chttpsvr_conn_t *conn) {
  * registration and handle a failed add. A failed pause falls back to a
  * removal as in _conn_start_diverted, and the later wait adds its own
  * registration; a registration added for a descriptor after its earlier one
- * was removed is watched like any other (see ccol_event_loop_remove).
+ * was removed is watched like any other (see ceventloop_remove).
  *
  * conn->state becomes CONN_ST_DIVERTED and conn goes into srv->diverted_head
  * and srv->diverted_tail through _diverted_list_add, just like
@@ -7143,7 +7143,7 @@ static void _conn_reject_via_pool(chttpsvr_conn_t *conn) {
  * chttpsvr_engine_stop(). A graceful shutdown or restart would then have no
  * way to interrupt an ordinary rejected request (404, 405, 413, 500 or 501)
  * parked on a slow reader. It could only sit out that write's duration bound
- * inside ctpool_shutdown_drain(reject_pool), which has no timeout of its own,
+ * inside cthrpool_shutdown_drain(reject_pool), which has no timeout of its own,
  * once for every rejection still in the pool's queue.
  *
  * How long each of those waits is depends on the operator through
@@ -7169,14 +7169,14 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
                                  size_t leftover_len) {
   _idle_list_remove(conn);
   /* Pause the registration instead of removing it. Resuming with
-   * ccol_event_loop_resume once the worker is done with this request and the
+   * ceventloop_resume once the worker is done with this request and the
    * connection waits for the next one is cheap, so pausing saves a full
    * event_entry allocate and free on every keep-alive request cycle, plus the
    * churn in the fd registry chmap.
    *
    * A pause shouldn't fail in practice: nothing else touches this
    * connection's reg while the reactor still owns it, and every documented
-   * ccol_event_loop_pause failure for a reg with a real fd comes down to
+   * ceventloop_pause failure for a reg with a real fd comes down to
    * "another thread removed reg". A failed pause removes the registration
    * (see _conn_pause_reg) and the connection then carries on like one that
    * never had a live registration: its next wait, in _task_tail's keep-alive
@@ -7192,7 +7192,7 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
 
   _ccol_mutex_lock(conn->srv->mutex);
   conn->srv->in_flight_requests++;
-  ctpool pool = conn->srv->worker_pool;
+  cthrpool pool = conn->srv->worker_pool;
   bool draining = _srv_draining(conn->srv);
   _ccol_mutex_unlock(conn->srv->mutex);
 
@@ -7224,7 +7224,7 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
       carry_alloc_failed = true;
   }
   /* carry and _carry_over_len are published BEFORE the submit, never after,
-   * because ctpool_try_submit may hand the task to an idle worker that starts
+   * because cthrpool_try_submit may hand the task to an idle worker that starts
    * _task_worker(conn) at once, in parallel with the rest of this
    * function. Writing these fields after the submit races that worker's read
    * of conn->_carry_over, which may see NULL, the field's steady value
@@ -7272,7 +7272,7 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
     _ccol_mem_free(conn->m_procs, carry);
     conn->_carry_over = NULL;
     conn->_carry_over_len = 0;
-    /* The worker pool is full. ctpool_try_submit returns ccol_container_full
+    /* The worker pool is full. cthrpool_try_submit returns ccol_container_full
      * instead of blocking, in line with this module's documented "never block
      * the reactor thread" contract. It's a real server condition, if a
      * temporary one, and the client should hear about it as a synchronous
@@ -7368,7 +7368,7 @@ static void _conn_reject_and_close(chttpsvr_conn_t *conn, bool run_middleware) {
    * conn->resp is still in its initial state for this request. It's also what
    * a middleware writes into if one runs below, and _conn_free destroys
    * it. */
-  chttpsvr_resp *resp = &conn->resp;
+  chttpsvr_resp_t *resp = &conn->resp;
   resp->status_code = conn->reject_status;
   /* Every 503 we send means "the server is saturated right now", so it tells
    * the client when a retry makes sense. If allocating the header fails it's
@@ -7397,7 +7397,7 @@ static void _conn_reject_and_close(chttpsvr_conn_t *conn, bool run_middleware) {
   if (wants_middleware && conn->decoded_path) {
     conn->dispatch.route = NULL;
     conn->dispatch.mw_idx = 0;
-    chttpsvr_req req;
+    chttpsvr_req_t req;
     memset(&req, 0, sizeof(req));
     req.conn = conn;
     /* No stream and no route here. We never read this request's body, since
@@ -7495,7 +7495,7 @@ void _chttpsvr_force_stream_prepare_fail_for_tests(bool force) {
  * fixed point, right after it has confirmed or acquired the shared engine
  * reference and registered itself with servers_bundler, and before any more
  * reactor work (_idle_sweep_start_if_needed, _make_listen_socket and the
- * listener's ccol_event_loop_add). It signals that it got there and then
+ * listener's ceventloop_add). It signals that it got there and then
  * waits to be released.
  *
  * That way a test can land a concurrent chttpsvr_engine_stop() every time
@@ -7723,7 +7723,7 @@ static void _start_resolve_race_hook_wait_if_armed(void) {
 /* Purely a white-box test hook. Once armed, _chttpsvr_stop_internal() blocks
  * at one fixed point, right after it entered CHTTPSVR_LC_STOPPING and
  * unlocked raw->mutex and strictly before the blocking
- * ccol_event_loop_remove() and close() of the OLD listener registration. It
+ * ceventloop_remove() and close() of the OLD listener registration. It
  * signals that it got there and then waits to be released.
  *
  * That way a test can land a concurrent chttpsvr_start() every time inside
@@ -8451,9 +8451,8 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
       return;
     }
     if (r == CTLS_HANDSHAKE_WANT_READ || r == CTLS_HANDSHAKE_WANT_WRITE) {
-      ccol_select_dir want = (r == CTLS_HANDSHAKE_WANT_WRITE)
-                                 ? ccol_select_write
-                                 : ccol_select_read;
+      cselect_dir_t want =
+          (r == CTLS_HANDSHAKE_WANT_WRITE) ? cselect_write : cselect_read;
       if (conn->reg) {
         /* A modify shouldn't fail in practice, since nothing else touches
          * this connection's reg while the reactor owns it alone, and
@@ -8468,9 +8467,9 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
         }
       } else {
         char *err = NULL;
-        conn->reg = ccol_event_loop_add(
-            srv_engine_bundler.reactor, ccol_selectable_from_fd(conn->fd, want),
-            (ccol_event_handlers_t){.on_readable = _conn_on_readable,
+        conn->reg = ceventloop_add(
+            srv_engine_bundler.reactor, cselectable_fd(conn->fd, want),
+            (ceventloop_handlers_t){.on_readable = _conn_on_readable,
                                     .on_writable = _conn_on_writable,
                                     .on_error = _conn_on_error,
                                     .on_removed = _conn_on_removed},
@@ -8501,7 +8500,7 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
     /* CTLS_HANDSHAKE_DONE */
     conn->state = CONN_ST_READING_HEADERS;
     if (conn->reg) {
-      if (_conn_reg_modify(conn, ccol_select_read) != ccol_success) {
+      if (_conn_reg_modify(conn, cselect_read) != ccol_success) {
         _conn_close(conn);
         return;
       }
@@ -8530,7 +8529,7 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
       if (errno == EWOULDBLOCK || errno == EAGAIN) {
         /* On a plaintext connection an EWOULDBLOCK from a raw read(2) always
          * means "wait until readable", matching the read-direction
-         * ccol_selectable_from_fd registration below. On a TLS connection it
+         * cselectable_fd registration below. On a TLS connection it
          * does NOT, because OpenSSL may need to write before this very
          * ctls_conn_read() can make progress, to flush a session ticket it
          * deferred after the handshake for example, or for a TLS 1.2
@@ -8541,15 +8540,13 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
          * really needs, so it would stall until the configured read or idle
          * timeout fires rather than until the next real byte, and with the
          * documented "wait forever" setting of 0 it would stall for good. */
-        ccol_select_dir want = ccol_select_read;
-        if (conn->tls && ctls_conn_wants_write(conn->tls))
-          want = ccol_select_write;
+        cselect_dir_t want = cselect_read;
+        if (conn->tls && ctls_conn_wants_write(conn->tls)) want = cselect_write;
         if (!conn->reg) {
           char *err = NULL;
-          conn->reg = ccol_event_loop_add(
-              srv_engine_bundler.reactor,
-              ccol_selectable_from_fd(conn->fd, want),
-              (ccol_event_handlers_t){.on_readable = _conn_on_readable,
+          conn->reg = ceventloop_add(
+              srv_engine_bundler.reactor, cselectable_fd(conn->fd, want),
+              (ceventloop_handlers_t){.on_readable = _conn_on_readable,
                                       .on_writable = _conn_on_writable,
                                       .on_error = _conn_on_error,
                                       .on_removed = _conn_on_removed},
@@ -8603,8 +8600,8 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
  * registration that just fired hasn't run yet (the same doc comment explains
  * why level-triggered epoll heals that case by itself). Either way the right
  * thing is the same: touch nothing and return. */
-static void _conn_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                              ccol_selectable *sel, void *arg) {
+static void _conn_on_readable(ceventloop loop, ceventloop_reg reg,
+                              cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   (void)sel;
@@ -8613,8 +8610,8 @@ static void _conn_on_readable(ccol_event_loop loop, ccol_event_reg reg,
   _conn_pump(conn);
 }
 
-static void _conn_on_writable(ccol_event_loop loop, ccol_event_reg reg,
-                              ccol_selectable *sel, void *arg) {
+static void _conn_on_writable(ceventloop loop, ceventloop_reg reg,
+                              cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   (void)sel;
@@ -8623,8 +8620,8 @@ static void _conn_on_writable(ccol_event_loop loop, ccol_event_reg reg,
   _conn_pump(conn);
 }
 
-static void _conn_on_error(ccol_event_loop loop, ccol_event_reg reg,
-                           ccol_selectable *sel, void *arg) {
+static void _conn_on_error(ceventloop loop, ceventloop_reg reg,
+                           cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   (void)sel;
@@ -9334,7 +9331,7 @@ static void _mem_dispatch(chttpsvr_conn_t *conn) {
   _diverted_list_add(conn);
   _ccol_mutex_lock(srv->mutex);
   srv->in_flight_requests++;
-  ctpool pool = srv->worker_pool;
+  cthrpool pool = srv->worker_pool;
   _ccol_mutex_unlock(srv->mutex);
   if (!_srv_submit(srv, _SRV_POOL_WORKER, pool, fn, conn)) {
     conn->park = _CONN_PARK_NONE;
@@ -9530,8 +9527,8 @@ static void _start_hold_for_tests(void) {
  * never gets a streaming request shouldn't start threads for them. Creation
  * happens outside srv->mutex, and a second creator that loses the race
  * destroys its own pool again. A server that isn't running, or that a
- * teardown has just detached, gets CTPOOL_NULL. */
-static ctpool _stream_pool_get(struct chttpserver *srv) {
+ * teardown has just detached, gets CTHRPOOL_NULL. */
+static cthrpool _stream_pool_get(struct chttpserver *srv) {
   for (;;) {
     /* The size is read together with the run it belongs to. A start stores
      * the new streaming_thread_count before beginning a new run under
@@ -9539,31 +9536,32 @@ static ctpool _stream_pool_get(struct chttpserver *srv) {
      * the run is unchanged, and a restart in between makes this call build a
      * pool for the new run instead. */
     _ccol_mutex_lock(srv->mutex);
-    ctpool pool = srv->stream_pool;
-    bool running = srv->worker_pool != CTPOOL_NULL;
+    cthrpool pool = srv->stream_pool;
+    bool running = srv->worker_pool != CTHRPOOL_NULL;
     uint64_t gen = atomic_load(&srv->stream_gen);
     int nthreads = atomic_load(&srv->stream_threads);
     _ccol_mutex_unlock(srv->mutex);
     if (pool || !running) return pool;
-    if (nthreads <= 0) return CTPOOL_NULL;
+    if (nthreads <= 0) return CTHRPOOL_NULL;
 
 #ifdef RUNNING_UNIT_TESTS
     _stream_pool_create_hold_for_tests();
 #endif
     char *err = NULL;
-    ctpool fresh = ctpool_create_mp((size_t)nthreads, 0, srv->m_procs, &err);
-    if (!fresh) return CTPOOL_NULL;
+    cthrpool fresh =
+        cthrpool_create_mp((size_t)nthreads, 0, srv->m_procs, &err);
+    if (!fresh) return CTHRPOOL_NULL;
     _ccol_mutex_lock(srv->mutex);
     bool same_run = atomic_load(&srv->stream_gen) == gen;
-    if (same_run && !srv->stream_pool && srv->worker_pool != CTPOOL_NULL) {
+    if (same_run && !srv->stream_pool && srv->worker_pool != CTHRPOOL_NULL) {
       srv->stream_pool = fresh;
-      fresh = CTPOOL_NULL;
+      fresh = CTHRPOOL_NULL;
     }
     pool = srv->stream_pool;
     _ccol_mutex_unlock(srv->mutex);
     if (fresh) {
-      ctpool_shutdown_drain(fresh);
-      ctpool_destroy(fresh);
+      cthrpool_shutdown_drain(fresh);
+      cthrpool_destroy(fresh);
       if (!same_run) continue;
     }
 #ifdef RUNNING_UNIT_TESTS
@@ -9663,7 +9661,7 @@ static bool _stream_token_start_one(struct chttpserver *srv) {
   }
   _ccol_mutex_unlock(srv->wait_mutex);
   if (!submit) return false;
-  ctpool pool = _stream_pool_get(srv);
+  cthrpool pool = _stream_pool_get(srv);
   _stream_token_arg_t *arg =
       pool ? (_stream_token_arg_t *)_ccol_mem_alloc(srv->m_procs, sizeof(*arg))
            : NULL;
@@ -9706,7 +9704,7 @@ static bool _stream_token_start_one(struct chttpserver *srv) {
 
 static void _stream_enqueue(chttpsvr_conn_t *conn) {
   struct chttpserver *srv = conn->srv;
-  ctpool pool = _stream_pool_get(srv);
+  cthrpool pool = _stream_pool_get(srv);
   if (!pool) {
     _conn_reject_busy(conn);
     return;
@@ -10005,16 +10003,16 @@ static __attribute__((noinline, cold)) ssize_t _drain_body_socket_read(
  * conn out of every list, when the reactor refuses, and the caller then
  * closes it. */
 static bool _conn_park_arm(chttpsvr_conn_t *conn, uint8_t kind) {
-  ccol_select_dir dir;
+  cselect_dir_t dir;
   if (kind == _CONN_PARK_BODY) {
-    dir = (conn->tls && ctls_conn_wants_write(conn->tls)) ? ccol_select_write
-                                                          : ccol_select_read;
+    dir = (conn->tls && ctls_conn_wants_write(conn->tls)) ? cselect_write
+                                                          : cselect_read;
     _conn_set_rcvlowat(conn);
   } else if (kind == _CONN_PARK_LINGER) {
-    dir = ccol_select_read;
+    dir = cselect_read;
     _conn_reset_rcvlowat(conn);
   } else {
-    dir = conn->wp_wants_read ? ccol_select_read : ccol_select_write;
+    dir = conn->wp_wants_read ? cselect_read : cselect_write;
     _conn_reset_rcvlowat(conn);
     conn->wp_outq = _conn_send_queue(conn);
   }
@@ -10022,16 +10020,16 @@ static bool _conn_park_arm(chttpsvr_conn_t *conn, uint8_t kind) {
   conn->state = CONN_ST_READING_HEADERS;
   if (conn->reg) {
     if (_conn_reg_modify(conn, dir) != ccol_success ||
-        ccol_event_loop_resume(srv_engine_bundler.reactor, conn->reg) !=
+        ceventloop_resume(srv_engine_bundler.reactor, conn->reg) !=
             ccol_success) {
       conn->park = _CONN_PARK_NONE;
       return false;
     }
   } else {
     char *err = NULL;
-    conn->reg = ccol_event_loop_add(
-        srv_engine_bundler.reactor, ccol_selectable_from_fd(conn->fd, dir),
-        (ccol_event_handlers_t){.on_readable = _conn_on_readable,
+    conn->reg = ceventloop_add(
+        srv_engine_bundler.reactor, cselectable_fd(conn->fd, dir),
+        (ceventloop_handlers_t){.on_readable = _conn_on_readable,
                                 .on_writable = _conn_on_writable,
                                 .on_error = _conn_on_error,
                                 .on_removed = _conn_on_removed},
@@ -10062,7 +10060,7 @@ static bool _conn_park_arm(chttpsvr_conn_t *conn, uint8_t kind) {
  * again. */
 static __attribute__((noinline, cold)) void _task_park_body(
     chttpsvr_conn_t *conn, struct chttpserver *srv, chttp1_stream_t *stream,
-    chttpsvr_req *req) {
+    chttpsvr_req_t *req) {
   uint8_t kind = conn->park_pending;
   conn->park_pending = _CONN_PARK_NONE;
   _destroy_req_scratch(req);
@@ -10103,7 +10101,7 @@ static __attribute__((noinline, cold)) void _conn_resume_parked(
   _diverted_list_add(conn);
   _ccol_mutex_lock(srv->mutex);
   srv->in_flight_requests++;
-  ctpool pool = srv->worker_pool;
+  cthrpool pool = srv->worker_pool;
   _ccol_mutex_unlock(srv->mutex);
 #ifdef RUNNING_UNIT_TESTS
   atomic_fetch_add(&g_resume_dispatch_count_for_tests, 1);
@@ -10485,7 +10483,7 @@ static ccol_retval_t _drain_body(chttpsvr_conn_t *conn,
   return ccol_success;
 }
 
-ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen) {
+ssize_t chttpsvr_req_read(chttpsvr_req_t *req, void *buf, size_t buflen) {
   if (!req) return -1;
   if (buflen == 0) return 0;
   if (!buf) return -1;
@@ -10649,7 +10647,7 @@ ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen) {
   }
 }
 
-ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req) {
+ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req_t *req) {
   if (!req || !req->conn) return ccol_invalid_args;
   chttpsvr_conn_t *conn = req->conn;
   if (conn->deadline_exceeded) return ccol_timed_out;
@@ -10666,7 +10664,7 @@ ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req) {
  * ordinary request's path compiles as one function. */
 static inline __attribute__((always_inline)) void _task_tail(
     chttpsvr_conn_t *conn, struct chttpserver *srv, chttp1_stream_t *stream,
-    chttpsvr_req *req, bool prepared, bool keep_alive, bool response_out) {
+    chttpsvr_req_t *req, bool prepared, bool keep_alive, bool response_out) {
   /* Reclaims the bytes of a further pipelined request on this connection,
    * already pulled off the wire, which chttp1_stream_release below would
    * otherwise always throw away. Bytes end up here in two situations.
@@ -10730,9 +10728,9 @@ static inline __attribute__((always_inline)) void _task_tail(
    * back to the reactor to read the next request's headers.
    *
    * conn->reg is only non-NULL here when this request went through a live
-   * ccol_event_loop registration that _conn_start_diverted then paused (see
+   * ceventloop registration that _conn_start_diverted then paused (see
    * that function's comment). Resuming it is far cheaper than a fresh
-   * ccol_event_loop_add, because the event_entry, the fd registry chmap entry
+   * ceventloop_add, because the event_entry, the fd registry chmap entry
    * and the epoll_ctl(ADD) all stayed in place and only the combined epoll
    * interest mask needs recomputing.
    *
@@ -10742,12 +10740,12 @@ static inline __attribute__((always_inline)) void _task_tail(
    * after the accept read this connection's headers synchronously, sometimes
    * several requests' worth of pipelined bytes, before the connection was
    * ever registered with the reactor, since _listener_on_readable calls
-   * _conn_pump directly without a ccol_event_loop_add in between.
+   * _conn_pump directly without a ceventloop_add in between.
    *
    * This branch's "there never was a registration" case and
    * _conn_start_diverted's "pause failed" case both give the same NULL, and
    * nothing here can tell them apart by design, because both need exactly the
-   * same fresh ccol_event_loop_add fallback below. So it's not a gap, just two
+   * same fresh ceventloop_add fallback below. So it's not a gap, just two
    * paths with one outcome. */
   /* This worker is done with conn as a worker-owned connection for now, so
    * it's no longer a candidate for _force_unblock_diverted_connections. The
@@ -10819,7 +10817,7 @@ static inline __attribute__((always_inline)) void _task_tail(
       /* _conn_feed_bytes has already settled conn's fate: it diverted a
        * further pipelined request to a worker, rejected it, or closed the
        * connection. A divert can go to this very pool, but always through a
-       * fresh ctpool_submit and never a direct recursive call. We only
+       * fresh cthrpool_submit and never a direct recursive call. We only
        * release this call's in_flight_requests slot here, the one taken when
        * THIS request was first diverted; whatever _conn_feed_bytes just
        * started owns its own independent slot. */
@@ -10845,7 +10843,7 @@ static inline __attribute__((always_inline)) void _task_tail(
    * carry-over above goes first, since those bytes come before everything
    * the TLS layer still holds. The loop ends on EWOULDBLOCK, and only then
    * does the registration below wait for the socket. */
-  ccol_select_dir tail_dir = ccol_select_read;
+  cselect_dir_t tail_dir = cselect_read;
   while (conn->tls && ctls_conn_has_pending_input(conn->tls)) {
     char tls_buf[8192];
     ssize_t n = ctls_conn_read(conn->tls, tls_buf, sizeof(tls_buf));
@@ -10854,7 +10852,7 @@ static inline __attribute__((always_inline)) void _task_tail(
       /* See the doc comment of ctls_conn_wants_write(). The read may need the
        * socket to become writable first, and then the registration below
        * waits in that direction. */
-      if (ctls_conn_wants_write(conn->tls)) tail_dir = ccol_select_write;
+      if (ctls_conn_wants_write(conn->tls)) tail_dir = cselect_write;
       break;
     }
     if (n <= 0) {
@@ -10872,7 +10870,7 @@ static inline __attribute__((always_inline)) void _task_tail(
   if (conn->reg) {
     /* Force the registration back to the read direction before resuming it.
      * This site only exists to wait for the next request's bytes, always the
-     * read direction, but conn->reg's recorded direction (ccol_event_reg's
+     * read direction, but conn->reg's recorded direction (ceventloop_reg's
      * sel.dir) may still be write from an earlier cycle.
      *
      * That happens in one specific sequence: the last successful read on this
@@ -10883,10 +10881,10 @@ static inline __attribute__((always_inline)) void _task_tail(
      * registration back to read, since that only happens on a LATER read
      * attempt that hits EWOULDBLOCK and wants the read direction.
      *
-     * ccol_event_loop_modify is safe on a paused registration. It only
+     * ceventloop_modify is safe on a paused registration. It only
      * updates the registration's recorded direction and the read or write
      * slot of the underlying fd entry, and delivery stays suppressed until
-     * ccol_event_loop_resume arms it again. So when we resume, conn->reg is
+     * ceventloop_resume arms it again. So when we resume, conn->reg is
      * always in tail_dir's direction, which is read unless the TLS drain
      * above ended on a read that needs the socket writable first.
      * _conn_reg_modify skips the call entirely when the recorded direction is
@@ -10902,13 +10900,13 @@ static inline __attribute__((always_inline)) void _task_tail(
      *
      * The modify isn't expected to fail since reg was known to be live a
      * moment ago. We check it anyway rather than assume, the same discipline
-     * this function follows for every other ccol_event_loop call. */
+     * this function follows for every other ceventloop call. */
     if (_conn_reg_modify(conn, tail_dir) != ccol_success) {
       _conn_close(conn);
       _release_in_flight(srv);
       return;
     }
-    if (ccol_event_loop_resume(srv_engine_bundler.reactor, conn->reg) !=
+    if (ceventloop_resume(srv_engine_bundler.reactor, conn->reg) !=
         ccol_success) {
       _conn_close(conn);
       _release_in_flight(srv);
@@ -10917,17 +10915,17 @@ static inline __attribute__((always_inline)) void _task_tail(
   } else {
     char *err = NULL;
     /* .on_writable is needed here for the same reason _conn_pump's two
-     * ccol_event_loop_add call sites have it. This connection has no live
+     * ceventloop_add call sites have it. This connection has no live
      * registration yet, because its very first request was handled fully
      * synchronously through _listener_on_readable's optimistic first read and
      * parse, without ever waiting on the reactor. But a LATER keep-alive
      * request on the same connection may still need write-direction interest
      * mid-read, as ctls_conn_wants_write decides (see its doc comment).
      *
-     * _conn_pump's read loop then calls ccol_event_loop_modify(conn->reg,
-     * ccol_select_write) on this exact registration, and that succeeds since
+     * _conn_pump's read loop then calls ceventloop_modify(conn->reg,
+     * cselect_write) on this exact registration, and that succeeds since
      * a modify only changes the epoll interest and never the handlers. With
-     * no on_writable handler, ccol_event_loop silently drops the later
+     * no on_writable handler, ceventloop silently drops the later
      * write-readiness event, because its documented behaviour for a direction
      * without a handler pointer is a no-op, and the connection stalls for
      * good until some unrelated timeout steps in, one the operator may have
@@ -10936,9 +10934,9 @@ static inline __attribute__((always_inline)) void _task_tail(
      * That's a real, reproducible gap. Every registration this file creates
      * for a live connection's fd must have both handlers, because any of them
      * may later need either direction. */
-    conn->reg = ccol_event_loop_add(
-        srv_engine_bundler.reactor, ccol_selectable_from_fd(conn->fd, tail_dir),
-        (ccol_event_handlers_t){.on_readable = _conn_on_readable,
+    conn->reg = ceventloop_add(
+        srv_engine_bundler.reactor, cselectable_fd(conn->fd, tail_dir),
+        (ceventloop_handlers_t){.on_readable = _conn_on_readable,
                                 .on_writable = _conn_on_writable,
                                 .on_error = _conn_on_error,
                                 .on_removed = _conn_on_removed},
@@ -10962,7 +10960,8 @@ static inline __attribute__((always_inline)) void _task_tail(
  * _task_tail. */
 static inline __attribute__((always_inline)) void _task_finish(
     chttpsvr_conn_t *conn, struct chttpserver *srv, chttp1_stream_t *stream,
-    chttpsvr_req *req, bool prepared, bool aborted, unsigned write_timeout_ms) {
+    chttpsvr_req_t *req, bool prepared, bool aborted,
+    unsigned write_timeout_ms) {
   /* The handler has returned, or will never run, so nobody reads the body
    * again (see _conn_drop_body). */
   _conn_drop_body(conn);
@@ -11071,7 +11070,7 @@ static void _task_worker(void *arg) {
    * a !conn->req_rejected guard. A request that hits the pool-full 503 path
    * never reaches _task_worker either, so no spurious "100 Continue" can come
    * before a 503. Sending from _conn_pump as soon as the headers are done,
-   * before ctpool_try_submit's capacity check, would break both of these.
+   * before cthrpool_try_submit's capacity check, would break both of these.
    *
    * The write never waits on the client: a full socket parks the connection
    * with the rest of the line and the body is read once it's out (see
@@ -11126,7 +11125,7 @@ static void _task_worker(void *arg) {
     if (ic == 0) conn->interim_write_failed = true;
   }
 
-  chttpsvr_req req;
+  chttpsvr_req_t req;
   memset(&req, 0, sizeof(req));
   req.conn = conn;
   req.stream = prepared ? &stream : NULL;
@@ -11278,7 +11277,7 @@ static void _task_read_body_and_finish(chttpsvr_conn_t *conn,
                                        struct chttpserver *srv,
                                        chttp1_stream_t *stream, bool expired) {
   unsigned write_timeout_ms = atomic_load(&srv->response_write_timeout_ms);
-  chttpsvr_req req;
+  chttpsvr_req_t req;
   memset(&req, 0, sizeof(req));
   req.conn = conn;
   req.stream = stream;
@@ -11342,7 +11341,7 @@ static void _task_continue_write(chttpsvr_conn_t *conn, struct chttpserver *srv,
     _release_in_flight(srv);
     return;
   }
-  chttpsvr_req req;
+  chttpsvr_req_t req;
   memset(&req, 0, sizeof(req));
   _task_tail(conn, srv, stream, &req, true, keep_alive, r == 1);
 }
@@ -11390,7 +11389,7 @@ static void _task_continue_interim(chttpsvr_conn_t *conn,
       _conn_end_parked_write(conn);
       conn->wp_interim = false;
       conn->interim_write_failed = true;
-      chttpsvr_req req;
+      chttpsvr_req_t req;
       memset(&req, 0, sizeof(req));
       _task_tail(conn, srv, &stream, &req, false, false, false);
       return;
@@ -11408,7 +11407,7 @@ static void _task_continue_interim(chttpsvr_conn_t *conn,
   conn->rate_active = false;
   if (r == 0) {
     conn->interim_write_failed = true;
-    chttpsvr_req req;
+    chttpsvr_req_t req;
     memset(&req, 0, sizeof(req));
     _task_tail(conn, srv, &stream, &req, true, false, false);
     return;
@@ -11657,7 +11656,7 @@ size_t _chttpsvr_listener_resource_pause_count_for_tests(void) {
  * listener later.
  *
  * It does nothing in two cases: srv has no live listener registration to
- * pause (lreg is NULL), or ccol_event_loop_pause fails. That call's contract
+ * pause (lreg is NULL), or ceventloop_pause fails. That call's contract
  * says a failure can only mean another thread removed lreg, a concurrent
  * chttpsvr_stop() for example, and listener_dispatch_pins exists precisely to
  * prevent that while this dispatch runs, so nothing should get there; if
@@ -11668,10 +11667,10 @@ size_t _chttpsvr_listener_resource_pause_count_for_tests(void) {
  * paused. */
 static void _listener_pause_for_resource_pressure(struct chttpserver *srv) {
   _ccol_mutex_lock(srv->mutex);
-  ccol_event_reg lreg = srv->listen_reg;
+  ceventloop_reg lreg = srv->listen_reg;
   _ccol_mutex_unlock(srv->mutex);
   if (!lreg) return;
-  if (ccol_event_loop_pause(srv_engine_bundler.reactor, lreg) == ccol_success) {
+  if (ceventloop_pause(srv_engine_bundler.reactor, lreg) == ccol_success) {
     atomic_store(&srv->listener_paused_for_resource_pressure, true);
 #ifdef RUNNING_UNIT_TESTS
     atomic_fetch_add(&g_listener_resource_pause_count_for_tests, 1);
@@ -11891,10 +11890,10 @@ static void _listener_on_readable_impl(struct chttpserver *srv, int lfd) {
        * resume comes at most _CHTTPSVR_IDLE_SWEEP_INTERVAL_MS after a slot
        * frees. */
       _ccol_mutex_lock(srv->mutex);
-      ccol_event_reg lreg = srv->listen_reg;
+      ceventloop_reg lreg = srv->listen_reg;
       _ccol_mutex_unlock(srv->mutex);
-      if (lreg && ccol_event_loop_pause(srv_engine_bundler.reactor, lreg) ==
-                      ccol_success) {
+      if (lreg &&
+          ceventloop_pause(srv_engine_bundler.reactor, lreg) == ccol_success) {
         /* Check the capacity again AFTER the pause, not only before it, to
          * close a real time-of-check to time-of-use race against the sweep
          * thread's resume check.
@@ -11910,7 +11909,7 @@ static void _listener_on_readable_impl(struct chttpserver *srv, int lfd) {
          * resumes immediately if a slot has freed since, which brings the gap
          * down to zero instead of up to one more tick.
          *
-         * Like every other ccol_event_loop_pause, _modify, _add and _resume
+         * Like every other ceventloop_pause, _modify, _add and _resume
          * call site in this file, we check the pause's return value instead of
          * fire-and-forget. A non-success can only mean another thread removed
          * lreg, the only documented failure for a non-NULL reg, and
@@ -11918,9 +11917,9 @@ static void _listener_on_readable_impl(struct chttpserver *srv, int lfd) {
          * dispatch runs, so nothing should get there. If something ever does,
          * there's no paused registration to resume, and skipping the recheck
          * and resume altogether is right, rather than calling
-         * ccol_event_loop_resume on a reg nobody paused. */
+         * ceventloop_resume on a reg nobody paused. */
         if (atomic_load(&srv->current_connections) < cap)
-          ccol_event_loop_resume(srv_engine_bundler.reactor, lreg);
+          ceventloop_resume(srv_engine_bundler.reactor, lreg);
       }
       return;
     }
@@ -12053,7 +12052,7 @@ static void _listener_on_readable_impl(struct chttpserver *srv, int lfd) {
 #endif /* RUNNING_UNIT_TESTS */
 }
 
-/* Registered with ccol_event_loop_add as the listener's on_readable
+/* Registered with ceventloop_add as the listener's on_readable
  * callback. It pins srv with listener_dispatch_pins (see that counter's
  * comment) for the whole call into _listener_on_readable_impl, any listener
  * pause it does included, and drops the pin as its very last action once that
@@ -12071,8 +12070,8 @@ static void _listener_on_readable_impl(struct chttpserver *srv, int lfd) {
  * listener a later chttpsvr_start created), and such a dispatch returns at
  * once: it must not accept on a listener it wasn't registered for, nor pause
  * or log on behalf of a server that may already be in its destroy. */
-static void _listener_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                  ccol_selectable *sel, void *arg) {
+static void _listener_on_readable(ceventloop loop, ceventloop_reg reg,
+                                  cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   struct chttpserver *srv = (struct chttpserver *)arg;
@@ -12100,7 +12099,7 @@ static void _listener_on_readable(ccol_event_loop loop, ccol_event_reg reg,
 
 /* The listener registration's on_removed handler. It fires exactly once per
  * registration and only when no dispatch of it can still run (see the doc
- * comment of ccol_event_loop_remove). It drops the srv->lifetime_refs
+ * comment of ceventloop_remove). It drops the srv->lifetime_refs
  * reference chttpsvr_start took for the registration, and runs srv's final
  * teardown when that was the last reference. */
 static void _listener_on_removed(void *arg) {
@@ -12492,7 +12491,7 @@ static bool _listen_sockname(int fd, uint16_t *port_out, char *host,
 /*                    ROUTER SHELL REGISTRY                                   */
 /* ========================================================================== */
 
-/* Every chttpsvr_router has a "shell": the struct itself, i.e. the owner, srv
+/* Every chttpsvr_router_t has a "shell": the struct itself, i.e. the owner, srv
  * and m_procs fields plus the routes, mw_head, mw_tail and mw_count
  * bookkeeping. The CONTENTS are what the shell points to, the prefix, the mw
  * list nodes, the routes array and each route's data. Every shell is
@@ -12500,7 +12499,7 @@ static bool _listen_sockname(int fd, uint16_t *port_out, char *host,
  * through a server's possibly custom ccol_memmgmt_procs_t, and
  * _destroy_router never frees a shell at all.
  *
- * The reason is that a chttpsvr_router* a caller holds has no indirection of
+ * The reason is that a chttpsvr_router_t* a caller holds has no indirection of
  * its own, unlike a chttpsvr handle, whose generation lives in the handle
  * VALUE and never in memory that can be freed from under a reader.
  * chttpsvr_router_on, _on_stream and _use need to read router->owner to find
@@ -12532,8 +12531,8 @@ static bool _listen_sockname(int fd, uint16_t *port_out, char *host,
 static struct {
   _ccol_mutex_t mutex;
   _ccol_once_flag_t once;
-  chttpsvr_router **shells; /* plain realloc'd array of every shell still
-                             * allocated in the process */
+  chttpsvr_router_t **shells; /* plain realloc'd array of every shell still
+                               * allocated in the process */
   size_t count;
   size_t capacity;
   /* True once the exit-time destructor has run. From then on a server's
@@ -12548,7 +12547,7 @@ static void _chttpsvr_router_shell_registry_init_globals(void) {
         "chttpsvr router shell registry: failed to initialize mutex");
 }
 
-static void _chttpsvr_router_shell_register(chttpsvr_router *r) {
+static void _chttpsvr_router_shell_register(chttpsvr_router_t *r) {
   _ccol_call_once(chttpsvr_router_shell_registry.once,
                   _chttpsvr_router_shell_registry_init_globals);
   _ccol_mutex_lock(chttpsvr_router_shell_registry.mutex);
@@ -12562,12 +12561,13 @@ static void _chttpsvr_router_shell_register(chttpsvr_router *r) {
      * like a real allocation failure a few lines down: this one shell just
      * isn't tracked for the exit-time free, which is never a correctness
      * problem. */
-    size_t new_cap = _doubling_growth_cap(
-        chttpsvr_router_shell_registry.capacity, sizeof(chttpsvr_router *), 8);
+    size_t new_cap =
+        _doubling_growth_cap(chttpsvr_router_shell_registry.capacity,
+                             sizeof(chttpsvr_router_t *), 8);
     if (new_cap > 0) {
-      chttpsvr_router **nn =
-          (chttpsvr_router **)realloc(chttpsvr_router_shell_registry.shells,
-                                      new_cap * sizeof(chttpsvr_router *));
+      chttpsvr_router_t **nn =
+          (chttpsvr_router_t **)realloc(chttpsvr_router_shell_registry.shells,
+                                        new_cap * sizeof(chttpsvr_router_t *));
       if (nn) {
         chttpsvr_router_shell_registry.shells = nn;
         chttpsvr_router_shell_registry.capacity = new_cap;
@@ -12592,12 +12592,13 @@ static void _chttpsvr_router_shell_register(chttpsvr_router *r) {
 /* Takes r out of the registry by swapping it with the last shell, and frees
  * the array once the destructor has run and the registry is empty. The
  * caller holds the registry mutex and frees r itself. */
-static void _chttpsvr_router_shell_unregister_locked(chttpsvr_router *r) {
+static void _chttpsvr_router_shell_unregister_locked(chttpsvr_router_t *r) {
   size_t i = r->shell_idx;
   if (i < chttpsvr_router_shell_registry.count &&
       chttpsvr_router_shell_registry.shells[i] == r) {
-    chttpsvr_router *last = chttpsvr_router_shell_registry
-                                .shells[--chttpsvr_router_shell_registry.count];
+    chttpsvr_router_t *last =
+        chttpsvr_router_shell_registry
+            .shells[--chttpsvr_router_shell_registry.count];
     chttpsvr_router_shell_registry.shells[i] = last;
     last->shell_idx = i;
   }
@@ -12617,15 +12618,15 @@ static void _chttpsvr_router_shell_unregister_locked(chttpsvr_router *r) {
  * too. A sub-router of a server destroyed before that keeps its shell, so a
  * stale pointer to it stays safe to pass (see chttpsvr_subrouter(3)). All of
  * the server's routers have already gone through _destroy_router. */
-static void _chttpsvr_router_shells_release(chttpsvr_router **routers,
+static void _chttpsvr_router_shells_release(chttpsvr_router_t **routers,
                                             size_t count,
-                                            chttpsvr_router *root) {
+                                            chttpsvr_router_t *root) {
   _ccol_call_once(chttpsvr_router_shell_registry.once,
                   _chttpsvr_router_shell_registry_init_globals);
   _ccol_mutex_lock(chttpsvr_router_shell_registry.mutex);
   bool all = chttpsvr_router_shell_registry.finalized;
   for (size_t i = 0; i < count; i++) {
-    chttpsvr_router *r = routers[i];
+    chttpsvr_router_t *r = routers[i];
     if (r != root && !all) continue;
     _chttpsvr_router_shell_unregister_locked(r);
     _ccol_default_mem_free(r);
@@ -12670,7 +12671,7 @@ __attribute__((destructor)) static void _cleanup_chttpsvr_router_shells(void) {
    * them. */
   size_t kept = 0;
   for (size_t i = 0; i < chttpsvr_router_shell_registry.count; i++) {
-    chttpsvr_router *r = chttpsvr_router_shell_registry.shells[i];
+    chttpsvr_router_t *r = chttpsvr_router_shell_registry.shells[i];
     if (atomic_load(&r->owner) == CHTTPSVR_NULL) {
       r->shell_idx = SIZE_MAX;
       _ccol_default_mem_free(r);
@@ -12726,7 +12727,7 @@ __attribute__((destructor)) static void _cleanup_chttpsvr_router_shells(void) {
  * handlers.
  *
  * Some of our state needs no handler here: worker_pool and reject_pool
- * (ctpool handles), the shared reactor (a ccol_event_loop handle) and every
+ * (cthrpool handles), the shared reactor (a ceventloop handle) and every
  * clog handle this module opens or derives (the engine-wide diagnostics
  * logger and each server's logger). cthreadpool.c's, cthreadcomm.c's and
  * clogger.c's own atfork registrations already protect all of them, so
@@ -12765,7 +12766,7 @@ __attribute__((destructor)) static void _cleanup_chttpsvr_router_shells(void) {
  *
  * None of these resets tries to reclaim or join a vanished thread; each just
  * says there's nothing left to wait for. g_engine_stop_watcher.started gets
- * the same treatment just below, and ctpool's and ccol_event_loop's
+ * the same treatment just below, and cthrpool's and ceventloop's
  * foreign_since_fork machinery does the same for their own worker threads. */
 static void _chttpsvr_atfork_prepare(void) {
 #ifdef RUNNING_UNIT_TESTS
@@ -12856,7 +12857,7 @@ static void _chttpsvr_atfork_prepare(void) {
  * the server. A parent thread that vanished with the fork may have been half
  * way through a resolve, a quiesce scan or an accept dispatch at that moment,
  * so as far as this process is concerned one of these counters would stay
- * non-zero forever with no thread left to decrement it. ctpool's atfork
+ * non-zero forever with no thread left to decrement it. cthrpool's atfork
  * release applies the same fix to its own pending_resolve_count, against the
  * same kind of hazard.
  *
@@ -12951,7 +12952,7 @@ static void _chttpsvr_atfork_prepare(void) {
  * atomically, and in the SAME critical section that enters
  * CHTTPSVR_LC_STOPPING it also resets listen_fd, listen_reg and unix_bind to
  * their "nothing left to clean up" sentinels, all before any of its real work
- * (ccol_event_loop_remove(), close() and unlink()) starts, which is where a
+ * (ceventloop_remove(), close() and unlink()) starts, which is where a
  * fork() can interrupt it. So a fork() anywhere in that work can never leave
  * those fields in a state chttpsvr_start() could misread, unlike the
  * multi-step _quiesce_server_once sequence above that releases srv->mutex
@@ -12994,7 +12995,7 @@ static void _chttpsvr_atfork_prepare(void) {
  * releases the OLD listener fd or the OLD unix_bind path and directory fd, if
  * any. That listener fd is still open in two cases, for CHTTPSVR_LC_STOPPING
  * when the vanished thread hadn't got to its close() yet, and for
- * CHTTPSVR_LC_STARTING when it had already got to its ccol_event_loop_add().
+ * CHTTPSVR_LC_STARTING when it had already got to its ceventloop_add().
  * So a later chttpsvr_start() on the same host and port may see a spurious
  * EADDRINUSE-type failure from that orphaned fd instead of a clean rebind,
  * which is a graceful failure the code already handles and not a crash. */
@@ -13164,9 +13165,9 @@ static int _count_prefix_segments(const char *prefix) {
   return count;
 }
 
-static chttpsvr_router *_create_router(struct chttpserver *srv,
-                                       const char *prefix,
-                                       ccol_memmgmt_procs_t *mp) {
+static chttpsvr_router_t *_create_router(struct chttpserver *srv,
+                                         const char *prefix,
+                                         ccol_memmgmt_procs_t *mp) {
   /* The shell itself does NOT use `mp`, the server's possibly custom
    * allocator, but _ccol_default_mem_calloc and _ccol_default_mem_free, the
    * plain default-allocator macros, since the _mem_* ones need a real
@@ -13174,8 +13175,8 @@ static chttpsvr_router *_create_router(struct chttpserver *srv,
    * chttpsvr_router_shell_registry explains why this struct's memory must
    * stay valid for the rest of the process, well past srv's lifetime and so
    * well past mp's. */
-  chttpsvr_router *r =
-      (chttpsvr_router *)_ccol_default_mem_calloc(1, sizeof(chttpsvr_router));
+  chttpsvr_router_t *r = (chttpsvr_router_t *)_ccol_default_mem_calloc(
+      1, sizeof(chttpsvr_router_t));
   if (!r) return NULL;
   r->prefix = ccol_strdup(mp, prefix ? prefix : "");
   if (!r->prefix) {
@@ -13193,7 +13194,7 @@ static chttpsvr_router *_create_router(struct chttpserver *srv,
   return r;
 }
 
-static void _destroy_router(chttpsvr_router *r, ccol_memmgmt_procs_t *mp) {
+static void _destroy_router(chttpsvr_router_t *r, ccol_memmgmt_procs_t *mp) {
   /* Invalidate the router before freeing any of its contents.
    * _chttpsvr_finish_destroy only gets here after __chttpsvr_destroy's
    * pending_resolve_count wait has confirmed that no resolve of this router's
@@ -13225,10 +13226,10 @@ static void _destroy_router(chttpsvr_router *r, ccol_memmgmt_procs_t *mp) {
    * chttpsvr_router_shell_registry's comment above. */
 }
 
-static ccol_retval_t _router_add_route(chttpsvr_router *router,
+static ccol_retval_t _router_add_route(chttpsvr_router_t *router,
                                        chttp_method_t method,
                                        const char *pattern,
-                                       chttpsvr_handler_fn fn, void *ctx,
+                                       chttpsvr_handler_fn_t fn, void *ctx,
                                        bool is_streaming) {
   if (!router || !pattern || !fn) return ccol_invalid_args;
   /* A route's method ends up as a bit in a mask (see _find_route), so only
@@ -13281,8 +13282,8 @@ static ccol_retval_t _router_add_route(chttpsvr_router *router,
   return ccol_success;
 }
 
-static ccol_retval_t _router_add_mw(chttpsvr_router *router,
-                                    chttpsvr_middleware_fn fn, void *ctx) {
+static ccol_retval_t _router_add_mw(chttpsvr_router_t *router,
+                                    chttpsvr_middleware_fn_t fn, void *ctx) {
   if (!router || !fn) return ccol_invalid_args;
   ccol_memmgmt_procs_t *mp = router->m_procs;
   chttpsvr_mw_node_t *node =
@@ -13457,7 +13458,7 @@ oom:
   return ccol_not_enough_memory;
 }
 
-static chttpsvr_qparams_t *_ensure_qparams(chttpsvr_req *req) {
+static chttpsvr_qparams_t *_ensure_qparams(chttpsvr_req_t *req) {
   chttpsvr_conn_t *conn = req->conn;
   if (req->_qparams) return req->_qparams;
   if (req->_qparams_attempted) return NULL;
@@ -13652,7 +13653,7 @@ chttpsvr chttpsvr_create_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     return CHTTPSVR_NULL;
   }
 
-  chttpsvr_router *root = _create_router(srv, "", srv->m_procs);
+  chttpsvr_router_t *root = _create_router(srv, "", srv->m_procs);
   if (!root) {
     _ccol_rw_lock_destroy(srv->routes_lock);
     _ccol_cond_var_destroy(srv->quiesce_done_cv);
@@ -13669,8 +13670,8 @@ chttpsvr chttpsvr_create_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     return CHTTPSVR_NULL;
   }
 
-  srv->routers = (chttpsvr_router **)_ccol_mem_alloc(srv->m_procs,
-                                                     sizeof(chttpsvr_router *));
+  srv->routers = (chttpsvr_router_t **)_ccol_mem_alloc(
+      srv->m_procs, sizeof(chttpsvr_router_t *));
   if (!srv->routers) {
     _destroy_router(root, srv->m_procs);
     _ccol_rw_lock_destroy(srv->routes_lock);
@@ -13715,7 +13716,7 @@ chttpsvr chttpsvr_create_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
   }
 
   /* The root router is unlike every other router: it's never handed back to
-   * a caller as a chttpsvr_router*, so chttpsvr_router_on's, _on_stream's and
+   * a caller as a chttpsvr_router_t*, so chttpsvr_router_on's, _on_stream's and
    * _use's owner-resolve path never runs on it.
    *
    * root->owner is set here for a single reason: the exit-time destructor,
@@ -13739,9 +13740,9 @@ chttpsvr chttpsvr_create_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
  * separate detach functions, so no call site can detach one and forget the
  * other. */
 typedef struct {
-  ctpool worker;
-  ctpool reject;
-  ctpool stream;
+  cthrpool worker;
+  cthrpool reject;
+  cthrpool stream;
 } _detached_pools_t;
 
 /* The extra grace period _wait_in_flight_bounded allows after forcing a
@@ -13806,7 +13807,7 @@ static void _timespec_add_ms(struct timespec *ts, unsigned ms) {
  * and each release its in_flight_requests slot.
  *
  * It exists because of what every caller does right after: each one calls
- * ctpool_shutdown_drain() on the worker pool through _destroy_detached_pools,
+ * cthrpool_shutdown_drain() on the worker pool through _destroy_detached_pools,
  * and that has NO timeout of its own; its doc comment in cthreadpool.h says it
  * blocks until every queued and active task has completed.
  *
@@ -13819,7 +13820,7 @@ static void _timespec_add_ms(struct timespec *ts, unsigned ms) {
  *
  * Then this function's careful 30s bound would mean nothing: the timeout runs
  * out and we return anyway, and the caller's very next call,
- * ctpool_shutdown_drain, hangs forever on the same stuck task, so there would
+ * cthrpool_shutdown_drain, hangs forever on the same stuck task, so there would
  * be no point in bounding this wait at all. The callers are
  * chttpsvr_destroy() and chttpsvr_engine_stop(), through
  * _drain_and_close_all_connections. A restart never gets here; it retires the
@@ -13875,22 +13876,22 @@ static void _wait_in_flight_bounded(struct chttpserver *srv) {
    * isn't a blocked socket read or write, since we've already unblocked that
    * whole class, but something this library can neither see nor control, like
    * a handler blocked in unrelated work that has nothing to do with a socket.
-   * ctpool_shutdown_drain() below waits for it, and there's nothing more this
+   * cthrpool_shutdown_drain() below waits for it, and there's nothing more this
    * function could safely force. */
 }
 
 static void _destroy_detached_pools(_detached_pools_t pools) {
   if (pools.stream) {
-    ctpool_shutdown_drain(pools.stream);
-    ctpool_destroy(pools.stream);
+    cthrpool_shutdown_drain(pools.stream);
+    cthrpool_destroy(pools.stream);
   }
   if (pools.worker) {
-    ctpool_shutdown_drain(pools.worker);
-    ctpool_destroy(pools.worker);
+    cthrpool_shutdown_drain(pools.worker);
+    cthrpool_destroy(pools.worker);
   }
   if (pools.reject) {
-    ctpool_shutdown_drain(pools.reject);
-    ctpool_destroy(pools.reject);
+    cthrpool_shutdown_drain(pools.reject);
+    cthrpool_destroy(pools.reject);
   }
 }
 
@@ -14002,7 +14003,7 @@ static void _retired_pools_reap(struct chttpserver *srv, bool wait_all) {
 #ifdef RUNNING_UNIT_TESTS
 /* The worker pool the process's latest _retire_pools call took out of
  * service. */
-static _Atomic ctpool g_last_retired_worker_pool_for_tests = CTPOOL_NULL;
+static _Atomic cthrpool g_last_retired_worker_pool_for_tests = CTHRPOOL_NULL;
 
 /* Purely a white-box test helper. It tells whether the shutdown of the
  * worker pool the latest restart retired has started, the point after which
@@ -14011,12 +14012,12 @@ static _Atomic ctpool g_last_retired_worker_pool_for_tests = CTPOOL_NULL;
  * that pool, a worker held in a hook for example, so the drain can't end and
  * the pool can't be destroyed while this helper reads it. */
 bool _chttpsvr_retired_worker_shutdown_started_for_tests(void) {
-  ctpool h = atomic_load(&g_last_retired_worker_pool_for_tests);
-  if (h == CTPOOL_NULL) return false;
-  struct cthread_pool *pool = _ctpool_resolve_for_tests(h);
+  cthrpool h = atomic_load(&g_last_retired_worker_pool_for_tests);
+  if (h == CTHRPOOL_NULL) return false;
+  struct cthread_pool *pool = _cthrpool_resolve_for_tests(h);
   if (!pool) return true;
   bool started = false;
-  _ctpool_shutdown_state_for_tests(pool, &started, NULL, NULL);
+  _cthrpool_shutdown_state_for_tests(pool, &started, NULL, NULL);
   return started;
 }
 #endif /* RUNNING_UNIT_TESTS */
@@ -14049,9 +14050,9 @@ static void _retire_current_pools(struct chttpserver *srv) {
   _ccol_mutex_lock(srv->mutex);
   _detached_pools_t out = {srv->worker_pool, srv->reject_pool,
                            srv->stream_pool};
-  srv->worker_pool = CTPOOL_NULL;
-  srv->reject_pool = CTPOOL_NULL;
-  srv->stream_pool = CTPOOL_NULL;
+  srv->worker_pool = CTHRPOOL_NULL;
+  srv->reject_pool = CTHRPOOL_NULL;
+  srv->stream_pool = CTHRPOOL_NULL;
   _stream_new_run_locked(srv);
   _ccol_mutex_unlock(srv->mutex);
   _retire_pools(srv, out);
@@ -14077,7 +14078,7 @@ static void _retire_current_pools(struct chttpserver *srv) {
  *
  * A request can still arrive after a connection is closed here, or while we
  * hold srv->mutex, and then one of two things happens, neither a leak nor a
- * crash. Either it hits an already removed ccol_event_loop registration, a
+ * crash. Either it hits an already removed ceventloop registration, a
  * safe no-op through the same dispatch-time liveness check this codebase
  * relies on elsewhere, or once it finally gets the lock it reads a NULL
  * worker_pool (and by the same reasoning a NULL reject_pool) and falls all
@@ -14102,9 +14103,9 @@ static _detached_pools_t _drain_and_close_all_connections(
   _wait_in_flight_bounded(srv);
   _detached_pools_t out = {srv->worker_pool, srv->reject_pool,
                            srv->stream_pool};
-  srv->worker_pool = CTPOOL_NULL;
-  srv->reject_pool = CTPOOL_NULL;
-  srv->stream_pool = CTPOOL_NULL;
+  srv->worker_pool = CTHRPOOL_NULL;
+  srv->reject_pool = CTHRPOOL_NULL;
+  srv->stream_pool = CTHRPOOL_NULL;
   _stream_new_run_locked(srv);
   _close_all_idle_connections(srv);
   _mem_wait_flush(srv);
@@ -14242,23 +14243,23 @@ static void _quiesce_server_once(struct chttpserver *srv) {
    * without waiting. Unlike destroy, that path can legitimately run at the
    * same time as a chttpsvr_start() that has already taken an engine
    * reference, so raw->contributed_to_engine is true, and that still uses
-   * srv_engine_bundler.reactor further down, to ccol_event_loop_add the
+   * srv_engine_bundler.reactor further down, to ceventloop_add the
    * listener for example.
    *
    * Without this wait we could decide below to drop this server's engine
    * reference and unregister and drain srv while chttpsvr_start, which still
    * thinks it holds that very reference, goes on to register a listener
    * against a reactor that may be torn down, or already is, by the time it
-   * gets there. That's a ccol_event_loop_add on an already destroyed
-   * ccol_event_loop handle.
+   * gets there. That's a ceventloop_add on an already destroyed
+   * ceventloop handle.
    *
    * The wait uses the same srv->mutex and resolve_cv pair as
    * _chttpsvr_resolve_unpin and closes the window the same way for every
    * caller of this function, so no caller needs to remember it.
    *
-   * ccol_event_reg is itself a generation-checked handle resolved through its
-   * ccol_event_loop's slot table just like the ccol_event_loop handle, so a
-   * stale conn->reg reaching a later ccol_event_loop_remove(), _modify(),
+   * ceventloop_reg is itself a generation-checked handle resolved through its
+   * ceventloop's slot table just like the ceventloop handle, so a
+   * stale conn->reg reaching a later ceventloop_remove(), _modify(),
    * _pause() or _resume() is always safely rejected without any risk of a
    * use-after-free. That's not what this particular wait is about. */
   while (atomic_load(&srv->pending_resolve_count) > 0)
@@ -14276,8 +14277,8 @@ static void _quiesce_server_once(struct chttpserver *srv) {
    * because that _engine_release_begin() may be the one that takes the shared
    * reactor's refcount to zero, when srv is the last contributing server, and
    * the reaper we then start calls
-   * ccol_event_loop_destroy(srv_engine_bundler.reactor). Our own
-   * ccol_event_loop_remove() calls, made inside
+   * ceventloop_destroy(srv_engine_bundler.reactor). Our own
+   * ceventloop_remove() calls, made inside
    * _drain_and_close_all_connections through _conn_close, would race that
    * reaper if they ran after the release instead of before. */
   _detached_pools_t old_pools = _drain_and_close_all_connections(srv);
@@ -14375,7 +14376,7 @@ void __chttpsvr_destroy(chttpsvr srv) {
    * worker pool is destroying it right now, and there's no safe way forward:
    * draining in-flight requests can never converge, because this very call
    * stack is what would finish and decrement the count, and the
-   * ctpool_destroy() that follows, on this thread's own pool, is an unrelated
+   * cthrpool_destroy() that follows, on this thread's own pool, is an unrelated
    * fatal misuse of cthreadpool.c.
    *
    * __chttpsvr_destroy has no ccol_retval_t to report it through, since its
@@ -14384,7 +14385,7 @@ void __chttpsvr_destroy(chttpsvr srv) {
    * right above, with a loud, immediate _ccol_fatal_err() naming the real
    * problem, instead of a silent hang followed by an abort whose stack trace
    * points somewhere else entirely. Same as the self-destroy guards of
-   * __ctpool_destroy and __ccol_event_loop_destroy. */
+   * __cthrpool_destroy and __ceventloop_destroy. */
   if (_chttpsvr_is_self_call(raw)) {
     _ccol_mutex_unlock(chttpsvr_slot_table.mutex);
     _ccol_fatal_err(
@@ -14727,7 +14728,7 @@ ccol_retval_t chttpsvr_start(chttpsvr h, const chttpsvr_config_t *cfg) {
    * ctls_ctx_cert_add needs), so quietly reading a lone cert_path or key_path
    * as "no TLS configured" would start this server as plain, unencrypted HTTP
    * while the caller thinks the port is HTTPS, and nothing would report an
-   * error anywhere. Same guard as in chttpclient_set_tls and the comment
+   * error anywhere. Same guard as in chttpcli_set_tls and the comment
    * above it.
    *
    * ca_bundle_path alone, without a cert_path and key_path pair, has the same
@@ -14735,7 +14736,7 @@ ccol_retval_t chttpsvr_start(chttpsvr h, const chttpsvr_config_t *cfg) {
    * `cert_path && key_path` branch, so a caller setting only ca_bundle_path
    * would get the same silent downgrade to plain HTTP instead of an error.
    * On the client side that's the everyday way to verify against a custom CA
-   * with chttpclient_set_tls, as curl's --cacert, Go's
+   * with chttpcli_set_tls, as curl's --cacert, Go's
    * TLSClientConfig.RootCAs and Python's
    * ssl.create_default_context(cafile=...) all do, with no client certificate
    * involved. But no reference server (Go's ListenAndServeTLS, Node's
@@ -15038,8 +15039,8 @@ ccol_retval_t chttpsvr_start(chttpsvr h, const chttpsvr_config_t *cfg) {
     }
 
     char *pool_err = NULL;
-    ctpool new_pool =
-        ctpool_create_mp((size_t)nthreads, queue_cap, raw->m_procs, &pool_err);
+    cthrpool new_pool = cthrpool_create_mp((size_t)nthreads, queue_cap,
+                                           raw->m_procs, &pool_err);
     if (!new_pool) {
       _ccol_mutex_lock(raw->mutex);
       raw->lifecycle = CHTTPSVR_LC_IDLE;
@@ -15063,12 +15064,12 @@ ccol_retval_t chttpsvr_start(chttpsvr h, const chttpsvr_config_t *cfg) {
     if (reject_nthreads < _CHTTPSVR_REJECT_POOL_MIN_THREADS)
       reject_nthreads = _CHTTPSVR_REJECT_POOL_MIN_THREADS;
     char *reject_pool_err = NULL;
-    ctpool new_reject_pool = ctpool_create_mp((size_t)reject_nthreads,
-                                              _CHTTPSVR_REJECT_POOL_QUEUE_CAP,
-                                              raw->m_procs, &reject_pool_err);
+    cthrpool new_reject_pool = cthrpool_create_mp(
+        (size_t)reject_nthreads, _CHTTPSVR_REJECT_POOL_QUEUE_CAP, raw->m_procs,
+        &reject_pool_err);
     if (!new_reject_pool) {
-      ctpool_shutdown_drain(new_pool);
-      ctpool_destroy(new_pool);
+      cthrpool_shutdown_drain(new_pool);
+      cthrpool_destroy(new_pool);
       _ccol_mutex_lock(raw->mutex);
       raw->lifecycle = CHTTPSVR_LC_IDLE;
       _ccol_mutex_unlock(raw->mutex);
@@ -15151,7 +15152,7 @@ ccol_retval_t chttpsvr_start(chttpsvr h, const chttpsvr_config_t *cfg) {
                                   raw->stream_pool};
     raw->worker_pool = new_pool;
     raw->reject_pool = new_reject_pool;
-    raw->stream_pool = CTPOOL_NULL;
+    raw->stream_pool = CTHRPOOL_NULL;
     _stream_new_run_locked(raw);
     _ccol_mutex_unlock(raw->mutex);
 #ifdef RUNNING_UNIT_TESTS
@@ -15245,7 +15246,7 @@ ccol_retval_t chttpsvr_start(chttpsvr h, const chttpsvr_config_t *cfg) {
      * servers_bundler.servers at all, finishes its scan believing every
      * server is quiesced, and may then tear the reactor down while we're
      * about to acquire and use it. That shows up as a spurious
-     * ccol_unexpected_failure from this call, with ccol_event_loop_add
+     * ccol_unexpected_failure from this call, with ceventloop_add
      * failing against a reactor that's already gone. Not a crash, but a real
      * race that we can avoid.
      *
@@ -15454,13 +15455,13 @@ ccol_retval_t chttpsvr_start(chttpsvr h, const chttpsvr_config_t *cfg) {
       return ccol_unexpected_failure;
     }
 
-    /* Publish these fields BEFORE the ccol_event_loop_add below, not after,
+    /* Publish these fields BEFORE the ceventloop_add below, not after,
      * because that call makes the registration live at once and a connection
      * can come in between the registration and the write of these fields.
      * Otherwise such a connection is dispatched to _listener_on_readable
      * while it still sees listen_fd's pre-start default of -1 (see the
      * comment of listen_fd on struct chttpserver). listen_fd goes back to -1
-     * below if ccol_event_loop_add itself fails, so a failed start never
+     * below if ceventloop_add itself fails, so a failed start never
      * leaves listen_fd pointing at an fd we're about to close. */
     atomic_store(&raw->listen_fd, lfd);
     atomic_store(&raw->is_unix_socket, is_unix);
@@ -15474,10 +15475,9 @@ ccol_retval_t chttpsvr_start(chttpsvr h, const chttpsvr_config_t *cfg) {
      * this call holds through its resolve keeps the count above 0, so the
      * release on a failed add never reaches the final teardown. */
     atomic_fetch_add(&raw->lifetime_refs, 1);
-    ccol_event_reg lreg = ccol_event_loop_add(
-        srv_engine_bundler.reactor,
-        ccol_selectable_from_fd(lfd, ccol_select_read),
-        (ccol_event_handlers_t){.on_readable = _listener_on_readable,
+    ceventloop_reg lreg = ceventloop_add(
+        srv_engine_bundler.reactor, cselectable_fd(lfd, cselect_read),
+        (ceventloop_handlers_t){.on_readable = _listener_on_readable,
                                 .on_removed = _listener_on_removed},
         raw, &reg_err);
     if (!lreg) {
@@ -15525,7 +15525,7 @@ ccol_retval_t chttpsvr_start(chttpsvr h, const chttpsvr_config_t *cfg) {
  * passing a raw struct chttpserver* where a handle belongs fails to compile
  * or, worse, reads the pointer's bit pattern as a slot index and generation
  * pair. Same split as chttpclient.c has between chttp_do_internal, which
- * works on a struct chttpclient*, and the public chttpclient_do wrapper,
+ * works on a struct chttpclient*, and the public chttpcli_do wrapper,
  * which resolves and then calls. */
 static void _chttpsvr_stop_internal(struct chttpserver *raw) {
   _ccol_mutex_lock(raw->mutex);
@@ -15548,7 +15548,7 @@ static void _chttpsvr_stop_internal(struct chttpserver *raw) {
       break;
   }
   int lfd = atomic_load(&raw->listen_fd);
-  ccol_event_reg lreg = raw->listen_reg;
+  ceventloop_reg lreg = raw->listen_reg;
   _chttpsvr_unix_bind_t unix_bind = raw->unix_bind;
   if (was_started) {
     /* Set in the same critical section that leaves CHTTPSVR_LC_RUNNING, so
@@ -15558,7 +15558,7 @@ static void _chttpsvr_stop_internal(struct chttpserver *raw) {
      * comment of chttpsvr_lifecycle_t has the race this state closes. */
     raw->lifecycle = CHTTPSVR_LC_STOPPING;
     atomic_store(&raw->listen_fd, -1);
-    raw->listen_reg = CCOL_EVENT_REG_NULL;
+    raw->listen_reg = CEVENTLOOP_REG_NULL;
     raw->unix_bind.path = NULL;
     raw->unix_bind.dir_fd = -1;
   }
@@ -15569,13 +15569,13 @@ static void _chttpsvr_stop_internal(struct chttpserver *raw) {
   _stop_race_hook_wait_if_armed();
 #endif /* RUNNING_UNIT_TESTS */
 
-  /* Once ccol_event_loop_remove returns, no NEW _listener_on_readable
+  /* Once ceventloop_remove returns, no NEW _listener_on_readable
    * dispatch can start for lreg. But it does NOT wait for a dispatch already
    * in progress when it's called, because it never takes the registration's
-   * dispatch_lock (see the comment of _ccol_event_loop_run_callback in
-   * cthreadcomm.c and the doc comment of ccol_event_loop_remove in
+   * dispatch_lock (see the comment of _ceventloop_run_callback in
+   * cthreadcomm.c and the doc comment of ceventloop_remove in
    * cthreadcomm.h). "teardown is deferred until any in-progress callback
-   * returns" there is about ccol_event_loop's internal bookkeeping memory,
+   * returns" there is about ceventloop's internal bookkeeping memory,
    * not a promise that the calling thread blocks for that callback.
    *
    * Without the wait below there's a real, narrow race of a few
@@ -15601,12 +15601,12 @@ static void _chttpsvr_stop_internal(struct chttpserver *raw) {
    * waiting here is never the one that must run for the counter to reach
    * 0, so it can't deadlock on itself.
    *
-   * ccol_event_loop_remove() has already run when the wait starts, so it can
+   * ceventloop_remove() has already run when the wait starts, so it can
    * only be waiting on a dispatch live at that very moment, never a fresh
-   * one, and there's at most one, since ccol_event_loop's per-registration
+   * one, and there's at most one, since ceventloop's per-registration
    * dispatch_lock already keeps a registration's callback from running
    * concurrently with itself. */
-  if (lreg) ccol_event_loop_remove(srv_engine_bundler.reactor, lreg);
+  if (lreg) ceventloop_remove(srv_engine_bundler.reactor, lreg);
   _ccol_mutex_lock(raw->mutex);
   while (atomic_load(&raw->listener_dispatch_pins) > 0)
     _ccol_cond_var_wait(raw->resolve_cv, raw->mutex);
@@ -15987,7 +15987,7 @@ size_t _chttpsvr_mem_holders_for_tests(chttpsvr h, bool *exempt_out) {
 
 /* For the request req names, held by a buffered route's handler: its
  * connection's body memory reservation and its body buffer's capacity. */
-void _chttpsvr_req_body_memory_for_tests(chttpsvr_req *req, size_t *charged,
+void _chttpsvr_req_body_memory_for_tests(chttpsvr_req_t *req, size_t *charged,
                                          size_t *held) {
   chttpsvr_conn_t *conn = req->conn;
   _ccol_mutex_lock(conn->srv->wait_mutex);
@@ -16018,7 +16018,7 @@ bool _chttpsvr_stream_pool_created_for_tests(chttpsvr h) {
   struct chttpserver *raw = _chttpsvr_resolve_for_tests(h);
   if (!raw) return false;
   _ccol_mutex_lock(raw->mutex);
-  bool created = raw->stream_pool != CTPOOL_NULL;
+  bool created = raw->stream_pool != CTHRPOOL_NULL;
   _ccol_mutex_unlock(raw->mutex);
   return created;
 }
@@ -16029,9 +16029,9 @@ size_t _chttpsvr_pool_active_for_tests(chttpsvr h, bool streaming) {
   struct chttpserver *raw = _chttpsvr_resolve_for_tests(h);
   if (!raw) return 0;
   _ccol_mutex_lock(raw->mutex);
-  ctpool pool = streaming ? raw->stream_pool : raw->worker_pool;
+  cthrpool pool = streaming ? raw->stream_pool : raw->worker_pool;
   _ccol_mutex_unlock(raw->mutex);
-  return pool ? ctpool_active_count(pool) : 0;
+  return pool ? cthrpool_active_count(pool) : 0;
 }
 
 /* How many connections in the idle list are parked on a body (kind 1) or on
@@ -16109,7 +16109,7 @@ void chttpsvr_engine_wait(void) {
   /* The self-call guard (see the comment of _chttpsvr_is_any_worker_call).
    * Blocking here from a request handler or middleware of ANY currently
    * registered server can deadlock the whole engine, not just that server:
-   * the ctpool_shutdown_drain inside _engine_force_stop_quiesce_all has no
+   * the cthrpool_shutdown_drain inside _engine_force_stop_quiesce_all has no
    * timeout and can never finish draining that handler's pool, since this
    * very call stack is what would let the task return, so the reactor never
    * gets torn down and this wait never wakes.
@@ -16133,7 +16133,7 @@ void chttpsvr_engine_wait(void) {
 
 ccol_retval_t chttpsvr_register_handler(chttpsvr h, chttp_method_t method,
                                         const char *pattern,
-                                        chttpsvr_handler_fn fn, void *ctx) {
+                                        chttpsvr_handler_fn_t fn, void *ctx) {
   if (!pattern || !fn) return ccol_invalid_args;
   struct chttpserver *raw = _chttpsvr_resolve(h);
   if (!raw) return ccol_invalid_args;
@@ -16148,7 +16148,7 @@ ccol_retval_t chttpsvr_register_handler(chttpsvr h, chttp_method_t method,
 ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr h,
                                                   chttp_method_t method,
                                                   const char *pattern,
-                                                  chttpsvr_handler_fn fn,
+                                                  chttpsvr_handler_fn_t fn,
                                                   void *ctx) {
   if (!pattern || !fn) return ccol_invalid_args;
   struct chttpserver *raw = _chttpsvr_resolve(h);
@@ -16159,7 +16159,7 @@ ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr h,
   return rv;
 }
 
-ccol_retval_t chttpsvr_use(chttpsvr h, chttpsvr_middleware_fn fn, void *ctx) {
+ccol_retval_t chttpsvr_use(chttpsvr h, chttpsvr_middleware_fn_t fn, void *ctx) {
   if (!fn) return ccol_invalid_args;
   struct chttpserver *raw = _chttpsvr_resolve(h);
   if (!raw) return ccol_invalid_args;
@@ -16168,14 +16168,14 @@ ccol_retval_t chttpsvr_use(chttpsvr h, chttpsvr_middleware_fn fn, void *ctx) {
   return rv;
 }
 
-chttpsvr_router *chttpsvr_subrouter(chttpsvr h, const char *prefix) {
+chttpsvr_router_t *chttpsvr_subrouter(chttpsvr h, const char *prefix) {
   if (!prefix || prefix[0] != '/') return NULL;
   if (strstr(prefix, "//")) return NULL;
 
   struct chttpserver *raw = _chttpsvr_resolve(h);
   if (!raw) return NULL;
 
-  chttpsvr_router *r = _create_router(raw, prefix, raw->m_procs);
+  chttpsvr_router_t *r = _create_router(raw, prefix, raw->m_procs);
   if (!r) {
     _chttpsvr_resolve_unpin(raw); /* exit 1 */
     return NULL;
@@ -16185,15 +16185,15 @@ chttpsvr_router *chttpsvr_subrouter(chttpsvr h, const char *prefix) {
   _ccol_rw_lock_wrlock(raw->routes_lock);
   if (raw->router_count >= raw->router_cap) {
     if (raw->router_cap > (SIZE_MAX - 2) / 2 ||
-        raw->router_cap * 2 + 2 > SIZE_MAX / sizeof(chttpsvr_router *)) {
+        raw->router_cap * 2 + 2 > SIZE_MAX / sizeof(chttpsvr_router_t *)) {
       _ccol_rw_lock_unlock(raw->routes_lock);
       _destroy_router(r, raw->m_procs);
       _chttpsvr_resolve_unpin(raw); /* exit 2 */
       return NULL;
     }
     size_t nc = raw->router_cap * 2 + 2;
-    chttpsvr_router **nr = (chttpsvr_router **)_ccol_mem_realloc(
-        raw->m_procs, raw->routers, nc * sizeof(chttpsvr_router *));
+    chttpsvr_router_t **nr = (chttpsvr_router_t **)_ccol_mem_realloc(
+        raw->m_procs, raw->routers, nc * sizeof(chttpsvr_router_t *));
     if (!nr) {
       _ccol_rw_lock_unlock(raw->routes_lock);
       _destroy_router(r, raw->m_procs);
@@ -16244,14 +16244,14 @@ chttpsvr_router *chttpsvr_subrouter(chttpsvr h, const char *prefix) {
  * resolved, pinned server otherwise, in which case the caller MUST call
  * _chttpsvr_resolve_unpin(raw) exactly once when it's done. */
 static struct chttpserver *_chttpsvr_router_reader_enter(
-    chttpsvr_router *router) {
+    chttpsvr_router_t *router) {
   chttpsvr owner = atomic_load(&router->owner);
   return _chttpsvr_resolve(owner);
 }
 
-ccol_retval_t chttpsvr_router_on(chttpsvr_router *router, chttp_method_t method,
-                                 const char *pattern, chttpsvr_handler_fn fn,
-                                 void *ctx) {
+ccol_retval_t chttpsvr_router_on(chttpsvr_router_t *router,
+                                 chttp_method_t method, const char *pattern,
+                                 chttpsvr_handler_fn_t fn, void *ctx) {
   if (!router || !pattern || !fn) return ccol_invalid_args;
   struct chttpserver *raw = _chttpsvr_router_reader_enter(router);
   if (!raw) return ccol_invalid_args;
@@ -16260,10 +16260,10 @@ ccol_retval_t chttpsvr_router_on(chttpsvr_router *router, chttp_method_t method,
   return rv;
 }
 
-ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
+ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router_t *router,
                                         chttp_method_t method,
                                         const char *pattern,
-                                        chttpsvr_handler_fn fn, void *ctx) {
+                                        chttpsvr_handler_fn_t fn, void *ctx) {
   if (!router || !pattern || !fn) return ccol_invalid_args;
   struct chttpserver *raw = _chttpsvr_router_reader_enter(router);
   if (!raw) return ccol_invalid_args;
@@ -16272,8 +16272,8 @@ ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
   return rv;
 }
 
-ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
-                                  chttpsvr_middleware_fn fn, void *ctx) {
+ccol_retval_t chttpsvr_router_use(chttpsvr_router_t *router,
+                                  chttpsvr_middleware_fn_t fn, void *ctx) {
   if (!router || !fn) return ccol_invalid_args;
   struct chttpserver *raw = _chttpsvr_router_reader_enter(router);
   if (!raw) return ccol_invalid_args;
@@ -16286,12 +16286,12 @@ ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
 /*                         REQUEST API                                        */
 /* ========================================================================== */
 
-chttp_method_t chttpsvr_req_method(const chttpsvr_req *req) {
+chttp_method_t chttpsvr_req_method(const chttpsvr_req_t *req) {
   if (!req) return CHTTP_GET;
   return req->conn->method;
 }
 
-const char *chttpsvr_req_path(const chttpsvr_req *req) {
+const char *chttpsvr_req_path(const chttpsvr_req_t *req) {
   if (!req) return NULL;
   return req->conn->decoded_path;
 }
@@ -16299,12 +16299,12 @@ const char *chttpsvr_req_path(const chttpsvr_req *req) {
 _Static_assert(CHTTPSVR_PEER_CERT_SHA256_LEN == CTLS_SHA256_LEN,
                "the public digest length must match the one of ctls");
 
-bool chttpsvr_req_peer_cert_verified(const chttpsvr_req *req) {
+bool chttpsvr_req_peer_cert_verified(const chttpsvr_req_t *req) {
   if (!req) return false;
   return req->conn->tls && ctls_conn_peer_cert_verified(req->conn->tls);
 }
 
-const void *chttpsvr_req_peer_cert_der(const chttpsvr_req *req,
+const void *chttpsvr_req_peer_cert_der(const chttpsvr_req_t *req,
                                        size_t *len_out) {
   if (len_out) *len_out = 0;
   if (!req || !req->conn->tls) return NULL;
@@ -16312,7 +16312,8 @@ const void *chttpsvr_req_peer_cert_der(const chttpsvr_req *req,
 }
 
 ccol_retval_t chttpsvr_req_peer_cert_sha256(
-    const chttpsvr_req *req, unsigned char out[CHTTPSVR_PEER_CERT_SHA256_LEN]) {
+    const chttpsvr_req_t *req,
+    unsigned char out[CHTTPSVR_PEER_CERT_SHA256_LEN]) {
   if (out) memset(out, 0, CHTTPSVR_PEER_CERT_SHA256_LEN);
   if (!req || !out) return ccol_invalid_args;
   if (!req->conn->tls || !ctls_conn_peer_cert_verified(req->conn->tls))
@@ -16322,12 +16323,12 @@ ccol_retval_t chttpsvr_req_peer_cert_sha256(
              : ccol_not_enough_memory;
 }
 
-const char *chttpsvr_req_peer_cert_subject(const chttpsvr_req *req) {
+const char *chttpsvr_req_peer_cert_subject(const chttpsvr_req_t *req) {
   if (!req || !req->conn->tls) return NULL;
   return ctls_conn_peer_cert_subject(req->conn->tls);
 }
 
-const char *chttpsvr_req_header(const chttpsvr_req *req, const char *name) {
+const char *chttpsvr_req_header(const chttpsvr_req_t *req, const char *name) {
   if (!req || !name) return NULL;
   chttpsvr_conn_t *conn = req->conn;
   /* A repeated header name keeps every occurrence, in arrival order, in
@@ -16341,7 +16342,7 @@ const char *chttpsvr_req_header(const chttpsvr_req *req, const char *name) {
   return NULL;
 }
 
-const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out) {
+const void *chttpsvr_req_body(const chttpsvr_req_t *req, size_t *len_out) {
   if (!req) {
     if (len_out) *len_out = 0;
     return NULL;
@@ -16381,7 +16382,7 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out) {
   return conn->body.buf;
 }
 
-const char *chttpsvr_req_param(const chttpsvr_req *req, const char *name) {
+const char *chttpsvr_req_param(const chttpsvr_req_t *req, const char *name) {
   if (!req || !name) return NULL;
   chttpsvr_conn_t *conn = req->conn;
   /* The same guard as in chttpsvr_req_read explains why conn and
@@ -16399,7 +16400,7 @@ const char *chttpsvr_req_param(const chttpsvr_req *req, const char *name) {
   return NULL;
 }
 
-const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
+const char **chttpsvr_req_query(chttpsvr_req_t *req, const char *key,
                                 size_t *count_out) {
   if (!req || !key) {
     if (count_out) *count_out = 0;
@@ -16441,7 +16442,7 @@ const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
   return req->_qresult;
 }
 
-ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req, const char *key,
+ccol_retval_t chttpsvr_req_query_one(chttpsvr_req_t *req, const char *key,
                                      const char **val_out) {
   if (!req || !key) {
     if (val_out) *val_out = NULL;
@@ -16478,12 +16479,12 @@ ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req, const char *key,
   return ccol_success;
 }
 
-const char *chttpsvr_req_raw_query(const chttpsvr_req *req) {
+const char *chttpsvr_req_raw_query(const chttpsvr_req_t *req) {
   if (!req) return NULL;
   return req->conn->raw_query;
 }
 
-bool chttpsvr_req_query_oom(const chttpsvr_req *req) {
+bool chttpsvr_req_query_oom(const chttpsvr_req_t *req) {
   if (!req) return false;
   return req->_qresult_oom || req->_qparams_parse_oom;
 }
@@ -16492,7 +16493,7 @@ bool chttpsvr_req_query_oom(const chttpsvr_req *req) {
  * doubles from there. */
 #define _CHTTPSVR_CTX_MORE_FIRST_CAP 4u
 
-ccol_retval_t chttpsvr_req_set_context(chttpsvr_req *req, const void *key,
+ccol_retval_t chttpsvr_req_set_context(chttpsvr_req_t *req, const void *key,
                                        void *value) {
   if (!req || !key) return ccol_invalid_args;
   if (!req->_ctx_first.key || req->_ctx_first.key == key) {
@@ -16528,7 +16529,7 @@ ccol_retval_t chttpsvr_req_set_context(chttpsvr_req *req, const void *key,
   return ccol_success;
 }
 
-void *chttpsvr_req_context(const chttpsvr_req *req, const void *key) {
+void *chttpsvr_req_context(const chttpsvr_req_t *req, const void *key) {
   if (!req || !key) return NULL;
   if (req->_ctx_first.key == key) return req->_ctx_first.value;
   const _chttpsvr_ctx_more_t *more = req->_ctx_more;
@@ -16542,7 +16543,7 @@ void *chttpsvr_req_context(const chttpsvr_req *req, const void *key) {
 /*                         RESPONSE API                                       */
 /* ========================================================================== */
 
-void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code) {
+void chttpsvr_resp_set_status(chttpsvr_resp_t *resp, int status_code) {
   if (resp) resp->status_code = status_code;
 }
 
@@ -16635,8 +16636,8 @@ static bool _resp_header_is_singleton(const char *name) {
 }
 
 /* Appends one more field line. The caller has validated name and value. */
-static ccol_retval_t _resp_header_append(chttpsvr_resp *resp, const char *name,
-                                         const char *value) {
+static ccol_retval_t _resp_header_append(chttpsvr_resp_t *resp,
+                                         const char *name, const char *value) {
   ccol_memmgmt_procs_t *mp = resp->m_procs;
   if (resp->header_count >= resp->header_cap) {
     if (resp->header_cap > (SIZE_MAX - 8) / 2) return ccol_not_enough_memory;
@@ -16667,8 +16668,8 @@ static ccol_retval_t _resp_header_append(chttpsvr_resp *resp, const char *name,
  * its place and the letter case of its name and every later field of that
  * name is dropped, so the other fields stay in the order of the calls that
  * set them. The caller has validated name and value. */
-static ccol_retval_t _resp_header_replace(chttpsvr_resp *resp, const char *name,
-                                          const char *value) {
+static ccol_retval_t _resp_header_replace(chttpsvr_resp_t *resp,
+                                          const char *name, const char *value) {
   ccol_memmgmt_procs_t *mp = resp->m_procs;
   size_t first = resp->header_count;
   for (size_t i = 0; i < resp->header_count; i++) {
@@ -16698,7 +16699,7 @@ static ccol_retval_t _resp_header_replace(chttpsvr_resp *resp, const char *name,
   return ccol_success;
 }
 
-ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
+ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp_t *resp, const char *name,
                                        const char *value) {
   if (!resp || !name || !value) return ccol_invalid_args;
   ccol_retval_t rv = _resp_header_validate(name, value);
@@ -16706,7 +16707,7 @@ ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
   return _resp_header_replace(resp, name, value);
 }
 
-ccol_retval_t chttpsvr_resp_add_header(chttpsvr_resp *resp, const char *name,
+ccol_retval_t chttpsvr_resp_add_header(chttpsvr_resp_t *resp, const char *name,
                                        const char *value) {
   if (!resp || !name || !value) return ccol_invalid_args;
   ccol_retval_t rv = _resp_header_validate(name, value);
@@ -16716,7 +16717,7 @@ ccol_retval_t chttpsvr_resp_add_header(chttpsvr_resp *resp, const char *name,
   return _resp_header_append(resp, name, value);
 }
 
-ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp, const void *data,
+ccol_retval_t chttpsvr_resp_write(chttpsvr_resp_t *resp, const void *data,
                                   size_t len) {
   if (!resp || (!data && len > 0)) return ccol_invalid_args;
   if (len == 0) return ccol_success;
@@ -16741,12 +16742,13 @@ ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp, const void *data,
   return ccol_success;
 }
 
-ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp, const char *str) {
+ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp_t *resp, const char *str) {
   if (!resp || !str) return ccol_invalid_args;
   return chttpsvr_resp_write(resp, str, strlen(str));
 }
 
-ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp, const char *fmt, ...) {
+ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp_t *resp, const char *fmt,
+                                   ...) {
   if (!resp || !fmt) return ccol_invalid_args;
 
   ccol_memmgmt_procs_t *mp = resp->m_procs;
@@ -16783,7 +16785,7 @@ ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp, const char *fmt, ...) {
   return rv;
 }
 
-ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp, const char *json,
+ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp_t *resp, const char *json,
                                        size_t len) {
   if (!resp || !json || len == 0) return ccol_invalid_args;
   ccol_retval_t rv = chttpsvr_resp_write(resp, json, len);

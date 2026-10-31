@@ -1,0 +1,65 @@
+.TH CDYNMQ_TIMED_RECV 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cdynmq_timed_recv \- receive a message from a dynamic queue with a timeout
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t cdynmq_timed_recv(cdynmq *dq,
+                                cmessage_t *target_buf,
+                                uint64_t timeout_us);
+.fi
+.SH DESCRIPTION
+.nf
+Works like cdynmq_recv(), but waits for a message for at most
+timeout_us microseconds. If one arrives in time, the message at the
+head is removed and handed over in target_buf, and the caller must free
+target_buf->data when done with it.
+
+The timeout counts microseconds from the call, and the library turns it
+into an absolute deadline on CLOCK_MONOTONIC.
+.fi
+.SH PARAMETERS
+.nf
+dq          Dynamic queue to receive from
+target_buf  Buffer that gets the message together with the ownership
+            of the data.
+timeout_us  Longest time to wait, in microseconds, from the call. 0
+            does not wait, which makes the call cdynmq_try_recv.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - A message was received. The caller must
+                            free target_buf->data.
+ccol_invalid_args         - dq or target_buf is NULL
+ccol_container_empty      - The timeout is 0 and the queue is empty
+ccol_timed_out            - The timeout ended before a message arrived
+ccol_unexpected_failure   - The wait failed with an error other than a
+                            timeout; errno holds that error
+.fi
+.SH NOTES
+.nf
+The call never blocks for longer than the timeout. After a successful
+call target_buf->data belongs to the caller.
+
+With a timeout of 0 the call doesn't wait at all. It does exactly what
+cdynmq_try_recv does and returns that result, so an empty queue
+gives ccol_container_empty and not ccol_timed_out.
+
+A timeout too large to form a deadline, such as UINT64_MAX, saturates
+to the latest deadline the clock can hold, which in practice means
+waiting with no end. It never wraps around into the past.
+
+The timeout is measured on CLOCK_MONOTONIC. Changes to the system's
+wall clock (made by an administrator, by NTP, or by resuming a virtual
+machine) don't make it longer or shorter, and the call waits for the
+duration that the caller gave.
+
+The function is thread-safe.
+.fi
+.SH "SEE ALSO"
+.BR cdynmq_recv (3),
+.BR cdynmq_try_recv (3),
+.BR cdynmq_send (3)

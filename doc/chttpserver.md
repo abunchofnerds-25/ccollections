@@ -38,7 +38,7 @@ This server answers `GET /hello` and stops when you press Ctrl-C:
 #include <stdlib.h>
 #include <ccollections/chttpserver.h>
 
-static void hello(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void hello(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     (void)ctx;
     const char *name = NULL;
     if (chttpsvr_req_query_one(req, "name", &name) != ccol_success || !name)
@@ -307,8 +307,8 @@ on. It either calls `next` to continue, or answers the request itself and
 returns:
 
 ```c
-static void require_api_key(chttpsvr_req *req, chttpsvr_resp *resp,
-                            void *ctx, chttpsvr_next_fn next) {
+static void require_api_key(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                            void *ctx, chttpsvr_next_fn_t next) {
     const char *key = chttpsvr_req_header(req, "x-api-key");
     if (!key || strcmp(key, ctx) != 0) {
         chttpsvr_resp_set_status(resp, CHTTP_STATUS_UNAUTHORIZED);
@@ -325,7 +325,7 @@ log or a rate limiter written as middleware sees that traffic as well.
 A sub-router groups routes under a path prefix and has its own middleware:
 
 ```c
-chttpsvr_router *admin = chttpsvr_subrouter(srv, "/admin");
+chttpsvr_router_t *admin = chttpsvr_subrouter(srv, "/admin");
 chttpsvr_router_use(admin, require_api_key, "s3cret");
 chttpsvr_router_on(admin, CHTTP_GET,  "/stats",  show_stats,  NULL);  /* /admin/stats */
 chttpsvr_router_on(admin, CHTTP_POST, "/reload", reload_conf, NULL);  /* /admin/reload */
@@ -358,8 +358,8 @@ overwrite each other's values:
 ```c
 static const char user_key;   /* only its address matters */
 
-static void authenticate(chttpsvr_req *req, chttpsvr_resp *resp,
-                         void *ctx, chttpsvr_next_fn next) {
+static void authenticate(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                         void *ctx, chttpsvr_next_fn_t next) {
     const user_t *user = find_user(ctx, chttpsvr_req_header(req, "x-api-key"));
     if (!user) {
         chttpsvr_resp_set_status(resp, CHTTP_STATUS_UNAUTHORIZED);
@@ -373,7 +373,7 @@ static void authenticate(chttpsvr_req *req, chttpsvr_resp *resp,
     next(req, resp);
 }
 
-static void show_stats(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void show_stats(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     (void)ctx;
     const user_t *user = chttpsvr_req_context(req, &user_key);
     chttpsvr_resp_printf(resp, "stats for %s", user->name);
@@ -419,16 +419,16 @@ typedef struct {
 
 /* ---- middleware ---------------------------------------------------- */
 
-static void access_log(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                       chttpsvr_next_fn next) {
+static void access_log(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                       chttpsvr_next_fn_t next) {
     (void)ctx;
     fprintf(stderr, "%s %s\n", chttp_method_str(chttpsvr_req_method(req)),
             chttpsvr_req_path(req));
     next(req, resp);   /* also runs for 404 and 405 answers */
 }
 
-static void require_token(chttpsvr_req *req, chttpsvr_resp *resp,
-                          void *ctx, chttpsvr_next_fn next) {
+static void require_token(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                          void *ctx, chttpsvr_next_fn_t next) {
     const char *expected = ctx;
     const char *auth = chttpsvr_req_header(req, "authorization");
     if (!auth || strcmp(auth, expected) != 0) {
@@ -442,7 +442,7 @@ static void require_token(chttpsvr_req *req, chttpsvr_resp *resp,
 
 /* ---- handlers ------------------------------------------------------ */
 
-static void send_json(chttpsvr_resp *resp, cjson node) {
+static void send_json(chttpsvr_resp_t *resp, cjson node) {
     char *text = cjson_serialize(node);
     if (!text) {
         chttpsvr_resp_set_status(resp, CHTTP_STATUS_INTERNAL_ERROR);
@@ -452,7 +452,7 @@ static void send_json(chttpsvr_resp *resp, cjson node) {
     cjson_serialize_free(text);
 }
 
-static void list_notes(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void list_notes(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     (void)req;
     store_t *st = ctx;
     pthread_mutex_lock(&st->lock);
@@ -460,7 +460,7 @@ static void list_notes(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     pthread_mutex_unlock(&st->lock);
 }
 
-static void get_note(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void get_note(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     store_t *st = ctx;
     const char *id = chttpsvr_req_param(req, "id");
     pthread_mutex_lock(&st->lock);
@@ -472,7 +472,7 @@ static void get_note(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     pthread_mutex_unlock(&st->lock);
 }
 
-static void put_note(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void put_note(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     store_t *st = ctx;
     size_t len = 0;
     const char *body = chttpsvr_req_body(req, &len);
@@ -500,7 +500,7 @@ static void put_note(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     }
 }
 
-static void delete_note(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void delete_note(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     store_t *st = ctx;
     pthread_mutex_lock(&st->lock);
     ccol_retval_t rv = cjson_dictionary_remove(st->notes,
@@ -510,7 +510,7 @@ static void delete_note(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
                                                       : CHTTP_STATUS_NOT_FOUND);
 }
 
-static void shutdown_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void shutdown_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                              void *ctx) {
     (void)req; (void)ctx;
     chttpsvr_resp_write_str(resp, "bye\n");
@@ -537,7 +537,7 @@ int main(int argc, char **argv) {
 
     /* Any registration can fail, and a server without its token guard must
        not start, so check the result of every registration. */
-    chttpsvr_router *api = chttpsvr_subrouter(srv, "/api/v1");
+    chttpsvr_router_t *api = chttpsvr_subrouter(srv, "/api/v1");
     bool ok =
         chttpsvr_use(srv, access_log, NULL) == ccol_success && api &&
         chttpsvr_router_use(api, require_token, "Bearer secret") == ccol_success &&
@@ -624,7 +624,7 @@ uploading the body at all.
 
 static atomic_int uploads_done;
 
-static void upload(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void upload(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     (void)ctx;
     const char *ctype = chttpsvr_req_header(req, "content-type");
     if (ctype && strstr(ctype, "text/html")) {
@@ -802,7 +802,7 @@ static void count_request(void) {
         chttpsvr_engine_stop();
 }
 
-static void public_page(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void public_page(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     (void)ctx;
     /* NULL for a client without a verified certificate. */
     const char *who = chttpsvr_req_peer_cert_subject(req);
@@ -810,7 +810,7 @@ static void public_page(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     count_request();
 }
 
-static void private_page(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void private_page(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     (void)ctx;
     unsigned char fp[CHTTPSVR_PEER_CERT_SHA256_LEN];
     const char *who = chttpsvr_req_peer_cert_subject(req);

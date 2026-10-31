@@ -10,27 +10,27 @@ cthreadcomm \- overview of the thread communication API
 This module moves data between threads and lets a thread wait until a
 queue or a file descriptor is ready. It is made of five parts:
 
-  ccol_circular_queue   A bounded queue. A send blocks while the queue
+  ccircq   A bounded queue. A send blocks while the queue
                         is full, which gives backpressure to a producer.
-  ccol_dynamic_queue    An unbounded queue. A send never waits.
-  ccol_channel          Two circular queues, one in each direction;
+  cdynmq    An unbounded queue. A send never waits.
+  cchan          Two circular queues, one in each direction;
                         the identity of the calling thread selects
                         the queue.
-  ccol_select()         A one-shot wait until one of several queues
+  cselect()         A one-shot wait until one of several queues
                         or file descriptors is ready; ready items
                         share the calls fairly.
-  ccol_event_loop       A persistent reactor that runs callbacks for
+  ceventloop       A persistent reactor that runs callbacks for
                         a set of queues and file descriptors that can
                         change.
 .fi
 .SS Messages and ownership
 .nf
-Every queue carries values of type c_message_t:
+Every queue carries values of type cmessage_t:
 
-  typedef struct c_message_t {
+  typedef struct cmessage_t {
       void   *data;
       size_t  size;
-  } c_message_t;
+  } cmessage_t;
 
 The library copies no payload.  A send that succeeds hands the
 ownership of data to the queue and sets the data field of the sender
@@ -54,11 +54,11 @@ never wraps around into the past.
 .fi
 .SS Readiness only
 .nf
-ccol_select() and ccol_event_loop only say that an item is ready; they
+cselect() and ceventloop only say that an item is ready; they
 never receive or send anything. Right after that the caller makes its
 own non-blocking call:
-  - For a queue: ccol_circq_try_recv_zc(), ccol_dynmq_try_recv_zc(),
-    ccol_circq_try_send_zc() or ccol_dynmq_send_zc().
+  - For a queue: ccircq_try_recv(), cdynmq_try_recv(),
+    ccircq_try_send() or cdynmq_send().
   - For a file descriptor: read(2), recv(2), write(2) or send(2).
 As with POSIX select(2), another consumer or producer can take the
 message or the space first, so that call must not block and you always
@@ -71,9 +71,9 @@ one dispatch serves every send that came before it started.
 .SS Handles
 .nf
 Queues and channels are plain pointers, and their destroy macros set
-the pointer to NULL. ccol_event_loop and ccol_event_reg are opaque
+the pointer to NULL. ceventloop and ceventloop_reg are opaque
 VALUE handles (uint64_t) and not pointers. Compare them with
-CCOL_EVENT_LOOP_NULL and CCOL_EVENT_REG_NULL, which are both 0.
+CEVENTLOOP_NULL and CEVENTLOOP_REG_NULL, which are both 0.
 Such a handle is resolved before the object behind it is used, so a
 stale handle is refused and never dereferenced.
 .fi
@@ -81,7 +81,7 @@ stale handle is refused and never dereferenced.
 .nf
 Event loop dispatch uses two thread-specific keys, created once per
 process; queues and channels need no key. If the process has no free
-key left, creating a loop fails with CCOL_EVENT_LOOP_NULL for the
+key left, creating a loop fails with CEVENTLOOP_NULL for the
 rest of that process, while queues and channels keep working.
 
 The library's process-exit destructors delete the keys and free the
@@ -104,11 +104,11 @@ the parent has no reactor threads in the child, though, so it
 dispatches nothing there.
 .fi
 .SH "SEE ALSO"
-.BR ccol_circular_queue_create (3),
-.BR ccol_dynamic_queue_create (3),
-.BR ccol_channel_create (3),
-.BR ccol_select (3),
-.BR ccol_event_loop_create (3),
-.BR ccol_event_loop_add (3),
-.BR ccol_event_loop_remove (3),
-.BR ccol_event_loop_destroy (3)
+.BR ccircq_create (3),
+.BR cdynmq_create (3),
+.BR cchan_create (3),
+.BR cselect (3),
+.BR ceventloop_create (3),
+.BR ceventloop_add (3),
+.BR ceventloop_remove (3),
+.BR ceventloop_destroy (3)

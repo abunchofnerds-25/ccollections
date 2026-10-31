@@ -163,7 +163,8 @@ static atomic_int g_probe_saw_sigpipe;
 
 /* Holds the response back until the client has closed, so the write of the
    response meets a peer that's gone. */
-static void _slow_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _slow_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                          void *ctx) {
   (void)req;
   (void)ctx;
   atomic_store(&g_slow_entered, 1);
@@ -177,7 +178,8 @@ static void _slow_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
    wrote _slow_handler's response, after that write. The worker inherits the
    blocked SIGPIPE of the thread that started the server, so a SIGPIPE raised by
    the write is still pending here. */
-static void _probe_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _probe_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                           void *ctx) {
   (void)req;
   (void)ctx;
   atomic_store(&g_probe_saw_sigpipe, _take_pending_sigpipe() ? 1 : 0);

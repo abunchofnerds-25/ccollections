@@ -12,13 +12,13 @@ void chttpcli_engine_wait(void);
 .SH DESCRIPTION
 .nf
 chttpclient's async engine serves Tier 2 and Tier 3
-(chttpclient_do_async, chttpclient_do_async_streaming,
-chttpclient_do_pooled and chttpclient_do_pooled_streaming) for every
+(chttpcli_do_async, chttpcli_do_async_streaming,
+chttpcli_do_pooled and chttpcli_do_pooled_streaming) for every
 client of the process. It starts with the first request of those tiers
 and stops once no client holds it: the last such request has
 ended and the last idle connection of those tiers is closed, which
-chttpclient_destroy does for its own client. The engine's teardown then
-runs on a separate thread, after chttpclient_destroy has returned.
+chttpcli_destroy does for its own client. The engine's teardown then
+runs on a separate thread, after chttpcli_destroy has returned.
 
 This function blocks until that teardown is over and joins the thread
 that ran it. Once it returns, no engine thread runs, and the engine
@@ -40,7 +40,7 @@ function. The exception is a build with CCOL_FORK_SAFETY_REQUIRED=0,
 where fork(2) does not wait and the call must come before fork(2).
 
 A call from an engine thread, that is, from the write_fn of
-chttpclient_do_async_streaming or chttpclient_do_pooled_streaming,
+chttpcli_do_async_streaming or chttpcli_do_pooled_streaming,
 would wait for its own thread, so it calls _ccol_fatal_err() instead.
 .fi
 .SH THREAD SAFETY
@@ -56,14 +56,14 @@ static ccol_memmgmt_procs_t engine_mp; /* filled by the application */
 
 int main(void) {
   chttpcli_set_engine_mem_mgmt_procs(&engine_mp);
-  chttpcli cli = chttpclient_create(NULL);
+  chttpcli cli = chttpcli_create(NULL);
   chttp_request_t *req =
       chttp_request_create(CHTTP_GET, "http://example.com/", NULL, NULL);
-  chttpcli_response *resp = NULL;
-  if (req && chttpclient_do_pooled(cli, req, &resp) == ccol_success)
-    chttpclient_resp_free(resp);
+  chttpcli_response_t *resp = NULL;
+  if (req && chttpcli_do_pooled(cli, req, &resp) == ccol_success)
+    chttpcli_resp_free(resp);
   chttp_request_free(req);
-  chttpclient_destroy(cli);
+  chttpcli_destroy(cli);
   /* The engine stops on a thread of its own; wait for it before the
    * allocator of the engine goes away. */
   chttpcli_engine_wait();
@@ -74,7 +74,7 @@ int main(void) {
 .BR chttpcli_set_engine_mem_mgmt_procs (3),
 .BR chttpcli_set_engine_logger (3),
 .BR chttpcli_set_engine_num_reactor_threads (3),
-.BR chttpclient_destroy (3),
-.BR chttpclient_do_async (3),
-.BR chttpclient_do_pooled (3),
+.BR chttpcli_destroy (3),
+.BR chttpcli_do_async (3),
+.BR chttpcli_do_pooled (3),
 .BR chttpsvr_engine_wait (3)

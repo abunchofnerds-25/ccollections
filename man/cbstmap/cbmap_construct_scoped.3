@@ -46,8 +46,8 @@ cbmap_declare_scoped(3) with cbmap_init(3). The cleanup attribute means it
 needs GCC or Clang.
 
 The map keeps its elements in key order and a walk visits them in
-ascending key order. cbmap_begin_iter(3) describes that contract and
-cbmap_create_full(3) the order that each key type gets. For a struct key_t
+ascending key order. cbstmap_begin_iter(3) describes that contract and
+cbstmap_create_full(3) the order that each key type gets. For a struct key_t
 the default order is a raw comparison of the key's representation, so use
 cbmap_construct_cc_scoped(3) for such a key.
 
@@ -93,5 +93,5 @@ void report(int *ids, size_t n) {
 .BR cbmap_declare_scoped (3),
 .BR cbmap_init (3),
 .BR cbmap_redeclare (3),
-.BR cbmap_begin_iter (3),
+.BR cbstmap_begin_iter (3),
 .BR cbmap_destroy (3)

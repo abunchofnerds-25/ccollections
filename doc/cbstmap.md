@@ -42,7 +42,7 @@ int main(void) {
 
     printf("who scored 95? %s\n", cbmap_get(scores, 95));
     cbmap_remove(scores, 78);
-    printf("%zu entries left\n", cbmap_elem_count(scores));
+    printf("%zu entries left\n", cbstmap_elem_count(scores));
 
     cbmap_destroy(scores);
     return 0;
@@ -77,8 +77,8 @@ The API is the hash map's API with `cbmap_` in place of `chmap_`:
 | read a value you know is there | `cbmap_get(m, key)` |
 | check for a key, or change its value in place | `cbmap_get_ptr(m, key)` |
 | delete a key | `cbmap_remove(m, key)` |
-| count the entries | `cbmap_elem_count(m)` |
-| empty the map and keep using it | `cbmap_reset(m)` |
+| count the entries | `cbstmap_elem_count(m)` |
+| empty the map and keep using it | `cbstmap_reset(m)` |
 | free the map | `cbmap_destroy(m)` |
 
 A missing key stops the program in `cbmap_get`, while `cbmap_get_ptr`
@@ -329,7 +329,7 @@ int main(void) {
         while (pop_due(timers, now, &due, what, sizeof(what)))
             printf("t=%4" PRIu64 "  ran \"%s\" (due %" PRIu64 ")\n", now, what, due);
     }
-    printf("%zu timers left\n", cbmap_elem_count(timers));
+    printf("%zu timers left\n", cbstmap_elem_count(timers));
 
     cbmap_destroy(timers);
     return 0;
@@ -352,12 +352,12 @@ string it handed out together with its entry.
 ## When an error must not stop the program
 
 The macros stop the program on a hard error, just like the hash map macros,
-and the raw functions report the error instead. `cbmap_create`,
-`cbmap_create_mp`, `cbmap_create_ch` and `cbmap_create_full` return `NULL`
-and an error string when they fail. `cbmap_insert_elem`,
-`cbmap_get_elem_ref`, `cbmap_get_elem_copy` and `cbmap_delete_elem` take
-each key and value as a `cmap_pair` and return a `ccol_retval_t`.
-`cbmap_get_elem_ref` fills a `cmap_pair` that you own with the location and
+and the raw functions report the error instead. `cbstmap_create`,
+`cbstmap_create_mp`, `cbstmap_create_ch` and `cbstmap_create_full` return
+`NULL` and an error string when they fail. `cbstmap_insert_elem`,
+`cbstmap_get_elem_ref`, `cbstmap_get_elem_copy` and `cbstmap_delete_elem`
+take each key and value as a `cmap_pair` and return a `ccol_retval_t`.
+`cbstmap_get_elem_ref` fills a `cmap_pair` that you own with the location and
 the size of the stored value, and its `ptr` stays valid until the next
 insert or delete.
 
@@ -412,20 +412,23 @@ Element access (macros):
 [cbmap_insert(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_insert.3.html),
 [cbmap_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_get.3.html),
 [cbmap_get_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_get_ptr.3.html),
-[cbmap_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_remove.3.html)
+[cbmap_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_remove.3.html),
+[cbmap_size(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_size.3.html),
+[cbmap_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_reset.3.html)
 
 Raw functions:
-[cbmap_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_create.3.html),
-[cbmap_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_create_mp.3.html),
-[cbmap_create_ch(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_create_ch.3.html),
-[cbmap_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_create_full.3.html),
-[cbmap_insert_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_insert_elem.3.html),
-[cbmap_get_elem_ref(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_get_elem_ref.3.html),
-[cbmap_get_elem_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_get_elem_copy.3.html),
-[cbmap_delete_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_delete_elem.3.html),
-[cbmap_elem_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_elem_count.3.html),
-[cbmap_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_reset.3.html),
-[cbmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_begin_iter.3.html)
+[cbstmap_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_destroy.3.html),
+[cbstmap_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_create.3.html),
+[cbstmap_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_create_mp.3.html),
+[cbstmap_create_ch(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_create_ch.3.html),
+[cbstmap_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_create_full.3.html),
+[cbstmap_insert_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_insert_elem.3.html),
+[cbstmap_get_elem_ref(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_get_elem_ref.3.html),
+[cbstmap_get_elem_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_get_elem_copy.3.html),
+[cbstmap_delete_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_delete_elem.3.html),
+[cbstmap_elem_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_elem_count.3.html),
+[cbstmap_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_reset.3.html),
+[cbstmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_begin_iter.3.html)
 
 Iteration:
 [ccol_for_each(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_for_each.3.html),

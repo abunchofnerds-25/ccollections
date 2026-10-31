@@ -32,7 +32,7 @@ SOFTWARE.
  * No program uses the library through this function. Every caller is one of
  * our containers (cvector, cstring and chashmap) growing or reserving its own
  * backing store, and a user of the library gets the behavior through
- * cvector_reserve, cstring_reserve, chmap_create and chmap_reset, never
+ * cvector_reserve, cstring_reserve, chashmap_create and chashmap_reset, never
  * through this name.
  *
  * The header is internal, so it has no visibility block, make install

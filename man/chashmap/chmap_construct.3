@@ -27,7 +27,7 @@ val_type  Type of values
 Stops the program if the allocation fails
 Creates hidden type marker variables that the other type-dispatching
 macros read, and chmap_redeclare(3) creates them again in another scope
-Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
+Uses CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
 Uses the default memory management and the default hashing
 An array key or value type, such as int[2] or char[16], is a compile
 error, and the message says to wrap the array in a struct. The macros copy
@@ -54,7 +54,7 @@ platform-defined padding bits differ. Every NaN long double is the same
 key, unlike float and double, where each distinct NaN payload is a
 different key.
 None of this value-based handling applies when a custom hashing
-function is given at creation time; see chmap_create_full(3).
+function is given at creation time; see chashmap_create_full(3).
 .fi
 .SH "STRUCT KEY EQUALITY"
 .nf
@@ -64,7 +64,7 @@ reads every byte too. With GCC 11 or later the macros zero the padding
 of their own copy of a key. With any other compiler that padding is
 unspecified, so a padded struct key needs a custom hashing function and
 a custom key equality function, which you give through
-chmap_construct_full(3). See chmap_create_full(3).
+chmap_construct_full(3). See chashmap_create_full(3).
 .fi
 .SH EXAMPLES
 .nf
@@ -75,4 +75,4 @@ chmap_destroy(map);
 .fi
 .SH "SEE ALSO"
 .BR chmap_construct_full (3),
-.BR chmap_create (3)
+.BR chashmap_create (3)

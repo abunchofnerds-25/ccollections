@@ -11,7 +11,7 @@ cbmap_insert(hm_name, key, val);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for cbmap_insert_elem() that builds the key's
+Type-inferred wrapper for cbstmap_insert_elem() that builds the key's
 cmap_pair and the value's cmap_pair from the caller's expressions. When
 the key is already in the map the value is updated and nothing is
 reported; _ccol_fatal_err() is called only on a real failure, which means
@@ -55,7 +55,7 @@ forms. A key of fixed length, such as a digest, can be a struct that wraps
 an array, such as
 struct { unsigned char b[32]; }; the tree orders by all of its bytes,
 zero bytes included. A key whose length is only known at run time goes
-through the raw cbmap_insert_elem(3) layer, with that length in
+through the raw cbstmap_insert_elem(3) layer, with that length in
 cmap_pair.size.
 
 A NULL character pointer is not a string, so a NULL key or value of a
@@ -64,7 +64,7 @@ character-pointer type stops the program with ccol_invalid_args.
 Both value types and string types are handled correctly.
 .fi
 .SH "SEE ALSO"
-.BR cbmap_insert_elem (3),
-.BR cbmap_create_full (3),
+.BR cbstmap_insert_elem (3),
+.BR cbstmap_create_full (3),
 .BR cbmap_get (3),
 .BR cbmap_remove (3)

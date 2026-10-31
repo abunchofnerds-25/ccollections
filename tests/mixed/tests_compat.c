@@ -61,11 +61,11 @@
  *      with _ccol_mem_alloc(mmgt_procs, ...).
  *      -> this stops the process in this file's allocator, which refuses
  *         to free a block it never handed out
- *   4. Skip __chmap_iterator_destroy() when an open-addressing iteration
+ *   4. Skip __chashmap_iterator_destroy() when an open-addressing iteration
  *      ends.
  *      -> compat_iterators.running_an_iterator_to_the_end_returns_its_memory
  *         and compat_allocator.an_iterator_is_allocated_from_the_container...
- *   5. Make chmap_get_elem_ref() set val_pair->ptr to the address of one
+ *   5. Make chashmap_get_elem_ref() set val_pair->ptr to the address of one
  *      shared static copy of the value, and not to the value in the map.
  *      -> all three compat_pointer_stability tests
  *
@@ -353,7 +353,7 @@ TEST(compat_allocator, a_refused_allocation_is_reported_rather_than_fatal) {
     int k = i, v = i;
     cmap_pair kp = {.ptr = &k, .size = sizeof(k)};
     cmap_pair vp = {.ptr = &v, .size = sizeof(v)};
-    worst = chmap_insert_elem(m, &kp, &vp);
+    worst = chashmap_insert_elem(m, &kp, &vp);
   }
   g_ca.fail_from = SIZE_MAX;
 
@@ -368,7 +368,7 @@ TEST(compat_allocator, a_refused_allocation_is_reported_rather_than_fatal) {
 
 TEST(compat_ownership,
      a_map_copies_a_string_key_and_value_into_its_own_storage) {
-  /* doc/chashmap.md and chmap_insert_elem(3): the map stores copies, so the
+  /* doc/chashmap.md and chashmap_insert_elem(3): the map stores copies, so the
    * caller's buffer stays the caller's, to reuse or to free. After the insert
    * the test writes over the source buffers to tell a copy apart from a kept
    * pointer, because a map that aliased the caller would hand back the text
@@ -588,7 +588,7 @@ TEST(compat_ownership,
 TEST(compat_pointer_stability, a_reference_survives_lookups_of_other_keys) {
   /* chashmap.h: an insert, a delete or a resize invalidates a returned
    * pointer, but it is invalidated "never by an unrelated
-   * chmap_get_elem_ref/chmap_get/chmap_get_ptr call for a different
+   * chashmap_get_elem_ref/chmap_get/chmap_get_ptr call for a different
    * key". */
   chmap_construct(m, int, int);
   for (int i = 0; i < 32; i++) {
@@ -599,14 +599,14 @@ TEST(compat_pointer_stability, a_reference_survives_lookups_of_other_keys) {
   int key = 5;
   cmap_pair kp = {.ptr = &key, .size = sizeof(key)};
   cmap_pair held = {NULL, 0};
-  ccol_retval_t r = chmap_get_elem_ref(m, &kp, &held);
+  ccol_retval_t r = chashmap_get_elem_ref(m, &kp, &held);
 
   for (int i = 0; i < 32; i++) {
     if (i == 5) continue;
     int other = i;
     cmap_pair okp = {.ptr = &other, .size = sizeof(other)};
     cmap_pair tmp;
-    (void)chmap_get_elem_ref(m, &okp, &tmp);
+    (void)chashmap_get_elem_ref(m, &okp, &tmp);
   }
 
   bool still_correct =
@@ -630,7 +630,7 @@ TEST(compat_pointer_stability, several_references_may_be_held_at_once) {
     int k = i;
     cmap_pair kp = {.ptr = &k, .size = sizeof(k)};
     cmap_pair out;
-    if (chmap_get_elem_ref(m, &kp, &out) != ccol_success || !out.ptr) {
+    if (chashmap_get_elem_ref(m, &kp, &out) != ccol_success || !out.ptr) {
       all_resolved = false;
       refs[i] = NULL;
       continue;
@@ -662,8 +662,8 @@ TEST(compat_pointer_stability, updating_a_key_in_place_keeps_other_references) {
   cmap_pair akp = {.ptr = &a, .size = sizeof(a)};
   cmap_pair bkp = {.ptr = &b, .size = sizeof(b)};
   cmap_pair aref = {NULL, 0}, bref = {NULL, 0};
-  bool got = chmap_get_elem_ref(m, &akp, &aref) == ccol_success &&
-             chmap_get_elem_ref(m, &bkp, &bref) == ccol_success;
+  bool got = chashmap_get_elem_ref(m, &akp, &aref) == ccol_success &&
+             chashmap_get_elem_ref(m, &bkp, &bref) == ccol_success;
 
   if (got) *(int *)aref.ptr = 1234;
 
@@ -776,7 +776,7 @@ static void ev_cb(const cmap_pair *key, const cmap_pair *val) {
     g_ev_keys[g_ev_count++] = *(const int *)key->ptr;
 }
 
-static ccol_retval_t lru_set_int(clru_cache c, int k, int v) {
+static ccol_retval_t lru_set_int(ccache c, int k, int v) {
   cmap_pair kp = {.ptr = &k, .size = sizeof(k)};
   cmap_pair vp = {.ptr = &v, .size = sizeof(v)};
   g_ev_inside_a_set = true;
@@ -785,7 +785,7 @@ static ccol_retval_t lru_set_int(clru_cache c, int k, int v) {
   return r;
 }
 
-static ccol_retval_t lru_get_int(clru_cache c, int k, int *out) {
+static ccol_retval_t lru_get_int(ccache c, int k, int *out) {
   /* clrucache_get_full() hands back a heap COPY of the stored value, which
    * the caller then frees, instead of filling a buffer the caller
    * passes in. These caches use the default allocator, so the matching call
@@ -809,9 +809,9 @@ TEST(compat_callbacks, a_small_cache_evicts_in_exact_global_lru_order) {
    * key leaves. */
   ev_reset();
   char *err = NULL;
-  clru_cache c = clrucache_create_full(3, ccol_int, ccol_int, NULL, NULL, ev_cb,
-                                       NULL, &err);
-  REQUIRE_TRUE(c != CLRU_CACHE_NULL);
+  ccache c = clrucache_create_full(3, ccol_int, ccol_int, NULL, NULL, ev_cb,
+                                   NULL, &err);
+  REQUIRE_TRUE(c != CCACHE_NULL);
 
   bool ok = lru_set_int(c, 1, 10) == ccol_success &&
             lru_set_int(c, 2, 20) == ccol_success &&
@@ -826,7 +826,7 @@ TEST(compat_callbacks, a_small_cache_evicts_in_exact_global_lru_order) {
 
   size_t evictions = g_ev_count;
   int first_evicted = evictions > 0 ? g_ev_keys[0] : -1;
-  clru_destroy(c);
+  ccache_destroy(c);
 
   REQUIRE_TRUE(ok);
   REQUIRE_EQ(evictions, (size_t)1);
@@ -841,9 +841,9 @@ TEST(compat_callbacks, the_eviction_callback_runs_synchronously_on_the_caller) {
    * move is exactly what this test is here to stop. */
   ev_reset();
   char *err = NULL;
-  clru_cache c = clrucache_create_full(2, ccol_int, ccol_int, NULL, NULL, ev_cb,
-                                       NULL, &err);
-  REQUIRE_TRUE(c != CLRU_CACHE_NULL);
+  ccache c = clrucache_create_full(2, ccol_int, ccol_int, NULL, NULL, ev_cb,
+                                   NULL, &err);
+  REQUIRE_TRUE(c != CCACHE_NULL);
 
   bool ok = true;
   for (int i = 1; i <= 6 && ok; i++) ok = lru_set_int(c, i, i) == ccol_success;
@@ -851,7 +851,7 @@ TEST(compat_callbacks, the_eviction_callback_runs_synchronously_on_the_caller) {
   size_t evictions = g_ev_count;
   bool ran_outside = g_ev_ran_outside_a_set;
   bool ran_off_thread = g_ev_ran_off_thread;
-  clru_destroy(c);
+  ccache_destroy(c);
 
   REQUIRE_TRUE(ok);
   REQUIRE_TRUE(evictions > 0);
@@ -863,7 +863,7 @@ TEST(compat_callbacks, the_eviction_callback_runs_synchronously_on_the_caller) {
 
 static bool g_setter_should_succeed;
 static size_t g_setter_calls;
-static clru_cache g_setter_cache;
+static ccache g_setter_cache;
 
 static bool remote_setter(const cmap_pair *key, const cmap_pair *val) {
   (void)val;
@@ -890,14 +890,14 @@ TEST(compat_callbacks, a_refused_remote_setter_leaves_the_cache_unchanged) {
   char *err = NULL;
   g_setter_cache = clrucache_create_full(8, ccol_int, ccol_int, NULL,
                                          remote_setter, NULL, NULL, &err);
-  REQUIRE_TRUE(g_setter_cache != CLRU_CACHE_NULL);
+  REQUIRE_TRUE(g_setter_cache != CCACHE_NULL);
 
   ccol_retval_t r = lru_set_int(g_setter_cache, 7, 70);
 
   int got = 0;
   ccol_retval_t lookup = lru_get_int(g_setter_cache, 7, &got);
   size_t calls = g_setter_calls;
-  clru_destroy(g_setter_cache);
+  ccache_destroy(g_setter_cache);
 
   REQUIRE_EQ((int)r, -18);      /* ccol_unexpected_failure */
   REQUIRE_EQ(calls, (size_t)1); /* the setter ran */
@@ -911,13 +911,13 @@ TEST(compat_callbacks, an_accepted_remote_setter_runs_before_the_cache_update) {
   char *err = NULL;
   g_setter_cache = clrucache_create_full(8, ccol_int, ccol_int, NULL,
                                          remote_setter, NULL, NULL, &err);
-  REQUIRE_TRUE(g_setter_cache != CLRU_CACHE_NULL);
+  REQUIRE_TRUE(g_setter_cache != CCACHE_NULL);
 
   ccol_retval_t r = lru_set_int(g_setter_cache, 7, 70);
   int got = 0;
   ccol_retval_t lookup = lru_get_int(g_setter_cache, 7, &got);
   size_t calls = g_setter_calls;
-  clru_destroy(g_setter_cache);
+  ccache_destroy(g_setter_cache);
 
   REQUIRE_EQ((int)r, 0);
   REQUIRE_EQ(calls, (size_t)1);
@@ -958,10 +958,10 @@ static void pool_complete(void *arg, bool ran) {
 }
 
 TEST(compat_callbacks, on_complete_runs_after_its_task_and_on_a_worker) {
-  /* cthreadpool.h, ctpool_submit(): "A worker calls on_complete(arg, true)
+  /* cthreadpool.h, cthrpool_submit(): "A worker calls on_complete(arg, true)
    * right after fn returns, on that worker thread". That one sentence
    * promises an order, a thread and the value of the ran flag, and this test
-   * pins all three. ctpool_wait() gives the synchronisation, so nothing here
+   * pins all three. cthrpool_wait() gives the synchronisation, so nothing here
    * depends on a sleep or a margin. */
   atomic_store(&g_seq, 0);
   atomic_store(&g_task_order, -1);
@@ -973,12 +973,12 @@ TEST(compat_callbacks, on_complete_runs_after_its_task_and_on_a_worker) {
   g_submitter_thread = pthread_self();
 
   char *err = NULL;
-  ctpool pool = ctpool_create_mp(2, 0, NULL, &err);
-  REQUIRE_TRUE(pool != CTPOOL_NULL);
+  cthrpool pool = cthrpool_create_mp(2, 0, NULL, &err);
+  REQUIRE_TRUE(pool != CTHRPOOL_NULL);
 
-  ccol_retval_t r = ctpool_submit(pool, pool_task, NULL, pool_complete);
-  ctpool_wait(pool);
-  ctpool_destroy(pool);
+  ccol_retval_t r = cthrpool_submit(pool, pool_task, NULL, pool_complete);
+  cthrpool_wait(pool);
+  cthrpool_destroy(pool);
 
   int task_order = atomic_load(&g_task_order);
   int complete_order = atomic_load(&g_complete_order);
@@ -1040,7 +1040,7 @@ static void *discard_release_gate(void *arg) {
 }
 
 TEST(compat_callbacks, a_discarded_task_gets_on_complete_with_ran_false) {
-  /* cthreadpool.h, ctpool_submit(): "on_complete runs exactly once for every
+  /* cthreadpool.h, cthrpool_submit(): "on_complete runs exactly once for every
    * task that a submit accepts" and "The on_complete(arg, false) calls run on
    * the thread that makes that call, before the call returns". A caller who
    * hands ownership of arg to the task relies on both. Each queued task below
@@ -1055,11 +1055,11 @@ TEST(compat_callbacks, a_discarded_task_gets_on_complete_with_ran_false) {
   g_submitter_thread = pthread_self();
 
   char *err = NULL;
-  ctpool pool = ctpool_create_mp(1, 0, NULL, &err);
-  REQUIRE_TRUE(pool != CTPOOL_NULL);
+  cthrpool pool = cthrpool_create_mp(1, 0, NULL, &err);
+  REQUIRE_TRUE(pool != CTHRPOOL_NULL);
 
   bool blocker_ok =
-      ctpool_submit(pool, discard_blocker_task, NULL, NULL) == ccol_success;
+      cthrpool_submit(pool, discard_blocker_task, NULL, NULL) == ccol_success;
   struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};
   for (int i = 0;
        blocker_ok && i < 60000 && !atomic_load(&g_discard_blocker_running); i++)
@@ -1068,7 +1068,7 @@ TEST(compat_callbacks, a_discarded_task_gets_on_complete_with_ran_false) {
   for (int i = 0; i < DISCARDED; i++) {
     void *block = malloc(16);
     if (!block) break;
-    if (ctpool_submit(pool, discard_task, block, discard_complete) !=
+    if (cthrpool_submit(pool, discard_task, block, discard_complete) !=
         ccol_success) {
       free(block);
       break;
@@ -1078,10 +1078,10 @@ TEST(compat_callbacks, a_discarded_task_gets_on_complete_with_ran_false) {
   pthread_t releaser;
   int created = pthread_create(&releaser, NULL, discard_release_gate, NULL);
   if (created != 0) atomic_store(&g_discard_gate, 1);
-  ctpool_shutdown_immediate(pool);
+  cthrpool_shutdown_immediate(pool);
   int calls_at_return = atomic_load(&g_discard_calls);
   if (created == 0) pthread_join(releaser, NULL);
-  ctpool_destroy(pool);
+  cthrpool_destroy(pool);
 
   REQUIRE_TRUE(blocker_ok);
   REQUIRE_EQ(created, 0);
@@ -1116,20 +1116,20 @@ TEST(compat_callbacks,
   for (int i = 0; i < ORDER_N; i++) atomic_store(&g_order_observed[i], -1);
 
   char *err = NULL;
-  ctpool pool = ctpool_create_mp(1, 0, NULL, &err);
-  REQUIRE_TRUE(pool != CTPOOL_NULL);
+  cthrpool pool = cthrpool_create_mp(1, 0, NULL, &err);
+  REQUIRE_TRUE(pool != CTHRPOOL_NULL);
 
   bool submitted_all = true;
   for (int i = 0; i < ORDER_N; i++) {
     g_order_args[i] = i;
-    if (ctpool_submit(pool, order_task, &g_order_args[i], NULL) !=
+    if (cthrpool_submit(pool, order_task, &g_order_args[i], NULL) !=
         ccol_success) {
       submitted_all = false;
       break;
     }
   }
-  ctpool_wait(pool);
-  ctpool_destroy(pool);
+  cthrpool_wait(pool);
+  cthrpool_destroy(pool);
 
   bool in_order = submitted_all;
   for (int i = 0; i < ORDER_N && in_order; i++) {

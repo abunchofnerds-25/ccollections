@@ -35,12 +35,12 @@ None. The macro expands to a statement, not to an expression.
 .SH "ORDERING"
 .nf
 The container is an AVL tree, so it keeps its elements in key order and a
-walk visits them in ascending key order, as cbmap_begin_iter(3)
+walk visits them in ascending key order, as cbstmap_begin_iter(3)
 describes. The declared key type picks the order: a signed integer
 comparison for the signed integer types, an unsigned comparison for the
 unsigned types and pointers, a numeric comparison for the floating-point
 types and a lexicographic byte comparison for a string key.
-cbmap_create_full(3) spells all of these out, including where a NaN key
+cbstmap_create_full(3) spells all of these out, including where a NaN key
 sorts.
 
 A key type that the map doesn't recognize, such as a struct, is compared
@@ -73,6 +73,6 @@ cbmap_destroy(sorted);
 .BR cbmap_declare (3),
 .BR cbmap_declare_scoped (3),
 .BR cbmap_construct (3),
-.BR cbmap_begin_iter (3),
-.BR cbmap_create_full (3),
+.BR cbstmap_begin_iter (3),
+.BR cbstmap_create_full (3),
 .BR cbmap_destroy (3)

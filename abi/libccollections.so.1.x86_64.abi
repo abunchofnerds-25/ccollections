@@ -9,29 +9,29 @@
   </elf-needed>
   <elf-function-symbols>
     <elf-symbol name='___csort_merge_sort' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='__cbmap_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='__cbmap_iterator_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='__ccol_channel_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='__ccol_circular_queue_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='__ccol_dynamic_queue_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='__ccol_event_loop_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='__chmap_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='__chmap_iterator_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='__chttpclient_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='__cbstmap_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='__cbstmap_iterator_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='__cchan_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='__ccircq_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='__cdynmq_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='__ceventloop_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='__chashmap_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='__chashmap_iterator_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='__chttpcli_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='__chttpsvr_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='__cjson_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='__clrucache_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='__clrucache_get_into' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='__cstring_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='__ctpool_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='__cthrpool_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='__cvector_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='__cyaml_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='_cbmap_get_val_accessor' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='_ccol_mempool_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='_ccol_mempool_free_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='_ccol_r_mempool_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='_ccol_r_mempool_free_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='_chmap_get_val_accessor' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='_cbstmap_get_val_accessor' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='_cmempool_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='_cmempool_free_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='_crmempool_destroy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='_crmempool_free_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='_chashmap_get_val_accessor' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='_cjson_delete' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='_cjson_get' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='_cjson_set_typed' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -56,81 +56,81 @@
     <elf-symbol name='_cyaml_delete' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='_cyaml_get' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='_cyaml_set_typed' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cbmap_begin_iter' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cbmap_create_full' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cbmap_delete_elem' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cbmap_elem_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cbmap_get_elem_copy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cbmap_get_elem_ref' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cbmap_insert_elem' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cbmap_reset' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_chan_disable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_chan_enable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_chan_msg_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_chan_recv_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_chan_send_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_chan_timed_recv_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_chan_timed_send_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_chan_try_recv_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_chan_try_send_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_channel_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_circq_disable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_circq_enable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_circq_msg_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_circq_recv_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_circq_send_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_circq_timed_recv_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_circq_timed_send_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_circq_try_recv_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_circq_try_send_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_circular_queue_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_dynamic_queue_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_dynmq_disable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_dynmq_enable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_dynmq_msg_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_dynmq_recv_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_dynmq_send_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_dynmq_timed_recv_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_dynmq_try_recv_zc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_event_loop_add' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_event_loop_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_event_loop_modify' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_event_loop_pause' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_event_loop_reg_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_event_loop_reg_generation' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_event_loop_remove' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_event_loop_resume' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_event_loop_shutdown' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_mempool_alloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_mempool_allocated_bytes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_mempool_calloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_mempool_create' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_mempool_create_from_preallocated_buffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_mempool_dynamic_allocs_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_mempool_total_capacity' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_mempool_used_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_r_mempool_alloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_r_mempool_allocated_bytes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_r_mempool_calloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_r_mempool_create' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_r_mempool_create_from_preallocated_buffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_r_mempool_dynamic_allocs_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_r_mempool_realloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_r_mempool_total_capacity' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_r_mempool_used_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_select' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_select_timed' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_selectable_from_chan' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cbstmap_begin_iter' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cbstmap_create_full' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cbstmap_delete_elem' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cbstmap_elem_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cbstmap_get_elem_copy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cbstmap_get_elem_ref' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cbstmap_insert_elem' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cbstmap_reset' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_disable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_enable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_msg_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_recv' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_send' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_timed_recv' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_timed_send' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_try_recv' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_try_send' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ccircq_disable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ccircq_enable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ccircq_msg_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ccircq_recv' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ccircq_send' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ccircq_timed_recv' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ccircq_timed_send' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ccircq_try_recv' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ccircq_try_send' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ccircq_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cdynmq_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cdynmq_disable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cdynmq_enable_sending' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cdynmq_msg_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cdynmq_recv' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cdynmq_send' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cdynmq_timed_recv' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cdynmq_try_recv' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ceventloop_add' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ceventloop_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ceventloop_modify' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ceventloop_pause' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ceventloop_reg_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ceventloop_reg_generation' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ceventloop_remove' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ceventloop_resume' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ceventloop_shutdown' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cmempool_alloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cmempool_allocated_bytes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cmempool_calloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cmempool_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cmempool_create_from_preallocated_buffer_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cmempool_dynamic_allocs_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cmempool_total_capacity' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cmempool_used_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='crmempool_alloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='crmempool_allocated_bytes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='crmempool_calloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='crmempool_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='crmempool_create_from_preallocated_buffer_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='crmempool_dynamic_allocs_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='crmempool_realloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='crmempool_total_capacity' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='crmempool_used_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cselect' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cselect_timed' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cchan_selectable' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='ccol_set_thread_name' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chashmap_begin_iter' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chmap_create_full' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chmap_delete_elem' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chmap_destroy_with_dtor' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chmap_elem_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chmap_get_elem_copy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chmap_get_elem_ref' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chmap_insert_elem' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chmap_reset' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chashmap_create_full' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chashmap_delete_elem' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chashmap_destroy_with_dtor' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chashmap_elem_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chashmap_get_elem_copy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chashmap_get_elem_ref' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chashmap_insert_elem' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chashmap_reset' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttp_base64_decode_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttp_base64_encode_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttp_basic_auth_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -150,25 +150,25 @@
     <elf-symbol name='chttpcli_set_engine_logger' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpcli_set_engine_mem_mgmt_procs' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpcli_set_engine_num_reactor_threads' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_async_result_free' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_async_result_get' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_do' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_do_async' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_do_async_streaming' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_do_pooled' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_do_pooled_streaming' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_do_streaming' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_resp_free' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_resp_header' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_resp_header_at' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_resp_header_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_set_connect_timeout' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_set_inactivity_timeout' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_set_max_response_body_size' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_set_pool_size' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_set_request_timeout' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpclient_set_tls' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_async_result_free' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_async_result_get' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_do' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_do_async' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_do_async_streaming' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_do_pooled' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_do_pooled_streaming' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_do_streaming' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_resp_free' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_resp_header' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_resp_header_at' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_resp_header_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_set_connect_timeout' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_set_inactivity_timeout' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_set_max_response_body_size' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_set_pool_size' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_set_request_timeout' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpcli_set_tls' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpsvr_bound_address' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpsvr_bound_port' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpsvr_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -284,24 +284,24 @@
     <elf-symbol name='cstring_to_lower' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cstring_to_upper' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cstring_trim' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_active_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_future_cancelled' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_future_create_detached' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_future_done' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_future_free' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_future_fulfill' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_future_get' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_pending_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_shutdown_drain' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_shutdown_immediate' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_submit' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_submit_future' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_timed_submit' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_timed_submit_future' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_try_submit' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_try_submit_future' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ctpool_wait' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_active_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_create_mp' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_future_cancelled' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_future_create_detached' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_future_done' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_future_free' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_future_fulfill' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_future_get' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_pending_count' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_shutdown_drain' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_shutdown_immediate' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_submit' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_submit_future' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_timed_submit' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_timed_submit_future' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_try_submit' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_try_submit_future' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cthrpool_wait' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_append_array' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_append_cvector' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_at' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -348,7 +348,7 @@
     <elf-symbol name='cyaml_type' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
   </elf-function-symbols>
   <elf-variable-symbols>
-    <elf-symbol name='_ccol_mempool_built_with_fast_layout' size='1' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='_cmempool_built_with_fast_layout' size='1' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
   </elf-variable-symbols>
   <undefined-elf-function-symbols>
     <elf-symbol name='ASN1_INTEGER_set' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='no'/>
@@ -906,63 +906,63 @@
       <parameter is-variadic='yes'/>
       <return type-id='type-id-11'/>
     </function-decl>
-    <typedef-decl name='cbinarymap' type-id='type-id-73' filepath='include/cbstmap.h' line='67' column='1' id='type-id-71'/>
+    <typedef-decl name='cbstmap' type-id='type-id-73' filepath='include/cbstmap.h' line='67' column='1' id='type-id-71'/>
     <typedef-decl name='cbmap' type-id='type-id-72' size-in-bits='64' filepath='include/cbstmap.h' line='70' column='1' id='type-id-74'/>
-    <class-decl name='cbinarymap' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/cbstmap.c' line='125' column='1' id='type-id-73'/>
-    <function-decl name='cbmap_begin_iter' mangled-name='cbmap_begin_iter' filepath='src/cbstmap.c' line='210' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_begin_iter' hash='c0a2cd77e78d328b'>
+    <class-decl name='cbstmap' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/cbstmap.c' line='125' column='1' id='type-id-73'/>
+    <function-decl name='cbstmap_begin_iter' mangled-name='cbstmap_begin_iter' filepath='src/cbstmap.c' line='210' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbstmap_begin_iter' hash='c0a2cd77e78d328b'>
       <parameter type-id='type-id-74' name='cbm' filepath='src/cbstmap.c' line='210' column='1'/>
       <parameter type-id='type-id-53' name='err' filepath='src/cbstmap.c' line='210' column='1'/>
       <return type-id='type-id-55'/>
     </function-decl>
-    <function-decl name='__cbmap_iterator_destroy' mangled-name='__cbmap_iterator_destroy' filepath='src/cbstmap.c' line='258' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__cbmap_iterator_destroy' hash='968529aeac74c0f5#2'>
+    <function-decl name='__cbstmap_iterator_destroy' mangled-name='__cbstmap_iterator_destroy' filepath='src/cbstmap.c' line='258' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__cbstmap_iterator_destroy' hash='968529aeac74c0f5#2'>
       <parameter type-id='type-id-55' name='iter' filepath='src/cbstmap.c' line='258' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='cbmap_create_full' mangled-name='cbmap_create_full' filepath='src/cbstmap.c' line='352' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_create_full' hash='7d4744bb25fb6049'>
+    <function-decl name='cbstmap_create_full' mangled-name='cbstmap_create_full' filepath='src/cbstmap.c' line='352' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbstmap_create_full' hash='7d4744bb25fb6049'>
       <parameter type-id='type-id-43' name='key_type' filepath='src/cbstmap.c' line='352' column='1'/>
       <parameter type-id='type-id-52' name='mmgmt_procs' filepath='src/cbstmap.c' line='353' column='1'/>
       <parameter type-id='type-id-42' name='custom_comparison_proc' filepath='src/cbstmap.c' line='354' column='1'/>
       <parameter type-id='type-id-53' name='err' filepath='src/cbstmap.c' line='355' column='1'/>
       <return type-id='type-id-74'/>
     </function-decl>
-    <function-decl name='__cbmap_destroy' mangled-name='__cbmap_destroy' filepath='src/cbstmap.c' line='447' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__cbmap_destroy' hash='7f32ffea222edbe7'>
+    <function-decl name='__cbstmap_destroy' mangled-name='__cbstmap_destroy' filepath='src/cbstmap.c' line='447' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__cbstmap_destroy' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-74' name='cbm' filepath='src/cbstmap.c' line='447' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='cbmap_elem_count' mangled-name='cbmap_elem_count' filepath='src/cbstmap.c' line='462' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_elem_count' hash='e0055d99adb0e173'>
+    <function-decl name='cbstmap_elem_count' mangled-name='cbstmap_elem_count' filepath='src/cbstmap.c' line='462' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbstmap_elem_count' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-74' name='cbm' filepath='src/cbstmap.c' line='462' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='cbmap_reset' mangled-name='cbmap_reset' filepath='src/cbstmap.c' line='471' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_reset' hash='a6972fae2815a2df'>
+    <function-decl name='cbstmap_reset' mangled-name='cbstmap_reset' filepath='src/cbstmap.c' line='471' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbstmap_reset' hash='a6972fae2815a2df'>
       <parameter type-id='type-id-74' name='cbm' filepath='src/cbstmap.c' line='471' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='cbmap_insert_elem' mangled-name='cbmap_insert_elem' filepath='src/cbstmap.c' line='1320' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_insert_elem' hash='26e14cbd2bb0154f'>
+    <function-decl name='cbstmap_insert_elem' mangled-name='cbstmap_insert_elem' filepath='src/cbstmap.c' line='1320' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbstmap_insert_elem' hash='26e14cbd2bb0154f'>
       <parameter type-id='type-id-74' name='cbm' filepath='src/cbstmap.c' line='1320' column='1'/>
       <parameter type-id='type-id-32' name='key_pair' filepath='src/cbstmap.c' line='1320' column='1'/>
       <parameter type-id='type-id-32' name='val_pair' filepath='src/cbstmap.c' line='1321' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='cbmap_get_elem_copy' mangled-name='cbmap_get_elem_copy' filepath='src/cbstmap.c' line='1420' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_get_elem_copy' hash='b5bd9ff2bfa14f25'>
+    <function-decl name='cbstmap_get_elem_copy' mangled-name='cbstmap_get_elem_copy' filepath='src/cbstmap.c' line='1420' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbstmap_get_elem_copy' hash='b5bd9ff2bfa14f25'>
       <parameter type-id='type-id-74' name='cbm' filepath='src/cbstmap.c' line='1420' column='1'/>
       <parameter type-id='type-id-32' name='key_pair' filepath='src/cbstmap.c' line='1420' column='1'/>
       <parameter type-id='type-id-24' name='target_buf' filepath='src/cbstmap.c' line='1421' column='1'/>
       <parameter type-id='type-id-36' name='target_buf_size' filepath='src/cbstmap.c' line='1421' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='cbmap_get_elem_ref' mangled-name='cbmap_get_elem_ref' filepath='src/cbstmap.c' line='1475' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_get_elem_ref' hash='b95d41af5a13dc64'>
+    <function-decl name='cbstmap_get_elem_ref' mangled-name='cbstmap_get_elem_ref' filepath='src/cbstmap.c' line='1475' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbstmap_get_elem_ref' hash='b95d41af5a13dc64'>
       <parameter type-id='type-id-74' name='cbm' filepath='src/cbstmap.c' line='1475' column='1'/>
       <parameter type-id='type-id-32' name='key_pair' filepath='src/cbstmap.c' line='1475' column='1'/>
       <parameter type-id='type-id-57' name='val_pair' filepath='src/cbstmap.c' line='1476' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='_cbmap_get_val_accessor' mangled-name='_cbmap_get_val_accessor' filepath='src/cbstmap.c' line='1503' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_cbmap_get_val_accessor' hash='6c248684b0de2b6c'>
+    <function-decl name='_cbstmap_get_val_accessor' mangled-name='_cbstmap_get_val_accessor' filepath='src/cbstmap.c' line='1503' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_cbstmap_get_val_accessor' hash='6c248684b0de2b6c'>
       <parameter type-id='type-id-74' name='cbm' filepath='src/cbstmap.c' line='1503' column='1'/>
       <parameter type-id='type-id-32' name='key_pair' filepath='src/cbstmap.c' line='1503' column='1'/>
       <parameter type-id='type-id-61' name='val_accessor' filepath='src/cbstmap.c' line='1504' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='cbmap_delete_elem' mangled-name='cbmap_delete_elem' filepath='src/cbstmap.c' line='1565' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_delete_elem' hash='ad09f5864ba034a4'>
+    <function-decl name='cbstmap_delete_elem' mangled-name='cbstmap_delete_elem' filepath='src/cbstmap.c' line='1565' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbstmap_delete_elem' hash='ad09f5864ba034a4'>
       <parameter type-id='type-id-74' name='cbm' filepath='src/cbstmap.c' line='1565' column='1'/>
       <parameter type-id='type-id-32' name='key_pair' filepath='src/cbstmap.c' line='1565' column='1'/>
       <return type-id='type-id-48'/>
@@ -1086,7 +1086,7 @@
     <typedef-decl name='chmap' type-id='type-id-103' size-in-bits='64' filepath='include/chashmap.h' line='116' column='1' id='type-id-109'/>
     <typedef-decl name='ccol_chmap_entry_ref' type-id='type-id-107' filepath='include/internal/chashinsert.h' line='144' column='1' id='type-id-104'/>
     <class-decl name='chashmap' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/chashmap.c' line='277' column='1' id='type-id-108'/>
-    <function-decl name='chmap_create_full' mangled-name='chmap_create_full' filepath='src/chashmap.c' line='3455' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_create_full' hash='fb7dcd0794caf583'>
+    <function-decl name='chashmap_create_full' mangled-name='chashmap_create_full' filepath='src/chashmap.c' line='3455' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chashmap_create_full' hash='fb7dcd0794caf583'>
       <parameter type-id='type-id-36' name='initial_bucket_array_size' filepath='src/chashmap.c' line='3455' column='1'/>
       <parameter type-id='type-id-43' name='key_type' filepath='src/chashmap.c' line='3456' column='1'/>
       <parameter type-id='type-id-43' name='val_type' filepath='src/chashmap.c' line='3456' column='1'/>
@@ -1096,41 +1096,41 @@
       <parameter type-id='type-id-53' name='err' filepath='src/chashmap.c' line='3460' column='1'/>
       <return type-id='type-id-109'/>
     </function-decl>
-    <function-decl name='chmap_insert_elem' mangled-name='chmap_insert_elem' filepath='src/chashmap.c' line='3699' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_insert_elem' hash='26e14cbd2bb0154f'>
+    <function-decl name='chashmap_insert_elem' mangled-name='chashmap_insert_elem' filepath='src/chashmap.c' line='3699' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chashmap_insert_elem' hash='26e14cbd2bb0154f'>
       <parameter type-id='type-id-109' name='chm' filepath='src/chashmap.c' line='3699' column='1'/>
       <parameter type-id='type-id-32' name='key_pair' filepath='src/chashmap.c' line='3699' column='1'/>
       <parameter type-id='type-id-32' name='val_pair' filepath='src/chashmap.c' line='3700' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chmap_get_elem_ref' mangled-name='chmap_get_elem_ref' filepath='src/chashmap.c' line='3797' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_get_elem_ref' hash='b95d41af5a13dc64'>
+    <function-decl name='chashmap_get_elem_ref' mangled-name='chashmap_get_elem_ref' filepath='src/chashmap.c' line='3797' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chashmap_get_elem_ref' hash='b95d41af5a13dc64'>
       <parameter type-id='type-id-109' name='chm' filepath='src/chashmap.c' line='3797' column='1'/>
       <parameter type-id='type-id-32' name='key_pair' filepath='src/chashmap.c' line='3797' column='1'/>
       <parameter type-id='type-id-57' name='val_pair' filepath='src/chashmap.c' line='3798' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='_chmap_get_val_accessor' mangled-name='_chmap_get_val_accessor' filepath='src/chashmap.c' line='3833' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_chmap_get_val_accessor' hash='6c248684b0de2b6c'>
+    <function-decl name='_chashmap_get_val_accessor' mangled-name='_chashmap_get_val_accessor' filepath='src/chashmap.c' line='3833' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_chashmap_get_val_accessor' hash='6c248684b0de2b6c'>
       <parameter type-id='type-id-109' name='chm' filepath='src/chashmap.c' line='3833' column='1'/>
       <parameter type-id='type-id-32' name='key_pair' filepath='src/chashmap.c' line='3833' column='1'/>
       <parameter type-id='type-id-61' name='val_accessor' filepath='src/chashmap.c' line='3834' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chmap_get_elem_copy' mangled-name='chmap_get_elem_copy' filepath='src/chashmap.c' line='3863' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_get_elem_copy' hash='b5bd9ff2bfa14f25'>
+    <function-decl name='chashmap_get_elem_copy' mangled-name='chashmap_get_elem_copy' filepath='src/chashmap.c' line='3863' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chashmap_get_elem_copy' hash='b5bd9ff2bfa14f25'>
       <parameter type-id='type-id-109' name='chm' filepath='src/chashmap.c' line='3863' column='1'/>
       <parameter type-id='type-id-32' name='key_pair' filepath='src/chashmap.c' line='3863' column='1'/>
       <parameter type-id='type-id-24' name='target_buf' filepath='src/chashmap.c' line='3864' column='1'/>
       <parameter type-id='type-id-36' name='target_buf_size' filepath='src/chashmap.c' line='3864' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chmap_delete_elem' mangled-name='chmap_delete_elem' filepath='src/chashmap.c' line='3884' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_delete_elem' hash='ad09f5864ba034a4'>
+    <function-decl name='chashmap_delete_elem' mangled-name='chashmap_delete_elem' filepath='src/chashmap.c' line='3884' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chashmap_delete_elem' hash='ad09f5864ba034a4'>
       <parameter type-id='type-id-109' name='chm' filepath='src/chashmap.c' line='3884' column='1'/>
       <parameter type-id='type-id-32' name='key_pair' filepath='src/chashmap.c' line='3884' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chmap_elem_count' mangled-name='chmap_elem_count' filepath='src/chashmap.c' line='3907' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_elem_count' hash='e0055d99adb0e173'>
+    <function-decl name='chashmap_elem_count' mangled-name='chashmap_elem_count' filepath='src/chashmap.c' line='3907' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chashmap_elem_count' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-109' name='chm' filepath='src/chashmap.c' line='3907' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='chmap_reset' mangled-name='chmap_reset' filepath='src/chashmap.c' line='3923' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_reset' hash='7e31633b6fb17772'>
+    <function-decl name='chashmap_reset' mangled-name='chashmap_reset' filepath='src/chashmap.c' line='3923' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chashmap_reset' hash='7e31633b6fb17772'>
       <parameter type-id='type-id-109' name='chm' filepath='src/chashmap.c' line='3923' column='1'/>
       <parameter type-id='type-id-36' name='new_bucket_array_size' filepath='src/chashmap.c' line='3923' column='1'/>
       <return type-id='type-id-48'/>
@@ -1140,15 +1140,15 @@
       <parameter type-id='type-id-53' name='err' filepath='src/chashmap.c' line='3990' column='1'/>
       <return type-id='type-id-55'/>
     </function-decl>
-    <function-decl name='__chmap_iterator_destroy' mangled-name='__chmap_iterator_destroy' filepath='src/chashmap.c' line='4079' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__chmap_iterator_destroy' hash='968529aeac74c0f5#2'>
+    <function-decl name='__chashmap_iterator_destroy' mangled-name='__chashmap_iterator_destroy' filepath='src/chashmap.c' line='4079' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__chashmap_iterator_destroy' hash='968529aeac74c0f5#2'>
       <parameter type-id='type-id-55' name='iter' filepath='src/cbstmap.c' line='258' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='__chmap_destroy' mangled-name='__chmap_destroy' filepath='src/chashmap.c' line='4149' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__chmap_destroy' hash='7f32ffea222edbe7'>
+    <function-decl name='__chashmap_destroy' mangled-name='__chashmap_destroy' filepath='src/chashmap.c' line='4149' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__chashmap_destroy' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-109' name='chm' filepath='src/chashmap.c' line='4149' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='chmap_destroy_with_dtor' mangled-name='chmap_destroy_with_dtor' filepath='src/chashmap.c' line='4184' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_destroy_with_dtor' hash='5695f5ce05a4c55f'>
+    <function-decl name='chashmap_destroy_with_dtor' mangled-name='chashmap_destroy_with_dtor' filepath='src/chashmap.c' line='4184' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chashmap_destroy_with_dtor' hash='5695f5ce05a4c55f'>
       <parameter type-id='type-id-109' name='chm' filepath='src/chashmap.c' line='4184' column='1'/>
       <parameter type-id='type-id-100' name='val_dtor' filepath='src/chashmap.c' line='4185' column='1'/>
       <parameter type-id='type-id-24' name='dtor_ctx' filepath='src/chashmap.c' line='4187' column='1'/>
@@ -1320,16 +1320,16 @@
     <array-type-def dimensions='1' type-id='type-id-2' size-in-bits='64' hash='e1c8b625c73024c4' id='type-id-140'>
       <subrange length='8' lower-bound='0' upper-bound='7' type-id='type-id-4' size-in-bits='64' is-anonymous='yes' hash='6e87a8ff484907ad' id='type-id-141'/>
     </array-type-def>
-    <enum-decl name='ccol_select_dir' naming-typedef-id='type-id-142' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1118' column='1' hash='c1ef82226f807189' id='type-id-143'>
+    <enum-decl name='cselect_dir_t' naming-typedef-id='type-id-142' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1118' column='1' hash='49b3eda8c7eb2893' id='type-id-143'>
       <underlying-type type-id='type-id-9'/>
-      <enumerator name='ccol_select_read' value='0'/>
-      <enumerator name='ccol_select_write' value='1'/>
+      <enumerator name='cselect_read' value='0'/>
+      <enumerator name='cselect_write' value='1'/>
     </enum-decl>
-    <enum-decl name='ccol_selectable_type' naming-typedef-id='type-id-144' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1091' column='1' hash='1f30afd684863a28' id='type-id-145'>
+    <enum-decl name='cselectable_type_t' naming-typedef-id='type-id-144' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1091' column='1' hash='5d81be26421efc94' id='type-id-145'>
       <underlying-type type-id='type-id-9'/>
-      <enumerator name='ccol_selectable_circq' value='0'/>
-      <enumerator name='ccol_selectable_dynq' value='1'/>
-      <enumerator name='ccol_selectable_fd' value='2'/>
+      <enumerator name='cselectable_type_ccircq' value='0'/>
+      <enumerator name='cselectable_type_cdynmq' value='1'/>
+      <enumerator name='cselectable_type_fd' value='2'/>
     </enum-decl>
     <enum-decl name='chttp1__finish_state_t' naming-typedef-id='type-id-146' size-in-bits='32' alignment-in-bits='32' filepath='include/internal/chttp1_parser.h' line='256' column='1' hash='8849246f1ca7b356' id='type-id-147'>
       <underlying-type type-id='type-id-9'/>
@@ -1517,7 +1517,7 @@
         <var-decl name='ai_next' type-id='type-id-170' visibility='default' filepath='/usr/include/netdb.h' line='574' column='1'/>
       </data-member>
     </class-decl>
-    <class-decl name='ccol_event_handlers' is-struct='yes' visibility='default' size-in-bits='256' filepath='include/cthreadcomm.h' line='1767' column='1' hash='2a6dbfba9bcf8fc7' id='type-id-171'>
+    <class-decl name='ceventloop_handlers' is-struct='yes' visibility='default' size-in-bits='256' filepath='include/cthreadcomm.h' line='1767' column='1' hash='acbe3ee7bb5262dc' id='type-id-171'>
       <data-member access='public' layout-offset-in-bits='0'>
         <var-decl name='on_readable' type-id='type-id-172' visibility='default' filepath='include/cthreadcomm.h' line='1769' column='1'/>
       </data-member>
@@ -1532,7 +1532,7 @@
       </data-member>
     </class-decl>
     <class-decl name='ccol_pintable' is-struct='yes' naming-typedef-id='type-id-176' visibility='default' size-in-bits='65536' filepath='include/internal/cpintable.h' line='146' column='1' hash='adbd8a58ff31b4da' id='type-id-177'/>
-    <class-decl name='ccol_selectable' is-struct='yes' naming-typedef-id='type-id-178' visibility='default' size-in-bits='128' filepath='include/cthreadcomm.h' line='1137' column='1' hash='83b885f4c7d07043' id='type-id-179'>
+    <class-decl name='cselectable_t' is-struct='yes' naming-typedef-id='type-id-178' visibility='default' size-in-bits='128' filepath='include/cthreadcomm.h' line='1137' column='1' hash='6a5e574e61486ba9' id='type-id-179'>
       <data-member access='public' layout-offset-in-bits='0'>
         <var-decl name='type' type-id='type-id-144' visibility='default' filepath='include/cthreadcomm.h' line='1138' column='1'/>
       </data-member>
@@ -1700,7 +1700,7 @@
         <var-decl name='client_cert_optional' type-id='type-id-1' visibility='default' filepath='include/chttp.h' line='255' column='1'/>
       </data-member>
     </class-decl>
-    <class-decl name='chttpcli_async_result' is-struct='yes' visibility='default' size-in-bits='192' filepath='include/chttpclient.h' line='1353' column='1' hash='67d08b2fd57bd201' id='type-id-197'>
+    <class-decl name='chttpcli_async_result' is-struct='yes' visibility='default' size-in-bits='192' filepath='include/chttpclient.h' line='1353' column='1' hash='3e6d53cef65c0101' id='type-id-197'>
       <data-member access='public' layout-offset-in-bits='0'>
         <var-decl name='rv' type-id='type-id-48' visibility='default' filepath='include/chttpclient.h' line='1354' column='1'/>
       </data-member>
@@ -1711,7 +1711,7 @@
         <var-decl name='_m_procs' type-id='type-id-52' visibility='default' filepath='include/chttpclient.h' line='1356' column='1'/>
       </data-member>
     </class-decl>
-    <class-decl name='chttpcli_response' is-struct='yes' visibility='default' size-in-bits='512' filepath='include/chttpclient.h' line='323' column='1' hash='a3b8bb1272c1397a' id='type-id-199'>
+    <class-decl name='chttpcli_response_t' is-struct='yes' visibility='default' size-in-bits='512' filepath='include/chttpclient.h' line='323' column='1' hash='6a3bd5baf130155e' id='type-id-199'>
       <data-member access='public' layout-offset-in-bits='0'>
         <var-decl name='status_code' type-id='type-id-11' visibility='default' filepath='include/chttpclient.h' line='324' column='1'/>
       </data-member>
@@ -1770,17 +1770,17 @@
     <typedef-decl name='__uint32_t' type-id='type-id-91' size-in-bits='32' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='42' column='1' hash='e66b43f97c38e87a' id='type-id-206'/>
     <typedef-decl name='__uint64_t' type-id='type-id-4' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='45' column='1' hash='8fdc5eea2983a729' id='type-id-207'/>
     <typedef-decl name='__uint8_t' type-id='type-id-119' size-in-bits='8' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='38' column='1' hash='6ebac62b3366db68' id='type-id-208'/>
-    <typedef-decl name='ccol_event_error_fn' type-id='type-id-209' size-in-bits='64' filepath='include/cthreadcomm.h' line='1688' column='1' hash='fd7a63c0c6c822c4' id='type-id-174'/>
-    <typedef-decl name='ccol_event_handlers_t' type-id='type-id-171' size-in-bits='256' filepath='include/cthreadcomm.h' line='1773' column='1' id='type-id-210'/>
-    <typedef-decl name='ccol_event_loop' type-id='type-id-184' size-in-bits='64' filepath='include/cthreadcomm.h' line='1528' column='1' hash='8fdc5eea2983a729' id='type-id-211'/>
-    <typedef-decl name='ccol_event_readable_fn' type-id='type-id-209' size-in-bits='64' filepath='include/cthreadcomm.h' line='1601' column='1' hash='fd7a63c0c6c822c4' id='type-id-172'/>
-    <typedef-decl name='ccol_event_reg' type-id='type-id-184' size-in-bits='64' filepath='include/cthreadcomm.h' line='1552' column='1' hash='8fdc5eea2983a729' id='type-id-212'/>
-    <typedef-decl name='ccol_event_removed_fn' type-id='type-id-44' size-in-bits='64' filepath='include/cthreadcomm.h' line='1735' column='1' hash='fd7a63c0c6c822c4' id='type-id-175'/>
-    <typedef-decl name='ccol_event_writable_fn' type-id='type-id-209' size-in-bits='64' filepath='include/cthreadcomm.h' line='1622' column='1' hash='fd7a63c0c6c822c4' id='type-id-173'/>
+    <typedef-decl name='ceventloop_error_fn_t' type-id='type-id-209' size-in-bits='64' filepath='include/cthreadcomm.h' line='1688' column='1' hash='fd7a63c0c6c822c4' id='type-id-174'/>
+    <typedef-decl name='ceventloop_handlers_t' type-id='type-id-171' size-in-bits='256' filepath='include/cthreadcomm.h' line='1773' column='1' id='type-id-210'/>
+    <typedef-decl name='ceventloop' type-id='type-id-184' size-in-bits='64' filepath='include/cthreadcomm.h' line='1528' column='1' hash='8fdc5eea2983a729' id='type-id-211'/>
+    <typedef-decl name='ceventloop_readable_fn_t' type-id='type-id-209' size-in-bits='64' filepath='include/cthreadcomm.h' line='1601' column='1' hash='fd7a63c0c6c822c4' id='type-id-172'/>
+    <typedef-decl name='ceventloop_reg' type-id='type-id-184' size-in-bits='64' filepath='include/cthreadcomm.h' line='1552' column='1' hash='8fdc5eea2983a729' id='type-id-212'/>
+    <typedef-decl name='ceventloop_removed_fn_t' type-id='type-id-44' size-in-bits='64' filepath='include/cthreadcomm.h' line='1735' column='1' hash='fd7a63c0c6c822c4' id='type-id-175'/>
+    <typedef-decl name='ceventloop_writable_fn_t' type-id='type-id-209' size-in-bits='64' filepath='include/cthreadcomm.h' line='1622' column='1' hash='fd7a63c0c6c822c4' id='type-id-173'/>
     <typedef-decl name='ccol_pintable' type-id='type-id-177' size-in-bits='65536' filepath='include/internal/cpintable.h' line='148' column='1' id='type-id-176'/>
-    <typedef-decl name='ccol_select_dir' type-id='type-id-143' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1121' column='1' hash='c1ef82226f807189' id='type-id-142'/>
-    <typedef-decl name='ccol_selectable' type-id='type-id-179' size-in-bits='128' filepath='include/cthreadcomm.h' line='1145' column='1' id='type-id-178'/>
-    <typedef-decl name='ccol_selectable_type' type-id='type-id-145' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1095' column='1' hash='1f30afd684863a28' id='type-id-144'/>
+    <typedef-decl name='cselect_dir_t' type-id='type-id-143' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1121' column='1' hash='49b3eda8c7eb2893' id='type-id-142'/>
+    <typedef-decl name='cselectable_t' type-id='type-id-179' size-in-bits='128' filepath='include/cthreadcomm.h' line='1145' column='1' id='type-id-178'/>
+    <typedef-decl name='cselectable_type_t' type-id='type-id-145' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1095' column='1' hash='5d81be26421efc94' id='type-id-144'/>
     <typedef-decl name='chttp1__finish_state_t' type-id='type-id-147' size-in-bits='32' alignment-in-bits='32' filepath='include/internal/chttp1_parser.h' line='262' column='1' hash='8849246f1ca7b356' id='type-id-146'/>
     <typedef-decl name='chttp1__state_t' type-id='type-id-149' size-in-bits='32' alignment-in-bits='32' filepath='include/internal/chttp1_parser.h' line='250' column='1' hash='35a8a2102e0139b4' id='type-id-148'/>
     <typedef-decl name='chttp1_errno_t' type-id='type-id-151' size-in-bits='32' alignment-in-bits='32' filepath='include/internal/chttp1_parser.h' line='199' column='1' hash='544c0a57d50ba95a' id='type-id-150'/>
@@ -1793,13 +1793,13 @@
     <typedef-decl name='chttp_tls_config_t' type-id='type-id-196' size-in-bits='256' filepath='include/chttp.h' line='256' column='1' id='type-id-215'/>
     <typedef-decl name='chttpcli' type-id='type-id-184' size-in-bits='64' filepath='include/chttpclient.h' line='151' column='1' hash='8fdc5eea2983a729' id='type-id-216'/>
     <typedef-decl name='chttpcli_async_result_t' type-id='type-id-197' size-in-bits='192' filepath='include/chttpclient.h' line='1357' column='1' id='type-id-217'/>
-    <typedef-decl name='chttpcli_response' type-id='type-id-199' size-in-bits='512' filepath='include/chttpclient.h' line='331' column='1' id='type-id-218'/>
-    <typedef-decl name='chttpcli_write_fn' type-id='type-id-219' size-in-bits='64' filepath='include/chttpclient.h' line='186' column='1' hash='fd7a63c0c6c822c4' id='type-id-220'/>
+    <typedef-decl name='chttpcli_response_t' type-id='type-id-199' size-in-bits='512' filepath='include/chttpclient.h' line='331' column='1' id='type-id-218'/>
+    <typedef-decl name='chttpcli_write_fn_t' type-id='type-id-219' size-in-bits='64' filepath='include/chttpclient.h' line='186' column='1' hash='fd7a63c0c6c822c4' id='type-id-220'/>
     <typedef-decl name='clog' type-id='type-id-184' size-in-bits='64' filepath='include/clogger.h' line='370' column='1' hash='8fdc5eea2983a729' id='type-id-221'/>
     <typedef-decl name='clog_async_cfg_t' type-id='type-id-200' size-in-bits='192' filepath='include/clogger.h' line='350' column='1' id='type-id-222'/>
     <typedef-decl name='clog_level_t' type-id='type-id-156' size-in-bits='32' alignment-in-bits='32' filepath='include/clogger.h' line='162' column='1' hash='617453aba0c8496b' id='type-id-155'/>
     <typedef-decl name='ctls_handshake_result_t' type-id='type-id-157' size-in-bits='32' alignment-in-bits='32' filepath='include/internal/ctls.h' line='137' column='1' hash='6646d853eefafe0a' id='type-id-223'/>
-    <typedef-decl name='ctpool' type-id='type-id-184' size-in-bits='64' filepath='include/cthreadpool.h' line='114' column='1' hash='8fdc5eea2983a729' id='type-id-224'/>
+    <typedef-decl name='cthrpool' type-id='type-id-184' size-in-bits='64' filepath='include/cthreadpool.h' line='114' column='1' hash='8fdc5eea2983a729' id='type-id-224'/>
     <typedef-decl name='pthread_attr_t' type-id='type-id-225' size-in-bits='448' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='62' column='1' id='type-id-226'/>
     <typedef-decl name='pthread_cond_t' type-id='type-id-227' size-in-bits='384' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='80' column='1' id='type-id-228'/>
     <typedef-decl name='pthread_condattr_t' type-id='type-id-229' size-in-bits='32' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='45' column='1' id='type-id-230'/>
@@ -1910,14 +1910,14 @@
     <qualified-type-def type-id='type-id-246' restrict='yes' hash='fc840d18d5f75cdd' id='type-id-247'/>
     <pointer-type-def type-id='type-id-176' size-in-bits='64' hash='549391cc103d1abd' id='type-id-248'/>
     <pointer-type-def type-id='type-id-48' size-in-bits='64' hash='69864a561585befb' id='type-id-249'/>
-    <pointer-type-def type-id='type-id-178' size-in-bits='64' hash='f975be0ea4a1d280' id='type-id-250'/>
+    <pointer-type-def type-id='type-id-178' size-in-bits='64' hash='ba86468e29b4c128' id='type-id-250'/>
     <qualified-type-def type-id='type-id-53' restrict='yes' hash='b04f089b5ae14a6d' id='type-id-251'/>
     <pointer-type-def type-id='type-id-213' size-in-bits='64' hash='2fde653aafdbb1fe' id='type-id-252'/>
     <pointer-type-def type-id='type-id-186' size-in-bits='64' hash='61ad18791bddf79f' id='type-id-253'/>
     <pointer-type-def type-id='type-id-214' size-in-bits='64' hash='b42fa35f1360bf1f' id='type-id-254'/>
     <pointer-type-def type-id='type-id-217' size-in-bits='64' hash='ba52ea038ab9eeac' id='type-id-255'/>
-    <pointer-type-def type-id='type-id-218' size-in-bits='64' hash='7f5b39dcb707d2cd' id='type-id-198'/>
-    <pointer-type-def type-id='type-id-198' size-in-bits='64' hash='416488aaa9fbe9a5' id='type-id-256'/>
+    <pointer-type-def type-id='type-id-218' size-in-bits='64' hash='3bb5524c8f647688' id='type-id-198'/>
+    <pointer-type-def type-id='type-id-198' size-in-bits='64' hash='cc02483b856e47b0' id='type-id-256'/>
     <qualified-type-def type-id='type-id-168' const='yes' hash='4400c446ed8ca1e0' id='type-id-257'/>
     <pointer-type-def type-id='type-id-257' size-in-bits='64' hash='d494314dd05a39c9' id='type-id-258'/>
     <qualified-type-def type-id='type-id-258' restrict='yes' hash='58de7f06ef5ba183' id='type-id-259'/>
@@ -1932,8 +1932,8 @@
     <pointer-type-def type-id='type-id-266' size-in-bits='64' hash='e61595ff0fa34afc' id='type-id-267'/>
     <qualified-type-def type-id='type-id-215' const='yes' hash='412929f8c114f21b' id='type-id-268'/>
     <pointer-type-def type-id='type-id-268' size-in-bits='64' hash='10e75aeb0bae08ff' id='type-id-269'/>
-    <qualified-type-def type-id='type-id-218' const='yes' hash='81d0a5d751a90fa5' id='type-id-270'/>
-    <pointer-type-def type-id='type-id-270' size-in-bits='64' hash='ecfad01b86064e33' id='type-id-271'/>
+    <qualified-type-def type-id='type-id-218' const='yes' hash='29633697c2b2cab3' id='type-id-270'/>
+    <pointer-type-def type-id='type-id-270' size-in-bits='64' hash='52b6e5e7957afdac' id='type-id-271'/>
     <qualified-type-def type-id='type-id-222' const='yes' hash='dc75ba3f1b4d831f' id='type-id-272'/>
     <pointer-type-def type-id='type-id-272' size-in-bits='64' hash='a7e12944f6f9cf30' id='type-id-273'/>
     <qualified-type-def type-id='type-id-226' const='yes' hash='13a03dff5e111f90' id='type-id-274'/>
@@ -1990,12 +1990,12 @@
     <pointer-type-def type-id='type-id-332' size-in-bits='64' id='type-id-333'/>
     <pointer-type-def type-id='type-id-334' size-in-bits='64' id='type-id-335'/>
     <class-decl name='ccol_chmap_entry_ref' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-336'/>
-    <class-decl name='ccol_circular_queue' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-337'/>
-    <class-decl name='ccol_dynamic_queue' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-338'/>
+    <class-decl name='ccircq' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-337'/>
+    <class-decl name='cdynmq' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-338'/>
     <class-decl name='chashmap' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-316'/>
     <class-decl name='ctls_conn' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-339'/>
     <class-decl name='ctls_ctx' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-340'/>
-    <class-decl name='ctpool_future' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-341'/>
+    <class-decl name='cthrpool_future_t' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-341'/>
     <class-decl name='cvector' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-342'/>
     <class-decl name='ossl_init_settings_st' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-343'/>
     <qualified-type-def type-id='type-id-24' restrict='yes' id='type-id-344'/>
@@ -2206,9 +2206,9 @@
     </function-decl>
     <typedef-decl name='chashmap' type-id='type-id-316' filepath='include/chashmap.h' line='113' column='1' id='type-id-318'/>
     <typedef-decl name='chmap' type-id='type-id-319' size-in-bits='64' filepath='include/chashmap.h' line='116' column='1' id='type-id-194'/>
-    <typedef-decl name='ccol_circular_queue' type-id='type-id-337' filepath='include/cthreadcomm.h' line='56' column='1' id='type-id-314'/>
-    <typedef-decl name='ccol_dynamic_queue' type-id='type-id-338' filepath='include/cthreadcomm.h' line='59' column='1' id='type-id-315'/>
-    <typedef-decl name='ctpool_future' type-id='type-id-341' filepath='include/cthreadpool.h' line='120' column='1' id='type-id-332'/>
+    <typedef-decl name='ccircq' type-id='type-id-337' filepath='include/cthreadcomm.h' line='56' column='1' id='type-id-314'/>
+    <typedef-decl name='cdynmq' type-id='type-id-338' filepath='include/cthreadcomm.h' line='59' column='1' id='type-id-315'/>
+    <typedef-decl name='cthrpool_future_t' type-id='type-id-341' filepath='include/cthreadpool.h' line='120' column='1' id='type-id-332'/>
     <typedef-decl name='cvector' type-id='type-id-342' filepath='include/cvector.h' line='58' column='1' id='type-id-334'/>
     <typedef-decl name='cvec' type-id='type-id-335' size-in-bits='64' filepath='include/cvector.h' line='61' column='1' id='type-id-345'/>
     <typedef-decl name='ccol_chmap_entry_ref' type-id='type-id-336' filepath='include/internal/chashinsert.h' line='144' column='1' id='type-id-323'/>
@@ -2252,33 +2252,33 @@
       <parameter type-id='type-id-36' name='num_threads' filepath='src/chttpclient.c' line='6664' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttpclient_do_async' mangled-name='chttpclient_do_async' filepath='src/chttpclient.c' line='14294' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_do_async' hash='df959e31e96fd11e'>
+    <function-decl name='chttpcli_do_async' mangled-name='chttpcli_do_async' filepath='src/chttpclient.c' line='14294' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_do_async' hash='df959e31e96fd11e'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='14294' column='1'/>
       <parameter type-id='type-id-267' name='req' filepath='src/chttpclient.c' line='14294' column='1'/>
       <return type-id='type-id-333'/>
     </function-decl>
-    <function-decl name='chttpclient_do_async_streaming' mangled-name='chttpclient_do_async_streaming' filepath='src/chttpclient.c' line='14303' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_do_async_streaming' hash='2a1f8bd0da302511'>
+    <function-decl name='chttpcli_do_async_streaming' mangled-name='chttpcli_do_async_streaming' filepath='src/chttpclient.c' line='14303' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_do_async_streaming' hash='2a1f8bd0da302511'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='14303' column='1'/>
       <parameter type-id='type-id-267' name='req' filepath='src/chttpclient.c' line='14304' column='1'/>
       <parameter type-id='type-id-220' name='write_fn' filepath='src/chttpclient.c' line='14305' column='1'/>
       <parameter type-id='type-id-24' name='write_ctx' filepath='src/chttpclient.c' line='14306' column='1'/>
       <return type-id='type-id-333'/>
     </function-decl>
-    <function-decl name='chttpclient_async_result_get' mangled-name='chttpclient_async_result_get' filepath='src/chttpclient.c' line='14317' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_async_result_get' hash='90e2c7a35d7cbec6'>
+    <function-decl name='chttpcli_async_result_get' mangled-name='chttpcli_async_result_get' filepath='src/chttpclient.c' line='14317' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_async_result_get' hash='90e2c7a35d7cbec6'>
       <parameter type-id='type-id-333' name='f' filepath='src/chttpclient.c' line='14317' column='1'/>
       <return type-id='type-id-255'/>
     </function-decl>
-    <function-decl name='chttpclient_async_result_free' mangled-name='chttpclient_async_result_free' filepath='src/chttpclient.c' line='14321' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_async_result_free' hash='90e2c7a35d7cbec6'>
+    <function-decl name='chttpcli_async_result_free' mangled-name='chttpcli_async_result_free' filepath='src/chttpclient.c' line='14321' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_async_result_free' hash='90e2c7a35d7cbec6'>
       <parameter type-id='type-id-255' name='result' filepath='src/chttpclient.c' line='14321' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='chttpclient_do_pooled' mangled-name='chttpclient_do_pooled' filepath='src/chttpclient.c' line='14353' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_do_pooled' hash='84e71f6550f77f56'>
+    <function-decl name='chttpcli_do_pooled' mangled-name='chttpcli_do_pooled' filepath='src/chttpclient.c' line='14353' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_do_pooled' hash='7b08ab1d21e5565c'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='15941' column='1'/>
       <parameter type-id='type-id-267' name='req' filepath='src/chttpclient.c' line='15941' column='1'/>
       <parameter type-id='type-id-256' name='resp_out' filepath='src/chttpclient.c' line='15942' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttpclient_do_pooled_streaming' mangled-name='chttpclient_do_pooled_streaming' filepath='src/chttpclient.c' line='14380' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_do_pooled_streaming' hash='f1cdc23cbb9362b6'>
+    <function-decl name='chttpcli_do_pooled_streaming' mangled-name='chttpcli_do_pooled_streaming' filepath='src/chttpclient.c' line='14380' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_do_pooled_streaming' hash='f1cdc23cbb9362b6'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='15960' column='1'/>
       <parameter type-id='type-id-267' name='req' filepath='src/chttpclient.c' line='15960' column='1'/>
       <parameter type-id='type-id-220' name='write_fn' filepath='src/chttpclient.c' line='15961' column='1'/>
@@ -2286,52 +2286,52 @@
       <parameter type-id='type-id-95' name='status_code_out' filepath='src/chttpclient.c' line='15962' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttpclient_create_mp' mangled-name='chttpclient_create_mp' filepath='src/chttpclient.c' line='14425' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_create_mp' hash='cd51762c0def1ded'>
+    <function-decl name='chttpcli_create_mp' mangled-name='chttpcli_create_mp' filepath='src/chttpclient.c' line='14425' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_create_mp' hash='cd51762c0def1ded'>
       <parameter type-id='type-id-52' name='mprocs' filepath='src/chttpclient.c' line='14425' column='1'/>
       <parameter type-id='type-id-53' name='err_str' filepath='src/chttpclient.c' line='14425' column='1'/>
       <return type-id='type-id-216'/>
     </function-decl>
-    <function-decl name='chttpclient_set_pool_size' mangled-name='chttpclient_set_pool_size' filepath='src/chttpclient.c' line='14569' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_set_pool_size' hash='0a5d6bd7462f741c'>
+    <function-decl name='chttpcli_set_pool_size' mangled-name='chttpcli_set_pool_size' filepath='src/chttpclient.c' line='14569' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_set_pool_size' hash='0a5d6bd7462f741c'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='14628' column='1'/>
       <parameter type-id='type-id-36' name='max_bytes' filepath='src/chttpclient.c' line='14629' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttpclient_set_connect_timeout' mangled-name='chttpclient_set_connect_timeout' filepath='src/chttpclient.c' line='14582' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_set_connect_timeout' hash='0a5d6bd7462f741c'>
+    <function-decl name='chttpcli_set_connect_timeout' mangled-name='chttpcli_set_connect_timeout' filepath='src/chttpclient.c' line='14582' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_set_connect_timeout' hash='0a5d6bd7462f741c'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='14602' column='1'/>
       <parameter type-id='type-id-184' name='us' filepath='src/chttpclient.c' line='14602' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttpclient_set_request_timeout' mangled-name='chttpclient_set_request_timeout' filepath='src/chttpclient.c' line='14592' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_set_request_timeout' hash='0a5d6bd7462f741c'>
+    <function-decl name='chttpcli_set_request_timeout' mangled-name='chttpcli_set_request_timeout' filepath='src/chttpclient.c' line='14592' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_set_request_timeout' hash='0a5d6bd7462f741c'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='14602' column='1'/>
       <parameter type-id='type-id-184' name='us' filepath='src/chttpclient.c' line='14602' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttpclient_set_inactivity_timeout' mangled-name='chttpclient_set_inactivity_timeout' filepath='src/chttpclient.c' line='14602' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_set_inactivity_timeout' hash='0a5d6bd7462f741c'>
+    <function-decl name='chttpcli_set_inactivity_timeout' mangled-name='chttpcli_set_inactivity_timeout' filepath='src/chttpclient.c' line='14602' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_set_inactivity_timeout' hash='0a5d6bd7462f741c'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='14602' column='1'/>
       <parameter type-id='type-id-184' name='us' filepath='src/chttpclient.c' line='14602' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttpclient_set_max_response_body_size' mangled-name='chttpclient_set_max_response_body_size' filepath='src/chttpclient.c' line='14628' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_set_max_response_body_size' hash='0a5d6bd7462f741c'>
+    <function-decl name='chttpcli_set_max_response_body_size' mangled-name='chttpcli_set_max_response_body_size' filepath='src/chttpclient.c' line='14628' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_set_max_response_body_size' hash='0a5d6bd7462f741c'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='14628' column='1'/>
       <parameter type-id='type-id-36' name='max_bytes' filepath='src/chttpclient.c' line='14629' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttpclient_set_tls' mangled-name='chttpclient_set_tls' filepath='src/chttpclient.c' line='14639' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_set_tls' hash='304e56fc0c309082'>
+    <function-decl name='chttpcli_set_tls' mangled-name='chttpcli_set_tls' filepath='src/chttpclient.c' line='14639' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_set_tls' hash='304e56fc0c309082'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='14639' column='1'/>
       <parameter type-id='type-id-269' name='tls' filepath='src/chttpclient.c' line='14639' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='__chttpclient_destroy' mangled-name='__chttpclient_destroy' filepath='src/chttpclient.c' line='14736' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__chttpclient_destroy' hash='e0055d99adb0e173'>
+    <function-decl name='__chttpcli_destroy' mangled-name='__chttpcli_destroy' filepath='src/chttpclient.c' line='14736' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__chttpcli_destroy' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-216' name='cli' filepath='src/chttpclient.c' line='14736' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='chttpclient_do' mangled-name='chttpclient_do' filepath='src/chttpclient.c' line='15941' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_do' hash='84e71f6550f77f56'>
+    <function-decl name='chttpcli_do' mangled-name='chttpcli_do' filepath='src/chttpclient.c' line='15941' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_do' hash='7b08ab1d21e5565c'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='15941' column='1'/>
       <parameter type-id='type-id-267' name='req' filepath='src/chttpclient.c' line='15941' column='1'/>
       <parameter type-id='type-id-256' name='resp_out' filepath='src/chttpclient.c' line='15942' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttpclient_do_streaming' mangled-name='chttpclient_do_streaming' filepath='src/chttpclient.c' line='15960' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_do_streaming' hash='f1cdc23cbb9362b6'>
+    <function-decl name='chttpcli_do_streaming' mangled-name='chttpcli_do_streaming' filepath='src/chttpclient.c' line='15960' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_do_streaming' hash='f1cdc23cbb9362b6'>
       <parameter type-id='type-id-216' name='h' filepath='src/chttpclient.c' line='15960' column='1'/>
       <parameter type-id='type-id-267' name='req' filepath='src/chttpclient.c' line='15960' column='1'/>
       <parameter type-id='type-id-220' name='write_fn' filepath='src/chttpclient.c' line='15961' column='1'/>
@@ -2342,12 +2342,12 @@
     <function-decl name='chttp_default_client' mangled-name='chttp_default_client' filepath='src/chttpclient.c' line='16004' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_default_client' hash='e0055d99adb0e173'>
       <return type-id='type-id-216'/>
     </function-decl>
-    <function-decl name='chttp_do' mangled-name='chttp_do' filepath='src/chttpclient.c' line='16138' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_do' hash='2cc9a877dbe77b27'>
+    <function-decl name='chttp_do' mangled-name='chttp_do' filepath='src/chttpclient.c' line='16138' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_do' hash='56189498bc139bdf'>
       <parameter type-id='type-id-267' name='req' filepath='src/chttpclient.c' line='16138' column='1'/>
       <parameter type-id='type-id-256' name='resp_out' filepath='src/chttpclient.c' line='16139' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttp_run_query' mangled-name='chttp_run_query' filepath='src/chttpclient.c' line='16152' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_run_query' hash='6786bb75537dd0ad'>
+    <function-decl name='chttp_run_query' mangled-name='chttp_run_query' filepath='src/chttpclient.c' line='16152' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_run_query' hash='5d1b31eb80d6a69a'>
       <parameter type-id='type-id-192' name='method' filepath='src/chttpclient.c' line='16152' column='1'/>
       <parameter type-id='type-id-59' name='url' filepath='src/chttpclient.c' line='16152' column='1'/>
       <parameter type-id='type-id-265' name='body' filepath='src/chttpclient.c' line='16153' column='1'/>
@@ -2355,51 +2355,51 @@
       <parameter type-id='type-id-256' name='resp_out' filepath='src/chttpclient.c' line='16154' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttp_get' mangled-name='chttp_get' filepath='src/chttpclient.c' line='16178' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_get' hash='453d749fce0faa0c'>
+    <function-decl name='chttp_get' mangled-name='chttp_get' filepath='src/chttpclient.c' line='16178' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_get' hash='773e635e688bacff'>
       <parameter type-id='type-id-59' name='url' filepath='src/chttpclient.c' line='16192' column='1'/>
       <parameter type-id='type-id-256' name='resp_out' filepath='src/chttpclient.c' line='16192' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttp_post' mangled-name='chttp_post' filepath='src/chttpclient.c' line='16182' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_post' hash='d1cf3faf3d42e5d1'>
+    <function-decl name='chttp_post' mangled-name='chttp_post' filepath='src/chttpclient.c' line='16182' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_post' hash='6ea9bfdad7983c3c'>
       <parameter type-id='type-id-59' name='url' filepath='src/chttpclient.c' line='16196' column='1'/>
       <parameter type-id='type-id-265' name='body' filepath='src/chttpclient.c' line='16196' column='1'/>
       <parameter type-id='type-id-256' name='resp_out' filepath='src/chttpclient.c' line='16197' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttp_put' mangled-name='chttp_put' filepath='src/chttpclient.c' line='16187' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_put' hash='d1cf3faf3d42e5d1'>
+    <function-decl name='chttp_put' mangled-name='chttp_put' filepath='src/chttpclient.c' line='16187' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_put' hash='6ea9bfdad7983c3c'>
       <parameter type-id='type-id-59' name='url' filepath='src/chttpclient.c' line='16196' column='1'/>
       <parameter type-id='type-id-265' name='body' filepath='src/chttpclient.c' line='16196' column='1'/>
       <parameter type-id='type-id-256' name='resp_out' filepath='src/chttpclient.c' line='16197' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttp_delete' mangled-name='chttp_delete' filepath='src/chttpclient.c' line='16192' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_delete' hash='453d749fce0faa0c'>
+    <function-decl name='chttp_delete' mangled-name='chttp_delete' filepath='src/chttpclient.c' line='16192' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_delete' hash='773e635e688bacff'>
       <parameter type-id='type-id-59' name='url' filepath='src/chttpclient.c' line='16192' column='1'/>
       <parameter type-id='type-id-256' name='resp_out' filepath='src/chttpclient.c' line='16192' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttp_patch' mangled-name='chttp_patch' filepath='src/chttpclient.c' line='16196' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_patch' hash='d1cf3faf3d42e5d1'>
+    <function-decl name='chttp_patch' mangled-name='chttp_patch' filepath='src/chttpclient.c' line='16196' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttp_patch' hash='6ea9bfdad7983c3c'>
       <parameter type-id='type-id-59' name='url' filepath='src/chttpclient.c' line='16196' column='1'/>
       <parameter type-id='type-id-265' name='body' filepath='src/chttpclient.c' line='16196' column='1'/>
       <parameter type-id='type-id-256' name='resp_out' filepath='src/chttpclient.c' line='16197' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='chttpclient_resp_header' mangled-name='chttpclient_resp_header' filepath='src/chttpclient.c' line='16254' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_resp_header' hash='a1eb4464f22194d5'>
+    <function-decl name='chttpcli_resp_header' mangled-name='chttpcli_resp_header' filepath='src/chttpclient.c' line='16254' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_resp_header' hash='5e355a0d18ae03e7'>
       <parameter type-id='type-id-271' name='resp' filepath='src/chttpclient.c' line='16254' column='1'/>
       <parameter type-id='type-id-59' name='name' filepath='src/chttpclient.c' line='16255' column='1'/>
       <return type-id='type-id-59'/>
     </function-decl>
-    <function-decl name='chttpclient_resp_header_count' mangled-name='chttpclient_resp_header_count' filepath='src/chttpclient.c' line='16266' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_resp_header_count' hash='a55a840745d88b25'>
+    <function-decl name='chttpcli_resp_header_count' mangled-name='chttpcli_resp_header_count' filepath='src/chttpclient.c' line='16266' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_resp_header_count' hash='1d67b4d069ed4b8a'>
       <parameter type-id='type-id-271' name='resp' filepath='src/chttpclient.c' line='16266' column='1'/>
       <parameter type-id='type-id-59' name='name' filepath='src/chttpclient.c' line='16267' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='chttpclient_resp_header_at' mangled-name='chttpclient_resp_header_at' filepath='src/chttpclient.c' line='16279' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_resp_header_at' hash='c0323e771084f6d9'>
+    <function-decl name='chttpcli_resp_header_at' mangled-name='chttpcli_resp_header_at' filepath='src/chttpclient.c' line='16279' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_resp_header_at' hash='4b125c1a8efe18e8'>
       <parameter type-id='type-id-271' name='resp' filepath='src/chttpclient.c' line='16279' column='1'/>
       <parameter type-id='type-id-59' name='name' filepath='src/chttpclient.c' line='16280' column='1'/>
       <parameter type-id='type-id-36' name='index' filepath='src/chttpclient.c' line='16280' column='1'/>
       <return type-id='type-id-59'/>
     </function-decl>
-    <function-decl name='chttpclient_resp_free' mangled-name='chttpclient_resp_free' filepath='src/chttpclient.c' line='16291' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpclient_resp_free' hash='15a64730bffd2f2c'>
+    <function-decl name='chttpcli_resp_free' mangled-name='chttpcli_resp_free' filepath='src/chttpclient.c' line='16291' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpcli_resp_free' hash='1386bef8e7d74304'>
       <parameter type-id='type-id-198' name='resp' filepath='src/chttpclient.c' line='16291' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
@@ -2427,7 +2427,7 @@
       <parameter type-id='type-id-24'/>
       <return type-id='type-id-36'/>
     </function-type>
-    <function-type size-in-bits='64' hash='738e95da2eed332a' id='type-id-308'>
+    <function-type size-in-bits='64' hash='9584d1389ffcb828' id='type-id-308'>
       <parameter type-id='type-id-211'/>
       <parameter type-id='type-id-212'/>
       <parameter type-id='type-id-250'/>
@@ -2666,9 +2666,9 @@
     <typedef-decl name='chttp1_stream_t' type-id='type-id-350' size-in-bits='512' filepath='include/internal/chttp1_parser.h' line='1072' column='1' id='type-id-368'/>
     <typedef-decl name='chttpsvr' type-id='type-id-184' size-in-bits='64' filepath='include/chttpserver.h' line='303' column='1' hash='8fdc5eea2983a729' id='type-id-369'/>
     <typedef-decl name='chttpsvr_config_t' type-id='type-id-351' size-in-bits='1408' filepath='include/chttpserver.h' line='798' column='1' id='type-id-370'/>
-    <typedef-decl name='chttpsvr_handler_fn' type-id='type-id-371' size-in-bits='64' filepath='include/chttpserver.h' line='339' column='1' hash='fd7a63c0c6c822c4' id='type-id-372'/>
-    <typedef-decl name='chttpsvr_middleware_fn' type-id='type-id-373' size-in-bits='64' filepath='include/chttpserver.h' line='370' column='1' hash='fd7a63c0c6c822c4' id='type-id-374'/>
-    <typedef-decl name='chttpsvr_next_fn' type-id='type-id-375' size-in-bits='64' filepath='include/chttpserver.h' line='353' column='1' hash='fd7a63c0c6c822c4' id='type-id-376'/>
+    <typedef-decl name='chttpsvr_handler_fn_t' type-id='type-id-371' size-in-bits='64' filepath='include/chttpserver.h' line='339' column='1' hash='fd7a63c0c6c822c4' id='type-id-372'/>
+    <typedef-decl name='chttpsvr_middleware_fn_t' type-id='type-id-373' size-in-bits='64' filepath='include/chttpserver.h' line='370' column='1' hash='fd7a63c0c6c822c4' id='type-id-374'/>
+    <typedef-decl name='chttpsvr_next_fn_t' type-id='type-id-375' size-in-bits='64' filepath='include/chttpserver.h' line='353' column='1' hash='fd7a63c0c6c822c4' id='type-id-376'/>
     <typedef-decl name='pthread_key_t' type-id='type-id-91' size-in-bits='32' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='49' column='1' hash='e66b43f97c38e87a' id='type-id-377'/>
     <typedef-decl name='sem_t' type-id='type-id-378' size-in-bits='256' filepath='/usr/include/x86_64-linux-gnu/bits/semaphore.h' line='39' column='1' id='type-id-379'/>
     <typedef-decl name='time_t' type-id='type-id-79' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/types/time_t.h' line='10' column='1' hash='b119fe0931d2ee10' id='type-id-380'/>
@@ -2745,8 +2745,8 @@
     <function-decl name='__builtin_strncpy' mangled-name='strncpy' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='strncpy' hash='7f32ffea222edbe7'>
       <return type-id='type-id-38'/>
     </function-decl>
-    <class-decl name='ccol_circular_queue' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-430'/>
-    <class-decl name='ccol_dynamic_queue' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-431'/>
+    <class-decl name='ccircq' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-430'/>
+    <class-decl name='cdynmq' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-431'/>
     <class-decl name='ctls_conn' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-432'/>
     <class-decl name='ctls_ctx' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-433'/>
     <class-decl name='cvector' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-434'/>
@@ -2883,18 +2883,18 @@
       <parameter type-id='type-id-402'/>
       <return type-id='type-id-11'/>
     </function-decl>
-    <typedef-decl name='chttpsvr_router' type-id='type-id-437' filepath='include/chttpserver.h' line='310' column='1' id='type-id-418'/>
-    <typedef-decl name='chttpsvr_req' type-id='type-id-438' filepath='include/chttpserver.h' line='314' column='1' id='type-id-414'/>
-    <typedef-decl name='chttpsvr_resp' type-id='type-id-439' filepath='include/chttpserver.h' line='320' column='1' id='type-id-416'/>
-    <typedef-decl name='ccol_circular_queue' type-id='type-id-430' filepath='include/cthreadcomm.h' line='56' column='1' id='type-id-410'/>
-    <typedef-decl name='ccol_dynamic_queue' type-id='type-id-431' filepath='include/cthreadcomm.h' line='59' column='1' id='type-id-412'/>
+    <typedef-decl name='chttpsvr_router_t' type-id='type-id-437' filepath='include/chttpserver.h' line='310' column='1' id='type-id-418'/>
+    <typedef-decl name='chttpsvr_req_t' type-id='type-id-438' filepath='include/chttpserver.h' line='314' column='1' id='type-id-414'/>
+    <typedef-decl name='chttpsvr_resp_t' type-id='type-id-439' filepath='include/chttpserver.h' line='320' column='1' id='type-id-416'/>
+    <typedef-decl name='ccircq' type-id='type-id-430' filepath='include/cthreadcomm.h' line='56' column='1' id='type-id-410'/>
+    <typedef-decl name='cdynmq' type-id='type-id-431' filepath='include/cthreadcomm.h' line='59' column='1' id='type-id-412'/>
     <typedef-decl name='cvector' type-id='type-id-434' filepath='include/cvector.h' line='58' column='1' id='type-id-428'/>
     <typedef-decl name='cvec' type-id='type-id-429' size-in-bits='64' filepath='include/cvector.h' line='61' column='1' id='type-id-440'/>
     <typedef-decl name='ctls_ctx_t' type-id='type-id-433' filepath='include/internal/ctls.h' line='122' column='1' id='type-id-426'/>
     <typedef-decl name='ctls_conn_t' type-id='type-id-432' filepath='include/internal/ctls.h' line='128' column='1' id='type-id-422'/>
-    <class-decl name='chttpsvr_router' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/chttpserver.c' line='98' column='1' id='type-id-437'/>
-    <class-decl name='chttpsvr_resp' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/chttpserver.c' line='200' column='1' id='type-id-439'/>
-    <class-decl name='chttpsvr_req' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/chttpserver.c' line='724' column='1' id='type-id-438'/>
+    <class-decl name='chttpsvr_router_t' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/chttpserver.c' line='98' column='1' id='type-id-437'/>
+    <class-decl name='chttpsvr_resp_t' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/chttpserver.c' line='200' column='1' id='type-id-439'/>
+    <class-decl name='chttpsvr_req_t' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/chttpserver.c' line='724' column='1' id='type-id-438'/>
     <function-decl name='chttpsvr_req_read' mangled-name='chttpsvr_req_read' filepath='src/chttpserver.c' line='10429' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chttpsvr_req_read' hash='c013aa17bfe204e4'>
       <parameter type-id='type-id-415' name='req' filepath='src/chttpserver.c' line='10429' column='1'/>
       <parameter type-id='type-id-24' name='buf' filepath='src/chttpserver.c' line='10429' column='1'/>
@@ -3187,7 +3187,7 @@
         <var-decl name='m_procs' type-id='type-id-52' visibility='default' filepath='include/internal/cgrowbuf.h' line='72' column='1'/>
       </data-member>
     </class-decl>
-    <class-decl name='cjson_dictionary_iter' is-struct='yes' visibility='default' size-in-bits='192' filepath='include/cjson.h' line='715' column='1' hash='52a4815b94354eed' id='type-id-450'>
+    <class-decl name='cjson_dictionary_iter_t' is-struct='yes' visibility='default' size-in-bits='192' filepath='include/cjson.h' line='715' column='1' hash='acc164cd27e42e06' id='type-id-450'>
       <data-member access='public' layout-offset-in-bits='0'>
         <var-decl name='key' type-id='type-id-59' visibility='default' filepath='include/cjson.h' line='719' column='1'/>
       </data-member>
@@ -3200,13 +3200,13 @@
     </class-decl>
     <typedef-decl name='__locale_t' type-id='type-id-452' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/types/__locale_t.h' line='41' column='1' hash='f1aad3d837f95ed2' id='type-id-453'/>
     <typedef-decl name='ccol_growbuf_t' type-id='type-id-449' size-in-bits='320' filepath='include/internal/cgrowbuf.h' line='73' column='1' id='type-id-448'/>
-    <typedef-decl name='cjson_dictionary_iter' type-id='type-id-450' size-in-bits='192' filepath='include/cjson.h' line='725' column='1' id='type-id-454'/>
+    <typedef-decl name='cjson_dictionary_iter_t' type-id='type-id-450' size-in-bits='192' filepath='include/cjson.h' line='725' column='1' id='type-id-454'/>
     <typedef-decl name='cjson_node_type_t' type-id='type-id-444' size-in-bits='32' alignment-in-bits='32' filepath='include/cjson.h' line='194' column='1' hash='ec90dc44ceb6a2f4' id='type-id-455'/>
     <typedef-decl name='locale_t' type-id='type-id-453' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/types/locale_t.h' line='24' column='1' hash='f1aad3d837f95ed2' id='type-id-456'/>
     <pointer-type-def type-id='type-id-445' size-in-bits='64' hash='f1aad3d837f95ed2' id='type-id-452'/>
     <pointer-type-def type-id='type-id-448' size-in-bits='64' hash='80b4371fe6fd9d5e' id='type-id-457'/>
     <pointer-type-def type-id='type-id-52' size-in-bits='64' hash='939040278143aa64' id='type-id-458'/>
-    <pointer-type-def type-id='type-id-454' size-in-bits='64' hash='e74112cd47d7be53' id='type-id-459'/>
+    <pointer-type-def type-id='type-id-454' size-in-bits='64' hash='b3d5a7b0607773c9' id='type-id-459'/>
     <qualified-type-def type-id='type-id-11' const='yes' hash='8cef8df4b6728924' id='type-id-460'/>
     <pointer-type-def type-id='type-id-460' size-in-bits='64' hash='15e84cc8db4ed19c' id='type-id-447'/>
     <pointer-type-def type-id='type-id-461' size-in-bits='64' id='type-id-462'/>
@@ -3353,11 +3353,11 @@
       <parameter type-id='type-id-59' name='path' filepath='src/cjson.c' line='3962' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='cjson_dictionary_next' mangled-name='cjson_dictionary_next' filepath='src/cjson.c' line='1783' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cjson_dictionary_next' hash='a11cc0ee4ad48950'>
+    <function-decl name='cjson_dictionary_next' mangled-name='cjson_dictionary_next' filepath='src/cjson.c' line='1783' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cjson_dictionary_next' hash='f7011f85ef7d683a'>
       <parameter type-id='type-id-459' name='it' filepath='src/cjson.c' line='1783' column='1'/>
       <return type-id='type-id-1'/>
     </function-decl>
-    <function-decl name='cjson_dictionary_first' mangled-name='cjson_dictionary_first' filepath='src/cjson.c' line='1798' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cjson_dictionary_first' hash='a11cc0ee4ad48950'>
+    <function-decl name='cjson_dictionary_first' mangled-name='cjson_dictionary_first' filepath='src/cjson.c' line='1798' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cjson_dictionary_first' hash='f7011f85ef7d683a'>
       <parameter type-id='type-id-451' name='dict' filepath='src/cjson.c' line='1798' column='1'/>
       <parameter type-id='type-id-459' name='it' filepath='src/cjson.c' line='1798' column='1'/>
       <return type-id='type-id-1'/>
@@ -3468,7 +3468,7 @@
         <var-decl name='__val' type-id='type-id-497' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/__sigset_t.h' line='7' column='1'/>
       </data-member>
     </class-decl>
-    <class-decl name='c_message_t' is-struct='yes' visibility='default' size-in-bits='128' filepath='include/cthreadcomm.h' line='71' column='1' hash='1fefac5f91d0661b' id='type-id-498'>
+    <class-decl name='cmessage_t' is-struct='yes' visibility='default' size-in-bits='128' filepath='include/cthreadcomm.h' line='71' column='1' hash='963b928bed8f9c5e' id='type-id-498'>
       <data-member access='public' layout-offset-in-bits='0'>
         <var-decl name='data' type-id='type-id-24' visibility='default' filepath='include/cthreadcomm.h' line='72' column='1'/>
       </data-member>
@@ -3773,7 +3773,7 @@
     <typedef-decl name='__u32' type-id='type-id-91' size-in-bits='32' filepath='/usr/include/asm-generic/int-ll64.h' line='27' column='1' hash='e66b43f97c38e87a' id='type-id-480'/>
     <typedef-decl name='__u64' type-id='type-id-241' size-in-bits='64' filepath='/usr/include/asm-generic/int-ll64.h' line='31' column='1' hash='ebdfc4685a1e82df' id='type-id-482'/>
     <typedef-decl name='__useconds_t' type-id='type-id-91' size-in-bits='32' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='161' column='1' hash='e66b43f97c38e87a' id='type-id-534'/>
-    <typedef-decl name='c_message_t' type-id='type-id-498' size-in-bits='128' filepath='include/cthreadcomm.h' line='74' column='1' id='type-id-535'/>
+    <typedef-decl name='cmessage_t' type-id='type-id-498' size-in-bits='128' filepath='include/cthreadcomm.h' line='74' column='1' id='type-id-535'/>
     <typedef-decl name='ccol_chmap_walk' type-id='type-id-499' size-in-bits='192' filepath='include/internal/chashinsert.h' line='185' column='1' id='type-id-536'/>
     <typedef-decl name='clog_format_t' type-id='type-id-488' size-in-bits='32' alignment-in-bits='32' filepath='include/clogger.h' line='641' column='1' hash='03e7e215d21f36b8' id='type-id-487'/>
     <typedef-decl name='clog_rotation_cfg_t' type-id='type-id-501' size-in-bits='320' filepath='include/clogger.h' line='248' column='1' id='type-id-537'/>
@@ -3840,7 +3840,7 @@
     <qualified-type-def type-id='type-id-51' restrict='yes' hash='6a2cf982d0fba87f' id='type-id-542'/>
     <pointer-type-def type-id='type-id-495' size-in-bits='64' hash='555fc4bca5fe84c7' id='type-id-543'/>
     <qualified-type-def type-id='type-id-543' restrict='yes' hash='44bc700b0795901e' id='type-id-544'/>
-    <pointer-type-def type-id='type-id-535' size-in-bits='64' hash='7874e0b0df3d73ed' id='type-id-545'/>
+    <pointer-type-def type-id='type-id-535' size-in-bits='64' hash='764f0678cbd9fe96' id='type-id-545'/>
     <pointer-type-def type-id='type-id-536' size-in-bits='64' hash='4a8656b8af5d189e' id='type-id-546'/>
     <qualified-type-def type-id='type-id-495' const='yes' hash='e7101e81b3a1c79a' id='type-id-547'/>
     <pointer-type-def type-id='type-id-547' size-in-bits='64' hash='cb258e8b0236a189' id='type-id-548'/>
@@ -3882,8 +3882,8 @@
     </function-decl>
     <class-decl name='__dirstream' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-587'/>
     <class-decl name='ccol_chmap_entry_ref' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-588'/>
-    <class-decl name='ccol_circular_queue' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-589'/>
-    <class-decl name='ccol_dynamic_queue' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-590'/>
+    <class-decl name='ccircq' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-589'/>
+    <class-decl name='cdynmq' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-590'/>
     <class-decl name='chashmap' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-591'/>
     <class-decl name='cvector' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-592'/>
     <qualified-type-def type-id='type-id-24' const='yes' id='type-id-573'/>
@@ -4162,8 +4162,8 @@
     </function-decl>
     <typedef-decl name='chashmap' type-id='type-id-591' filepath='include/chashmap.h' line='113' column='1' id='type-id-581'/>
     <typedef-decl name='chmap' type-id='type-id-582' size-in-bits='64' filepath='include/chashmap.h' line='116' column='1' id='type-id-595'/>
-    <typedef-decl name='ccol_circular_queue' type-id='type-id-589' filepath='include/cthreadcomm.h' line='56' column='1' id='type-id-577'/>
-    <typedef-decl name='ccol_dynamic_queue' type-id='type-id-590' filepath='include/cthreadcomm.h' line='59' column='1' id='type-id-579'/>
+    <typedef-decl name='ccircq' type-id='type-id-589' filepath='include/cthreadcomm.h' line='56' column='1' id='type-id-577'/>
+    <typedef-decl name='cdynmq' type-id='type-id-590' filepath='include/cthreadcomm.h' line='59' column='1' id='type-id-579'/>
     <typedef-decl name='cvector' type-id='type-id-592' filepath='include/cvector.h' line='58' column='1' id='type-id-585'/>
     <typedef-decl name='cvec' type-id='type-id-586' size-in-bits='64' filepath='include/cvector.h' line='61' column='1' id='type-id-596'/>
     <typedef-decl name='ccol_chmap_entry_ref' type-id='type-id-588' filepath='include/internal/chashinsert.h' line='144' column='1' id='type-id-583'/>
@@ -4267,10 +4267,10 @@
     </function-type>
   </abi-instr>
   <abi-instr address-size='64' path='src/clrucache.c' comp-dir-path='/home/danis/Workspace/c/ccollections' language='LANG_C11'>
-    <typedef-decl name='clru_cache' type-id='type-id-184' size-in-bits='64' filepath='include/clrucache.h' line='207' column='1' hash='8fdc5eea2983a729' id='type-id-597'/>
-    <typedef-decl name='clru_eviction_cb_t' type-id='type-id-598' size-in-bits='64' filepath='include/clrucache.h' line='181' column='1' hash='fd7a63c0c6c822c4' id='type-id-599'/>
-    <typedef-decl name='clru_remote_getter_t' type-id='type-id-600' size-in-bits='64' filepath='include/clrucache.h' line='146' column='1' hash='fd7a63c0c6c822c4' id='type-id-601'/>
-    <typedef-decl name='clru_remote_setter_t' type-id='type-id-602' size-in-bits='64' filepath='include/clrucache.h' line='164' column='1' hash='fd7a63c0c6c822c4' id='type-id-603'/>
+    <typedef-decl name='ccache' type-id='type-id-184' size-in-bits='64' filepath='include/clrucache.h' line='207' column='1' hash='8fdc5eea2983a729' id='type-id-597'/>
+    <typedef-decl name='ccache_eviction_fn_t' type-id='type-id-598' size-in-bits='64' filepath='include/clrucache.h' line='181' column='1' hash='fd7a63c0c6c822c4' id='type-id-599'/>
+    <typedef-decl name='ccache_remote_getter_fn_t' type-id='type-id-600' size-in-bits='64' filepath='include/clrucache.h' line='146' column='1' hash='fd7a63c0c6c822c4' id='type-id-601'/>
+    <typedef-decl name='ccache_remote_setter_fn_t' type-id='type-id-602' size-in-bits='64' filepath='include/clrucache.h' line='164' column='1' hash='fd7a63c0c6c822c4' id='type-id-603'/>
     <pointer-type-def type-id='type-id-604' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-600'/>
     <pointer-type-def type-id='type-id-605' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-602'/>
     <pointer-type-def type-id='type-id-606' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-598'/>
@@ -4341,25 +4341,25 @@
     </function-type>
   </abi-instr>
   <abi-instr address-size='64' path='src/cmempool.c' comp-dir-path='/home/danis/Workspace/c/ccollections' language='LANG_C11'>
-    <enum-decl name='ccol_r_memory_fallback_policy_t' size-in-bits='32' alignment-in-bits='32' filepath='include/cmempool.h' line='812' column='1' hash='23ee08b43980b76e' id='type-id-615'>
+    <enum-decl name='crmempool_fallback_policy_t' size-in-bits='32' alignment-in-bits='32' filepath='include/cmempool.h' line='812' column='1' hash='c9816fdfb4df0c6d' id='type-id-615'>
       <underlying-type type-id='type-id-9'/>
-      <enumerator name='ccol_fallback_disabled' value='0'/>
-      <enumerator name='ccol_fallback_at_first_exhaustion' value='1'/>
-      <enumerator name='ccol_fallback_at_last_exhaustion' value='2'/>
-      <enumerator name='_ccol_fallback_end_place_holder' value='3'/>
+      <enumerator name='crmempool_fallback_disabled' value='0'/>
+      <enumerator name='crmempool_fallback_at_first_exhaustion' value='1'/>
+      <enumerator name='crmempool_fallback_at_last_exhaustion' value='2'/>
+      <enumerator name='_crmempool_fallback_end_place_holder' value='3'/>
     </enum-decl>
-    <typedef-decl name='ccol_r_memory_fallback_policy_t' type-id='type-id-615' size-in-bits='32' alignment-in-bits='32' filepath='include/cmempool.h' line='818' column='1' hash='23ee08b43980b76e' id='type-id-616'/>
+    <typedef-decl name='crmempool_fallback_policy_t' type-id='type-id-615' size-in-bits='32' alignment-in-bits='32' filepath='include/cmempool.h' line='818' column='1' hash='c9816fdfb4df0c6d' id='type-id-616'/>
     <pointer-type-def type-id='type-id-617' size-in-bits='64' id='type-id-618'/>
     <pointer-type-def type-id='type-id-619' size-in-bits='64' id='type-id-620'/>
-    <typedef-decl name='ccol_mempool' type-id='type-id-621' filepath='include/cmempool.h' line='61' column='1' id='type-id-617'/>
-    <var-decl name='_ccol_mempool_built_with_fast_layout' type-id='type-id-58' visibility='default' filepath='include/cmempool.h' line='303' column='1'/>
-    <typedef-decl name='ccol_r_mempool' type-id='type-id-622' filepath='include/cmempool.h' line='804' column='1' id='type-id-619'/>
-    <class-decl name='ccol_mempool' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/cmempool.c' line='135' column='1' id='type-id-621'/>
-    <function-decl name='_ccol_mempool_destroy' mangled-name='_ccol_mempool_destroy' filepath='src/cmempool.c' line='1320' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_ccol_mempool_destroy' hash='7f32ffea222edbe7'>
+    <typedef-decl name='cmempool' type-id='type-id-621' filepath='include/cmempool.h' line='61' column='1' id='type-id-617'/>
+    <var-decl name='_cmempool_built_with_fast_layout' type-id='type-id-58' visibility='default' filepath='include/cmempool.h' line='303' column='1'/>
+    <typedef-decl name='crmempool' type-id='type-id-622' filepath='include/cmempool.h' line='804' column='1' id='type-id-619'/>
+    <class-decl name='cmempool' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/cmempool.c' line='135' column='1' id='type-id-621'/>
+    <function-decl name='_cmempool_destroy' mangled-name='_cmempool_destroy' filepath='src/cmempool.c' line='1320' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_cmempool_destroy' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-618' name='mp' filepath='src/cmempool.c' line='1320' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ccol_mempool_create' mangled-name='ccol_mempool_create' filepath='src/cmempool.c' line='1523' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_mempool_create' hash='ac9d481bfc41a861'>
+    <function-decl name='cmempool_create_mp' mangled-name='cmempool_create_mp' filepath='src/cmempool.c' line='1523' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cmempool_create_mp' hash='ac9d481bfc41a861'>
       <parameter type-id='type-id-36' name='elem_count' filepath='src/cmempool.c' line='1523' column='1'/>
       <parameter type-id='type-id-36' name='elem_size' filepath='src/cmempool.c' line='1523' column='1'/>
       <parameter type-id='type-id-1' name='fallback_to_dynamic_memory' filepath='src/cmempool.c' line='1524' column='1'/>
@@ -4368,7 +4368,7 @@
       <parameter type-id='type-id-53' name='err' filepath='src/cmempool.c' line='1527' column='1'/>
       <return type-id='type-id-618'/>
     </function-decl>
-    <function-decl name='ccol_mempool_create_from_preallocated_buffer' mangled-name='ccol_mempool_create_from_preallocated_buffer' filepath='src/cmempool.c' line='1684' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_mempool_create_from_preallocated_buffer' hash='ac9d481bfc41a861'>
+    <function-decl name='cmempool_create_from_preallocated_buffer_mp' mangled-name='cmempool_create_from_preallocated_buffer_mp' filepath='src/cmempool.c' line='1684' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cmempool_create_from_preallocated_buffer_mp' hash='ac9d481bfc41a861'>
       <parameter type-id='type-id-24' name='buffer' filepath='src/cmempool.c' line='1685' column='1'/>
       <parameter type-id='type-id-36' name='buf_size' filepath='src/cmempool.c' line='1685' column='1'/>
       <parameter type-id='type-id-36' name='elem_size' filepath='src/cmempool.c' line='1685' column='1'/>
@@ -4378,37 +4378,37 @@
       <parameter type-id='type-id-53' name='err' filepath='src/cmempool.c' line='1687' column='1'/>
       <return type-id='type-id-618'/>
     </function-decl>
-    <function-decl name='ccol_mempool_alloc_entry' mangled-name='ccol_mempool_alloc_entry' filepath='src/cmempool.c' line='1912' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_mempool_alloc_entry' hash='7f32ffea222edbe7'>
+    <function-decl name='cmempool_alloc_entry' mangled-name='cmempool_alloc_entry' filepath='src/cmempool.c' line='1912' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cmempool_alloc_entry' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-618' name='mp' filepath='src/cmempool.c' line='1933' column='1'/>
       <return type-id='type-id-24'/>
     </function-decl>
-    <function-decl name='ccol_mempool_calloc_entry' mangled-name='ccol_mempool_calloc_entry' filepath='src/cmempool.c' line='1933' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_mempool_calloc_entry' hash='7f32ffea222edbe7'>
+    <function-decl name='cmempool_calloc_entry' mangled-name='cmempool_calloc_entry' filepath='src/cmempool.c' line='1933' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cmempool_calloc_entry' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-618' name='mp' filepath='src/cmempool.c' line='1933' column='1'/>
       <return type-id='type-id-24'/>
     </function-decl>
-    <function-decl name='_ccol_mempool_free_entry' mangled-name='_ccol_mempool_free_entry' filepath='src/cmempool.c' line='2118' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_ccol_mempool_free_entry' hash='7f32ffea222edbe7'>
+    <function-decl name='_cmempool_free_entry' mangled-name='_cmempool_free_entry' filepath='src/cmempool.c' line='2118' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_cmempool_free_entry' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-618' name='mp' filepath='src/cmempool.c' line='2118' column='1'/>
       <parameter type-id='type-id-24' name='entry' filepath='src/cmempool.c' line='2119' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ccol_mempool_total_capacity' mangled-name='ccol_mempool_total_capacity' filepath='src/cmempool.c' line='2145' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_mempool_total_capacity' hash='e0055d99adb0e173'>
+    <function-decl name='cmempool_total_capacity' mangled-name='cmempool_total_capacity' filepath='src/cmempool.c' line='2145' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cmempool_total_capacity' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-618' name='mp' filepath='src/cmempool.c' line='2145' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='ccol_mempool_used_count' mangled-name='ccol_mempool_used_count' filepath='src/cmempool.c' line='2171' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_mempool_used_count' hash='e0055d99adb0e173'>
+    <function-decl name='cmempool_used_count' mangled-name='cmempool_used_count' filepath='src/cmempool.c' line='2171' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cmempool_used_count' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-618' name='mp' filepath='src/cmempool.c' line='2145' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='ccol_mempool_dynamic_allocs_count' mangled-name='ccol_mempool_dynamic_allocs_count' filepath='src/cmempool.c' line='2204' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_mempool_dynamic_allocs_count' hash='e0055d99adb0e173'>
+    <function-decl name='cmempool_dynamic_allocs_count' mangled-name='cmempool_dynamic_allocs_count' filepath='src/cmempool.c' line='2204' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cmempool_dynamic_allocs_count' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-618' name='mp' filepath='src/cmempool.c' line='2145' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <class-decl name='ccol_r_mempool' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/cmempool.c' line='2236' column='1' id='type-id-622'/>
-    <function-decl name='_ccol_r_mempool_destroy' mangled-name='_ccol_r_mempool_destroy' filepath='src/cmempool.c' line='2256' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_ccol_r_mempool_destroy' hash='7f32ffea222edbe7'>
+    <class-decl name='crmempool' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/cmempool.c' line='2236' column='1' id='type-id-622'/>
+    <function-decl name='_crmempool_destroy' mangled-name='_crmempool_destroy' filepath='src/cmempool.c' line='2256' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_crmempool_destroy' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-620' name='rmp' filepath='src/cmempool.c' line='2256' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ccol_r_mempool_create' mangled-name='ccol_r_mempool_create' filepath='src/cmempool.c' line='2452' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_r_mempool_create' hash='dd4d0d44852fe048'>
+    <function-decl name='crmempool_create_mp' mangled-name='crmempool_create_mp' filepath='src/cmempool.c' line='2452' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='crmempool_create_mp' hash='1df9a8e28203ca97'>
       <parameter type-id='type-id-182' name='smallest_size_power_of_two' filepath='src/cmempool.c' line='2452' column='1'/>
       <parameter type-id='type-id-182' name='largest_size_power_of_two' filepath='src/cmempool.c' line='2453' column='1'/>
       <parameter type-id='type-id-182' name='smallest_elem_count_power_of_two' filepath='src/cmempool.c' line='2454' column='1'/>
@@ -4418,7 +4418,7 @@
       <parameter type-id='type-id-53' name='err' filepath='src/cmempool.c' line='2458' column='1'/>
       <return type-id='type-id-620'/>
     </function-decl>
-    <function-decl name='ccol_r_mempool_create_from_preallocated_buffer' mangled-name='ccol_r_mempool_create_from_preallocated_buffer' filepath='src/cmempool.c' line='2612' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_r_mempool_create_from_preallocated_buffer' hash='034183f39203178a'>
+    <function-decl name='crmempool_create_from_preallocated_buffer_mp' mangled-name='crmempool_create_from_preallocated_buffer_mp' filepath='src/cmempool.c' line='2612' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='crmempool_create_from_preallocated_buffer_mp' hash='78dbd69d4e8ca01e'>
       <parameter type-id='type-id-24' name='buffer' filepath='src/cmempool.c' line='2613' column='1'/>
       <parameter type-id='type-id-36' name='buf_size' filepath='src/cmempool.c' line='2613' column='1'/>
       <parameter type-id='type-id-182' name='smallest_size_power_of_two' filepath='src/cmempool.c' line='2613' column='1'/>
@@ -4430,46 +4430,46 @@
       <parameter type-id='type-id-53' name='err' filepath='src/cmempool.c' line='2616' column='1'/>
       <return type-id='type-id-620'/>
     </function-decl>
-    <function-decl name='ccol_r_mempool_alloc_entry' mangled-name='ccol_r_mempool_alloc_entry' filepath='src/cmempool.c' line='2736' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_r_mempool_alloc_entry' hash='e0055d99adb0e173'>
+    <function-decl name='crmempool_alloc_entry' mangled-name='crmempool_alloc_entry' filepath='src/cmempool.c' line='2736' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='crmempool_alloc_entry' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-620' name='rmp' filepath='src/cmempool.c' line='2765' column='1'/>
       <parameter type-id='type-id-36' name='size' filepath='src/cmempool.c' line='2765' column='1'/>
       <return type-id='type-id-24'/>
     </function-decl>
-    <function-decl name='ccol_r_mempool_calloc_entry' mangled-name='ccol_r_mempool_calloc_entry' filepath='src/cmempool.c' line='2765' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_r_mempool_calloc_entry' hash='e0055d99adb0e173'>
+    <function-decl name='crmempool_calloc_entry' mangled-name='crmempool_calloc_entry' filepath='src/cmempool.c' line='2765' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='crmempool_calloc_entry' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-620' name='rmp' filepath='src/cmempool.c' line='2765' column='1'/>
       <parameter type-id='type-id-36' name='size' filepath='src/cmempool.c' line='2765' column='1'/>
       <return type-id='type-id-24'/>
     </function-decl>
-    <function-decl name='_ccol_r_mempool_free_entry' mangled-name='_ccol_r_mempool_free_entry' filepath='src/cmempool.c' line='2898' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_ccol_r_mempool_free_entry' hash='7f32ffea222edbe7'>
+    <function-decl name='_crmempool_free_entry' mangled-name='_crmempool_free_entry' filepath='src/cmempool.c' line='2898' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='_crmempool_free_entry' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-620' name='rmp' filepath='src/cmempool.c' line='2898' column='1'/>
       <parameter type-id='type-id-24' name='entry' filepath='src/cmempool.c' line='2898' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ccol_r_mempool_realloc_entry' mangled-name='ccol_r_mempool_realloc_entry' filepath='src/cmempool.c' line='2930' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_r_mempool_realloc_entry' hash='e0055d99adb0e173'>
+    <function-decl name='crmempool_realloc_entry' mangled-name='crmempool_realloc_entry' filepath='src/cmempool.c' line='2930' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='crmempool_realloc_entry' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-620' name='rmp' filepath='src/cmempool.c' line='2930' column='1'/>
       <parameter type-id='type-id-24' name='addr' filepath='src/cmempool.c' line='2930' column='1'/>
       <parameter type-id='type-id-36' name='size' filepath='src/cmempool.c' line='2931' column='1'/>
       <return type-id='type-id-24'/>
     </function-decl>
-    <function-decl name='ccol_r_mempool_used_count' mangled-name='ccol_r_mempool_used_count' filepath='src/cmempool.c' line='3030' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_r_mempool_used_count' hash='91495cdf6321a116'>
+    <function-decl name='crmempool_used_count' mangled-name='crmempool_used_count' filepath='src/cmempool.c' line='3030' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='crmempool_used_count' hash='91495cdf6321a116'>
       <parameter type-id='type-id-620' name='rmp' filepath='src/cmempool.c' line='3105' column='1'/>
       <parameter type-id='type-id-36' name='size' filepath='src/cmempool.c' line='3105' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='ccol_mempool_allocated_bytes' mangled-name='ccol_mempool_allocated_bytes' filepath='src/cmempool.c' line='3051' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_mempool_allocated_bytes' hash='e0055d99adb0e173'>
+    <function-decl name='cmempool_allocated_bytes' mangled-name='cmempool_allocated_bytes' filepath='src/cmempool.c' line='3051' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cmempool_allocated_bytes' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-618' name='mp' filepath='src/cmempool.c' line='2145' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='ccol_r_mempool_allocated_bytes' mangled-name='ccol_r_mempool_allocated_bytes' filepath='src/cmempool.c' line='3073' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_r_mempool_allocated_bytes' hash='e0055d99adb0e173'>
+    <function-decl name='crmempool_allocated_bytes' mangled-name='crmempool_allocated_bytes' filepath='src/cmempool.c' line='3073' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='crmempool_allocated_bytes' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-620' name='rmp' filepath='src/cmempool.c' line='3073' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='ccol_r_mempool_total_capacity' mangled-name='ccol_r_mempool_total_capacity' filepath='src/cmempool.c' line='3087' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_r_mempool_total_capacity' hash='91495cdf6321a116'>
+    <function-decl name='crmempool_total_capacity' mangled-name='crmempool_total_capacity' filepath='src/cmempool.c' line='3087' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='crmempool_total_capacity' hash='91495cdf6321a116'>
       <parameter type-id='type-id-620' name='rmp' filepath='src/cmempool.c' line='3105' column='1'/>
       <parameter type-id='type-id-36' name='size' filepath='src/cmempool.c' line='3105' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='ccol_r_mempool_dynamic_allocs_count' mangled-name='ccol_r_mempool_dynamic_allocs_count' filepath='src/cmempool.c' line='3105' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_r_mempool_dynamic_allocs_count' hash='91495cdf6321a116'>
+    <function-decl name='crmempool_dynamic_allocs_count' mangled-name='crmempool_dynamic_allocs_count' filepath='src/cmempool.c' line='3105' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='crmempool_dynamic_allocs_count' hash='91495cdf6321a116'>
       <parameter type-id='type-id-620' name='rmp' filepath='src/cmempool.c' line='3105' column='1'/>
       <parameter type-id='type-id-36' name='size' filepath='src/cmempool.c' line='3105' column='1'/>
       <return type-id='type-id-36'/>
@@ -4700,10 +4700,10 @@
     </function-decl>
   </abi-instr>
   <abi-instr address-size='64' path='src/cthreadcomm.c' comp-dir-path='/home/danis/Workspace/c/ccollections' language='LANG_C11'>
-    <enum-decl name='ccol_channel_direction' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1014' column='1' hash='58487c3e6d4f3bb4' id='type-id-632'>
+    <enum-decl name='cchan_direction_t' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1014' column='1' hash='71268078f37b99d4' id='type-id-632'>
       <underlying-type type-id='type-id-9'/>
-      <enumerator name='ccol_owner_to_workers' value='0'/>
-      <enumerator name='ccol_workers_to_owner' value='1'/>
+      <enumerator name='cchan_owner_to_workers' value='0'/>
+      <enumerator name='cchan_workers_to_owner' value='1'/>
     </enum-decl>
     <class-decl name='epoll_event' is-struct='yes' visibility='default' size-in-bits='96' filepath='/usr/include/x86_64-linux-gnu/sys/epoll.h' line='85' column='1' hash='ff86c5f5aa86b0c8' id='type-id-633'>
       <data-member access='public' layout-offset-in-bits='0'>
@@ -4713,7 +4713,7 @@
         <var-decl name='data' type-id='type-id-634' visibility='default' filepath='/usr/include/x86_64-linux-gnu/sys/epoll.h' line='88' column='1'/>
       </data-member>
     </class-decl>
-    <typedef-decl name='ccol_channel_direction' type-id='type-id-632' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1017' column='1' hash='58487c3e6d4f3bb4' id='type-id-635'/>
+    <typedef-decl name='cchan_direction_t' type-id='type-id-632' size-in-bits='32' alignment-in-bits='32' filepath='include/cthreadcomm.h' line='1017' column='1' hash='71268078f37b99d4' id='type-id-635'/>
     <typedef-decl name='epoll_data_t' type-id='type-id-636' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/sys/epoll.h' line='83' column='1' id='type-id-634'/>
     <union-decl name='epoll_data' visibility='default' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/sys/epoll.h' line='77' column='1' hash='b7b019b718d186c4' id='type-id-636'>
       <data-member access='public'>
@@ -4766,184 +4766,184 @@
     </function-decl>
     <typedef-decl name='chashmap' type-id='type-id-648' filepath='include/chashmap.h' line='113' column='1' id='type-id-644'/>
     <typedef-decl name='chmap' type-id='type-id-645' size-in-bits='64' filepath='include/chashmap.h' line='116' column='1' id='type-id-651'/>
-    <typedef-decl name='ccol_circular_queue' type-id='type-id-589' filepath='include/cthreadcomm.h' line='56' column='1' id='type-id-640'/>
-    <typedef-decl name='ccol_dynamic_queue' type-id='type-id-590' filepath='include/cthreadcomm.h' line='59' column='1' id='type-id-642'/>
-    <typedef-decl name='ccol_channel' type-id='type-id-652' filepath='include/cthreadcomm.h' line='62' column='1' id='type-id-638'/>
+    <typedef-decl name='ccircq' type-id='type-id-589' filepath='include/cthreadcomm.h' line='56' column='1' id='type-id-640'/>
+    <typedef-decl name='cdynmq' type-id='type-id-590' filepath='include/cthreadcomm.h' line='59' column='1' id='type-id-642'/>
+    <typedef-decl name='cchan' type-id='type-id-652' filepath='include/cthreadcomm.h' line='62' column='1' id='type-id-638'/>
     <typedef-decl name='cvector' type-id='type-id-649' filepath='include/cvector.h' line='58' column='1' id='type-id-646'/>
     <typedef-decl name='cvec' type-id='type-id-647' size-in-bits='64' filepath='include/cvector.h' line='61' column='1' id='type-id-653'/>
-    <function-decl name='ccol_circular_queue_create_mp' mangled-name='ccol_circular_queue_create_mp' filepath='src/cthreadcomm.c' line='833' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_circular_queue_create_mp' hash='cd51762c0def1ded'>
+    <function-decl name='ccircq_create_mp' mangled-name='ccircq_create_mp' filepath='src/cthreadcomm.c' line='833' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccircq_create_mp' hash='cd51762c0def1ded'>
       <parameter type-id='type-id-36'/>
       <parameter type-id='type-id-52'/>
       <parameter type-id='type-id-53'/>
       <return type-id='type-id-578'/>
     </function-decl>
-    <function-decl name='__ccol_circular_queue_destroy' mangled-name='__ccol_circular_queue_destroy' filepath='src/cthreadcomm.c' line='948' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__ccol_circular_queue_destroy' hash='7f32ffea222edbe7'>
+    <function-decl name='__ccircq_destroy' mangled-name='__ccircq_destroy' filepath='src/cthreadcomm.c' line='948' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__ccircq_destroy' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-578'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ccol_circq_send_zc' mangled-name='ccol_circq_send_zc' filepath='src/cthreadcomm.c' line='1110' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_circq_send_zc' hash='2503f7bcb1c170d8'>
+    <function-decl name='ccircq_send' mangled-name='ccircq_send' filepath='src/cthreadcomm.c' line='1110' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccircq_send' hash='bb49362c8a9c6d40'>
       <parameter type-id='type-id-578'/>
       <parameter type-id='type-id-545'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_circq_try_send_zc' mangled-name='ccol_circq_try_send_zc' filepath='src/cthreadcomm.c' line='1143' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_circq_try_send_zc' hash='2503f7bcb1c170d8'>
+    <function-decl name='ccircq_try_send' mangled-name='ccircq_try_send' filepath='src/cthreadcomm.c' line='1143' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccircq_try_send' hash='bb49362c8a9c6d40'>
       <parameter type-id='type-id-578'/>
       <parameter type-id='type-id-545'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_circq_timed_send_zc' mangled-name='ccol_circq_timed_send_zc' filepath='src/cthreadcomm.c' line='1213' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_circq_timed_send_zc' hash='455b2e5a29356e31'>
-      <parameter type-id='type-id-578'/>
-      <parameter type-id='type-id-545'/>
-      <parameter type-id='type-id-184'/>
-      <return type-id='type-id-48'/>
-    </function-decl>
-    <function-decl name='ccol_circq_recv_zc' mangled-name='ccol_circq_recv_zc' filepath='src/cthreadcomm.c' line='1352' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_circq_recv_zc' hash='2503f7bcb1c170d8'>
-      <parameter type-id='type-id-578'/>
-      <parameter type-id='type-id-545'/>
-      <return type-id='type-id-48'/>
-    </function-decl>
-    <function-decl name='ccol_circq_try_recv_zc' mangled-name='ccol_circq_try_recv_zc' filepath='src/cthreadcomm.c' line='1375' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_circq_try_recv_zc' hash='2503f7bcb1c170d8'>
-      <parameter type-id='type-id-578'/>
-      <parameter type-id='type-id-545'/>
-      <return type-id='type-id-48'/>
-    </function-decl>
-    <function-decl name='ccol_circq_timed_recv_zc' mangled-name='ccol_circq_timed_recv_zc' filepath='src/cthreadcomm.c' line='1425' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_circq_timed_recv_zc' hash='455b2e5a29356e31'>
+    <function-decl name='ccircq_timed_send' mangled-name='ccircq_timed_send' filepath='src/cthreadcomm.c' line='1213' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccircq_timed_send' hash='893be1dd94d5d370'>
       <parameter type-id='type-id-578'/>
       <parameter type-id='type-id-545'/>
       <parameter type-id='type-id-184'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_circq_disable_sending' mangled-name='ccol_circq_disable_sending' filepath='src/cthreadcomm.c' line='1498' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_circq_disable_sending' hash='a6972fae2815a2df'>
+    <function-decl name='ccircq_recv' mangled-name='ccircq_recv' filepath='src/cthreadcomm.c' line='1352' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccircq_recv' hash='bb49362c8a9c6d40'>
+      <parameter type-id='type-id-578'/>
+      <parameter type-id='type-id-545'/>
+      <return type-id='type-id-48'/>
+    </function-decl>
+    <function-decl name='ccircq_try_recv' mangled-name='ccircq_try_recv' filepath='src/cthreadcomm.c' line='1375' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccircq_try_recv' hash='bb49362c8a9c6d40'>
+      <parameter type-id='type-id-578'/>
+      <parameter type-id='type-id-545'/>
+      <return type-id='type-id-48'/>
+    </function-decl>
+    <function-decl name='ccircq_timed_recv' mangled-name='ccircq_timed_recv' filepath='src/cthreadcomm.c' line='1425' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccircq_timed_recv' hash='893be1dd94d5d370'>
+      <parameter type-id='type-id-578'/>
+      <parameter type-id='type-id-545'/>
+      <parameter type-id='type-id-184'/>
+      <return type-id='type-id-48'/>
+    </function-decl>
+    <function-decl name='ccircq_disable_sending' mangled-name='ccircq_disable_sending' filepath='src/cthreadcomm.c' line='1498' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccircq_disable_sending' hash='a6972fae2815a2df'>
       <parameter type-id='type-id-578'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_circq_enable_sending' mangled-name='ccol_circq_enable_sending' filepath='src/cthreadcomm.c' line='1512' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_circq_enable_sending' hash='a6972fae2815a2df'>
+    <function-decl name='ccircq_enable_sending' mangled-name='ccircq_enable_sending' filepath='src/cthreadcomm.c' line='1512' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccircq_enable_sending' hash='a6972fae2815a2df'>
       <parameter type-id='type-id-578'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_circq_msg_count' mangled-name='ccol_circq_msg_count' filepath='src/cthreadcomm.c' line='1526' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_circq_msg_count' hash='e0055d99adb0e173'>
+    <function-decl name='ccircq_msg_count' mangled-name='ccircq_msg_count' filepath='src/cthreadcomm.c' line='1526' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccircq_msg_count' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-641' name='cq' filepath='src/cthreadcomm.c' line='1526' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='ccol_dynamic_queue_create_mp' mangled-name='ccol_dynamic_queue_create_mp' filepath='src/cthreadcomm.c' line='1671' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_dynamic_queue_create_mp' hash='40960830721b2bfa'>
+    <function-decl name='cdynmq_create_mp' mangled-name='cdynmq_create_mp' filepath='src/cthreadcomm.c' line='1671' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cdynmq_create_mp' hash='40960830721b2bfa'>
       <parameter type-id='type-id-52'/>
       <parameter type-id='type-id-53'/>
       <return type-id='type-id-580'/>
     </function-decl>
-    <function-decl name='__ccol_dynamic_queue_destroy' mangled-name='__ccol_dynamic_queue_destroy' filepath='src/cthreadcomm.c' line='1750' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__ccol_dynamic_queue_destroy' hash='7f32ffea222edbe7'>
+    <function-decl name='__cdynmq_destroy' mangled-name='__cdynmq_destroy' filepath='src/cthreadcomm.c' line='1750' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__cdynmq_destroy' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-580'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ccol_dynmq_send_zc' mangled-name='ccol_dynmq_send_zc' filepath='src/cthreadcomm.c' line='1833' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_dynmq_send_zc' hash='2503f7bcb1c170d8'>
+    <function-decl name='cdynmq_send' mangled-name='cdynmq_send' filepath='src/cthreadcomm.c' line='1833' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cdynmq_send' hash='bb49362c8a9c6d40'>
       <parameter type-id='type-id-580'/>
       <parameter type-id='type-id-545'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_dynmq_recv_zc' mangled-name='ccol_dynmq_recv_zc' filepath='src/cthreadcomm.c' line='1896' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_dynmq_recv_zc' hash='2503f7bcb1c170d8'>
+    <function-decl name='cdynmq_recv' mangled-name='cdynmq_recv' filepath='src/cthreadcomm.c' line='1896' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cdynmq_recv' hash='bb49362c8a9c6d40'>
       <parameter type-id='type-id-580'/>
       <parameter type-id='type-id-545'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_dynmq_try_recv_zc' mangled-name='ccol_dynmq_try_recv_zc' filepath='src/cthreadcomm.c' line='1919' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_dynmq_try_recv_zc' hash='2503f7bcb1c170d8'>
+    <function-decl name='cdynmq_try_recv' mangled-name='cdynmq_try_recv' filepath='src/cthreadcomm.c' line='1919' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cdynmq_try_recv' hash='bb49362c8a9c6d40'>
       <parameter type-id='type-id-580'/>
       <parameter type-id='type-id-545'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_dynmq_timed_recv_zc' mangled-name='ccol_dynmq_timed_recv_zc' filepath='src/cthreadcomm.c' line='1966' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_dynmq_timed_recv_zc' hash='455b2e5a29356e31'>
+    <function-decl name='cdynmq_timed_recv' mangled-name='cdynmq_timed_recv' filepath='src/cthreadcomm.c' line='1966' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cdynmq_timed_recv' hash='893be1dd94d5d370'>
       <parameter type-id='type-id-580'/>
       <parameter type-id='type-id-545'/>
       <parameter type-id='type-id-184'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_dynmq_disable_sending' mangled-name='ccol_dynmq_disable_sending' filepath='src/cthreadcomm.c' line='2037' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_dynmq_disable_sending' hash='a6972fae2815a2df'>
+    <function-decl name='cdynmq_disable_sending' mangled-name='cdynmq_disable_sending' filepath='src/cthreadcomm.c' line='2037' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cdynmq_disable_sending' hash='a6972fae2815a2df'>
       <parameter type-id='type-id-580'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_dynmq_enable_sending' mangled-name='ccol_dynmq_enable_sending' filepath='src/cthreadcomm.c' line='2050' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_dynmq_enable_sending' hash='a6972fae2815a2df'>
+    <function-decl name='cdynmq_enable_sending' mangled-name='cdynmq_enable_sending' filepath='src/cthreadcomm.c' line='2050' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cdynmq_enable_sending' hash='a6972fae2815a2df'>
       <parameter type-id='type-id-580'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_dynmq_msg_count' mangled-name='ccol_dynmq_msg_count' filepath='src/cthreadcomm.c' line='2064' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_dynmq_msg_count' hash='e0055d99adb0e173'>
+    <function-decl name='cdynmq_msg_count' mangled-name='cdynmq_msg_count' filepath='src/cthreadcomm.c' line='2064' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cdynmq_msg_count' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-643' name='dq' filepath='src/cthreadcomm.c' line='2064' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <class-decl name='ccol_channel' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/cthreadcomm.c' line='2077' column='1' id='type-id-652'/>
-    <function-decl name='ccol_channel_create_mp' mangled-name='ccol_channel_create_mp' filepath='src/cthreadcomm.c' line='2089' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_channel_create_mp' hash='cd51762c0def1ded'>
+    <class-decl name='cchan' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='src/cthreadcomm.c' line='2077' column='1' id='type-id-652'/>
+    <function-decl name='cchan_create_mp' mangled-name='cchan_create_mp' filepath='src/cthreadcomm.c' line='2089' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_create_mp' hash='cd51762c0def1ded'>
       <parameter type-id='type-id-36' name='max_size' filepath='src/cthreadcomm.c' line='2089' column='1'/>
       <parameter type-id='type-id-52' name='mmgmt_procs' filepath='src/cthreadcomm.c' line='2090' column='1'/>
       <parameter type-id='type-id-53' name='err_str' filepath='src/cthreadcomm.c' line='2091' column='1'/>
       <return type-id='type-id-639'/>
     </function-decl>
-    <function-decl name='__ccol_channel_destroy' mangled-name='__ccol_channel_destroy' filepath='src/cthreadcomm.c' line='2139' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__ccol_channel_destroy' hash='7f32ffea222edbe7'>
+    <function-decl name='__cchan_destroy' mangled-name='__cchan_destroy' filepath='src/cthreadcomm.c' line='2139' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__cchan_destroy' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2139' column='1'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ccol_chan_send_zc' mangled-name='ccol_chan_send_zc' filepath='src/cthreadcomm.c' line='2158' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_chan_send_zc' hash='2503f7bcb1c170d8'>
+    <function-decl name='cchan_send' mangled-name='cchan_send' filepath='src/cthreadcomm.c' line='2158' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_send' hash='bb49362c8a9c6d40'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2215' column='1'/>
       <parameter type-id='type-id-545' name='target_buf' filepath='src/cthreadcomm.c' line='2215' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_chan_try_send_zc' mangled-name='ccol_chan_try_send_zc' filepath='src/cthreadcomm.c' line='2171' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_chan_try_send_zc' hash='2503f7bcb1c170d8'>
+    <function-decl name='cchan_try_send' mangled-name='cchan_try_send' filepath='src/cthreadcomm.c' line='2171' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_try_send' hash='bb49362c8a9c6d40'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2215' column='1'/>
       <parameter type-id='type-id-545' name='target_buf' filepath='src/cthreadcomm.c' line='2215' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_chan_timed_send_zc' mangled-name='ccol_chan_timed_send_zc' filepath='src/cthreadcomm.c' line='2185' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_chan_timed_send_zc' hash='455b2e5a29356e31'>
+    <function-decl name='cchan_timed_send' mangled-name='cchan_timed_send' filepath='src/cthreadcomm.c' line='2185' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_timed_send' hash='893be1dd94d5d370'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2229' column='1'/>
       <parameter type-id='type-id-545' name='target_buf' filepath='src/cthreadcomm.c' line='2229' column='1'/>
       <parameter type-id='type-id-184' name='timeout_us' filepath='src/cthreadcomm.c' line='2230' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_chan_recv_zc' mangled-name='ccol_chan_recv_zc' filepath='src/cthreadcomm.c' line='2201' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_chan_recv_zc' hash='2503f7bcb1c170d8'>
+    <function-decl name='cchan_recv' mangled-name='cchan_recv' filepath='src/cthreadcomm.c' line='2201' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_recv' hash='bb49362c8a9c6d40'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2215' column='1'/>
       <parameter type-id='type-id-545' name='target_buf' filepath='src/cthreadcomm.c' line='2215' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_chan_try_recv_zc' mangled-name='ccol_chan_try_recv_zc' filepath='src/cthreadcomm.c' line='2215' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_chan_try_recv_zc' hash='2503f7bcb1c170d8'>
+    <function-decl name='cchan_try_recv' mangled-name='cchan_try_recv' filepath='src/cthreadcomm.c' line='2215' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_try_recv' hash='bb49362c8a9c6d40'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2215' column='1'/>
       <parameter type-id='type-id-545' name='target_buf' filepath='src/cthreadcomm.c' line='2215' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_chan_timed_recv_zc' mangled-name='ccol_chan_timed_recv_zc' filepath='src/cthreadcomm.c' line='2229' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_chan_timed_recv_zc' hash='455b2e5a29356e31'>
+    <function-decl name='cchan_timed_recv' mangled-name='cchan_timed_recv' filepath='src/cthreadcomm.c' line='2229' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_timed_recv' hash='893be1dd94d5d370'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2229' column='1'/>
       <parameter type-id='type-id-545' name='target_buf' filepath='src/cthreadcomm.c' line='2229' column='1'/>
       <parameter type-id='type-id-184' name='timeout_us' filepath='src/cthreadcomm.c' line='2230' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_chan_disable_sending' mangled-name='ccol_chan_disable_sending' filepath='src/cthreadcomm.c' line='2248' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_chan_disable_sending' hash='5e85c515f0f895fc'>
+    <function-decl name='cchan_disable_sending' mangled-name='cchan_disable_sending' filepath='src/cthreadcomm.c' line='2248' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_disable_sending' hash='4640d8ebcb70c16a'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2264' column='1'/>
       <parameter type-id='type-id-635' name='d' filepath='src/cthreadcomm.c' line='2265' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_chan_enable_sending' mangled-name='ccol_chan_enable_sending' filepath='src/cthreadcomm.c' line='2264' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_chan_enable_sending' hash='5e85c515f0f895fc'>
+    <function-decl name='cchan_enable_sending' mangled-name='cchan_enable_sending' filepath='src/cthreadcomm.c' line='2264' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_enable_sending' hash='4640d8ebcb70c16a'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2264' column='1'/>
       <parameter type-id='type-id-635' name='d' filepath='src/cthreadcomm.c' line='2265' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_chan_msg_count' mangled-name='ccol_chan_msg_count' filepath='src/cthreadcomm.c' line='2281' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_chan_msg_count' hash='2bd6fd8a5ceb8126'>
+    <function-decl name='cchan_msg_count' mangled-name='cchan_msg_count' filepath='src/cthreadcomm.c' line='2281' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_msg_count' hash='ef16077acac585f4'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2281' column='1'/>
       <parameter type-id='type-id-635' name='d' filepath='src/cthreadcomm.c' line='2281' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='ccol_selectable_from_chan' mangled-name='ccol_selectable_from_chan' filepath='src/cthreadcomm.c' line='2406' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_selectable_from_chan' hash='e67e9309164b67a3'>
+    <function-decl name='cchan_selectable' mangled-name='cchan_selectable' filepath='src/cthreadcomm.c' line='2406' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cchan_selectable' hash='577b63924bf0c766'>
       <parameter type-id='type-id-639' name='ch' filepath='src/cthreadcomm.c' line='2406' column='1'/>
       <parameter type-id='type-id-142' name='dir' filepath='src/cthreadcomm.c' line='2407' column='1'/>
       <return type-id='type-id-178'/>
     </function-decl>
-    <function-decl name='ccol_select_timed' mangled-name='ccol_select_timed' filepath='src/cthreadcomm.c' line='3269' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_select_timed' hash='5ddce920bc3bdaa7'>
+    <function-decl name='cselect_timed' mangled-name='cselect_timed' filepath='src/cthreadcomm.c' line='3269' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cselect_timed' hash='6412c55081775922'>
       <parameter type-id='type-id-110' name='ready_index' filepath='src/cthreadcomm.c' line='3269' column='1'/>
       <parameter type-id='type-id-36' name='n' filepath='src/cthreadcomm.c' line='3269' column='1'/>
       <parameter type-id='type-id-250' name='selectables' filepath='src/cthreadcomm.c' line='3270' column='1'/>
       <parameter type-id='type-id-184' name='timeout_us' filepath='src/cthreadcomm.c' line='3271' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_select' mangled-name='ccol_select' filepath='src/cthreadcomm.c' line='3434' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_select' hash='6b3223e46283a955'>
+    <function-decl name='cselect' mangled-name='cselect' filepath='src/cthreadcomm.c' line='3434' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cselect' hash='994630419aa88cc3'>
       <parameter type-id='type-id-110' name='ready_index' filepath='src/cthreadcomm.c' line='3434' column='1'/>
       <parameter type-id='type-id-36' name='n' filepath='src/cthreadcomm.c' line='3434' column='1'/>
       <parameter type-id='type-id-250' name='selectables' filepath='src/cthreadcomm.c' line='3435' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_event_loop_add' mangled-name='ccol_event_loop_add' filepath='src/cthreadcomm.c' line='5942' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_event_loop_add' hash='93bcda57ba01485b'>
+    <function-decl name='ceventloop_add' mangled-name='ceventloop_add' filepath='src/cthreadcomm.c' line='5942' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ceventloop_add' hash='93bcda57ba01485b'>
       <parameter type-id='type-id-211'/>
       <parameter type-id='type-id-178'/>
       <parameter type-id='type-id-210'/>
@@ -4951,37 +4951,37 @@
       <parameter type-id='type-id-53'/>
       <return type-id='type-id-212'/>
     </function-decl>
-    <function-decl name='ccol_event_loop_reg_generation' mangled-name='ccol_event_loop_reg_generation' filepath='src/cthreadcomm.c' line='6135' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_event_loop_reg_generation' hash='a46227d8770aeeb5'>
+    <function-decl name='ceventloop_reg_generation' mangled-name='ceventloop_reg_generation' filepath='src/cthreadcomm.c' line='6135' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ceventloop_reg_generation' hash='a46227d8770aeeb5'>
       <parameter type-id='type-id-211' name='loop' filepath='src/cthreadcomm.c' line='6135' column='1'/>
       <parameter type-id='type-id-212' name='reg' filepath='src/cthreadcomm.c' line='6136' column='1'/>
       <return type-id='type-id-184'/>
     </function-decl>
-    <function-decl name='ccol_event_loop_modify' mangled-name='ccol_event_loop_modify' filepath='src/cthreadcomm.c' line='6259' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_event_loop_modify' hash='81a6f2a619fc3acb'>
+    <function-decl name='ceventloop_modify' mangled-name='ceventloop_modify' filepath='src/cthreadcomm.c' line='6259' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ceventloop_modify' hash='33f7b5d7d2f89d2e'>
       <parameter type-id='type-id-211'/>
       <parameter type-id='type-id-212'/>
       <parameter type-id='type-id-142'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_event_loop_pause' mangled-name='ccol_event_loop_pause' filepath='src/cthreadcomm.c' line='6398' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_event_loop_pause' hash='0a5d6bd7462f741c'>
+    <function-decl name='ceventloop_pause' mangled-name='ceventloop_pause' filepath='src/cthreadcomm.c' line='6398' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ceventloop_pause' hash='0a5d6bd7462f741c'>
       <parameter type-id='type-id-211'/>
       <parameter type-id='type-id-212'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_event_loop_resume' mangled-name='ccol_event_loop_resume' filepath='src/cthreadcomm.c' line='6458' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_event_loop_resume' hash='0a5d6bd7462f741c'>
+    <function-decl name='ceventloop_resume' mangled-name='ceventloop_resume' filepath='src/cthreadcomm.c' line='6458' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ceventloop_resume' hash='0a5d6bd7462f741c'>
       <parameter type-id='type-id-211'/>
       <parameter type-id='type-id-212'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_event_loop_remove' mangled-name='ccol_event_loop_remove' filepath='src/cthreadcomm.c' line='6892' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_event_loop_remove' hash='0a5d6bd7462f741c'>
+    <function-decl name='ceventloop_remove' mangled-name='ceventloop_remove' filepath='src/cthreadcomm.c' line='6892' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ceventloop_remove' hash='0a5d6bd7462f741c'>
       <parameter type-id='type-id-211'/>
       <parameter type-id='type-id-212'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ccol_event_loop_reg_count' mangled-name='ccol_event_loop_reg_count' filepath='src/cthreadcomm.c' line='6922' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_event_loop_reg_count' hash='91495cdf6321a116'>
+    <function-decl name='ceventloop_reg_count' mangled-name='ceventloop_reg_count' filepath='src/cthreadcomm.c' line='6922' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ceventloop_reg_count' hash='91495cdf6321a116'>
       <parameter type-id='type-id-211' name='loop' filepath='src/cthreadcomm.c' line='6922' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='ccol_event_loop_create_mp' mangled-name='ccol_event_loop_create_mp' filepath='src/cthreadcomm.c' line='7937' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_event_loop_create_mp' hash='154f04cbd449ee14'>
+    <function-decl name='ceventloop_create_mp' mangled-name='ceventloop_create_mp' filepath='src/cthreadcomm.c' line='7937' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ceventloop_create_mp' hash='154f04cbd449ee14'>
       <parameter type-id='type-id-36'/>
       <parameter type-id='type-id-36'/>
       <parameter type-id='type-id-36'/>
@@ -4989,11 +4989,11 @@
       <parameter type-id='type-id-53'/>
       <return type-id='type-id-211'/>
     </function-decl>
-    <function-decl name='ccol_event_loop_shutdown' mangled-name='ccol_event_loop_shutdown' filepath='src/cthreadcomm.c' line='8498' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_event_loop_shutdown' hash='7e31633b6fb17772'>
+    <function-decl name='ceventloop_shutdown' mangled-name='ceventloop_shutdown' filepath='src/cthreadcomm.c' line='8498' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ceventloop_shutdown' hash='7e31633b6fb17772'>
       <parameter type-id='type-id-211' name='loop' filepath='src/cthreadcomm.c' line='8498' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='__ccol_event_loop_destroy' mangled-name='__ccol_event_loop_destroy' filepath='src/cthreadcomm.c' line='8624' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__ccol_event_loop_destroy' hash='e0055d99adb0e173'>
+    <function-decl name='__ceventloop_destroy' mangled-name='__ceventloop_destroy' filepath='src/cthreadcomm.c' line='8624' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__ceventloop_destroy' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-211'/>
       <return type-id='type-id-38'/>
     </function-decl>
@@ -5004,31 +5004,31 @@
     <pointer-type-def type-id='type-id-657' size-in-bits='64' id='type-id-658'/>
     <class-decl name='cvector' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-659'/>
     <qualified-type-def type-id='type-id-24' restrict='yes' id='type-id-660'/>
-    <typedef-decl name='ctpool_future' type-id='type-id-341' filepath='include/cthreadpool.h' line='120' column='1' id='type-id-654'/>
+    <typedef-decl name='cthrpool_future_t' type-id='type-id-341' filepath='include/cthreadpool.h' line='120' column='1' id='type-id-654'/>
     <typedef-decl name='cvector' type-id='type-id-659' filepath='include/cvector.h' line='58' column='1' id='type-id-657'/>
     <typedef-decl name='cvec' type-id='type-id-658' size-in-bits='64' filepath='include/cvector.h' line='61' column='1' id='type-id-661'/>
-    <function-decl name='ctpool_create_mp' mangled-name='ctpool_create_mp' filepath='src/cthreadpool.c' line='1408' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_create_mp' hash='579213b82fa6df9f'>
+    <function-decl name='cthrpool_create_mp' mangled-name='cthrpool_create_mp' filepath='src/cthreadpool.c' line='1408' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_create_mp' hash='579213b82fa6df9f'>
       <parameter type-id='type-id-36'/>
       <parameter type-id='type-id-36'/>
       <parameter type-id='type-id-52'/>
       <parameter type-id='type-id-53'/>
       <return type-id='type-id-224'/>
     </function-decl>
-    <function-decl name='ctpool_submit' mangled-name='ctpool_submit' filepath='src/cthreadpool.c' line='1807' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_submit' hash='f97a1377d96f5855'>
+    <function-decl name='cthrpool_submit' mangled-name='cthrpool_submit' filepath='src/cthreadpool.c' line='1807' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_submit' hash='f97a1377d96f5855'>
       <parameter type-id='type-id-224'/>
       <parameter type-id='type-id-44'/>
       <parameter type-id='type-id-24'/>
       <parameter type-id='type-id-310'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ctpool_try_submit' mangled-name='ctpool_try_submit' filepath='src/cthreadpool.c' line='1812' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_try_submit' hash='f97a1377d96f5855'>
+    <function-decl name='cthrpool_try_submit' mangled-name='cthrpool_try_submit' filepath='src/cthreadpool.c' line='1812' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_try_submit' hash='f97a1377d96f5855'>
       <parameter type-id='type-id-224'/>
       <parameter type-id='type-id-44'/>
       <parameter type-id='type-id-24'/>
       <parameter type-id='type-id-310'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ctpool_timed_submit' mangled-name='ctpool_timed_submit' filepath='src/cthreadpool.c' line='1817' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_timed_submit' hash='4a6fa20f9e312d7f'>
+    <function-decl name='cthrpool_timed_submit' mangled-name='cthrpool_timed_submit' filepath='src/cthreadpool.c' line='1817' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_timed_submit' hash='4a6fa20f9e312d7f'>
       <parameter type-id='type-id-224' name='pool' filepath='src/cthreadpool.c' line='1817' column='1'/>
       <parameter type-id='type-id-44' name='fn' filepath='src/cthreadpool.c' line='1817' column='1'/>
       <parameter type-id='type-id-24' name='arg' filepath='src/cthreadpool.c' line='1817' column='1'/>
@@ -5036,21 +5036,21 @@
       <parameter type-id='type-id-184' name='timeout_us' filepath='src/cthreadpool.c' line='1819' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ctpool_submit_future' mangled-name='ctpool_submit_future' filepath='src/cthreadpool.c' line='1958' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_submit_future' hash='a3c482a88390cdcd'>
+    <function-decl name='cthrpool_submit_future' mangled-name='cthrpool_submit_future' filepath='src/cthreadpool.c' line='1958' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_submit_future' hash='a3c482a88390cdcd'>
       <parameter type-id='type-id-224' name='pool' filepath='src/cthreadpool.c' line='1958' column='1'/>
       <parameter type-id='type-id-312' name='fn' filepath='src/cthreadpool.c' line='1958' column='1'/>
       <parameter type-id='type-id-24' name='arg' filepath='src/cthreadpool.c' line='1958' column='1'/>
       <parameter type-id='type-id-249' name='rv_out' filepath='src/cthreadpool.c' line='1959' column='1'/>
       <return type-id='type-id-655'/>
     </function-decl>
-    <function-decl name='ctpool_try_submit_future' mangled-name='ctpool_try_submit_future' filepath='src/cthreadpool.c' line='1966' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_try_submit_future' hash='12fda4ab8ff74e1a'>
+    <function-decl name='cthrpool_try_submit_future' mangled-name='cthrpool_try_submit_future' filepath='src/cthreadpool.c' line='1966' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_try_submit_future' hash='12fda4ab8ff74e1a'>
       <parameter type-id='type-id-224' name='pool' filepath='src/cthreadpool.c' line='1966' column='1'/>
       <parameter type-id='type-id-312' name='fn' filepath='src/cthreadpool.c' line='1966' column='1'/>
       <parameter type-id='type-id-24' name='arg' filepath='src/cthreadpool.c' line='1967' column='1'/>
       <parameter type-id='type-id-656' name='out' filepath='src/cthreadpool.c' line='1967' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ctpool_timed_submit_future' mangled-name='ctpool_timed_submit_future' filepath='src/cthreadpool.c' line='1972' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_timed_submit_future' hash='558cbea32cbd6c73'>
+    <function-decl name='cthrpool_timed_submit_future' mangled-name='cthrpool_timed_submit_future' filepath='src/cthreadpool.c' line='1972' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_timed_submit_future' hash='558cbea32cbd6c73'>
       <parameter type-id='type-id-224' name='pool' filepath='src/cthreadpool.c' line='1972' column='1'/>
       <parameter type-id='type-id-312' name='fn' filepath='src/cthreadpool.c' line='1972' column='1'/>
       <parameter type-id='type-id-24' name='arg' filepath='src/cthreadpool.c' line='1973' column='1'/>
@@ -5058,52 +5058,52 @@
       <parameter type-id='type-id-656' name='out' filepath='src/cthreadpool.c' line='1974' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ctpool_future_get' mangled-name='ctpool_future_get' filepath='src/cthreadpool.c' line='1984' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_future_get' hash='7f32ffea222edbe7'>
+    <function-decl name='cthrpool_future_get' mangled-name='cthrpool_future_get' filepath='src/cthreadpool.c' line='1984' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_future_get' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-333'/>
       <return type-id='type-id-24'/>
     </function-decl>
-    <function-decl name='ctpool_future_done' mangled-name='ctpool_future_done' filepath='src/cthreadpool.c' line='2019' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_future_done' hash='c7c710e908194b91'>
+    <function-decl name='cthrpool_future_done' mangled-name='cthrpool_future_done' filepath='src/cthreadpool.c' line='2019' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_future_done' hash='c7c710e908194b91'>
       <parameter type-id='type-id-655' name='f' filepath='src/cthreadpool.c' line='2027' column='1'/>
       <return type-id='type-id-1'/>
     </function-decl>
-    <function-decl name='ctpool_future_cancelled' mangled-name='ctpool_future_cancelled' filepath='src/cthreadpool.c' line='2027' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_future_cancelled' hash='c7c710e908194b91'>
+    <function-decl name='cthrpool_future_cancelled' mangled-name='cthrpool_future_cancelled' filepath='src/cthreadpool.c' line='2027' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_future_cancelled' hash='c7c710e908194b91'>
       <parameter type-id='type-id-655' name='f' filepath='src/cthreadpool.c' line='2027' column='1'/>
       <return type-id='type-id-1'/>
     </function-decl>
-    <function-decl name='ctpool_future_free' mangled-name='ctpool_future_free' filepath='src/cthreadpool.c' line='2035' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_future_free' hash='7f32ffea222edbe7'>
+    <function-decl name='cthrpool_future_free' mangled-name='cthrpool_future_free' filepath='src/cthreadpool.c' line='2035' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_future_free' hash='7f32ffea222edbe7'>
       <parameter type-id='type-id-333'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ctpool_future_create_detached' mangled-name='ctpool_future_create_detached' filepath='src/cthreadpool.c' line='2040' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_future_create_detached' hash='3327e540f712d574'>
+    <function-decl name='cthrpool_future_create_detached' mangled-name='cthrpool_future_create_detached' filepath='src/cthreadpool.c' line='2040' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_future_create_detached' hash='3327e540f712d574'>
       <parameter type-id='type-id-53'/>
       <return type-id='type-id-333'/>
     </function-decl>
-    <function-decl name='ctpool_future_fulfill' mangled-name='ctpool_future_fulfill' filepath='src/cthreadpool.c' line='2065' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_future_fulfill' hash='a6972fae2815a2df'>
+    <function-decl name='cthrpool_future_fulfill' mangled-name='cthrpool_future_fulfill' filepath='src/cthreadpool.c' line='2065' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_future_fulfill' hash='a6972fae2815a2df'>
       <parameter type-id='type-id-333'/>
       <parameter type-id='type-id-24'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='ctpool_wait' mangled-name='ctpool_wait' filepath='src/cthreadpool.c' line='2085' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_wait' hash='e0055d99adb0e173'>
+    <function-decl name='cthrpool_wait' mangled-name='cthrpool_wait' filepath='src/cthreadpool.c' line='2085' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_wait' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-224'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ctpool_shutdown_drain' mangled-name='ctpool_shutdown_drain' filepath='src/cthreadpool.c' line='2197' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_shutdown_drain' hash='e0055d99adb0e173'>
+    <function-decl name='cthrpool_shutdown_drain' mangled-name='cthrpool_shutdown_drain' filepath='src/cthreadpool.c' line='2197' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_shutdown_drain' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-224'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ctpool_shutdown_immediate' mangled-name='ctpool_shutdown_immediate' filepath='src/cthreadpool.c' line='2308' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_shutdown_immediate' hash='e0055d99adb0e173'>
+    <function-decl name='cthrpool_shutdown_immediate' mangled-name='cthrpool_shutdown_immediate' filepath='src/cthreadpool.c' line='2308' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_shutdown_immediate' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-224'/>
       <return type-id='type-id-38'/>
     </function-decl>
-    <function-decl name='ctpool_pending_count' mangled-name='ctpool_pending_count' filepath='src/cthreadpool.c' line='2322' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_pending_count' hash='91495cdf6321a116'>
+    <function-decl name='cthrpool_pending_count' mangled-name='cthrpool_pending_count' filepath='src/cthreadpool.c' line='2322' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_pending_count' hash='91495cdf6321a116'>
       <parameter type-id='type-id-224' name='pool' filepath='src/cthreadpool.c' line='2332' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='ctpool_active_count' mangled-name='ctpool_active_count' filepath='src/cthreadpool.c' line='2332' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ctpool_active_count' hash='91495cdf6321a116'>
+    <function-decl name='cthrpool_active_count' mangled-name='cthrpool_active_count' filepath='src/cthreadpool.c' line='2332' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cthrpool_active_count' hash='91495cdf6321a116'>
       <parameter type-id='type-id-224' name='pool' filepath='src/cthreadpool.c' line='2332' column='1'/>
       <return type-id='type-id-36'/>
     </function-decl>
-    <function-decl name='__ctpool_destroy' mangled-name='__ctpool_destroy' filepath='src/cthreadpool.c' line='2497' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__ctpool_destroy' hash='e0055d99adb0e173'>
+    <function-decl name='__cthrpool_destroy' mangled-name='__cthrpool_destroy' filepath='src/cthreadpool.c' line='2497' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__cthrpool_destroy' hash='e0055d99adb0e173'>
       <parameter type-id='type-id-224'/>
       <return type-id='type-id-38'/>
     </function-decl>
@@ -6157,7 +6157,7 @@
       <enumerator name='CYAML_LIST' value='5'/>
       <enumerator name='CYAML_DICTIONARY' value='6'/>
     </enum-decl>
-    <class-decl name='cyaml_dictionary_iter' is-struct='yes' visibility='default' size-in-bits='192' filepath='include/cyaml.h' line='1153' column='1' hash='724a2323eec77a80' id='type-id-851'>
+    <class-decl name='cyaml_dictionary_iter_t' is-struct='yes' visibility='default' size-in-bits='192' filepath='include/cyaml.h' line='1153' column='1' hash='64e3274215ede8c7' id='type-id-851'>
       <data-member access='public' layout-offset-in-bits='0'>
         <var-decl name='key' type-id='type-id-59' visibility='default' filepath='include/cyaml.h' line='1156' column='1'/>
       </data-member>
@@ -6168,9 +6168,9 @@
         <var-decl name='_cyaml_next' type-id='type-id-24' visibility='default' filepath='include/cyaml.h' line='1161' column='1'/>
       </data-member>
     </class-decl>
-    <typedef-decl name='cyaml_dictionary_iter' type-id='type-id-851' size-in-bits='192' filepath='include/cyaml.h' line='1162' column='1' id='type-id-853'/>
+    <typedef-decl name='cyaml_dictionary_iter_t' type-id='type-id-851' size-in-bits='192' filepath='include/cyaml.h' line='1162' column='1' id='type-id-853'/>
     <typedef-decl name='cyaml_node_type_t' type-id='type-id-850' size-in-bits='32' alignment-in-bits='32' filepath='include/cyaml.h' line='508' column='1' hash='751704e1f96ecf52' id='type-id-854'/>
-    <pointer-type-def type-id='type-id-853' size-in-bits='64' hash='4585e38237a22d1e' id='type-id-855'/>
+    <pointer-type-def type-id='type-id-853' size-in-bits='64' hash='2ee487e7006634bb' id='type-id-855'/>
     <pointer-type-def type-id='type-id-856' size-in-bits='64' id='type-id-857'/>
     <qualified-type-def type-id='type-id-858' const='yes' id='type-id-859'/>
     <pointer-type-def type-id='type-id-859' size-in-bits='64' id='type-id-860'/>
@@ -6286,11 +6286,11 @@
       <parameter type-id='type-id-36' name='index' filepath='src/cyaml.c' line='1667' column='1'/>
       <return type-id='type-id-48'/>
     </function-decl>
-    <function-decl name='cyaml_dictionary_next' mangled-name='cyaml_dictionary_next' filepath='src/cyaml.c' line='1694' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cyaml_dictionary_next' hash='b5e49990a51f5684'>
+    <function-decl name='cyaml_dictionary_next' mangled-name='cyaml_dictionary_next' filepath='src/cyaml.c' line='1694' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cyaml_dictionary_next' hash='cdf1d67ed999911f'>
       <parameter type-id='type-id-855' name='it' filepath='src/cyaml.c' line='1694' column='1'/>
       <return type-id='type-id-1'/>
     </function-decl>
-    <function-decl name='cyaml_dictionary_first' mangled-name='cyaml_dictionary_first' filepath='src/cyaml.c' line='1709' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cyaml_dictionary_first' hash='b5e49990a51f5684'>
+    <function-decl name='cyaml_dictionary_first' mangled-name='cyaml_dictionary_first' filepath='src/cyaml.c' line='1709' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cyaml_dictionary_first' hash='cdf1d67ed999911f'>
       <parameter type-id='type-id-852' name='dict' filepath='src/cyaml.c' line='1709' column='1'/>
       <parameter type-id='type-id-855' name='it' filepath='src/cyaml.c' line='1709' column='1'/>
       <return type-id='type-id-1'/>

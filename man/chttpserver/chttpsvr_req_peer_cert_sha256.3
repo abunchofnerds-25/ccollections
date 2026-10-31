@@ -8,7 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/chttpserver.h>
 
 ccol_retval_t chttpsvr_req_peer_cert_sha256(
-    const chttpsvr_req *req,
+    const chttpsvr_req_t *req,
     unsigned char out[CHTTPSVR_PEER_CERT_SHA256_LEN]);
 .fi
 .SH DESCRIPTION
@@ -58,7 +58,7 @@ static const unsigned char allowed[CHTTPSVR_PEER_CERT_SHA256_LEN] = {
     0x3a, 0x7f, /* ... the 32 bytes ... */
 };
 
-static void handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx)
+static void handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx)
 {
     (void)ctx;
     unsigned char fp[CHTTPSVR_PEER_CERT_SHA256_LEN];

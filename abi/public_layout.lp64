@@ -2,26 +2,16 @@
 # size, alignment, and the offset, nesting depth and name of every
 # member. ci_scripts/check_public_layout.sh writes this file with
 # --update and compares the layout of the system against it.
-record struct c_message_t sizeof=16 align=8
-  0 1 data
-  8 1 size
-record struct ccol_event_handlers sizeof=32 align=8
-  0 1 on_readable
-  8 1 on_writable
-  16 1 on_error
-  24 1 on_removed
 record struct ccol_memmgmt_procs_t sizeof=32 align=8
   0 1 malloc
   8 1 free
   16 1 calloc
   24 1 realloc
-record struct ccol_selectable sizeof=16 align=8
-  0 1 type
-  4 1 dir
-  8 1 (anonymous)
-  8 2 cq
-  8 2 dq
-  8 2 fd
+record struct ceventloop_handlers sizeof=32 align=8
+  0 1 on_readable
+  8 1 on_writable
+  16 1 on_error
+  24 1 on_removed
 record struct chttp_request sizeof=80 align=8
   0 1 method
   8 1 url
@@ -50,7 +40,7 @@ record struct chttpcli_async_result sizeof=24 align=8
   0 1 rv
   8 1 resp
   16 1 _m_procs
-record struct chttpcli_response sizeof=64 align=8
+record struct chttpcli_response_t sizeof=64 align=8
   0 1 status_code
   8 1 body
   16 1 body_len
@@ -85,7 +75,7 @@ record struct chttpsvr_config sizeof=176 align=8
   152 1 streaming_thread_count
   160 1 streaming_queue_capacity
   168 1 streaming_queue_timeout_us
-record struct cjson_dictionary_iter sizeof=24 align=8
+record struct cjson_dictionary_iter_t sizeof=24 align=8
   0 1 key
   8 1 value
   16 1 _cjson_next
@@ -109,7 +99,17 @@ record struct cmap_iterator sizeof=40 align=8
 record struct cmap_pair sizeof=16 align=8
   0 1 ptr
   8 1 size
-record struct cyaml_dictionary_iter sizeof=24 align=8
+record struct cmessage_t sizeof=16 align=8
+  0 1 data
+  8 1 size
+record struct cselectable_t sizeof=16 align=8
+  0 1 type
+  4 1 dir
+  8 1 (anonymous)
+  8 2 cq
+  8 2 dq
+  8 2 fd
+record struct cyaml_dictionary_iter_t sizeof=24 align=8
   0 1 key
   8 1 value
   16 1 _cyaml_next

@@ -18,7 +18,7 @@ a process never gets more than one default client.
 The default client has the default settings: pool_size is the CPU
 count, the connect timeout is 30 s, the inactivity timeout is 60 s,
 there is no request timeout and TLS verification is on. You can
-change them with the same chttpclient_set_* functions as for any other
+change them with the same chttpcli_set_* functions as for any other
 client.
 .fi
 .SH RETURN VALUE
@@ -28,21 +28,21 @@ initialization fails.
 .fi
 .SH WARNINGS
 .nf
-Do not pass this handle to chttpclient_destroy. The module owns the
+Do not pass this handle to chttpcli_destroy. The module owns the
 default client and destroys it at process exit, from a handler that it
 registers with atexit(3) when it first builds the client. A call to
 chttp_default_client from an exit handler that runs after that one
 returns CHTTPCLI_NULL.
-If you destroy it anyway, the chttpclient_destroy call does not crash,
+If you destroy it anyway, the chttpcli_destroy call does not crash,
 because the module recognizes the handle and clears its own reference
 to it. The library never builds the default client again, though, so
 every later call to chttp_default_client, chttp_do, chttp_get and the
 other wrappers fails cleanly and runs no request, for the rest of the
 process's life. If you need a client whose lifetime you control,
-create your own with chttpclient_create or chttpclient_create_mp.
+create your own with chttpcli_create or chttpcli_create_mp.
 .fi
 .SH "SEE ALSO"
-.BR chttpclient_create (3),
-.BR chttpclient_destroy (3),
+.BR chttpcli_create (3),
+.BR chttpcli_destroy (3),
 .BR chttp_do (3),
 .BR chttp_get (3)

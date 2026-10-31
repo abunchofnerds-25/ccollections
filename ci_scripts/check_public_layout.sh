@@ -119,8 +119,8 @@ function typedef_name(file, ln, col,    line, n, i, c, depth, started, incmt, ta
 
 function public(name) {
 	if (name ~ /^_/) return 0
-	if (name ~ /^(cbinarymap|c_message_t|cthread_pool)$/) return 1
-	return name ~ /^(ccol_|CCOL_|ccollections_|cvec|cvector|chmap|chashmap|cbmap|cbstmap|cstr|cstring|csort|cjson|cyaml|clog|clru|cmap|cmempool|cthreadcomm|cthreadpool|ctpool|chttp|ctls|citer)/
+	if (name ~ /^(cmessage_t|cthread_pool)$/) return 1
+	return name ~ /^(ccol_|CCOL_|ccollections_|cvec|cvector|chmap|chashmap|cbmap|cbstmap|cstr|cstring|csort|cjson|cyaml|clog|clru|ccache|cmap|cmempool|crmempool|cthreadcomm|ccircq|cdynmq|cchan|ceventloop|cselect|cthreadpool|cthrpool|chttp|ctls|citer)/
 }
 
 # "(unnamed at include/x.h:12:9)" or "(anonymous struct at ...)" is a record

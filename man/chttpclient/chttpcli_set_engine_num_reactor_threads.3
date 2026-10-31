@@ -12,9 +12,9 @@ ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads);
 .SH DESCRIPTION
 .nf
 This function sets how many OS threads the async engine's shared
-ccol_event_loop reactor (the one behind Tier 2 and Tier 3) uses for
+ceventloop reactor (the one behind Tier 2 and Tier 3) uses for
 polling and dispatch. The rules of the num_reactor_threads parameter
-of ccol_event_loop_create_mp apply (see cthreadcomm.h): 1 means a
+of ceventloop_create_mp apply (see cthreadcomm.h): 1 means a
 single thread that both polls and dispatches inline, and a larger
 value means one dedicated poller thread plus (num_threads - 1)
 dispatch worker threads.
@@ -30,7 +30,7 @@ chttpcli instance.
 
 You can call this function at only two points: before the reactor
 first starts in this process (before the first call to
-chttpclient_do_async or chttpclient_do_async_streaming anywhere), or
+chttpcli_do_async or chttpcli_do_async_streaming anywhere), or
 after the engine has stopped completely. The engine stops once every
 async user of a chttpcli has dropped its reference and the automatic
 teardown has finished, and chttpcli_engine_wait blocks until that
@@ -50,6 +50,6 @@ ccol_not_permitted, while the engine runs. Wait for the engine to stop
 .BR chttpcli_engine_wait (3),
 .BR chttpcli_set_engine_mem_mgmt_procs (3),
 .BR chttpcli_set_engine_logger (3),
-.BR chttpclient_do_async (3),
-.BR chttpclient_do_pooled (3),
+.BR chttpcli_do_async (3),
+.BR chttpcli_do_pooled (3),
 .BR chttpsvr_set_engine_num_reactor_threads (3)

@@ -64,10 +64,10 @@ SOFTWARE.
  */
 
 /** @brief Opaque binary search tree map structure */
-typedef struct cbinarymap cbinarymap;
+typedef struct cbstmap cbstmap;
 
 /** @brief Pointer to binary search tree map (handle type) */
-typedef cbinarymap *cbmap;
+typedef cbstmap *cbmap;
 
 /* ========================================================================== */
 /*                         BST MAP CREATION                                   */
@@ -115,20 +115,20 @@ typedef cbinarymap *cbmap;
  * @note All operations are O(log n) for a balanced tree
  * @note The caller must destroy the map with cbmap_destroy() after use
  *
- * @see cbmap_create
- * @see cbmap_create_mp
- * @see cbmap_create_ch
+ * @see cbstmap_create
+ * @see cbstmap_create_mp
+ * @see cbstmap_create_ch
  * @see cbmap_destroy
  */
-cbmap cbmap_create_full(ccol_data_type key_type,
-                        ccol_memmgmt_procs_t *mmgmt_procs,
-                        ccol_comparison_proc_t custom_comparison_proc,
-                        char **err);
+cbmap cbstmap_create_full(ccol_data_type key_type,
+                          ccol_memmgmt_procs_t *mmgmt_procs,
+                          ccol_comparison_proc_t custom_comparison_proc,
+                          char **err);
 
 /**
  * @brief Create a BST map with default settings
  *
- * Convenience wrapper for cbmap_create_full() with the default memory
+ * Convenience wrapper for cbstmap_create_full() with the default memory
  * management and the default comparison for the key type.
  *
  * @param key_type Type of the keys the map stores
@@ -137,14 +137,14 @@ cbmap cbmap_create_full(ccol_data_type key_type,
  * @return Pointer to the new BST map, or NULL on failure
  */
 static inline __attribute__((always_inline)) cbmap
-cbmap_create(ccol_data_type key_type, char **err) {
-  return cbmap_create_full(key_type, NULL, NULL, err);
+cbstmap_create(ccol_data_type key_type, char **err) {
+  return cbstmap_create_full(key_type, NULL, NULL, err);
 }
 
 /**
  * @brief Create a BST map with custom memory management
  *
- * Convenience wrapper for cbmap_create_full() with custom memory management
+ * Convenience wrapper for cbstmap_create_full() with custom memory management
  * and the default comparison.
  *
  * @param key_type Type of the keys the map stores
@@ -153,15 +153,15 @@ cbmap_create(ccol_data_type key_type, char **err) {
  *
  * @return Pointer to the new BST map, or NULL on failure
  */
-static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
+static inline __attribute__((always_inline)) cbmap cbstmap_create_mp(
     ccol_data_type key_type, ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
-  return cbmap_create_full(key_type, mmgmt_procs, NULL, err);
+  return cbstmap_create_full(key_type, mmgmt_procs, NULL, err);
 }
 
 /**
  * @brief Create a BST map with custom comparison function
  *
- * Convenience wrapper for cbmap_create_full() with a custom comparison
+ * Convenience wrapper for cbstmap_create_full() with a custom comparison
  * function and the default memory management.
  *
  * @param key_type Type of the keys the map stores
@@ -175,9 +175,9 @@ static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
  * of each stored key.
  */
 static inline __attribute__((always_inline)) cbmap
-cbmap_create_ch(ccol_data_type key_type,
-                ccol_comparison_proc_t custom_comparison_proc, char **err) {
-  return cbmap_create_full(key_type, NULL, custom_comparison_proc, err);
+cbstmap_create_ch(ccol_data_type key_type,
+                  ccol_comparison_proc_t custom_comparison_proc, char **err) {
+  return cbstmap_create_full(key_type, NULL, custom_comparison_proc, err);
 }
 
 /* ========================================================================== */
@@ -196,7 +196,7 @@ cbmap_create_ch(ccol_data_type key_type,
  * @note It asserts if cbm is NULL
  * @note O(1) complexity
  */
-size_t cbmap_elem_count(cbmap cbm);
+size_t cbstmap_elem_count(cbmap cbm);
 
 /**
  * @brief Clear all elements from the map
@@ -215,7 +215,7 @@ size_t cbmap_elem_count(cbmap cbm);
  *
  * @see cbmap_destroy
  */
-ccol_retval_t cbmap_reset(cbmap cbm);
+ccol_retval_t cbstmap_reset(cbmap cbm);
 
 /**
  * @brief Insert or update a key-value pair
@@ -246,7 +246,7 @@ ccol_retval_t cbmap_reset(cbmap cbm);
  * ccol_other_types keys, with or without a ptr, and it stores an empty value
  * or an empty key. A string key (ccol_string) counts its terminating NUL, so
  * its size is at least 1, and a key of size 0 on such a map is
- * ccol_invalid_args, as in chmap_insert_elem. chmap_insert_elem also
+ * ccol_invalid_args, as in chashmap_insert_elem. chashmap_insert_elem also
  * rejects a zero-size value, and a zero-size key of any type
  * @note The key data and the value data are copied; the map doesn't point
  * at the caller's data
@@ -259,12 +259,12 @@ ccol_retval_t cbmap_reset(cbmap cbm);
  * left-right, right-left)
  * @note It asserts if cbm is NULL
  *
- * @see cbmap_get_elem_copy
- * @see cbmap_get_elem_ref
- * @see cbmap_delete_elem
+ * @see cbstmap_get_elem_copy
+ * @see cbstmap_get_elem_ref
+ * @see cbstmap_delete_elem
  */
-ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
-                                const cmap_pair *val_pair);
+ccol_retval_t cbstmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
+                                  const cmap_pair *val_pair);
 
 /**
  * @brief Get a copy of the value associated with a key
@@ -287,15 +287,15 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
  * @return ccol_key_not_found if the key is not in the map
  *
  * @note O(log n) complexity, since it's a binary search
- * @note The two sizes must match exactly, whereas chmap_get_elem_copy
+ * @note The two sizes must match exactly, whereas chashmap_get_elem_copy
  * doesn't need an exact match
  * @note It asserts if cbm is NULL
  *
- * @see cbmap_get_elem_ref
- * @see cbmap_insert_elem
+ * @see cbstmap_get_elem_ref
+ * @see cbstmap_insert_elem
  */
-ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
-                                  void *target_buf, size_t target_buf_size);
+ccol_retval_t cbstmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
+                                    void *target_buf, size_t target_buf_size);
 
 /**
  * @brief Get the location and the size of the value associated with a key
@@ -326,14 +326,14 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
  * @note The cmap_pair belongs to the caller and the map keeps no reference
  * to it. Don't free val_pair->ptr, the map owns the value bytes. Changing
  * val_pair->ptr or val_pair->size only changes the caller's copy, never the
- * stored value. To replace a value, call cbmap_insert_elem()
+ * stored value. To replace a value, call cbstmap_insert_elem()
  * @note It asserts if cbm is NULL
  *
- * @see cbmap_get_elem_copy
- * @see cbmap_insert_elem
+ * @see cbstmap_get_elem_copy
+ * @see cbstmap_insert_elem
  */
-ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
-                                 cmap_pair *val_pair);
+ccol_retval_t cbstmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
+                                   cmap_pair *val_pair);
 
 /**
  * @brief Get the accessor that the map keeps for the value of a key
@@ -346,8 +346,8 @@ ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
  *
  * @warning Do not call this function directly. Use the cbmap_get_ptr() macro
  */
-ccol_retval_t _cbmap_get_val_accessor(cbmap cbm, const cmap_pair *key_pair,
-                                      const cmap_pair **val_accessor);
+ccol_retval_t _cbstmap_get_val_accessor(cbmap cbm, const cmap_pair *key_pair,
+                                        const cmap_pair **val_accessor);
 
 /**
  * @brief Delete a key-value pair from the map
@@ -378,20 +378,20 @@ ccol_retval_t _cbmap_get_val_accessor(cbmap cbm, const cmap_pair *key_pair,
  * iteratively
  * @note It asserts if cbm is NULL
  *
- * @see cbmap_insert_elem
- * @see cbmap_reset
+ * @see cbstmap_insert_elem
+ * @see cbstmap_reset
  */
-ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair);
+ccol_retval_t cbstmap_delete_elem(cbmap cbm, const cmap_pair *key_pair);
 
 /* ========================================================================== */
 /*                         BST MAP ITERATION                                  */
 /* ========================================================================== */
 
-/* cbmap_begin_iter() is declared in citerators.h, which this header
+/* cbstmap_begin_iter() is declared in citerators.h, which this header
  * includes, since that header's ccol_begin() macro needs all three iterator
  * functions in every translation unit that uses it. */
 
-void __cbmap_iterator_destroy(cmap_iterator *iter);
+void __cbstmap_iterator_destroy(cmap_iterator *iter);
 
 /* ========================================================================== */
 /*                         BST MAP DESTRUCTION                                */
@@ -402,9 +402,10 @@ void __cbmap_iterator_destroy(cmap_iterator *iter);
  *
  * @param cbm BST map to destroy
  *
- * @warning Do not call this function directly. Use the cbmap_destroy() macro
+ * @warning Do not call this function directly. Use the cbstmap_destroy() or
+ * cbmap_destroy() macro
  */
-void __cbmap_destroy(cbmap cbm);
+void __cbstmap_destroy(cbmap cbm);
 
 /**
  * @brief Destroy a BST map and set pointer to NULL
@@ -420,18 +421,18 @@ void __cbmap_destroy(cbmap cbm);
  * @note cbm is evaluated exactly once, and it must be a modifiable lvalue,
  * such as a variable or an element of an array
  */
-#define cbmap_destroy(cbm)      \
-  _ccol_cbmap_destroy_impl(cbm, \
-                           _ccol_uniq(__ccol_cbmap_destroy_slot, __COUNTER__))
+#define cbstmap_destroy(cbm)  \
+  _ccol_cbstmap_destroy_impl( \
+      cbm, _ccol_uniq(__ccol_cbstmap_destroy_slot, __COUNTER__))
 
-/* Internal: the body of cbmap_destroy. slot is a name from _ccol_uniq(), so
+/* Internal: the body of cbstmap_destroy. slot is a name from _ccol_uniq(), so
  * the macro can nest inside the argument of another destroy macro and still
  * be -Wshadow clean. The argument is evaluated exactly once. */
-#define _ccol_cbmap_destroy_impl(cbm, slot) \
-  do {                                      \
-    __typeof__(cbm) *slot = &(cbm);         \
-    __cbmap_destroy(*slot);                 \
-    *slot = NULL;                           \
+#define _ccol_cbstmap_destroy_impl(cbm, slot) \
+  do {                                        \
+    __typeof__(cbm) *slot = &(cbm);           \
+    __cbstmap_destroy(*slot);                 \
+    *slot = NULL;                             \
   } while (0)
 
 /**
@@ -442,9 +443,9 @@ void __cbmap_destroy(cbmap cbm);
  * @note Used by the _ccol_destructor attribute
  * @warning Do not call this function directly
  */
-static inline void ___cbmap_destroy(cbmap *cbm) {
+static inline void ___cbstmap_destroy(cbmap *cbm) {
   if (cbm && *cbm) {
-    __cbmap_destroy(*cbm);
+    __cbstmap_destroy(*cbm);
     *cbm = NULL;
   }
 }
@@ -507,7 +508,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       NULL;                                                                 \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = \
       NULL;                                                                 \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL
+  cbmap hm_name _ccol_destructor(___cbstmap_destroy) = NULL
 
 /**
  * @brief Initialize a BST map with defaults
@@ -528,7 +529,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 #define cbmap_init(hm_name)                                                   \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
         NULL, &__ccol_cbmap_err);                                             \
     if (!hm_name) {                                                           \
@@ -552,7 +553,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 #define cbmap_init_mp(hm_name, mmgmt_procs)                                   \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         (mmgmt_procs), NULL, &__ccol_cbmap_err);                              \
     if (!hm_name) {                                                           \
@@ -576,7 +577,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 #define cbmap_init_cc(hm_name, custom_comparison_proc)                        \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
         (custom_comparison_proc), &__ccol_cbmap_err);                         \
     if (!hm_name) {                                                           \
@@ -600,7 +601,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 #define cbmap_init_full(hm_name, mmgmt_procs, custom_comparison_proc)         \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         (mmgmt_procs), (custom_comparison_proc), &__ccol_cbmap_err);          \
     if (!hm_name) {                                                           \
@@ -621,7 +622,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note It stops the program on failure
  * @note It works out the key type (signedness, float, string,
  * struct)
- * @note A struct key_t gets a raw memcmp order (see cbmap_create_full), so
+ * @note A struct key_t gets a raw memcmp order (see cbstmap_create_full), so
  * use cbmap_construct_cc for a struct key type
  *
  * Example:
@@ -644,10 +645,10 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  cbmap hm_name /* _ccol_destructor(___cbstmap_destroy) = NULL; */ = NULL;    \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
         NULL, &__ccol_cbmap_err);                                             \
     if (!hm_name) {                                                           \
@@ -662,10 +663,10 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  cbmap hm_name _ccol_destructor(___cbstmap_destroy) = NULL;                  \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
         NULL, &__ccol_cbmap_err);                                             \
     if (!hm_name) {                                                           \
@@ -693,10 +694,10 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  cbmap hm_name /* _ccol_destructor(___cbstmap_destroy) = NULL; */ = NULL;    \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         (mmgmt_procs), NULL, &__ccol_cbmap_err);                              \
     if (!hm_name) {                                                           \
@@ -711,10 +712,10 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  cbmap hm_name _ccol_destructor(___cbstmap_destroy) = NULL;                  \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         (mmgmt_procs), NULL, &__ccol_cbmap_err);                              \
     if (!hm_name) {                                                           \
@@ -742,10 +743,10 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  cbmap hm_name /* _ccol_destructor(___cbstmap_destroy) = NULL; */ = NULL;    \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
         (custom_comparison_proc), &__ccol_cbmap_err);                         \
     if (!hm_name) {                                                           \
@@ -761,10 +762,10 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  cbmap hm_name _ccol_destructor(___cbstmap_destroy) = NULL;                  \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
         (custom_comparison_proc), &__ccol_cbmap_err);                         \
     if (!hm_name) {                                                           \
@@ -794,10 +795,10 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  cbmap hm_name /* _ccol_destructor(___cbstmap_destroy) = NULL; */ = NULL;    \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         (mmgmt_procs), (custom_comparison_proc), &__ccol_cbmap_err);          \
     if (!hm_name) {                                                           \
@@ -813,10 +814,10 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  cbmap hm_name _ccol_destructor(___cbstmap_destroy) = NULL;                  \
   do {                                                                        \
     char *__ccol_cbmap_err = NULL;                                            \
-    hm_name = cbmap_create_full(                                              \
+    hm_name = cbstmap_create_full(                                            \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         (mmgmt_procs), (custom_comparison_proc), &__ccol_cbmap_err);          \
     if (!hm_name) {                                                           \
@@ -830,9 +831,19 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /* ========================================================================== */
 
 /**
+ * @brief Destroy a BST map and set the pointer to NULL (type-inferred alias)
+ *
+ * The name the type-inferred layer uses for cbstmap_destroy(). It behaves the
+ * same way.
+ *
+ * @param cbm BST map to destroy. It is set to NULL
+ */
+#define cbmap_destroy(cbm) cbstmap_destroy(cbm)
+
+/**
  * @brief Insert a key-value pair (type-inferred)
  *
- * Type-inferred wrapper for cbmap_insert_elem(). It builds the key's and the
+ * Type-inferred wrapper for cbstmap_insert_elem(). It builds the key's and the
  * value's cmap_pair from the caller's expressions and calls
  * _ccol_fatal_err() on failure.
  *
@@ -856,7 +867,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note A NULL key or value of a character-pointer type isn't a string, so
  * the program stops with ccol_invalid_args for it
  *
- * @see cbmap_insert_elem
+ * @see cbstmap_insert_elem
  * @see cbmap_get
  * @see cbmap_remove
  */
@@ -931,7 +942,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     ccol_retval_t __ccol_cbmap_r =                                            \
         (!__ccol_cbmap_kp->ptr || !__ccol_cbmap_vp->ptr)                      \
             ? ccol_invalid_args                                               \
-            : cbmap_insert_elem(hm_name, __ccol_cbmap_kp, __ccol_cbmap_vp);   \
+            : cbstmap_insert_elem(hm_name, __ccol_cbmap_kp, __ccol_cbmap_vp); \
     if (__ccol_cbmap_r != ccol_success &&                                     \
         __ccol_cbmap_r != ccol_key_already_present) {                         \
       _ccol_dump_key_to_stderr(__ccol_cbmap_kp->ptr, __ccol_cbmap_kp->size);  \
@@ -943,7 +954,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Remove a key-value pair (type-inferred)
  *
- * Type-inferred wrapper for cbmap_delete_elem() that returns the result
+ * Type-inferred wrapper for cbstmap_delete_elem() that returns the result
  * code.
  *
  * @param hm_name BST map to remove from
@@ -959,7 +970,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note A NULL key of a character-pointer type isn't a string, so it gives
  * ccol_invalid_args for it
  *
- * @see cbmap_delete_elem
+ * @see cbstmap_delete_elem
  * @see cbmap_insert
  */
 #define cbmap_remove(hm_name, key)                                          \
@@ -971,27 +982,27 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /* The public macro above names all the temporaries of this body with
  * _ccol_uniq(), so it can nest inside the argument of any public macro,
  * itself included. */
-#define _ccol_cbmap_remove_impl(hm_name, key, __ccol_cbmap_key_tmp,          \
-                                __ccol_cbmap_kp, __ccol_cbmap_r)             \
-  ({                                                                         \
-    /* The temporary has the tree's DECLARED key type. See cbmap_insert()    \
-     * for why the lookup key goes through a conversion and not a raw byte   \
-     * copy. */                                                              \
-    _ccol_declared_or_own_type(hm_name##__ccol_key_type_var, (key))          \
-        __ccol_cbmap_key_tmp = (key);                                        \
-    _ccol_clear_padding(&__ccol_cbmap_key_tmp);                              \
-    cmap_pair *__ccol_cbmap_kp = &(cmap_pair){};                             \
-    _populate_cmap_pair(__ccol_cbmap_kp, __ccol_cbmap_key_tmp);              \
-    ccol_retval_t __ccol_cbmap_r =                                           \
-        !__ccol_cbmap_kp->ptr ? ccol_invalid_args                            \
-                              : cbmap_delete_elem(hm_name, __ccol_cbmap_kp); \
-    __ccol_cbmap_r;                                                          \
+#define _ccol_cbmap_remove_impl(hm_name, key, __ccol_cbmap_key_tmp,            \
+                                __ccol_cbmap_kp, __ccol_cbmap_r)               \
+  ({                                                                           \
+    /* The temporary has the tree's DECLARED key type. See cbmap_insert()      \
+     * for why the lookup key goes through a conversion and not a raw byte     \
+     * copy. */                                                                \
+    _ccol_declared_or_own_type(hm_name##__ccol_key_type_var, (key))            \
+        __ccol_cbmap_key_tmp = (key);                                          \
+    _ccol_clear_padding(&__ccol_cbmap_key_tmp);                                \
+    cmap_pair *__ccol_cbmap_kp = &(cmap_pair){};                               \
+    _populate_cmap_pair(__ccol_cbmap_kp, __ccol_cbmap_key_tmp);                \
+    ccol_retval_t __ccol_cbmap_r =                                             \
+        !__ccol_cbmap_kp->ptr ? ccol_invalid_args                              \
+                              : cbstmap_delete_elem(hm_name, __ccol_cbmap_kp); \
+    __ccol_cbmap_r;                                                            \
   })
 
 /**
  * @brief Get value by key (type-inferred, returns value)
  *
- * Type-inferred wrapper for cbmap_get_elem_ref() that returns the value
+ * Type-inferred wrapper for cbstmap_get_elem_ref() that returns the value
  * itself. It calls _ccol_fatal_err() when the key is not in the map, and
  * also when the two sizes don't match.
  *
@@ -1040,9 +1051,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     cmap_pair __ccol_cbmap_vp = {NULL, 0};                                     \
     _populate_cmap_pair(__ccol_cbmap_kp, __ccol_cbmap_key_tmp);                \
     ccol_retval_t __ccol_cbmap_r =                                             \
-        !__ccol_cbmap_kp->ptr                                                  \
-            ? ccol_invalid_args                                                \
-            : cbmap_get_elem_ref(hm_name, __ccol_cbmap_kp, &__ccol_cbmap_vp);  \
+        !__ccol_cbmap_kp->ptr ? ccol_invalid_args                              \
+                              : cbstmap_get_elem_ref(hm_name, __ccol_cbmap_kp, \
+                                                     &__ccol_cbmap_vp);        \
     if (__ccol_cbmap_r != ccol_success) {                                      \
       _ccol_dump_key_to_stderr(__ccol_cbmap_kp->ptr, __ccol_cbmap_kp->size);   \
       _ccol_fatal_err("cbmap_get('%s'): r: %d (%s)", #hm_name, __ccol_cbmap_r, \
@@ -1074,7 +1085,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * Storing a different char* through that address replaces the pointer while
  * the size still describes the old string, and it hands the map a pointer
  * it doesn't own and whose lifetime it can't control. Without the const,
- * cbmap_get_elem_copy() and every read of an iterator value would then walk
+ * cbstmap_get_elem_copy() and every read of an iterator value would then walk
  * the new buffer, possibly much shorter, for the length of the old string.
  * AddressSanitizer reports a global-buffer-overflow read of the old length
  * on the first such read.
@@ -1099,7 +1110,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Get pointer to value by key (type-inferred, returns pointer or NULL)
  *
- * Type-inferred wrapper for cbmap_get_elem_ref() that returns a pointer to
+ * Type-inferred wrapper for cbstmap_get_elem_ref() that returns a pointer to
  * the value, or NULL if the key is not in the map. cbmap_get() stops the
  * program in that case, this macro doesn't.
  *
@@ -1129,7 +1140,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * NULL for it
  *
  * @see cbmap_get
- * @see cbmap_get_elem_ref
+ * @see cbstmap_get_elem_ref
  * @see cbmap_insert
  *
  * Example:
@@ -1187,15 +1198,15 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
         _ccol_is_char_ptr(*hm_name##__ccol_val_type_var)) {                 \
       /* The entry's only char* object is the ptr field of the accessor the \
        * map keeps for it, so the result points there. */                   \
-      __ccol_cbmap_r = _cbmap_get_val_accessor(hm_name, __ccol_cbmap_kp,    \
-                                               &__ccol_cbmap_acc);          \
+      __ccol_cbmap_r = _cbstmap_get_val_accessor(hm_name, __ccol_cbmap_kp,  \
+                                                 &__ccol_cbmap_acc);        \
       if (__ccol_cbmap_r == ccol_success) {                                 \
         __ccol_cbmap_val = (__typeof__(*hm_name##__ccol_val_type_var) *)&(  \
             __ccol_cbmap_acc->ptr);                                         \
       }                                                                     \
     } else if (__ccol_cbmap_kp->ptr) {                                      \
       __ccol_cbmap_r =                                                      \
-          cbmap_get_elem_ref(hm_name, __ccol_cbmap_kp, &__ccol_cbmap_vp);   \
+          cbstmap_get_elem_ref(hm_name, __ccol_cbmap_kp, &__ccol_cbmap_vp); \
       if (__ccol_cbmap_r == ccol_success) {                                 \
         if (__ccol_cbmap_vp.size != sizeof(*__ccol_cbmap_val)) {            \
           _ccol_fatal_err(                                                  \
@@ -1212,5 +1223,27 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     }                                                                       \
     _ccol_cbmap_value_ptr_result(hm_name, __ccol_cbmap_val);                \
   })
+
+/**
+ * @brief Get the number of entries in a BST map (type-inferred alias)
+ *
+ * The name the type-inferred layer uses for cbstmap_elem_count().
+ *
+ * @param cbm BST map to query
+ *
+ * @return The number of entries
+ */
+#define cbmap_size(cbm) cbstmap_elem_count((cbm))
+
+/**
+ * @brief Remove every entry from a BST map (type-inferred alias)
+ *
+ * The name the type-inferred layer uses for cbstmap_reset().
+ *
+ * @param cbm BST map to reset
+ *
+ * @return ccol_success, or the code cbstmap_reset() gives
+ */
+#define cbmap_reset(cbm) cbstmap_reset((cbm))
 
 #pragma GCC visibility pop

@@ -13,6 +13,9 @@ chmap_destroy(hm);
 .nf
 Frees everything the hash map holds, all key-value pairs included, and
 then sets the hash map pointer to NULL.
+
+This is the name the type-inferred macro layer uses for chashmap_destroy(3). It
+behaves the same way.
 .fi
 .SH PARAMETERS
 .nf
@@ -29,5 +32,6 @@ such as a variable or an array element, and an expression with a side
 effect such as handles[i++] destroys and clears exactly one element.
 .fi
 .SH "SEE ALSO"
-.BR chmap_create (3),
-.BR chmap_destroy_with_dtor (3)
+.BR chashmap_destroy (3),
+.BR chashmap_create (3),
+.BR chashmap_destroy_with_dtor (3)

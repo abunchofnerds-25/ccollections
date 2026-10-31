@@ -1,0 +1,47 @@
+.TH CTHRPOOL_FUTURE_CREATE_DETACHED 3 "2026-09-21" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cthrpool_future_create_detached \- create a standalone future with no pool or queued task
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadpool.h>
+
+cthrpool_future_t *cthrpool_future_create_detached(char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates a future that no cthread_pool task queue is behind. A
+producer outside the pool, such as an event-driven engine that is not
+itself a cthrpool worker, must call cthrpool_future_fulfill exactly once
+to deliver the result.
+
+On success the future has a reference count of 2, the same convention
+as with cthrpool_submit_future: the caller holds one reference, which
+cthrpool_future_free releases, and the producer holds the other one,
+which cthrpool_future_fulfill releases. Each cthrpool_future_get call that
+runs on the future adds one more for its duration.
+
+The struct is freed once every reference is gone, in whatever order
+they go. cthrpool_future_free can come before cthrpool_future_fulfill, and
+either call can come while other threads still wait in
+cthrpool_future_get, exactly as with a future that a pool is behind.
+
+The function always uses the standard malloc and free and never a
+custom allocator, the same as the futures of cthrpool_submit_future.
+.fi
+.SH PARAMETERS
+.nf
+err_str   Optional pointer to receive an error string on failure
+          (pass NULL to ignore)
+.fi
+.SH RETURN VALUE
+.nf
+Returns a new cthrpool_future_t handle (not yet done) on success.
+Returns NULL on allocation failure.
+.fi
+.SH "SEE ALSO"
+.BR cthrpool_future_fulfill (3),
+.BR cthrpool_future_get (3),
+.BR cthrpool_future_done (3),
+.BR cthrpool_future_free (3)

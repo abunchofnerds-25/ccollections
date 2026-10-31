@@ -46,7 +46,7 @@ SOFTWARE.
  * cache, and the entry for that key sits in two data structures of that
  * segment at once:
  *
- *   1. The hash map (the segment's map): key -> clru_entry*
+ *   1. The hash map (the segment's map): key -> ccache_entry*
  *      The map stores a COPY of the pointer (8 bytes), which leads to the
  *      mutable entry holding the condition variable and the value.
  *
@@ -97,7 +97,7 @@ SOFTWARE.
  *   be reclaimed. The reference costs one increment and one decrement under
  *   a mutex the thread already holds.
  */
-typedef struct clru_entry {
+typedef struct ccache_entry {
   void *key;
   size_t key_size;
 
@@ -136,8 +136,8 @@ typedef struct clru_entry {
    * protects this field. */
   int waiters;
 
-  struct clru_entry *prev; /* LRU list links (NULL when not in LRU) */
-  struct clru_entry *next;
+  struct ccache_entry *prev; /* LRU list links (NULL when not in LRU) */
+  struct ccache_entry *next;
   bool in_lru;
 
   /* Only the two miss paths set this, right before they tear down an entry
@@ -156,9 +156,9 @@ typedef struct clru_entry {
    * two sentinel entries, so a bigger entry would also move the segment
    * fields the hit path reads. */
   bool fetch_failed;
-} clru_entry;
+} ccache_entry;
 
-/* clru_cache is an opaque value handle: the top 32 bits are the slot index
+/* ccache is an opaque value handle: the top 32 bits are the slot index
  * and the bottom 32 bits the generation (see the doc comment on the typedef
  * in include/clrucache.h). The handle is resolved through this table before
  * the struct clrucache* behind it is touched, and that's what lets
@@ -169,7 +169,7 @@ typedef struct clru_entry {
  * completed. A slot is marked not-in-use the moment it is released and its
  * generation goes up on every reuse, so a stale handle can never alias a
  * later, unrelated cache that holds the same slot index. This table mirrors
- * chttpcli_slot_table, chttpsvr_slot_table and ccol_event_loop_slot_table
+ * chttpcli_slot_table, chttpsvr_slot_table and ceventloop_slot_table
  * exactly; the copy of this comment in src/chttpclient.c explains the
  * design rationale.
  *
@@ -230,14 +230,13 @@ static void _clrucache_release_slot_table_if_deferred_locked(void);
 
 static void _clrucache_slot_table_init_globals(void) {
   if (_ccol_rw_lock_init(clrucache_slot_table.rwlock) != 0)
-    _ccol_fatal_err("clru_cache slot table: failed to initialize rwlock");
+    _ccol_fatal_err("ccache slot table: failed to initialize rwlock");
   clrucache_slot_table.slots = cvector_create(sizeof(clrucache_slot_t), NULL);
   if (!clrucache_slot_table.slots)
-    _ccol_fatal_err("clru_cache slot table: failed to allocate slots vector");
+    _ccol_fatal_err("ccache slot table: failed to allocate slots vector");
   clrucache_slot_table.free_indices = cvector_create(sizeof(uint32_t), NULL);
   if (!clrucache_slot_table.free_indices)
-    _ccol_fatal_err(
-        "clru_cache slot table: failed to allocate free-index vector");
+    _ccol_fatal_err("ccache slot table: failed to allocate free-index vector");
 }
 
 /* One segment of a cache, with its own lock.
@@ -254,8 +253,8 @@ static void _clrucache_slot_table_init_globals(void) {
  * segment borrows: the router holds the single copy of the caller's
  * allocator, because a copy in each segment would need to be freed by the
  * very allocator that the copy names. */
-typedef struct clru_shard {
-  /* key -> clru_entry*. The value type is a pointer, so the map picks its
+typedef struct ccache_shard {
+  /* key -> ccache_entry*. The value type is a pointer, so the map picks its
      own backend from the key type: open addressing for an integral or a
      pointer key, separate chaining for a string, a struct or a long
      double. */
@@ -265,23 +264,23 @@ typedef struct clru_shard {
    * entry and lru_tail.prev the LRU entry. The sentinels are embedded in the
    * struct rather than allocated on the heap, and their cond, key and value
    * fields are never used. */
-  clru_entry lru_head;
-  clru_entry lru_tail;
+  ccache_entry lru_head;
+  ccache_entry lru_tail;
 
   size_t capacity; /* this segment's share of the configured capacity */
   size_t size;     /* number of LIVE entries in this segment */
 
   _ccol_mutex_t mutex; /* protects everything in this segment */
 
-  clru_remote_getter_t remote_getter;
-  clru_remote_setter_t remote_setter;
-  clru_eviction_cb_t eviction_cb;
+  ccache_remote_getter_fn_t remote_getter;
+  ccache_remote_setter_fn_t remote_setter;
+  ccache_eviction_fn_t eviction_cb;
 
   ccol_memmgmt_procs_t *m_procs;
-} clru_shard;
+} ccache_shard;
 
 struct clrucache {
-  clru_shard **shards;
+  ccache_shard **shards;
   size_t shard_count;
 
   /* The declared key type, and its width when it has a fixed one (0 when it
@@ -301,7 +300,7 @@ struct clrucache {
   /* This cache's handle. An unpin uses it to find the slot holding its pin,
    * so the caller doesn't have to carry a handle. Written once, before the
    * handle is published, and never again. */
-  clru_cache self_handle;
+  ccache self_handle;
 
   /* Our copy of the caller's allocator. m_procs points here when the caller
    * gave an allocator and is NULL otherwise. The cache keeps no pointer to
@@ -312,7 +311,7 @@ struct clrucache {
 };
 
 /* ========================================================================== */
-/*                    CLRU_CACHE HANDLE RESOLVE / UNPIN                       */
+/*                    CCACHE HANDLE RESOLVE / UNPIN                       */
 /* ========================================================================== */
 
 /* Resolves h and pins the result against a concurrent destroy. Returns NULL
@@ -327,7 +326,7 @@ struct clrucache {
  * stays under the rwlock. */
 static ccol_pintable clrucache_pintable;
 
-static struct clrucache *_clrucache_resolve(clru_cache h) {
+static struct clrucache *_clrucache_resolve(ccache h) {
   /* No lock and no shared write here. Every public entry point of this
    * module runs this, so a write here to memory another thread reads would
    * cost time on every single cache operation. */
@@ -353,10 +352,10 @@ static void _clrucache_resolve_unpin(struct clrucache *raw) {
  * an allocation failure, then disarms itself. Without it, the lost-index
  * recovery below would need a real out-of-memory condition at one specific
  * cvector_push_back, which an ordinary test run can't produce. */
-static _Atomic bool g_clrucache_fail_next_free_index_push = false;
+static _Atomic bool g_ccache_fail_next_free_index_push = false;
 
 void _clrucache_force_next_free_index_push_failure_for_tests(void) {
-  atomic_store(&g_clrucache_fail_next_free_index_push, true);
+  atomic_store(&g_ccache_fail_next_free_index_push, true);
 }
 #endif
 
@@ -368,7 +367,7 @@ void _clrucache_force_next_free_index_push_failure_for_tests(void) {
  * table again. See clrucache_slot_table.lost_indices. */
 static void _clrucache_free_index_release_locked(uint32_t idx) {
 #ifdef RUNNING_UNIT_TESTS
-  if (atomic_exchange(&g_clrucache_fail_next_free_index_push, false)) {
+  if (atomic_exchange(&g_ccache_fail_next_free_index_push, false)) {
     clrucache_slot_table.lost_indices++;
     return;
   }
@@ -416,8 +415,8 @@ static __attribute__((noinline)) bool _clrucache_reclaim_lost_index_locked(
  * and also when the module destructor has already released the table, which
  * *released then reports. clrucache_create_full calls it once, after the
  * object is fully constructed in every other respect. */
-static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache,
-                                                 bool *released) {
+static ccache _clrucache_handle_slot_acquire(struct clrucache *cache,
+                                             bool *released) {
   _ccol_call_once(clrucache_slot_table.once,
                   _clrucache_slot_table_init_globals);
   _ccol_rw_lock_wrlock(clrucache_slot_table.rwlock);
@@ -462,7 +461,7 @@ static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache,
    * exact slot index. The identical guard in chttpcli_handle_slot_acquire
    * explains why. */
   if (slot->generation == 0) slot->generation++;
-  clru_cache h = ((clru_cache)idx << 32) | (clru_cache)slot->generation;
+  ccache h = ((ccache)idx << 32) | (ccache)slot->generation;
 
   /* Written before the handle is published, so a resolver that finds this
    * cache also finds the handle its own unpin needs. */
@@ -495,7 +494,7 @@ static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache,
 /*                         LRU LIST HELPERS                                   */
 /* ========================================================================== */
 
-static void lru_add_to_front(clru_shard *cache, clru_entry *e) {
+static void lru_add_to_front(ccache_shard *cache, ccache_entry *e) {
   e->next = cache->lru_head.next;
   e->prev = &cache->lru_head;
   cache->lru_head.next->prev = e;
@@ -503,7 +502,7 @@ static void lru_add_to_front(clru_shard *cache, clru_entry *e) {
   e->in_lru = true;
 }
 
-static void lru_remove(clru_entry *e) {
+static void lru_remove(ccache_entry *e) {
   if (!e->in_lru) return;
   e->prev->next = e->next;
   e->next->prev = e->prev;
@@ -512,7 +511,7 @@ static void lru_remove(clru_entry *e) {
   e->in_lru = false;
 }
 
-static void lru_move_to_front(clru_shard *cache, clru_entry *e) {
+static void lru_move_to_front(ccache_shard *cache, ccache_entry *e) {
   lru_remove(e);
   lru_add_to_front(cache, e);
 }
@@ -521,9 +520,9 @@ static void lru_move_to_front(clru_shard *cache, clru_entry *e) {
 /*                         ENTRY HELPERS                                      */
 /* ========================================================================== */
 
-static clru_entry *entry_alloc(clru_shard *cache) {
-  clru_entry *e =
-      (clru_entry *)_ccol_mem_calloc(cache->m_procs, 1, sizeof(clru_entry));
+static ccache_entry *entry_alloc(ccache_shard *cache) {
+  ccache_entry *e =
+      (ccache_entry *)_ccol_mem_calloc(cache->m_procs, 1, sizeof(ccache_entry));
   if (!e) return NULL;
   if (_ccol_cond_var_init(e->cond) != 0) {
     /* Do NOT route this through entry_free(): it calls
@@ -541,13 +540,13 @@ static clru_entry *entry_alloc(clru_shard *cache) {
  * Precondition: no other thread can reach e or holds a reference to it.
  * Exactly two situations give that. (1) e was never published into
  * cache->map, because an allocation or an insert failed before or during
- * map_upsert or chmap_insert_elem, so no other thread can find it at all.
+ * map_upsert or chashmap_insert_elem, so no other thread can find it at all.
  * (2) e->evicted == true and e->waiters == 0: e was published, a later call
  * removed it from both the map and the LRU list, and every thread waiting
  * on it woke up and dropped its reference. The caller may or may not hold
  * the segment's mutex, because correctness only depends on one of these two
  * situations and not on the mutex. */
-static void entry_free(clru_shard *cache, clru_entry *e) {
+static void entry_free(ccache_shard *cache, ccache_entry *e) {
   _ccol_mem_free(cache->m_procs, e->key);
   _ccol_mem_free(cache->m_procs, e->value);
   _ccol_cond_var_destroy(e->cond);
@@ -578,8 +577,8 @@ static void entry_free(clru_shard *cache, clru_entry *e) {
  * exactly what a set of an absent key does; on failure it removes the
  * placeholder and the key stays evicted. Every thread waiting on the key is
  * waiting on that set, so none of them can see the placeholder. */
-static bool evict_lru(clru_shard *cache) {
-  clru_entry *victim = cache->lru_tail.prev;
+static bool evict_lru(ccache_shard *cache) {
+  ccache_entry *victim = cache->lru_tail.prev;
   if (victim == &cache->lru_head) return false; /* nothing to evict */
 
   if (cache->eviction_cb && victim->value) {
@@ -599,7 +598,7 @@ static bool evict_lru(clru_shard *cache) {
   }
 
   cmap_pair kp = {.ptr = victim->key, .size = victim->key_size};
-  chmap_delete_elem(cache->map, &kp);
+  chashmap_delete_elem(cache->map, &kp);
 
   victim->evicted = true;
   _ccol_cond_var_broadcast(victim->cond);
@@ -613,7 +612,7 @@ static bool evict_lru(clru_shard *cache) {
 /* Make sure cache->size < cache->capacity by evicting LRU entries. Every
  * entry that cache->size counts is in the LRU list and can be evicted, so
  * the loop always gets there. */
-static void make_room(clru_shard *cache) {
+static void make_room(ccache_shard *cache) {
   while (cache->size >= cache->capacity) {
     if (!evict_lru(cache)) break;
   }
@@ -630,20 +629,21 @@ static void make_room(clru_shard *cache) {
  * defense in depth rather than something alignment needs. It stays for
  * consistency with cjson, cyaml, cthreadcomm and chttpclient, which use the
  * same pattern for their own pointer storage inside a chmap. */
-static clru_entry *map_lookup(clru_shard *cache, const cmap_pair *key_pair) {
+static ccache_entry *map_lookup(ccache_shard *cache,
+                                const cmap_pair *key_pair) {
   cmap_pair found;
-  ccol_retval_t r = chmap_get_elem_ref(cache->map, key_pair, &found);
+  ccol_retval_t r = chashmap_get_elem_ref(cache->map, key_pair, &found);
   if (r != ccol_success) return NULL;
-  clru_entry *e;
+  ccache_entry *e;
   memcpy(&e, found.ptr, sizeof(e));
   return e;
 }
 
 /* Inserts or updates the entry pointer in the internal chmap. */
-static ccol_retval_t map_upsert(clru_shard *cache, const cmap_pair *key_pair,
-                                clru_entry *entry) {
+static ccol_retval_t map_upsert(ccache_shard *cache, const cmap_pair *key_pair,
+                                ccache_entry *entry) {
   cmap_pair vp = {.ptr = &entry, .size = sizeof(entry)};
-  return chmap_insert_elem(cache->map, key_pair, &vp);
+  return chashmap_insert_elem(cache->map, key_pair, &vp);
 }
 
 /* ========================================================================== */
@@ -657,7 +657,7 @@ static ccol_retval_t map_upsert(clru_shard *cache, const cmap_pair *key_pair,
  * capacity, so no segment starts with nothing to hold, and by a ceiling, so
  * a very large cache doesn't pay for segments that no realistic number of
  * threads would use at once. */
-#define CLRU_MAX_SHARDS 16u
+#define CCACHE_MAX_SHARDS 16u
 
 /* How many entries a segment has to be worth before a cache is split at
  * all.
@@ -677,11 +677,11 @@ static ccol_retval_t map_upsert(clru_shard *cache, const cmap_pair *key_pair,
  * large enough for lock contention to be the real problem gets exactly as
  * many segments as it would without this value. For a small cache an exact
  * eviction order is worth more than a lock that fewer threads share. */
-#define CLRU_MIN_ENTRIES_PER_SHARD 64u
+#define CCACHE_MIN_ENTRIES_PER_SHARD 64u
 
 static size_t shard_count_for(size_t capacity) {
-  size_t n = capacity / CLRU_MIN_ENTRIES_PER_SHARD;
-  if (n > CLRU_MAX_SHARDS) n = CLRU_MAX_SHARDS;
+  size_t n = capacity / CCACHE_MIN_ENTRIES_PER_SHARD;
+  if (n > CCACHE_MAX_SHARDS) n = CCACHE_MAX_SHARDS;
   if (n == 0) n = 1;
   return n;
 }
@@ -709,7 +709,7 @@ static size_t shard_count_for(size_t capacity) {
  * 64-bit avalanche, which makes every output bit depend on every input bit,
  * and it runs ahead of a mutex lock and a map lookup, so its few
  * instructions aren't the cost that matters here. */
-static inline size_t clru_reduce(uint64_t h, size_t shard_count) {
+static inline size_t ccache_reduce(uint64_t h, size_t shard_count) {
   h ^= h >> 33;
   h *= 0xff51afd7ed558ccdULL;
   h ^= h >> 33;
@@ -736,8 +736,8 @@ static inline size_t clru_reduce(uint64_t h, size_t shard_count) {
  * cmap_pair that a caller built. The check runs before the segment count is
  * looked at, so a malformed key reports ccol_invalid_args whether or not the
  * cache is big enough to have segments. */
-static clru_shard *shard_for(struct clrucache *router,
-                             const cmap_pair *key_pair) {
+static ccache_shard *shard_for(struct clrucache *router,
+                               const cmap_pair *key_pair) {
   if (router->key_fixed_width != 0 &&
       key_pair->size != router->key_fixed_width) {
     return NULL;
@@ -745,7 +745,7 @@ static clru_shard *shard_for(struct clrucache *router,
   if (router->shard_count == 1) return router->shards[0];
   uint64_t h =
       ccol_chmap_hash_key(key_pair->ptr, key_pair->size, router->key_type);
-  return router->shards[clru_reduce(h, router->shard_count)];
+  return router->shards[ccache_reduce(h, router->shard_count)];
 }
 
 /* Frees the router's allocation. Our copy of the caller's allocator lives
@@ -765,12 +765,13 @@ static void router_free_self(struct clrucache *router) {
 /* Builds one segment. Everything below the router belongs to a single
  * segment, so this is the whole construction of one: its own map, its own
  * eviction order and its own lock. */
-static clru_shard *shard_create(size_t capacity, ccol_data_type key_type,
-                                clru_remote_getter_t getter,
-                                clru_remote_setter_t setter,
-                                clru_eviction_cb_t eviction_cb,
-                                ccol_memmgmt_procs_t *mprocs, char **err) {
-  clru_shard *cache = (clru_shard *)_ccol_mem_calloc(mprocs, 1, sizeof(*cache));
+static ccache_shard *shard_create(size_t capacity, ccol_data_type key_type,
+                                  ccache_remote_getter_fn_t getter,
+                                  ccache_remote_setter_fn_t setter,
+                                  ccache_eviction_fn_t eviction_cb,
+                                  ccol_memmgmt_procs_t *mprocs, char **err) {
+  ccache_shard *cache =
+      (ccache_shard *)_ccol_mem_calloc(mprocs, 1, sizeof(*cache));
   if (!cache) {
     if (err) *err = _CCOL_ERR_STR("failed to allocate cache segment");
     return NULL;
@@ -781,8 +782,8 @@ static clru_shard *shard_create(size_t capacity, ccol_data_type key_type,
 
   char *map_err = NULL;
   cache->map =
-      chmap_create_full(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, key_type,
-                        ccol_pointer, cache->m_procs, NULL, NULL, &map_err);
+      chashmap_create_full(CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, key_type,
+                           ccol_pointer, cache->m_procs, NULL, NULL, &map_err);
   if (!cache->map) {
     if (err)
       *err = map_err ? map_err : _CCOL_ERR_STR("failed to create internal map");
@@ -804,7 +805,7 @@ static clru_shard *shard_create(size_t capacity, ccol_data_type key_type,
    * file. */
   if (_ccol_mutex_init(cache->mutex) != 0) {
     if (err) *err = _CCOL_ERR_STR("failed to initialize cache mutex");
-    __chmap_destroy(cache->map);
+    __chashmap_destroy(cache->map);
     _ccol_mem_free(mprocs, cache);
     return NULL;
   }
@@ -820,7 +821,7 @@ static clru_shard *shard_create(size_t capacity, ccol_data_type key_type,
  * itself. The eviction runs under the segment's lock, because the caller
  * supplies the eviction callback and every other path that calls it holds
  * that lock too. */
-static void shard_destroy(clru_shard *cache) {
+static void shard_destroy(ccache_shard *cache) {
   if (!cache) return;
   _ccol_mutex_lock(cache->mutex);
   /* evict_lru() returns false exactly when the list is empty. No set can be
@@ -831,7 +832,7 @@ static void shard_destroy(clru_shard *cache) {
   }
   _ccol_mutex_unlock(cache->mutex);
 
-  __chmap_destroy(cache->map);
+  __chashmap_destroy(cache->map);
   _ccol_mutex_destroy(cache->mutex);
   _ccol_mem_free(cache->m_procs, cache);
 }
@@ -844,27 +845,27 @@ static void router_destroy_shards(struct clrucache *router) {
   }
 }
 
-clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
-                                 ccol_data_type val_type,
-                                 clru_remote_getter_t getter,
-                                 clru_remote_setter_t setter,
-                                 clru_eviction_cb_t eviction_cb,
-                                 ccol_memmgmt_procs_t *mprocs, char **err) {
+ccache clrucache_create_full(size_t capacity, ccol_data_type key_type,
+                             ccol_data_type val_type,
+                             ccache_remote_getter_fn_t getter,
+                             ccache_remote_setter_fn_t setter,
+                             ccache_eviction_fn_t eviction_cb,
+                             ccol_memmgmt_procs_t *mprocs, char **err) {
   (void)val_type; /* val_type isn't needed; the map stores pointers */
 
   if (capacity == 0) {
     if (err) *err = _CCOL_ERR_STR("capacity must be > 0");
-    return CLRU_CACHE_NULL;
+    return CCACHE_NULL;
   }
 
-  if (!_ccol_verify_memmgmt_procs(mprocs, err)) return CLRU_CACHE_NULL;
+  if (!_ccol_verify_memmgmt_procs(mprocs, err)) return CCACHE_NULL;
 
   struct clrucache *router =
       (struct clrucache *)(mprocs ? mprocs->calloc(1, sizeof(*router))
                                   : calloc(1, sizeof(*router)));
   if (!router) {
     if (err) *err = _CCOL_ERR_STR("failed to allocate cache struct");
-    return CLRU_CACHE_NULL;
+    return CCACHE_NULL;
   }
 
   if (mprocs) {
@@ -876,12 +877,12 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
   router->key_type = key_type;
   router->key_fixed_width = ccol_fixed_width_data_type_size(key_type);
   router->shard_count = shard_count_for(capacity);
-  router->shards = (clru_shard **)_ccol_mem_calloc(
+  router->shards = (ccache_shard **)_ccol_mem_calloc(
       router->m_procs, router->shard_count, sizeof(*router->shards));
   if (!router->shards) {
     if (err) *err = _CCOL_ERR_STR("failed to allocate cache segments");
     router_free_self(router);
-    return CLRU_CACHE_NULL;
+    return CCACHE_NULL;
   }
 
   /* The segment capacities add up to exactly the total the caller asked
@@ -896,28 +897,28 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
     if (!router->shards[i]) {
       router_destroy_shards(router);
       router_free_self(router);
-      return CLRU_CACHE_NULL;
+      return CCACHE_NULL;
     }
   }
 
   /* Acquiring the slot is the LITERAL LAST step and runs once the cache is
    * fully constructed in every other respect. Same as the constructors of
-   * chttpcli, chttpsvr and ccol_event_loop: no caller ever sees a handle
-   * until this function is about to return success. Unlike ccol_event_loop
-   * and ctpool, this module starts no threads of its own, so a failure here
+   * chttpcli, chttpsvr and ceventloop: no caller ever sees a handle
+   * until this function is about to return success. Unlike ceventloop
+   * and cthrpool, this module starts no threads of its own, so a failure here
    * has no thread to stop and only frees what was already built. */
   bool table_released = false;
-  clru_cache h = _clrucache_handle_slot_acquire(router, &table_released);
+  ccache h = _clrucache_handle_slot_acquire(router, &table_released);
   if (h == 0) {
     if (err)
       *err = table_released
                  ? _CCOL_ERR_STR(
-                       "the clru_cache handle table is released at the end of "
+                       "the ccache handle table is released at the end of "
                        "the process")
-                 : _CCOL_ERR_STR("failed to allocate clru_cache handle slot");
+                 : _CCOL_ERR_STR("failed to allocate ccache handle slot");
     router_destroy_shards(router);
     router_free_self(router);
-    return CLRU_CACHE_NULL;
+    return CCACHE_NULL;
   }
 
   return h;
@@ -927,7 +928,7 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
 /*                         __clrucache_destroy                                */
 /* ========================================================================== */
 
-void __clrucache_destroy(clru_cache cache) {
+void __clrucache_destroy(ccache cache) {
   if (!cache) return;
 
   /* Resolve cache through the slot table and mark the slot not-in-use in
@@ -961,7 +962,7 @@ void __clrucache_destroy(clru_cache cache) {
     _ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
     _ccol_fatal_err(
         "clrucache_destroy: handle is stale or already destroyed "
-        "(double-destroy / use-after-destroy of a clru_cache handle)");
+        "(double-destroy / use-after-destroy of a ccache handle)");
   }
   slot->in_use = false; /* From this instant on, ALL future resolves for
                             this handle are blocked, and so is a second,
@@ -973,7 +974,7 @@ void __clrucache_destroy(clru_cache cache) {
 
   /* Wait for the pin count to reach 0 BEFORE any teardown logic runs at all,
    * not just before memory is freed, which is the same order as in chttpcli.
-   * Waiting first is safe here, even though it isn't in ctpool. This
+   * Waiting first is safe here, even though it isn't in cthrpool. This
    * module's blocking waits are the _ccol_cond_var_wait loops that coalesce
    * a getter or a setter, and they're released by the remote_getter or
    * remote_setter call of some other application thread finishing for that
@@ -1025,9 +1026,9 @@ void __clrucache_destroy(clru_cache cache) {
  * race. _clrucache_resolve needs a matching _unpin call and this one needs
  * none, so a test has nothing to remember; a forgotten unpin would leave a
  * pin outstanding on that cache and silently hang every future
- * clru_destroy against it. Returns NULL under exactly the same conditions
+ * ccache_destroy against it. Returns NULL under exactly the same conditions
  * as _clrucache_resolve. */
-struct clrucache *_clrucache_resolve_for_tests(clru_cache h) {
+struct clrucache *_clrucache_resolve_for_tests(ccache h) {
   _ccol_call_once(clrucache_slot_table.once,
                   _clrucache_slot_table_init_globals);
   if (h == 0) return NULL;
@@ -1045,7 +1046,7 @@ struct clrucache *_clrucache_resolve_for_tests(clru_cache h) {
   return raw;
 }
 
-/* Reads how many slots the clru_cache handle table holds right now, counting
+/* Reads how many slots the ccache handle table holds right now, counting
  * the slots the table grew and those a release freed that no acquire has
  * reused yet. A test uses it to assert that a create/destroy loop reuses
  * freed slots; without that the table would grow without bound. */
@@ -1056,7 +1057,7 @@ struct clrucache *_clrucache_resolve_for_tests(clru_cache h) {
  * the caller asked for either way, and the eviction slack of a full cache is
  * much wider than the one or two entries at stake. Reading the segments
  * directly is what lets a test pin it. */
-size_t _clrucache_segment_capacity_sum_for_tests(clru_cache cache,
+size_t _clrucache_segment_capacity_sum_for_tests(ccache cache,
                                                  size_t *out_segments) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) {
@@ -1074,7 +1075,7 @@ size_t _clrucache_segment_capacity_sum_for_tests(clru_cache cache,
 /* The number of segments whose map hashes in chashmap's keyed mode, and in
  * *out_segments the number of segments. A test uses it to see that a flood
  * switched the segments' maps. */
-size_t _clrucache_keyed_segment_maps_for_tests(clru_cache cache,
+size_t _clrucache_keyed_segment_maps_for_tests(ccache cache,
                                                size_t *out_segments) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) {
@@ -1114,15 +1115,14 @@ size_t _clrucache_free_index_count_for_tests(void) {
  * and so does a thread running a remote getter or setter for it. A test
  * polls this to know that a getter really is waiting on an operation in
  * flight, instead of guessing with a sleep. */
-int _clrucache_key_waiters_for_tests(clru_cache cache,
-                                     const cmap_pair *key_pair) {
+int _clrucache_key_waiters_for_tests(ccache cache, const cmap_pair *key_pair) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) return -1;
   int n = -1;
-  clru_shard *shard = shard_for(raw, key_pair);
+  ccache_shard *shard = shard_for(raw, key_pair);
   if (shard) {
     _ccol_mutex_lock(shard->mutex);
-    clru_entry *entry = map_lookup(shard, key_pair);
+    ccache_entry *entry = map_lookup(shard, key_pair);
     if (entry) n = entry->waiters;
     _ccol_mutex_unlock(shard->mutex);
   }
@@ -1158,12 +1158,12 @@ size_t _clrucache_slot_table_capacity_for_tests(void) {
  * hard to reproduce. The flag doesn't disarm itself: a test arms it for
  * exactly the one call under test and must set it back to 0 itself, so
  * later unrelated tests in the same process aren't affected. */
-static _Atomic unsigned int _clru_test_post_publish_delay_us = 0;
-static _Atomic bool _clru_test_post_publish_delay_entered = false;
+static _Atomic unsigned int _ccache_test_post_publish_delay_us = 0;
+static _Atomic bool _ccache_test_post_publish_delay_entered = false;
 
-void clru_test_set_post_publish_delay_us(unsigned int delay_us) {
-  atomic_store(&_clru_test_post_publish_delay_entered, false);
-  atomic_store(&_clru_test_post_publish_delay_us, delay_us);
+void ccache_test_set_post_publish_delay_us(unsigned int delay_us) {
+  atomic_store(&_ccache_test_post_publish_delay_entered, false);
+  atomic_store(&_ccache_test_post_publish_delay_us, delay_us);
 }
 
 /* Lets a test poll for one fact: the publishing thread has entered its delay
@@ -1176,28 +1176,28 @@ void clru_test_set_post_publish_delay_us(unsigned int delay_us) {
  * sleep, which can fire too early, before the publishing thread has locked
  * the mutex again and with nothing to queue behind, or leave less margin
  * than the test intends. */
-bool clru_test_post_publish_delay_entered(void) {
-  return atomic_load(&_clru_test_post_publish_delay_entered);
+bool ccache_test_post_publish_delay_entered(void) {
+  return atomic_load(&_ccache_test_post_publish_delay_entered);
 }
 
-static void _clru_test_maybe_delay_post_publish(void) {
-  unsigned int us = atomic_load(&_clru_test_post_publish_delay_us);
+static void _ccache_test_maybe_delay_post_publish(void) {
+  unsigned int us = atomic_load(&_ccache_test_post_publish_delay_us);
   if (!us) return;
-  atomic_store(&_clru_test_post_publish_delay_entered, true);
+  atomic_store(&_ccache_test_post_publish_delay_entered, true);
   usleep(us);
 }
 #endif
 
 /* Frees the slot table's bookkeeping arrays at process exit so that the
  * leak-kind report of make memtest doesn't flag them as still reachable.
- * Same as _cleanup_event_loop_slot_table of ccol_event_loop; the comment on
+ * Same as _cleanup_event_loop_slot_table of ceventloop; the comment on
  * that function gives the reasoning, including why this is only sound
- * when the application destroys every clru_cache it creates before process
+ * when the application destroys every ccache it creates before process
  * exit. This test suite meets that precondition for a clean make memtest.
  * This function MUST use _ccol_call_once, because an
  * __attribute__((destructor)) function runs for the whole shared object,
  * whichever parts of it the process used: without _ccol_call_once, a
- * process that links this library and never creates a clru_cache would lock
+ * process that links this library and never creates a ccache would lock
  * a mutex here that no pthread_mutex_init call ever prepared. */
 /* Tells whether any slot still names a cache. The caller holds the write
  * lock.
@@ -1252,7 +1252,7 @@ static void _clrucache_release_slot_table_locked(void) {
   clrucache_slot_table.release_deferred = false;
 }
 
-__attribute__((destructor)) static void _cleanup_clrucache_slot_table(void) {
+__attribute__((destructor)) static void _cleanup_ccache_slot_table(void) {
   _ccol_call_once(clrucache_slot_table.once,
                   _clrucache_slot_table_init_globals);
   /* Nothing to do, and nothing safe to touch. Each vector is set to NULL as
@@ -1291,7 +1291,7 @@ __attribute__((destructor)) static void _cleanup_clrucache_slot_table(void) {
 /* ========================================================================== */
 
 static ccol_retval_t clrucache_get_full_retry(struct clrucache *raw,
-                                              clru_shard *shard,
+                                              ccache_shard *shard,
                                               const cmap_pair *key_pair,
                                               cmap_pair *val_out);
 
@@ -1308,10 +1308,10 @@ static ccol_retval_t clrucache_get_full_retry(struct clrucache *raw,
  * reports the retry through *again, still holding the mutex and the pin, and
  * the cold function loops. */
 static inline __attribute__((always_inline)) ccol_retval_t
-clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
+clrucache_get_full_locked(struct clrucache *raw, ccache_shard *shard,
                           const cmap_pair *key_pair, cmap_pair *val_out,
                           bool *again) {
-  clru_entry *entry = map_lookup(shard, key_pair);
+  ccache_entry *entry = map_lookup(shard, key_pair);
 
   if (!entry) {
     /* Cache miss */
@@ -1348,14 +1348,14 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
     entry->fetch_in_progress = true;
 
     /* ccol_key_already_present is a documented SUCCESS outcome of
-     * chmap_insert_elem: it means the map wrote the key's stored value, the
+     * chashmap_insert_elem: it means the map wrote the key's stored value, the
      * entry pointer here, in place. We treat it like ccol_success, as
-     * every other chmap_insert_elem call site in this codebase does (see
+     * every other chashmap_insert_elem call site in this codebase does (see
      * cjson.c and clogger.c). It can't actually happen here, since
      * map_lookup() confirmed the key is absent under this same uninterrupted
      * hold of the mutex, but failing hard here wouldn't just be redundant, it
      * would be dangerous: the map already points at `entry` when
-     * chmap_insert_elem returns, so freeing `entry` here, as a plain
+     * chashmap_insert_elem returns, so freeing `entry` here, as a plain
      * out-of-memory failure does, would leave a dangling pointer for the very
      * next lookup of this key. */
     ccol_retval_t ins = map_upsert(shard, key_pair, entry);
@@ -1404,7 +1404,7 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
       /* Widens the window in which an unrelated concurrent eviction can reach
        * and lock shard->mutex before the broadcast below wakes any coalesced
        * waiter. See the doc comment on the hook. */
-      _clru_test_maybe_delay_post_publish();
+      _ccache_test_maybe_delay_post_publish();
 #endif
       _ccol_cond_var_broadcast(entry->cond);
       _ccol_mutex_unlock(shard->mutex);
@@ -1416,7 +1416,7 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
       if (fetched.ptr)
         _ccol_mem_free(shard->m_procs, fetched.ptr); /* size==0 edge case */
       cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
-      chmap_delete_elem(shard->map, &kp);
+      chashmap_delete_elem(shard->map, &kp);
       entry->evicted = true;
       entry->fetch_failed = true;
       _ccol_cond_var_broadcast(entry->cond);
@@ -1528,7 +1528,7 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
  * lookup for as long as a waiter keeps finding a failed set; see the comment
  * on fetch_failed. */
 static __attribute__((noinline)) ccol_retval_t
-clrucache_get_full_retry(struct clrucache *raw, clru_shard *shard,
+clrucache_get_full_retry(struct clrucache *raw, ccache_shard *shard,
                          const cmap_pair *key_pair, cmap_pair *val_out) {
   for (;;) {
     bool retry = false;
@@ -1538,7 +1538,7 @@ clrucache_get_full_retry(struct clrucache *raw, clru_shard *shard,
   }
 }
 
-ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
+ccol_retval_t clrucache_get_full(ccache cache, const cmap_pair *key_pair,
                                  cmap_pair *val_out) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) return ccol_invalid_args;
@@ -1553,7 +1553,7 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
    * doesn't match the width of the declared key type, which the segment's
    * map would reject anyway; rejecting it here keeps the choice of segment
    * from reading past the end of the key. */
-  clru_shard *shard = shard_for(raw, key_pair);
+  ccache_shard *shard = shard_for(raw, key_pair);
   if (!shard) {
     _clrucache_resolve_unpin(raw);
     return ccol_invalid_args;
@@ -1579,10 +1579,10 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
  * unlocks it briefly around its own entry_free() calls; see the comment at
  * those call sites.
  */
-static clru_entry *create_and_insert_placeholder(clru_shard *cache,
-                                                 const cmap_pair *key_pair,
-                                                 ccol_retval_t *err_out) {
-  clru_entry *e = entry_alloc(cache);
+static ccache_entry *create_and_insert_placeholder(ccache_shard *cache,
+                                                   const cmap_pair *key_pair,
+                                                   ccol_retval_t *err_out) {
+  ccache_entry *e = entry_alloc(cache);
   if (!e) {
     *err_out = ccol_not_enough_memory;
     return NULL;
@@ -1606,7 +1606,7 @@ static clru_entry *create_and_insert_placeholder(clru_shard *cache,
   e->key_size = key_pair->size;
 
   /* ccol_key_already_present is a documented success outcome of
-   * chmap_insert_elem, not a failure. The identical guard and comment in the
+   * chashmap_insert_elem, not a failure. The identical guard and comment in the
    * miss path of clrucache_get_full explain why. */
   ccol_retval_t ins = map_upsert(cache, key_pair, e);
   if (ins != ccol_success && ins != ccol_key_already_present) {
@@ -1626,7 +1626,7 @@ static clru_entry *create_and_insert_placeholder(clru_shard *cache,
  * placeholder), which the caller frees after releasing cache->mutex. The
  * caller must hold cache->mutex.
  */
-static void *entry_store_value(clru_shard *cache, clru_entry *entry,
+static void *entry_store_value(ccache_shard *cache, ccache_entry *entry,
                                void *new_val, size_t new_size) {
   void *old_val = entry->value;
   entry->value = new_val;
@@ -1642,7 +1642,7 @@ static void *entry_store_value(clru_shard *cache, clru_entry *entry,
   return old_val;
 }
 
-ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
+ccol_retval_t clrucache_set_full(ccache cache, const cmap_pair *key_pair,
                                  const cmap_pair *val_pair) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) return ccol_invalid_args;
@@ -1654,7 +1654,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
 
   /* See the note in clrucache_get_full. The key picks one segment and every
    * step below stays inside it. */
-  clru_shard *shard = shard_for(raw, key_pair);
+  ccache_shard *shard = shard_for(raw, key_pair);
   if (!shard) {
     _clrucache_resolve_unpin(raw);
     return ccol_invalid_args;
@@ -1675,7 +1675,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
 
   _ccol_mutex_lock(shard->mutex);
 
-  clru_entry *entry;
+  ccache_entry *entry;
 
   /*
    * Loop until this thread owns the set slot for this key. One map_lookup
@@ -1683,7 +1683,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
    * block on the same in-progress operation and all wake up together once it
    * completes or fails. Without the loop the second thread to run would call
    * create_and_insert_placeholder for a key the first thread has already
-   * inserted again, get ccol_key_already_present from chmap_insert_elem, and
+   * inserted again, get ccol_key_already_present from chashmap_insert_elem, and
    * wrongly return ccol_not_enough_memory to its caller. Looping back to
    * map_lookup finds the first thread's placeholder and waits on it, which
    * serialises the setters correctly.
@@ -1741,7 +1741,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
    * touch the LRU list before entry_store_value(), which handles both cases
    * correctly without help: !in_lru for a new entry or a placeholder, and
    * in_lru for an existing entry that moves to the front. That saves a
-   * useless unlock and lock pair on every clru_set() call, which is the
+   * useless unlock and lock pair on every ccache_set() call, which is the
    * common case for a cache with no remote source. */
   bool remote_ok = true;
 
@@ -1801,13 +1801,13 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
      * cache is exactly as the concurrent operations alone left it, which is
      * what a set that never happened would leave. */
     cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
-    chmap_delete_elem(shard->map, &kp);
+    chashmap_delete_elem(shard->map, &kp);
     entry->evicted = true;
   }
 
   entry->set_in_progress = false;
 #ifdef RUNNING_UNIT_TESTS
-  _clru_test_maybe_delay_post_publish();
+  _ccache_test_maybe_delay_post_publish();
 #endif
   _ccol_cond_var_broadcast(entry->cond);
 
@@ -1825,7 +1825,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
 /* ========================================================================== */
 
 static ccol_retval_t clrucache_get_into_retry(struct clrucache *raw,
-                                              clru_shard *shard,
+                                              ccache_shard *shard,
                                               const cmap_pair *key_pair,
                                               void *buf, size_t buf_size);
 
@@ -1842,10 +1842,10 @@ static ccol_retval_t clrucache_get_into_retry(struct clrucache *raw,
  * reports the retry through *again, still holding the mutex and the pin, and
  * the cold function loops. */
 static inline __attribute__((always_inline)) ccol_retval_t
-clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
+clrucache_get_into_locked(struct clrucache *raw, ccache_shard *shard,
                           const cmap_pair *key_pair, void *buf, size_t buf_size,
                           bool *again) {
-  clru_entry *entry = map_lookup(shard, key_pair);
+  ccache_entry *entry = map_lookup(shard, key_pair);
 
   if (!entry) {
     if (!shard->remote_getter) {
@@ -1875,7 +1875,7 @@ clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
     entry->fetch_in_progress = true;
 
     /* ccol_key_already_present is a documented success outcome of
-     * chmap_insert_elem, not a failure. The identical guard and comment in
+     * chashmap_insert_elem, not a failure. The identical guard and comment in
      * the miss path of clrucache_get_full have the full reasoning. */
     ccol_retval_t ins = map_upsert(shard, key_pair, entry);
     if (ins != ccol_success && ins != ccol_key_already_present) {
@@ -1903,7 +1903,7 @@ clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
        * exactly. A larger value overflows buf, and a smaller one leaves the
        * tail of buf untouched, holding uninitialized or stale data from the
        * caller's stack or heap while the call still reports ccol_success, so
-       * the caller of the type-inferred clru_get() macro gets a ValT that is
+       * the caller of the type-inferred ccache_get() macro gets a ValT that is
        * only partly filled. Caching a wrongly sized value would also make
        * every future __clrucache_get_into call for this key hit the same
        * problem, so any size mismatch counts as a complete fetch failure and
@@ -1911,7 +1911,7 @@ clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
       if (fetched.size != buf_size) {
         _ccol_mem_free(shard->m_procs, fetched.ptr);
         cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
-        chmap_delete_elem(shard->map, &kp);
+        chashmap_delete_elem(shard->map, &kp);
         entry->evicted = true;
         entry->fetch_size_mismatch = true;
         entry->fetch_failed = true;
@@ -1932,7 +1932,7 @@ clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
       memcpy(buf, fetched.ptr, fetched.size);
 
 #ifdef RUNNING_UNIT_TESTS
-      _clru_test_maybe_delay_post_publish();
+      _ccache_test_maybe_delay_post_publish();
 #endif
       _ccol_cond_var_broadcast(entry->cond);
       _ccol_mutex_unlock(shard->mutex);
@@ -1941,7 +1941,7 @@ clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
     } else {
       if (fetched.ptr) _ccol_mem_free(shard->m_procs, fetched.ptr);
       cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
-      chmap_delete_elem(shard->map, &kp);
+      chashmap_delete_elem(shard->map, &kp);
       entry->evicted = true;
       entry->fetch_failed = true;
       _ccol_cond_var_broadcast(entry->cond);
@@ -2037,7 +2037,7 @@ clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
  * lookup for as long as a waiter keeps finding a failed set; see the comment
  * on fetch_failed. */
 static __attribute__((noinline)) ccol_retval_t clrucache_get_into_retry(
-    struct clrucache *raw, clru_shard *shard, const cmap_pair *key_pair,
+    struct clrucache *raw, ccache_shard *shard, const cmap_pair *key_pair,
     void *buf, size_t buf_size) {
   for (;;) {
     bool retry = false;
@@ -2047,7 +2047,7 @@ static __attribute__((noinline)) ccol_retval_t clrucache_get_into_retry(
   }
 }
 
-ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
+ccol_retval_t __clrucache_get_into(ccache cache, const cmap_pair *key_pair,
                                    void *buf, size_t buf_size) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) return ccol_invalid_args;
@@ -2058,7 +2058,7 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
 
   /* See the note in clrucache_get_full. The key picks one segment and every
    * step below stays inside it. */
-  clru_shard *shard = shard_for(raw, key_pair);
+  ccache_shard *shard = shard_for(raw, key_pair);
   if (!shard) {
     _clrucache_resolve_unpin(raw);
     return ccol_invalid_args;
@@ -2072,7 +2072,7 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
 /*                         SIZE / CAPACITY QUERIES                            */
 /* ========================================================================== */
 
-size_t clrucache_size(clru_cache cache) {
+size_t clrucache_size(ccache cache) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) return 0;
   /* We add up the segment sizes, each under its own lock, so the total is a
@@ -2082,7 +2082,7 @@ size_t clrucache_size(clru_cache cache) {
    */
   size_t total = 0;
   for (size_t i = 0; i < raw->shard_count; i++) {
-    clru_shard *sh = raw->shards[i];
+    ccache_shard *sh = raw->shards[i];
     _ccol_mutex_lock(sh->mutex);
     total += sh->size;
     _ccol_mutex_unlock(sh->mutex);
@@ -2091,7 +2091,7 @@ size_t clrucache_size(clru_cache cache) {
   return total;
 }
 
-size_t clrucache_capacity(clru_cache cache) {
+size_t clrucache_capacity(ccache cache) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) return 0;
   /* Fixed at creation and never written again, so no lock is needed. */

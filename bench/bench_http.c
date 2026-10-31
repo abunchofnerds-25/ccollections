@@ -90,7 +90,7 @@ typedef struct {
 /* The response states the length the server received, so the client can
  * check that the whole body arrived, because otherwise a partly arrived body
  * would measure less work at the full price. */
-static void bench_echo_len_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void bench_echo_len_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                    void *ctx) {
   (void)ctx;
   size_t len = 0;
@@ -99,7 +99,7 @@ static void bench_echo_len_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_printf(resp, "%zu", len);
 }
 
-static void bench_large_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void bench_large_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   const unsigned char *body = ctx;
@@ -107,7 +107,7 @@ static void bench_large_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write(resp, body, BENCH_HTTP_LARGE_BODY);
 }
 
-static void bench_hello_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void bench_hello_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -119,7 +119,7 @@ static void http_teardown(void *state) {
   http_state_t *st = state;
   if (st->cli != CHTTPCLI_NULL) {
     chttpcli c = st->cli;
-    chttpclient_destroy(c);
+    chttpcli_destroy(c);
   }
   if (st->srv != CHTTPSVR_NULL) {
     chttpsvr s = st->srv;
@@ -195,13 +195,13 @@ static void *http_setup(size_t n) {
     return NULL;
   }
 
-  st->cli = chttpclient_create(&err);
+  st->cli = chttpcli_create(&err);
   if (st->cli == CHTTPCLI_NULL) {
     if (err) fprintf(stderr, "bench: chttpclient creation failed: %s\n", err);
     http_teardown(st);
     return NULL;
   }
-  chttpclient_set_pool_size(st->cli, BENCH_HTTP_CONCURRENCY);
+  chttpcli_set_pool_size(st->cli, BENCH_HTTP_CONCURRENCY);
   return st;
 }
 
@@ -215,14 +215,14 @@ static void http_do_requests(http_state_t *st, size_t count) {
   for (size_t i = 0; i < count; i++) {
     chttp_request_t *req = chttp_request_create(CHTTP_GET, st->url, NULL, NULL);
     if (!req) bench_die("http request allocation failed");
-    chttpcli_response *resp = NULL;
-    if (chttpclient_do(st->cli, req, &resp) != ccol_success) {
-      chttpclient_resp_free(resp);
+    chttpcli_response_t *resp = NULL;
+    if (chttpcli_do(st->cli, req, &resp) != ccol_success) {
+      chttpcli_resp_free(resp);
       chttp_request_free(req);
       bench_die("http request failed");
     }
     atomic_fetch_add_explicit(&st->ok, 1, memory_order_relaxed);
-    chttpclient_resp_free(resp);
+    chttpcli_resp_free(resp);
     chttp_request_free(req);
   }
 }
@@ -247,16 +247,16 @@ static void http_do_posts(http_state_t *st, const unsigned char *body,
     chttp_request_t *req =
         chttp_request_create(CHTTP_POST, st->url_echo_len, &b, NULL);
     if (!req) bench_die("http request allocation failed");
-    chttpcli_response *resp = NULL;
-    if (chttpclient_do(st->cli, req, &resp) != ccol_success || !resp ||
+    chttpcli_response_t *resp = NULL;
+    if (chttpcli_do(st->cli, req, &resp) != ccol_success || !resp ||
         resp->status_code != 200 || resp->body_len != strlen(expect) ||
         memcmp(resp->body, expect, resp->body_len) != 0) {
-      chttpclient_resp_free(resp);
+      chttpcli_resp_free(resp);
       chttp_request_free(req);
       bench_die("http post failed or the server saw a partial body");
     }
     atomic_fetch_add_explicit(&st->ok, 1, memory_order_relaxed);
-    chttpclient_resp_free(resp);
+    chttpcli_resp_free(resp);
     chttp_request_free(req);
   }
 }
@@ -284,15 +284,15 @@ static void http_get_large_run(void *state, size_t n) {
     chttp_request_t *req =
         chttp_request_create(CHTTP_GET, st->url_large, NULL, NULL);
     if (!req) bench_die("http request allocation failed");
-    chttpcli_response *resp = NULL;
-    if (chttpclient_do(st->cli, req, &resp) != ccol_success || !resp ||
+    chttpcli_response_t *resp = NULL;
+    if (chttpcli_do(st->cli, req, &resp) != ccol_success || !resp ||
         resp->status_code != 200 || resp->body_len != BENCH_HTTP_LARGE_BODY) {
-      chttpclient_resp_free(resp);
+      chttpcli_resp_free(resp);
       chttp_request_free(req);
       bench_die("http large response failed or arrived in part");
     }
     atomic_fetch_add_explicit(&st->ok, 1, memory_order_relaxed);
-    chttpclient_resp_free(resp);
+    chttpcli_resp_free(resp);
     chttp_request_free(req);
   }
   bench_sink(&st->ok);
@@ -304,7 +304,7 @@ static void http_get_large_run(void *state, size_t n) {
  * the clients don't queue behind each other on the way out. */
 static void *http_setup_mt(size_t n, unsigned threads) {
   http_state_t *st = http_setup(n);
-  if (st) chttpclient_set_pool_size(st->cli, threads);
+  if (st) chttpcli_set_pool_size(st->cli, threads);
   return st;
 }
 

@@ -1,0 +1,57 @@
+.TH CRMEMPOOL_CREATE_FROM_PREALLOCATED_BUFFER 3 "2026-10-30" "c_collections" "C Collections Library - Macros"
+.SH NAME
+crmempool_create_from_preallocated_buffer \- create ranged pool from user buffer
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+crmempool_create_from_preallocated_buffer(
+    buffer, buf_size, smallest_size_power_of_two,
+    largest_size_power_of_two,
+    number_of_smallest_size_elems_power_of_two, fb_policy,
+    single_threaded, err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a ranged memory pool on top of a buffer that the caller
+provides, so no sub-pool takes its storage from the heap. Fallback
+entries, when the policy allows them, come from the standard malloc
+and free.
+
+It is the same as calling
+crmempool_create_from_preallocated_buffer_mp() with NULL memory
+management procedures, and every rule of that page applies.
+.fi
+.SH PARAMETERS
+.nf
+buffer                                      Pointer to preallocated buffer
+buf_size                                    Size of buffer in bytes (must
+                                            match exactly what
+                                            CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER
+                                            produces for the same
+                                            parameters)
+smallest_size_power_of_two                  Exponent for smallest pool size
+largest_size_power_of_two                   Exponent for largest pool size
+number_of_smallest_size_elems_power_of_two  Exponent for smallest pool count
+fb_policy                                   Fallback policy for exhausted pools
+single_threaded                             If true, take no lock
+err                                         Optional pointer that receives
+                                            an error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to the new ranged memory pool on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+The caller must destroy the pool with crmempool_destroy() before the
+buffer goes out of scope.
+.fi
+.SH "SEE ALSO"
+.BR CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER (3),
+.BR crmempool_create_from_preallocated_buffer_mp (3),
+.BR crmempool_create (3),
+.BR crmempool_destroy (3)

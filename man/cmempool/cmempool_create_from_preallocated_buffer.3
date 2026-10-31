@@ -1,0 +1,53 @@
+.TH CMEMPOOL_CREATE_FROM_PREALLOCATED_BUFFER 3 "2026-10-30" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cmempool_create_from_preallocated_buffer \- create pool from user buffer
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+cmempool_create_from_preallocated_buffer(buffer, buf_size, elem_size,
+                                         fallback_to_dynamic_memory,
+                                         single_threaded, err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a memory pool on top of a buffer that the caller provides, so
+the pool takes no memory from the heap for its entries. Fallback
+entries, when the fallback is on, come from the standard malloc and
+free.
+
+It is the same as calling cmempool_create_from_preallocated_buffer_mp()
+with NULL memory management procedures, and every rule of that page
+applies.
+.fi
+.SH PARAMETERS
+.nf
+buffer                     Pointer to the preallocated buffer
+buf_size                   Size of the buffer in bytes
+elem_size                  Size of each element in bytes. It must be
+                           > 0. If it is smaller than sizeof(uintptr_t),
+                           it is rounded up. The maximum is SIZE_MAX
+                           less the stride rounding
+fallback_to_dynamic_memory If true, allocate from the heap when the pool
+                           is empty
+single_threaded            If true, take no lock
+err                        Optional pointer that receives an error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to the new memory pool on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Declare the buffer with CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(), which
+sizes and aligns it for the pool. The caller must destroy the pool with
+cmempool_destroy() before the buffer goes out of scope.
+.fi
+.SH "SEE ALSO"
+.BR CMEMPOOL_DECLARE_PREALLOCATED_BUFFER (3),
+.BR cmempool_create_from_preallocated_buffer_mp (3),
+.BR cmempool_create (3),
+.BR cmempool_destroy (3)

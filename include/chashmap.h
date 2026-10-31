@@ -92,7 +92,7 @@ SOFTWARE.
  * again on the new table and keeps it when the keys spread under it. A
  * lookup never writes to the map. A long double key is hashed by value with
  * SipHash-1-3 in both modes. The secrets are drawn once per process. See
- * chmap_create_full() for the thresholds and for what someone who controls
+ * chashmap_create_full() for the thresholds and for what someone who controls
  * the keys can still force
  * - A separate-chaining map iterates in insertion order, while an
  * open-addressing map iterates in slot order, which depends on the mode and
@@ -107,7 +107,7 @@ SOFTWARE.
  */
 
 /** @brief The default first size of the bucket array */
-#define CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE 16
+#define CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE 16
 
 /** @brief Opaque hash map structure */
 typedef struct chashmap chashmap;
@@ -158,7 +158,7 @@ typedef chashmap *chmap;
  * then two different keys and a lookup misses. Give such a key type a
  * custom_hashing_proc and a custom_key_equality_proc that read only the
  * members. Without them the bytes of a padded key must be fully determined.
- * Through the raw functions such as chmap_insert_elem() the map reads
+ * Through the raw functions such as chashmap_insert_elem() the map reads
  * exactly the object that key_pair->ptr points at, so zero the whole key
  * object with memset() before you set its members. Through the
  * type-inferred macros the map sees the macro's own copy of the key, and C
@@ -269,27 +269,27 @@ typedef chashmap *chmap;
  * different buckets, and a lookup can report a present key as absent.
  * @note Destroy the map with chmap_destroy() once you're done with it
  *
- * @see chmap_create
- * @see chmap_create_mp
- * @see chmap_create_ch
+ * @see chashmap_create
+ * @see chashmap_create_mp
+ * @see chashmap_create_ch
  * @see chmap_destroy
  */
-chmap chmap_create_full(size_t initial_bucket_array_size,
-                        ccol_data_type key_type, ccol_data_type val_type,
-                        ccol_memmgmt_procs_t *mmgmt_procs,
-                        ccol_hashing_proc_t custom_hashing_proc,
-                        ccol_key_equality_proc_t custom_key_equality_proc,
-                        char **err);
+chmap chashmap_create_full(size_t initial_bucket_array_size,
+                           ccol_data_type key_type, ccol_data_type val_type,
+                           ccol_memmgmt_procs_t *mmgmt_procs,
+                           ccol_hashing_proc_t custom_hashing_proc,
+                           ccol_key_equality_proc_t custom_key_equality_proc,
+                           char **err);
 
 /**
  * @brief Create a hash map with the default settings
  *
- * A convenience wrapper for chmap_create_full() with the default memory
+ * A convenience wrapper for chashmap_create_full() with the default memory
  * management and the default hash, which starts in the fast mode and
- * switches to the keyed mode on a flood; see chmap_create_full().
+ * switches to the keyed mode on a flood; see chashmap_create_full().
  *
  * @param initial_bucket_array_size First number of buckets; see
- * chmap_create_full(). 0 is refused and the call fails
+ * chashmap_create_full(). 0 is refused and the call fails
  * @param key_type Type of the keys, which selects the implementation strategy
  * @param val_type Type of the values, which selects the implementation
  * strategy
@@ -297,23 +297,23 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
  *
  * @return Pointer to the new hash map, or NULL when the call fails
  *
- * @note See chmap_create_full() for how the implementation is picked
+ * @note See chashmap_create_full() for how the implementation is picked
  */
 static inline __attribute__((always_inline)) chmap
-chmap_create(size_t initial_bucket_array_size, ccol_data_type key_type,
-             ccol_data_type val_type, char **err) {
-  return chmap_create_full(initial_bucket_array_size, key_type, val_type, NULL,
-                           NULL, NULL, err);
+chashmap_create(size_t initial_bucket_array_size, ccol_data_type key_type,
+                ccol_data_type val_type, char **err) {
+  return chashmap_create_full(initial_bucket_array_size, key_type, val_type,
+                              NULL, NULL, NULL, err);
 }
 
 /**
  * @brief Create a hash map with custom memory management
  *
- * A convenience wrapper for chmap_create_full() with custom memory
+ * A convenience wrapper for chashmap_create_full() with custom memory
  * management and the default hash.
  *
  * @param initial_bucket_array_size First number of buckets; see
- * chmap_create_full(). 0 is refused and the call fails
+ * chashmap_create_full(). 0 is refused and the call fails
  * @param key_type Type of the keys, which selects the implementation strategy
  * @param val_type Type of the values, which selects the implementation
  * strategy
@@ -322,23 +322,23 @@ chmap_create(size_t initial_bucket_array_size, ccol_data_type key_type,
  *
  * @return Pointer to the new hash map, or NULL when the call fails
  *
- * @note See chmap_create_full() for how the implementation is picked
+ * @note See chashmap_create_full() for how the implementation is picked
  */
-static inline __attribute__((always_inline)) chmap chmap_create_mp(
+static inline __attribute__((always_inline)) chmap chashmap_create_mp(
     size_t initial_bucket_array_size, ccol_data_type key_type,
     ccol_data_type val_type, ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
-  return chmap_create_full(initial_bucket_array_size, key_type, val_type,
-                           mmgmt_procs, NULL, NULL, err);
+  return chashmap_create_full(initial_bucket_array_size, key_type, val_type,
+                              mmgmt_procs, NULL, NULL, err);
 }
 
 /**
  * @brief Create a hash map with a custom hash function
  *
- * A convenience wrapper for chmap_create_full() with a custom hash function
+ * A convenience wrapper for chashmap_create_full() with a custom hash function
  * and the default memory management.
  *
  * @param initial_bucket_array_size First number of buckets; see
- * chmap_create_full(). 0 is refused and the call fails
+ * chashmap_create_full(). 0 is refused and the call fails
  * @param key_type Type of the keys, which selects the implementation strategy
  * @param val_type Type of the values, which selects the implementation
  * strategy
@@ -347,14 +347,14 @@ static inline __attribute__((always_inline)) chmap chmap_create_mp(
  *
  * @return Pointer to the new hash map, or NULL when the call fails
  *
- * @note See chmap_create_full() for how the implementation is picked
+ * @note See chashmap_create_full() for how the implementation is picked
  */
 static inline __attribute__((always_inline)) chmap
-chmap_create_ch(size_t initial_bucket_array_size, ccol_data_type key_type,
-                ccol_data_type val_type,
-                ccol_hashing_proc_t custom_hashing_proc, char **err) {
-  return chmap_create_full(initial_bucket_array_size, key_type, val_type, NULL,
-                           custom_hashing_proc, NULL, err);
+chashmap_create_ch(size_t initial_bucket_array_size, ccol_data_type key_type,
+                   ccol_data_type val_type,
+                   ccol_hashing_proc_t custom_hashing_proc, char **err) {
+  return chashmap_create_full(initial_bucket_array_size, key_type, val_type,
+                              NULL, custom_hashing_proc, NULL, err);
 }
 
 /* ========================================================================== */
@@ -373,7 +373,7 @@ chmap_create_ch(size_t initial_bucket_array_size, ccol_data_type key_type,
  * @note It asserts when chm is NULL
  * @note O(1) complexity
  */
-size_t chmap_elem_count(chmap chm);
+size_t chashmap_elem_count(chmap chm);
 
 /**
  * @brief Remove every element, and resize the map if you ask for it
@@ -397,7 +397,7 @@ size_t chmap_elem_count(chmap chm);
  *
  * @see chmap_destroy
  */
-ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
+ccol_retval_t chashmap_reset(chmap chm, size_t new_bucket_array_size);
 
 /**
  * @brief Insert a key-value pair, or update it (upsert)
@@ -436,7 +436,7 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
  * as it is. This path reports ccol_key_already_present and not
  * ccol_success; see above
  * @note key_pair and val_pair may point into the map itself: each can be a
- * pair that chmap_get_elem_ref() filled for any key of the same map, or any
+ * pair that chashmap_get_elem_ref() filled for any key of the same map, or any
  * other pair that points at the bytes of a stored key or value. Both pairs
  * are read before anything changes, so this holds even for the insert that
  * resizes the map and frees the storage they point at
@@ -445,12 +445,12 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
  * (bucket_count + 1) * 1.5
  * @note Scale factor is 2x for open-addressing, 4x for separate chaining
  *
- * @see chmap_get_elem_copy
- * @see chmap_get_elem_ref
- * @see chmap_delete_elem
+ * @see chashmap_get_elem_copy
+ * @see chashmap_get_elem_ref
+ * @see chashmap_delete_elem
  */
-ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair *key_pair,
-                                const cmap_pair *val_pair);
+ccol_retval_t chashmap_insert_elem(chmap chm, const cmap_pair *key_pair,
+                                   const cmap_pair *val_pair);
 
 /**
  * @brief Get a copy of the value that belongs to a key
@@ -480,11 +480,11 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair *key_pair,
  * @note When target_buf_size is larger than the stored value, the remaining
  * bytes of target_buf are set to zero rather than left as they were
  *
- * @see chmap_get_elem_ref
- * @see chmap_insert_elem
+ * @see chashmap_get_elem_ref
+ * @see chashmap_insert_elem
  */
-ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
-                                  void *target_buf, size_t target_buf_size);
+ccol_retval_t chashmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
+                                     void *target_buf, size_t target_buf_size);
 
 /**
  * @brief Get the location and the size of the value that belongs to a key
@@ -514,19 +514,19 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
  * @note Separate chaining: O(n) worst case per bucket, where n is the chain
  * length
  * @note An insert, a delete or a resize makes val_pair->ptr invalid, but a
- * call to chmap_get_elem_ref, chmap_get or chmap_get_ptr for a different key
+ * call to chashmap_get_elem_ref, chmap_get or chmap_get_ptr for a different key
  * never does. So you can hold two or more results for different keys at the
  * same time and each one stays valid on its own
  * @note The cmap_pair belongs to the caller and the map keeps no reference
  * to it. Don't free val_pair->ptr, the map owns the value bytes. Changing
  * val_pair->ptr or val_pair->size changes only the caller's copy and never
- * the stored value; use chmap_insert_elem() to replace a value.
+ * the stored value; use chashmap_insert_elem() to replace a value.
  *
- * @see chmap_get_elem_copy
- * @see chmap_insert_elem
+ * @see chashmap_get_elem_copy
+ * @see chashmap_insert_elem
  */
-ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair *key_pair,
-                                 cmap_pair *val_pair);
+ccol_retval_t chashmap_get_elem_ref(chmap chm, const cmap_pair *key_pair,
+                                    cmap_pair *val_pair);
 
 /**
  * @brief Get the accessor that a separate-chaining map keeps for the value
@@ -540,8 +540,8 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair *key_pair,
  *
  * @warning Do not call this function directly. Use the chmap_get_ptr() macro
  */
-ccol_retval_t _chmap_get_val_accessor(chmap chm, const cmap_pair *key_pair,
-                                      const cmap_pair **val_accessor);
+ccol_retval_t _chashmap_get_val_accessor(chmap chm, const cmap_pair *key_pair,
+                                         const cmap_pair **val_accessor);
 
 /**
  * @brief Delete a key-value pair from the map
@@ -573,10 +573,10 @@ ccol_retval_t _chmap_get_val_accessor(chmap chm, const cmap_pair *key_pair,
  * @note Scale factor is 0.5x for open-addressing, 0.25x for separate chaining
  * @note It never resizes below the minimum threshold
  *
- * @see chmap_insert_elem
- * @see chmap_reset
+ * @see chashmap_insert_elem
+ * @see chashmap_reset
  */
-ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
+ccol_retval_t chashmap_delete_elem(chmap chm, const cmap_pair *key_pair);
 
 /* ========================================================================== */
 /*                         HASH MAP ITERATION                                 */
@@ -586,7 +586,7 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
  * the ccol_begin() macro there needs all three iterator functions in every
  * translation unit that uses it. */
 
-void __chmap_iterator_destroy(cmap_iterator *iter);
+void __chashmap_iterator_destroy(cmap_iterator *iter);
 
 /* ========================================================================== */
 /*                         HASH MAP DESTRUCTION                               */
@@ -597,19 +597,20 @@ void __chmap_iterator_destroy(cmap_iterator *iter);
  *
  * @param chm The hash map to destroy
  *
- * @warning Do not call this function directly. Use the chmap_destroy() macro
+ * @warning Do not call this function directly. Use the chashmap_destroy() or
+ * chmap_destroy() macro
  */
-void __chmap_destroy(chmap chm);
+void __chashmap_destroy(chmap chm);
 
 /**
  * @brief Destroy a hash map, call a destructor on every value first, and
  * allocate no memory to do it
  *
- * Behaves like __chmap_destroy() with one difference: when val_dtor is not
+ * Behaves like __chashmap_destroy() with one difference: when val_dtor is not
  * NULL it is called once for each live entry, with that entry's value as a
  * cmap_pair, right before the entry is freed. Nothing at all is allocated.
  * The walk goes over the map's internal bucket and slot storage directly,
- * the same way __chmap_destroy() does it, and the destructor call is part of
+ * the same way __chashmap_destroy() does it, and the destructor call is part of
  * that same walk.
  *
  * It's meant for a map whose values are owned pointers, each naming a
@@ -624,12 +625,12 @@ void __chmap_destroy(chmap chm);
  *
  * @param chm The hash map to destroy
  * @param val_dtor Destructor called once for each live value, before that
- *   entry is freed. Give NULL for the same behaviour as __chmap_destroy()
+ *   entry is freed. Give NULL for the same behaviour as __chashmap_destroy()
  * @param dtor_ctx Opaque pointer passed unchanged to every val_dtor call
  *
  * @note Calling it with a NULL chm is safe and does nothing
  * @note The chm handle is not set to NULL, which matches the raw internal
- *   convention of __chmap_destroy()
+ *   convention of __chashmap_destroy()
  * @note val_dtor must not change chm, since the map is in the middle of its
  *   teardown for the whole call
  * @note val_pair describes the stored value of the entry: val_pair->ptr
@@ -640,13 +641,13 @@ void __chmap_destroy(chmap chm);
  *   the pair describes storage that the map is about to free, and the map
  *   can't own a pointer it didn't allocate
  *
- * @see __chmap_destroy
+ * @see __chashmap_destroy
  * @see chashmap_begin_iter
  */
-void chmap_destroy_with_dtor(chmap chm,
-                             void (*val_dtor)(const cmap_pair *val_pair,
-                                              void *dtor_ctx),
-                             void *dtor_ctx);
+void chashmap_destroy_with_dtor(chmap chm,
+                                void (*val_dtor)(const cmap_pair *val_pair,
+                                                 void *dtor_ctx),
+                                void *dtor_ctx);
 
 /**
  * @brief Internal cleanup function that destroys a map at the end of its scope
@@ -656,9 +657,9 @@ void chmap_destroy_with_dtor(chmap chm,
  * @note The _ccol_destructor attribute uses this function
  * @warning Do not call this function directly
  */
-static inline void ___chmap_destroy(chmap *chm) {
+static inline void ___chashmap_destroy(chmap *chm) {
   if (chm && *chm) {
-    __chmap_destroy(*chm);
+    __chashmap_destroy(*chm);
     *chm = NULL;
   }
 }
@@ -677,18 +678,18 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note chm is evaluated exactly once, and it must be a modifiable lvalue
  * such as a variable or an element of an array
  */
-#define chmap_destroy(chm)      \
-  _ccol_chmap_destroy_impl(chm, \
-                           _ccol_uniq(__ccol_chmap_destroy_slot, __COUNTER__))
+#define chashmap_destroy(chm)  \
+  _ccol_chashmap_destroy_impl( \
+      chm, _ccol_uniq(__ccol_chashmap_destroy_slot, __COUNTER__))
 
-/* Internal: the body of chmap_destroy. slot is a name from _ccol_uniq(), so
- * the macro can nest inside the argument of another destroy macro and still
- * be -Wshadow clean. The argument is evaluated exactly once. */
-#define _ccol_chmap_destroy_impl(chm, slot) \
-  do {                                      \
-    __typeof__(chm) *slot = &(chm);         \
-    __chmap_destroy(*slot);                 \
-    *slot = NULL;                           \
+/* Internal: the body of chashmap_destroy. slot is a name from _ccol_uniq(),
+ * so the macro can nest inside the argument of another destroy macro and
+ * still be -Wshadow clean. The argument is evaluated exactly once. */
+#define _ccol_chashmap_destroy_impl(chm, slot) \
+  do {                                         \
+    __typeof__(chm) *slot = &(chm);            \
+    __chashmap_destroy(*slot);                 \
+    *slot = NULL;                              \
   } while (0)
 
 /* ========================================================================== */
@@ -754,7 +755,7 @@ static inline void ___chmap_destroy(chmap *chm) {
       NULL;                                                                 \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = \
       NULL;                                                                 \
-  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL
+  chmap hm_name _ccol_destructor(___chashmap_destroy) = NULL
 
 /**
  * @brief Initialize a hash map and set every option
@@ -768,10 +769,10 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @param mmgmt_procs Custom memory management procedures, or NULL
  * @param custom_hashing_proc Custom hash function, or NULL
  * @param custom_key_equality_proc Custom key equality function, or NULL. See
- * chmap_create_full() for the rule that ties it to custom_hashing_proc.
+ * chashmap_create_full() for the rule that ties it to custom_hashing_proc.
  *
  * @note It stops the program when the initialization fails
- * @note It uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
+ * @note It uses CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
  * @note The key type and the value type are read by the macro itself, and
  * the implementation is picked from them
  *
@@ -782,8 +783,8 @@ static inline void ___chmap_destroy(chmap *chm) {
                         custom_key_equality_proc)                             \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create_full(                                              \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create_full(                                           \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (mmgmt_procs), (custom_hashing_proc), (custom_key_equality_proc),     \
@@ -808,10 +809,10 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @param mmgmt_procs Custom memory management procedures, or NULL
  * @param custom_hashing_proc Custom hash function, or NULL
  * @param custom_key_equality_proc Custom key equality function, or NULL. See
- * chmap_create_full() for the rule that ties it to custom_hashing_proc.
+ * chashmap_create_full() for the rule that ties it to custom_hashing_proc.
  *
  * @note It stops the program when the initialization fails
- * @note It uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
+ * @note It uses CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
  * @note The implementation is picked from key_t and val_t
  *
  * @see chmap_init_full
@@ -823,11 +824,11 @@ static inline void ___chmap_destroy(chmap *chm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;              \
+  chmap hm_name /* _ccol_destructor(___chashmap_destroy) */ = NULL;           \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create_full(                                              \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create_full(                                           \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (mmgmt_procs), (custom_hashing_proc), (custom_key_equality_proc),     \
@@ -846,11 +847,11 @@ static inline void ___chmap_destroy(chmap *chm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL;                    \
+  chmap hm_name _ccol_destructor(___chashmap_destroy) = NULL;                 \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create_full(                                              \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create_full(                                           \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (mmgmt_procs), (custom_hashing_proc), (custom_key_equality_proc),     \
@@ -876,8 +877,8 @@ static inline void ___chmap_destroy(chmap *chm) {
 #define chmap_init(hm_name)                                                   \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create(                                                   \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create(                                                \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         &__ccol_chmap_err);                                                   \
@@ -927,11 +928,11 @@ static inline void ___chmap_destroy(chmap *chm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;              \
+  chmap hm_name /* _ccol_destructor(___chashmap_destroy) */ = NULL;           \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create(                                                   \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create(                                                \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         &__ccol_chmap_err);                                                   \
@@ -947,11 +948,11 @@ static inline void ___chmap_destroy(chmap *chm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL;                    \
+  chmap hm_name _ccol_destructor(___chashmap_destroy) = NULL;                 \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create(                                                   \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create(                                                \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         &__ccol_chmap_err);                                                   \
@@ -976,8 +977,8 @@ static inline void ___chmap_destroy(chmap *chm) {
 #define chmap_init_mp(hm_name, mmgmt_procs)                                   \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create_mp(                                                \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create_mp(                                             \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (mmgmt_procs), &__ccol_chmap_err);                                    \
@@ -1005,11 +1006,11 @@ static inline void ___chmap_destroy(chmap *chm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;              \
+  chmap hm_name /* _ccol_destructor(___chashmap_destroy) */ = NULL;           \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create_mp(                                                \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create_mp(                                             \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (mmgmt_procs), &__ccol_chmap_err);                                    \
@@ -1025,11 +1026,11 @@ static inline void ___chmap_destroy(chmap *chm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL;                    \
+  chmap hm_name _ccol_destructor(___chashmap_destroy) = NULL;                 \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create_mp(                                                \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create_mp(                                             \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (mmgmt_procs), &__ccol_chmap_err);                                    \
@@ -1054,8 +1055,8 @@ static inline void ___chmap_destroy(chmap *chm) {
 #define chmap_init_ch(hm_name, custom_hashing_proc)                           \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create_ch(                                                \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create_ch(                                             \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (custom_hashing_proc), &__ccol_chmap_err);                            \
@@ -1083,11 +1084,11 @@ static inline void ___chmap_destroy(chmap *chm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;              \
+  chmap hm_name /* _ccol_destructor(___chashmap_destroy) */ = NULL;           \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create_ch(                                                \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create_ch(                                             \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (custom_hashing_proc), &__ccol_chmap_err);                            \
@@ -1103,11 +1104,11 @@ static inline void ___chmap_destroy(chmap *chm) {
       NULL;                                                                   \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
       NULL;                                                                   \
-  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL;                    \
+  chmap hm_name _ccol_destructor(___chashmap_destroy) = NULL;                 \
   do {                                                                        \
     char *__ccol_chmap_err = NULL;                                            \
-    hm_name = chmap_create_ch(                                                \
-        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+    hm_name = chashmap_create_ch(                                             \
+        CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
         ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (custom_hashing_proc), &__ccol_chmap_err);                            \
@@ -1122,9 +1123,19 @@ static inline void ___chmap_destroy(chmap *chm) {
 /* ========================================================================== */
 
 /**
+ * @brief Destroy a hash map and set the pointer to NULL (type-inferred alias)
+ *
+ * The name the type-inferred layer uses for chashmap_destroy(). It behaves the
+ * same way.
+ *
+ * @param chm The hash map to destroy. It is set to NULL
+ */
+#define chmap_destroy(chm) chashmap_destroy(chm)
+
+/**
  * @brief Insert a key-value pair (type-inferred)
  *
- * The type-inferred wrapper for chmap_insert_elem(). It builds the key and
+ * The type-inferred wrapper for chashmap_insert_elem(). It builds the key and
  * value cmap_pairs from the expressions you give and calls _ccol_fatal_err()
  * when the insert fails.
  *
@@ -1146,7 +1157,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note A NULL key or value of a character-pointer type is not a string,
  * and the program stops with ccol_invalid_args for it
  *
- * @see chmap_insert_elem
+ * @see chashmap_insert_elem
  * @see chmap_get
  * @see chmap_remove
  *
@@ -1220,7 +1231,7 @@ static inline void ___chmap_destroy(chmap *chm) {
     _populate_cmap_pair(__ccol_chmap_kp, __ccol_chmap_key_tmp);               \
     _populate_cmap_pair(__ccol_chmap_vp, __ccol_chmap_val_tmp);               \
     ccol_retval_t __ccol_chmap_r =                                            \
-        chmap_insert_elem(hm_name, __ccol_chmap_kp, __ccol_chmap_vp);         \
+        chashmap_insert_elem(hm_name, __ccol_chmap_kp, __ccol_chmap_vp);      \
     if (__ccol_chmap_r != ccol_success &&                                     \
         __ccol_chmap_r != ccol_key_already_present) {                         \
       _ccol_dump_key_to_stderr(__ccol_chmap_kp->ptr, __ccol_chmap_kp->size);  \
@@ -1232,7 +1243,7 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Remove a key-value pair (type-inferred)
  *
- * The type-inferred wrapper for chmap_delete_elem(), which hands the result
+ * The type-inferred wrapper for chashmap_delete_elem(), which hands the result
  * code back to you.
  *
  * @param hm_name The hash map to remove from
@@ -1247,7 +1258,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note A NULL key of a character-pointer type is not a string, and you get
  * ccol_invalid_args for it
  *
- * @see chmap_delete_elem
+ * @see chashmap_delete_elem
  * @see chmap_insert
  *
  * Example:
@@ -1280,14 +1291,14 @@ static inline void ___chmap_destroy(chmap *chm) {
     cmap_pair *__ccol_chmap_kp = &(cmap_pair){};                       \
     _populate_cmap_pair(__ccol_chmap_kp, __ccol_chmap_key_tmp);        \
     ccol_retval_t __ccol_chmap_r =                                     \
-        chmap_delete_elem(hm_name, __ccol_chmap_kp);                   \
+        chashmap_delete_elem(hm_name, __ccol_chmap_kp);                \
     __ccol_chmap_r;                                                    \
   })
 
 /**
  * @brief Get a value by its key (type-inferred, gives the value)
  *
- * The type-inferred wrapper for chmap_get_elem_ref() that gives the value
+ * The type-inferred wrapper for chashmap_get_elem_ref() that gives the value
  * itself. It calls _ccol_fatal_err() when the key is not present, and also
  * when the two sizes don't match.
  *
@@ -1343,7 +1354,7 @@ static inline void ___chmap_destroy(chmap *chm) {
     cmap_pair __ccol_chmap_vp = {NULL, 0};                                     \
     _populate_cmap_pair(__ccol_chmap_kp, __ccol_chmap_key_tmp);                \
     ccol_retval_t __ccol_chmap_r =                                             \
-        chmap_get_elem_ref(hm_name, __ccol_chmap_kp, &__ccol_chmap_vp);        \
+        chashmap_get_elem_ref(hm_name, __ccol_chmap_kp, &__ccol_chmap_vp);     \
     if (__ccol_chmap_r != ccol_success) {                                      \
       _ccol_dump_key_to_stderr(__ccol_chmap_kp->ptr, __ccol_chmap_kp->size);   \
       _ccol_fatal_err("chmap_get('%s'): r: %d (%s)", #hm_name, __ccol_chmap_r, \
@@ -1375,7 +1386,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  * different char* through that address would replace the pointer while the
  * size still describes the previous string, and it would give the map a
  * pointer it doesn't own and whose lifetime it can't control. Without the
- * const, chmap_get_elem_copy() and every read of an iterator value would
+ * const, chashmap_get_elem_copy() and every read of an iterator value would
  * then walk the new buffer, which can be much shorter, for the length of
  * the previous string: AddressSanitizer reports a global-buffer-overflow
  * read of the old length on the first such read.
@@ -1401,7 +1412,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @brief Get a pointer to a value by its key (type-inferred, gives a pointer or
  * NULL)
  *
- * The type-inferred wrapper for chmap_get_elem_ref() that gives a pointer to
+ * The type-inferred wrapper for chashmap_get_elem_ref() that gives a pointer to
  * the value, or NULL when the key is not present. Unlike chmap_get() it
  * doesn't stop the program for a missing key.
  *
@@ -1428,7 +1439,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  * NULL for it
  *
  * @see chmap_get
- * @see chmap_get_elem_ref
+ * @see chashmap_get_elem_ref
  * @see chmap_insert
  *
  * Example:
@@ -1485,15 +1496,15 @@ static inline void ___chmap_destroy(chmap *chm) {
     if (_ccol_is_char_ptr(*hm_name##__ccol_val_type_var)) {                  \
       /* The entry's only char* object is the ptr field of the accessor the  \
        * map keeps for it, so the result points there. */                    \
-      __ccol_chmap_r = _chmap_get_val_accessor(hm_name, __ccol_chmap_kp,     \
-                                               &__ccol_chmap_acc);           \
+      __ccol_chmap_r = _chashmap_get_val_accessor(hm_name, __ccol_chmap_kp,  \
+                                                  &__ccol_chmap_acc);        \
       if (__ccol_chmap_r == ccol_success) {                                  \
         __ccol_chmap_val = (__typeof__(*hm_name##__ccol_val_type_var) *)&(   \
             __ccol_chmap_acc->ptr);                                          \
       }                                                                      \
     } else {                                                                 \
       __ccol_chmap_r =                                                       \
-          chmap_get_elem_ref(hm_name, __ccol_chmap_kp, &__ccol_chmap_vp);    \
+          chashmap_get_elem_ref(hm_name, __ccol_chmap_kp, &__ccol_chmap_vp); \
       if (__ccol_chmap_r == ccol_success) {                                  \
         if (__ccol_chmap_vp.size != sizeof(*__ccol_chmap_val)) {             \
           _ccol_fatal_err(                                                   \
@@ -1510,5 +1521,30 @@ static inline void ___chmap_destroy(chmap *chm) {
     }                                                                        \
     _ccol_chmap_value_ptr_result(hm_name, __ccol_chmap_val);                 \
   })
+
+/**
+ * @brief Get the number of entries in a hash map (type-inferred alias)
+ *
+ * The name the type-inferred layer uses for chashmap_elem_count().
+ *
+ * @param chm The hash map to query
+ *
+ * @return The number of entries
+ */
+#define chmap_size(chm) chashmap_elem_count((chm))
+
+/**
+ * @brief Remove every entry from a hash map (type-inferred alias)
+ *
+ * The name the type-inferred layer uses for chashmap_reset().
+ *
+ * @param chm The hash map to reset
+ * @param new_bucket_array_size Number of buckets after the reset; see
+ * chashmap_reset()
+ *
+ * @return ccol_success, or the code chashmap_reset() gives
+ */
+#define chmap_reset(chm, new_bucket_array_size) \
+  chashmap_reset((chm), (new_bucket_array_size))
 
 #pragma GCC visibility pop

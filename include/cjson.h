@@ -712,7 +712,7 @@ ccol_retval_t cjson_dictionary_remove(cjson obj, const char *key);
  * @c key. cjson_set() updates the existing node in place, so @c value stays
  *    the same node.
  */
-typedef struct cjson_dictionary_iter {
+typedef struct cjson_dictionary_iter_t {
   /** The key of the current member. It stays valid until that member is
    *  removed or the dictionary is destroyed, and it is NULL once the
    *  iteration is over. */
@@ -722,7 +722,7 @@ typedef struct cjson_dictionary_iter {
   cjson value;
   /** Private: the member that the next step reads. */
   const void *_cjson_next;
-} cjson_dictionary_iter;
+} cjson_dictionary_iter_t;
 
 /**
  * @brief Start an iteration over a dictionary, and step onto its first
@@ -737,14 +737,14 @@ typedef struct cjson_dictionary_iter {
  *
  * Example:
  * @code
- * cjson_dictionary_iter it;
+ * cjson_dictionary_iter_t it;
  * for (bool ok = cjson_dictionary_first(obj, &it); ok;
  *      ok = cjson_dictionary_next(&it)) {
  *   printf("%s: %s\n", it.key, cjson_type_str(it.value));
  * }
  * @endcode
  */
-bool cjson_dictionary_first(cjson dict, cjson_dictionary_iter *it);
+bool cjson_dictionary_first(cjson dict, cjson_dictionary_iter_t *it);
 
 /**
  * @brief Step a dictionary cursor onto the next member.
@@ -755,7 +755,7 @@ bool cjson_dictionary_first(cjson dict, cjson_dictionary_iter *it);
  *         returned false, and then @c key and @c value are set to NULL.
  *         false also when @p it is NULL.
  */
-bool cjson_dictionary_next(cjson_dictionary_iter *it);
+bool cjson_dictionary_next(cjson_dictionary_iter_t *it);
 
 /* ========================================================================== */
 /*                         DEEP COPY                                          */

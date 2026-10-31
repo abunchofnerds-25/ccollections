@@ -1,0 +1,66 @@
+.TH CEVENTLOOP_RESUME 3 "2026-07-18" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ceventloop_resume \- resume event delivery for a registration previously paused by ceventloop_pause
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ceventloop_resume(ceventloop loop, ceventloop_reg reg);
+.fi
+.SH DESCRIPTION
+.nf
+Works only on fd registrations. A registration made from a queue or a
+cchan selectable gives ccol_invalid_args, the same restriction
+that ceventloop_modify has.
+
+Recomputes the fd's combined epoll interest mask with reg included
+again. That is an ordinary EPOLL_CTL_MOD call when the fd is in
+the kernel's epoll interest set, which happens when the other direction
+on the fd is live and not paused, and an EPOLL_CTL_ADD call when
+ceventloop_pause took the fd out of the set because every
+direction was paused. reg's direction, its generation and its share of
+ceventloop_reg_count stay as they were before the pause; the call
+only undoes what ceventloop_pause did to the interest mask.
+
+It also re-arms a reg that the loop stopped watching because an event
+reached it that none of its handlers can take (see
+ceventloop_add(3)).
+
+Resuming a reg that is neither paused nor stopped that way (one that
+was never paused, or was already resumed) succeeds and does nothing, on
+purpose. It matches how ceventloop_modify treats a request for the
+state that a registration is already in.
+.fi
+.SH PARAMETERS
+.nf
+loop  ceventloop the registration belongs to.
+reg   Registration to resume.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        reg is resumed, or it was not paused.
+ccol_invalid_args   loop is CEVENTLOOP_NULL, a stale handle,
+                    or a handle that has already been destroyed;
+                    or reg is CEVENTLOOP_REG_NULL or fails to
+                    resolve for another reason; or reg is a
+                    registration for a queue or a cchan. A reg
+                    that fails to resolve includes one removed at the
+                    same time, for example when the connection is
+                    closed while the caller thinks it still owns a
+                    paused registration to resume.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call at the same time as ceventloop_remove(), and from a
+callback running on one of the reactor threads. It is common to call it
+from a different thread than the one that paused reg, as in the
+EXAMPLES section of ceventloop_pause(3).
+.fi
+.SH "SEE ALSO"
+.BR ceventloop_pause (3),
+.BR ceventloop_add (3),
+.BR ceventloop_remove (3),
+.BR ceventloop_modify (3),
+.BR ceventloop_reg_generation (3)

@@ -1,0 +1,67 @@
+.TH CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER 3 "2026-08-28" "c_collections" "C Collections Library - Macros"
+.SH NAME
+CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER \- declare buffer for ranged memory pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(
+    name,
+    smallest_size_power_of_two,
+    largest_size_power_of_two,
+    number_of_smallest_size_elems_power_of_two);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a uint8_t array of the right size for a ranged memory pool
+with the given parameters, which the caller then passes to
+crmempool_create_from_preallocated_buffer_mp(). The computed size
+includes the status byte of every element of every sub-pool, and the
+buffer holds all the sub-pools one after another in contiguous memory.
+.fi
+.SH PARAMETERS
+.nf
+name                                     Variable name for the buffer
+smallest_size_power_of_two               Exponent for smallest pool size
+largest_size_power_of_two                Exponent for largest pool size
+number_of_smallest_size_elems_power_of_two  Exponent for smallest pool count
+.fi
+.SH NOTES
+.nf
+The buffer goes on the stack or into static storage, depending on where
+  you declare it
+It is useful on embedded systems, and anywhere you don't want a heap
+  allocation
+The macro declares the buffer with the alignment that every entry of
+  the pool is guaranteed to have, which is 16 bytes, so you can pass
+  the buffer straight to crmempool_create_from_preallocated_buffer_mp()
+  without thinking about alignment, and every sub-pool segment inside
+  the buffer stays correctly aligned too. The 16 is a fixed constant;
+  CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(3) explains why
+The buffer has exactly the size that
+  crmempool_create_from_preallocated_buffer_mp() requires for the
+  same parameters
+A _Static_assert rejects three cases at compile time: parameters that
+  would make the required buffer size overflow size_t, a
+  number_of_smallest_size_elems_power_of_two below
+  largest_size_power_of_two - smallest_size_power_of_two, and a
+  smallest_size_power_of_two below 4. The smallest element that a
+  ranged pool serves is 16 bytes, so a buffer declared for anything
+  smaller could only go to a constructor that refuses it. Without the
+  assert, the macro would silently give an array of the wrong size
+.fi
+.SH EXAMPLES
+.nf
+CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER(my_buffer, 4, 8, 10);
+crmempool *rmp = crmempool_create_from_preallocated_buffer(
+    my_buffer, sizeof(my_buffer), 4, 8, 10,
+    crmempool_fallback_disabled, false, NULL);
+if (!rmp)
+    return 1;
+/* ... crmempool_alloc_entry(rmp, n) / crmempool_free_entry(rmp, e) ... */
+crmempool_destroy(rmp);   /* frees the pool object, not my_buffer */
+.fi
+.SH "SEE ALSO"
+.BR crmempool_create_from_preallocated_buffer_mp (3)

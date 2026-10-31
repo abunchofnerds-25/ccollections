@@ -1,0 +1,62 @@
+.TH CDYNMQ_SELECTABLE 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cdynmq_selectable \- build a cselectable_t from a cdynmq
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+cdynmq_selectable(q, dir);
+.fi
+.SH DESCRIPTION
+.nf
+Builds a cselectable_t value (a tagged union, here of type
+cselectable_type_cdynmq) that wraps the given cdynmq pointer
+with the given direction.
+
+  cselect_read; wait for at least one message to arrive (read-wait)
+  cselect_write; wait until the queue holds fewer than
+                     ccol_max_elem_count messages, the same ceiling
+                     cdynmq_send() itself enforces, or until
+                     sends on the queue are turned off
+
+In practice a cdynmq has no bound, so the write direction
+is nearly always ready at once. A queue whose sends were turned off
+with cdynmq_disable_sending() is ready too, the same way a pipe
+whose reader has gone is ready for POLLOUT, and the
+cdynmq_send() that the caller makes next returns
+ccol_not_permitted.
+.fi
+.SH PARAMETERS
+.nf
+q    cdynmq pointer to wrap. A NULL value makes a
+     selectable that cselect() rejects with ccol_invalid_args.
+dir  cselect_read or cselect_write.
+.fi
+.SH RETURN VALUE
+.nf
+cselectable_t value (not a pointer).
+.fi
+.SH EXAMPLES
+.nf
+cdynmq *dq = cdynmq_create(NULL);
+ccircq *q0 = ccircq_create(8, NULL);
+
+size_t idx;
+cselect_va(&idx,
+    ccircq_selectable(q0, cselect_read),
+    cdynmq_selectable(dq, cselect_read));
+/* on ccol_success, claim the message with cdynmq_try_recv(dq, ...)
+   or ccircq_try_recv(q0, ...), for whichever selectable idx
+   points at */
+
+cdynmq_destroy(dq);
+ccircq_destroy(q0);
+.fi
+.SH "SEE ALSO"
+.BR cselect (3),
+.BR cselect_va (3),
+.BR ccircq_selectable (3),
+.BR cchan_selectable (3),
+.BR cselectable_fd (3)

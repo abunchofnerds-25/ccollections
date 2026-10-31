@@ -5,14 +5,14 @@ get a data race, and that is undefined behaviour. `cthreadcomm` gives you
 safe ways to hand data from one thread to another and to wait for events.
 There are five pieces:
 
-- `ccol_circular_queue`, a bounded queue whose sender waits while it's full,
+- `ccircq`, a bounded queue whose sender waits while it's full,
   so a fast producer can only go as fast as its consumer.
-- `ccol_dynamic_queue`, an unbounded queue whose sender never waits.
-- `ccol_channel`, two bounded queues behind one handle, which an "owner"
+- `cdynmq`, an unbounded queue whose sender never waits.
+- `cchan`, two bounded queues behind one handle, which an "owner"
   thread uses to talk to its "worker" threads.
-- `ccol_select`, which waits until the first of several queues or file
+- `cselect`, which waits until the first of several queues or file
   descriptors is ready. It's like `poll(2)` but it takes queues too.
-- `ccol_event_loop`, a persistent reactor that runs your callbacks on its own
+- `ceventloop`, a persistent reactor that runs your callbacks on its own
   thread (or threads) every time a watched queue or file descriptor is
   ready.
 
@@ -37,42 +37,42 @@ without a payload marks the end of the stream:
 #include <stdlib.h>
 
 static void *producer(void *arg) {
-    ccol_circular_queue *q = arg;
+    ccircq *q = arg;
     for (int i = 1; i <= 5; i++) {
         int *n = malloc(sizeof(*n));
         if (!n) continue;             /* no memory: ignore this number */
         *n = i * i;
-        c_message_t msg = { .data = n, .size = sizeof(*n) };
-        if (ccol_circq_send_zc(q, &msg) != ccol_success)
+        cmessage_t msg = { .data = n, .size = sizeof(*n) };
+        if (ccircq_send(q, &msg) != ccol_success)
             free(msg.data);           /* after a failed send, the data is ours */
         /* after a successful send, msg.data is NULL: the queue owns the data */
     }
-    c_message_t done = { .data = NULL, .size = 0 };   /* end of the stream */
-    ccol_circq_send_zc(q, &done);
+    cmessage_t done = { .data = NULL, .size = 0 };   /* end of the stream */
+    ccircq_send(q, &done);
     return NULL;
 }
 
 int main(void) {
     char *err = NULL;
-    ccol_circular_queue *q = ccol_circular_queue_create(4, &err);
+    ccircq *q = ccircq_create(4, &err);
     if (!q) { fprintf(stderr, "queue: %s\n", err); return 1; }
 
     pthread_t t;
     if (pthread_create(&t, NULL, producer, q) != 0) {
-        ccol_circular_queue_destroy(q);
+        ccircq_destroy(q);
         return 1;
     }
 
     for (;;) {
-        c_message_t msg;
-        ccol_circq_recv_zc(q, &msg);  /* waits until a message arrives */
+        cmessage_t msg;
+        ccircq_recv(q, &msg);  /* waits until a message arrives */
         if (!msg.data) break;         /* the sentinel */
         printf("got %d\n", *(int *)msg.data);
         free(msg.data);               /* the receiver owns the payload */
     }
 
     pthread_join(t, NULL);
-    ccol_circular_queue_destroy(q);   /* the queue must be empty here */
+    ccircq_destroy(q);   /* the queue must be empty here */
     return 0;
 }
 ```
@@ -81,20 +81,19 @@ Build it with `-lccollections -lpthread`.
 
 ## Messages and who owns them
 
-Every queue carries a `c_message_t`:
+Every queue carries a `cmessage_t`:
 
 ```c
-typedef struct c_message_t {
+typedef struct cmessage_t {
     void   *data;   /* your payload, usually on the heap */
     size_t  size;   /* the size of the payload in bytes */
-} c_message_t;
+} cmessage_t;
 ```
 
 The queues never copy your payload. They move the pointer, and the
-**ownership** of the payload moves with it, which is what the `_zc` ("zero
-copy") in the function names stands for. A successful send sets `msg.data`
-to `NULL` because the queue has taken the payload over, so don't touch it
-again. A failed send leaves `msg` as it was, so the payload is yours
+**ownership** of the payload moves with it. A successful send sets
+`msg.data` to `NULL` because the queue has taken the payload over, so don't
+touch it again. A failed send leaves `msg` as it was, so the payload is yours
 and you have to free it or send it somewhere else. A receive hands the
 payload to you, and then freeing it is your job.
 
@@ -109,11 +108,11 @@ refused by every send with `ccol_invalid_args`, and it stays yours.
 
 | You need | Use |
 |---|---|
-| A producer that must go slower when the consumer is slow | `ccol_circular_queue` |
-| A producer that must not wait | `ccol_dynamic_queue` |
-| One owner thread that sends work to helpers and gets replies | `ccol_channel` |
-| One thread that waits on several queues or sockets at the same time | `ccol_select` |
-| Callbacks that run each time a queue or socket is ready, for a long time | `ccol_event_loop` |
+| A producer that must go slower when the consumer is slow | `ccircq` |
+| A producer that must not wait | `cdynmq` |
+| One owner thread that sends work to helpers and gets replies | `cchan` |
+| One thread that waits on several queues or sockets at the same time | `cselect` |
+| Callbacks that run each time a queue or socket is ready, for a long time | `ceventloop` |
 
 You can use any of the queues from many threads at the same time. When you
 aren't sure which queue to pick, start with the circular queue: its sender
@@ -125,13 +124,13 @@ make the program run out of memory.
 Most operations come in three forms:
 
 ```c
-ccol_circq_send_zc(q, &msg);                  /* waits while the queue is full */
-ccol_circq_try_send_zc(q, &msg);              /* ccol_container_full immediately */
-ccol_circq_timed_send_zc(q, &msg, 250000);    /* waits at most 250 ms */
+ccircq_send(q, &msg);                  /* waits while the queue is full */
+ccircq_try_send(q, &msg);              /* ccol_container_full immediately */
+ccircq_timed_send(q, &msg, 250000);    /* waits at most 250 ms */
 
-ccol_circq_recv_zc(q, &msg);                  /* waits for a message */
-ccol_circq_try_recv_zc(q, &msg);              /* ccol_container_empty immediately */
-ccol_circq_timed_recv_zc(q, &msg, 250000);
+ccircq_recv(q, &msg);                  /* waits for a message */
+ccircq_try_recv(q, &msg);              /* ccol_container_empty immediately */
+ccircq_timed_recv(q, &msg, 250000);    /* waits at most 250 ms */
 ```
 
 Timeouts are `uint64_t` microseconds on a monotonic clock, so changing the
@@ -141,16 +140,16 @@ of `0` behaves exactly like its `try_` form and gives the same result code
 timeout conventions of the whole library are in
 [the design guide](design.md).
 
-The dynamic queue has a single send, `ccol_dynmq_send_zc`, which never
+The dynamic queue has a single send, `cdynmq_send`, which never
 waits, and the usual blocking, try and timed receive. A channel has all six
-calls, named `ccol_chan_`.
+calls, named `cchan_`.
 
-`ccol_circq_disable_sending` (and its `dynmq` and `chan` versions) closes a
+`ccircq_disable_sending` (and its `dynmq` and `chan` versions) closes a
 queue to new sends. Senders that are waiting on a full queue then return
 `ccol_not_permitted` and keep their messages, while whatever is already in
 the queue stays there for the consumer. A receive on an empty queue keeps
 waiting though, so the consumer needs a sentinel (or a timed receive) to find
-out that the stream is over. A producer that waits with `ccol_select` (or
+out that the stream is over. A producer that waits with `cselect` (or
 with an event loop write registration, see below) does find out: a queue
 whose sends are off counts as ready for writing, the same way a pipe whose
 reader went away counts as ready for `POLLOUT`, so the wait returns and the
@@ -158,9 +157,9 @@ producer's send then reports `ccol_not_permitted`.
 
 ## Channels: an owner and its workers
 
-A `ccol_channel` is two circular queues behind one handle, one for each
+A `cchan` is two circular queues behind one handle, one for each
 direction. The thread that creates the channel is its **owner** and every
-other thread is a **worker**. `ccol_chan_send_zc` and `ccol_chan_recv_zc`
+other thread is a **worker**. `cchan_send` and `cchan_recv`
 pick the right queue from the identity of the calling thread, so what the
 owner sends goes to the workers and what the workers send goes to the owner.
 
@@ -169,33 +168,33 @@ exit while the channel is in use. In practice that means you create the
 channel on the thread that lives longest, which is usually the main thread.
 There's a full example further down.
 
-## Waiting on several sources: `ccol_select`
+## Waiting on several sources: `cselect`
 
-`ccol_select` waits until one of several **selectables** is ready and tells
+`cselect` waits until one of several **selectables** is ready and tells
 you which one. You build the selectables from queues and file descriptors:
 
 ```c
 size_t which;
-ccol_retval_t rc = ccol_select_va(&which,
-    ccol_selectable_from_circq(jobs, ccol_select_read),    /* index 0 */
-    ccol_selectable_from_fd(sock_fd, ccol_select_read));   /* index 1 */
+ccol_retval_t rc = cselect_va(&which,
+    ccircq_selectable(jobs, cselect_read),       /* index 0 */
+    cselectable_fd(sock_fd, cselect_read));  /* index 1 */
 ```
 
-`ccol_select_timed_va` adds a timeout in microseconds and returns
+`cselect_timed_va` adds a timeout in microseconds and returns
 `ccol_timed_out` when nothing becomes ready in that time. With a timeout of
 `0` it checks the selectables once and doesn't wait.
 
-The thing to remember is that **`ccol_select` only reports readiness**. It
+The thing to remember is that **`cselect` only reports readiness**. It
 doesn't receive or send anything for you, so after it returns you make your
-own non-blocking call: `ccol_circq_try_recv_zc`, `ccol_dynmq_try_recv_zc`,
-`ccol_circq_try_send_zc` or `ccol_dynmq_send_zc` for a queue, and `read(2)`
+own non-blocking call: `ccircq_try_recv`, `cdynmq_try_recv`,
+`ccircq_try_send` or `cdynmq_send` for a queue, and `read(2)`
 or `recv(2)` (`write(2)` or `send(2)`) for a file descriptor. Exactly as with
 POSIX `select(2)`, another thread can take the message before your call
 runs, which is why that call must not block and why you have to check what
 it returns.
 
 When several selectables are ready at once, they share the calls of
-`ccol_select` fairly whatever their index. Each call scans the set in
+`cselect` fairly whatever their index. Each call scans the set in
 rotation order from a start that moves on with every call, and a ready file
 descriptor competes the same way as a ready queue. A worker that waits on a
 stop pipe and a job queue therefore sees the stop byte within a few calls,
@@ -215,73 +214,73 @@ call, when the call really has to wait.
 
 ## The persistent event loop
 
-`ccol_select` waits once. If you watch the same sources again and again for
-the whole life of a program, a `ccol_event_loop` is the better tool. You
+`cselect` waits once. If you watch the same sources again and again for
+the whole life of a program, a `ceventloop` is the better tool. You
 create it once and register queues and file descriptors with callbacks, and
 its background thread calls you every time a source is ready:
 
 ```c
-/* The smallest useful ccol_event_loop: a callback runs on the reactor
+/* The smallest useful ceventloop: a callback runs on the reactor
    thread whenever a job queue has messages. */
 #include <ccollections/cthreadcomm.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static void on_job(ccol_event_loop loop, ccol_event_reg reg,
-                   ccol_selectable *sel, void *arg) {
+static void on_job(ceventloop loop, ceventloop_reg reg,
+                   cselectable_t *sel, void *arg) {
     (void)loop; (void)reg;
-    ccol_dynamic_queue *acks = arg;
-    c_message_t msg;
+    cdynmq *acks = arg;
+    cmessage_t msg;
     /* readiness only: receive here, and allow for an empty queue */
-    while (ccol_circq_try_recv_zc(sel->cq, &msg) == ccol_success) {
+    while (ccircq_try_recv(sel->cq, &msg) == ccol_success) {
         printf("job: %s\n", (char *)msg.data);
         free(msg.data);
-        c_message_t ack = { .data = NULL, .size = 0 };
-        ccol_dynmq_send_zc(acks, &ack);    /* tell main that one job is done */
+        cmessage_t ack = { .data = NULL, .size = 0 };
+        cdynmq_send(acks, &ack);    /* tell main that one job is done */
     }
 }
 
 int main(void) {
     char *err = NULL;
-    ccol_event_loop loop = ccol_event_loop_create(32, 1, 1, &err);
+    ceventloop loop = ceventloop_create(32, 1, 1, &err);
     if (!loop) { fprintf(stderr, "loop: %s\n", err); return 1; }
 
-    ccol_circular_queue *jobs = ccol_circular_queue_create(64, NULL);
-    ccol_dynamic_queue *acks = ccol_dynamic_queue_create(NULL);
+    ccircq *jobs = ccircq_create(64, NULL);
+    cdynmq *acks = cdynmq_create(NULL);
     if (!jobs || !acks) return 1;
-    ccol_event_handlers_t handlers = { .on_readable = on_job };
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(jobs, ccol_select_read),
+    ceventloop_handlers_t handlers = { .on_readable = on_job };
+    ceventloop_reg reg = ceventloop_add(
+        loop, ccircq_selectable(jobs, cselect_read),
         handlers, acks, &err);
     if (!reg) { fprintf(stderr, "add: %s\n", err); return 1; }
 
     const char *names[] = { "build #41", "build #42", "deploy" };
     int sent = 0;
     for (int i = 0; i < 3; i++) {
-        c_message_t msg = { .data = strdup(names[i]), .size = strlen(names[i]) + 1 };
-        if (ccol_circq_send_zc(jobs, &msg) == ccol_success) sent++;
+        cmessage_t msg = { .data = strdup(names[i]), .size = strlen(names[i]) + 1 };
+        if (ccircq_send(jobs, &msg) == ccol_success) sent++;
         else free(msg.data);
     }
 
     for (int i = 0; i < sent; i++) {   /* wait until every sent job has run */
-        c_message_t ack;
-        ccol_dynmq_recv_zc(acks, &ack);
+        cmessage_t ack;
+        cdynmq_recv(acks, &ack);
     }
 
     /* Teardown order: stop the threads, remove, empty, destroy. */
-    ccol_event_loop_shutdown(loop);   /* completes the queued dispatches, joins */
-    ccol_event_loop_remove(loop, reg);
-    c_message_t left;
-    while (ccol_circq_try_recv_zc(jobs, &left) == ccol_success) free(left.data);
-    ccol_circular_queue_destroy(jobs);
-    ccol_dynamic_queue_destroy(acks);
-    ccol_event_loop_destroy(loop);
+    ceventloop_shutdown(loop);   /* completes the queued dispatches, joins */
+    ceventloop_remove(loop, reg);
+    cmessage_t left;
+    while (ccircq_try_recv(jobs, &left) == ccol_success) free(left.data);
+    ccircq_destroy(jobs);
+    cdynmq_destroy(acks);
+    ceventloop_destroy(loop);
     return 0;
 }
 ```
 
-`ccol_event_loop_create` takes three numbers:
+`ceventloop_create` takes three numbers:
 
 1. the size of the event batch of one wait (32 is more than enough);
 2. the number of lock stripes (give `1`);
@@ -289,12 +288,12 @@ int main(void) {
 
 A few things about the callbacks are worth keeping in mind.
 
-They only report readiness, just like `ccol_select`. Receive with
-`ccol_circq_try_recv_zc(sel->cq, ...)` (or `sel->dq`), or call `read` or
+They only report readiness, just like `cselect`. Receive with
+`ccircq_try_recv(sel->cq, ...)` (or `sel->dq`), or call `read` or
 `recv` on `sel->fd`, and be ready for that call to find nothing.
 
 They run on the loop's thread and not on the thread that called
-`ccol_event_loop_add`. With the default single reactor thread a slow
+`ceventloop_add`. With the default single reactor thread a slow
 callback holds up every other registration, so hand slow work over to
 another thread or to a [thread pool](cthreadpool.md).
 
@@ -305,25 +304,25 @@ its registration.
 
 A callback gets its own registration as `reg`, so it can remove or pause
 itself. Use that parameter and not a copy that the adding thread stores
-after `ccol_event_loop_add` returns, because the callback can run before
+after `ceventloop_add` returns, because the callback can run before
 that store happens.
 
 The loop never runs the callback of one registration twice at the same time,
 and it never runs the read and the write callback of one file descriptor at
 the same time either, whatever the number of threads.
 
-`ccol_event_loop` and `ccol_event_reg` are opaque value handles (integers),
-not pointers. Compare them with `CCOL_EVENT_LOOP_NULL` and
-`CCOL_EVENT_REG_NULL`. Both are `0`, so `if (!loop)` works.
+`ceventloop` and `ceventloop_reg` are opaque value handles (integers),
+not pointers. Compare them with `CEVENTLOOP_NULL` and
+`CEVENTLOOP_REG_NULL`. Both are `0`, so `if (!loop)` works.
 
 ### Removing registrations safely
 
-You can call `ccol_event_loop_remove` from any thread, including from the
+You can call `ceventloop_remove` from any thread, including from the
 registration's own callback. Once it returns, no new callback of that
 registration starts, but it doesn't wait for a callback that happens to be
 running on another thread at that moment. If the `arg` of your callback has
 to stay valid until that callback is done, set `on_removed` in
-`ccol_event_handlers_t`. It runs exactly once, at a point where no callback
+`ceventloop_handlers_t`. It runs exactly once, at a point where no callback
 of the registration can run, and that's where you free `arg` and
 close the descriptor.
 
@@ -335,19 +334,19 @@ the program with an assertion.
 
 This teardown order always works:
 
-1. Call `ccol_event_loop_shutdown`, which finishes the work it has already
+1. Call `ceventloop_shutdown`, which finishes the work it has already
    collected and joins the threads. From that point the loop takes no wake
    from a queue it watches, so other listeners of that queue keep getting
-   every message, and a new `ccol_event_loop_add` on it is refused.
+   every message, and a new `ceventloop_add` on it is refused.
 2. Remove the registrations, empty your queues and destroy them.
-3. Call `ccol_event_loop_destroy`, which also runs the `on_removed` of every
+3. Call `ceventloop_destroy`, which also runs the `on_removed` of every
    registration that is live.
 
 ### Watching both directions, changing direction, pausing
 
 A registration watches one direction. To read and write one socket from
-separate callbacks, add the socket twice, once with `ccol_select_read` and
-once with `ccol_select_write`. `ccol_event_loop_modify` switches a
+separate callbacks, add the socket twice, once with `cselect_read` and
+once with `cselect_write`. `ceventloop_modify` switches a
 registration from write to read, for example after a non-blocking
 `connect(2)` has completed. If you want the events to stop for a while and
 come back later, say while a worker thread does blocking I/O on the socket,
@@ -355,9 +354,9 @@ pause and resume:
 
 ```c
 /* fragment */
-ccol_event_loop_pause(loop, reg);    /* no callbacks for reg from here on */
+ceventloop_pause(loop, reg);    /* no callbacks for reg from here on */
 /* ... a different thread uses the fd directly ... */
-ccol_event_loop_resume(loop, reg);   /* same registration, events again */
+ceventloop_resume(loop, reg);   /* same registration, events again */
 ```
 
 Pause, resume and modify only work on file descriptors. To change a queue
@@ -394,8 +393,8 @@ when it reports. Each worker stops when it receives its own sentinel.
 typedef struct { size_t id; char *text; size_t words; } job_t;
 
 typedef struct {
-    ccol_circular_queue *jobs;     /* bounded: it slows the producer down */
-    ccol_dynamic_queue  *results;  /* unbounded: a worker does not wait */
+    ccircq *jobs;     /* bounded: it slows the producer down */
+    cdynmq  *results;  /* unbounded: a worker does not wait */
 } queues_t;
 
 static size_t count_words(const char *s) {
@@ -411,8 +410,8 @@ static size_t count_words(const char *s) {
 static void *worker(void *arg) {
     queues_t *qs = arg;
     for (;;) {
-        c_message_t msg;
-        ccol_circq_recv_zc(qs->jobs, &msg);
+        cmessage_t msg;
+        ccircq_recv(qs->jobs, &msg);
         if (!msg.data) return NULL;           /* one sentinel for each worker */
 
         job_t *job = msg.data;
@@ -420,8 +419,8 @@ static void *worker(void *arg) {
         free(job->text);
         job->text = NULL;
 
-        c_message_t out = { .data = job, .size = sizeof(*job) };
-        if (ccol_dynmq_send_zc(qs->results, &out) != ccol_success)
+        cmessage_t out = { .data = job, .size = sizeof(*job) };
+        if (cdynmq_send(qs->results, &out) != ccol_success)
             free(out.data);
     }
 }
@@ -438,8 +437,8 @@ int main(void) {
     const size_t n_lines = sizeof(lines) / sizeof(lines[0]);
 
     queues_t qs = {
-        .jobs = ccol_circular_queue_create(2, NULL),
-        .results = ccol_dynamic_queue_create(NULL),
+        .jobs = ccircq_create(2, NULL),
+        .results = cdynmq_create(NULL),
     };
     if (!qs.jobs || !qs.results) return 1;
 
@@ -456,8 +455,8 @@ int main(void) {
         job->id = i;
         job->text = strdup(lines[i]);
         job->words = 0;
-        c_message_t msg = { .data = job, .size = sizeof(*job) };
-        if (!job->text || ccol_circq_send_zc(qs.jobs, &msg) != ccol_success) {
+        cmessage_t msg = { .data = job, .size = sizeof(*job) };
+        if (!job->text || ccircq_send(qs.jobs, &msg) != ccol_success) {
             free(job->text);
             free(job);
             continue;
@@ -467,16 +466,16 @@ int main(void) {
 
     size_t words[sizeof(lines) / sizeof(lines[0])] = { 0 };
     for (size_t got = 0; got < sent; got++) {
-        c_message_t msg;
-        ccol_dynmq_recv_zc(qs.results, &msg);
+        cmessage_t msg;
+        cdynmq_recv(qs.results, &msg);
         job_t *done = msg.data;
         words[done->id] = done->words;
         free(done);
     }
 
     for (int i = 0; i < started; i++) {
-        c_message_t stop = { .data = NULL, .size = 0 };
-        ccol_circq_send_zc(qs.jobs, &stop);
+        cmessage_t stop = { .data = NULL, .size = 0 };
+        ccircq_send(qs.jobs, &stop);
     }
     for (int i = 0; i < started; i++)
         pthread_join(team[i], NULL);
@@ -488,8 +487,8 @@ int main(void) {
     }
     printf("total: %zu\n", total);
 
-    ccol_circular_queue_destroy(qs.jobs);
-    ccol_dynamic_queue_destroy(qs.results);
+    ccircq_destroy(qs.jobs);
+    cdynmq_destroy(qs.results);
     return 0;
 }
 ```
@@ -503,7 +502,7 @@ own buffer, and that costs nothing since the ownership travels with the
 pointer.
 
 ```c
-/* A helper thread for requests and replies on one ccol_channel. The main
+/* A helper thread for requests and replies on one cchan. The main
    thread creates the channel, so it is the owner and the helper is a worker. */
 #include <ccollections/cthreadcomm.h>
 #include <ctype.h>
@@ -513,40 +512,40 @@ pointer.
 #include <string.h>
 
 static void *slugify_worker(void *arg) {
-    ccol_channel *ch = arg;
+    cchan *ch = arg;
     for (;;) {
-        c_message_t req;
-        ccol_chan_recv_zc(ch, &req);       /* a worker receives from the owner */
+        cmessage_t req;
+        cchan_recv(ch, &req);       /* a worker receives from the owner */
         if (!req.data) return NULL;
 
         char *s = req.data;                /* we own it; change it in place */
         for (char *p = s; *p; p++)
             *p = isalnum((unsigned char)*p) ? (char)tolower((unsigned char)*p) : '-';
 
-        c_message_t reply = req;           /* send the same buffer back */
-        if (ccol_chan_send_zc(ch, &reply) != ccol_success)
+        cmessage_t reply = req;           /* send the same buffer back */
+        if (cchan_send(ch, &reply) != ccol_success)
             free(reply.data);
     }
 }
 
-static char *slugify(ccol_channel *ch, const char *title) {
-    c_message_t req = { .data = strdup(title), .size = strlen(title) + 1 };
-    if (ccol_chan_send_zc(ch, &req) != ccol_success) {   /* owner -> worker */
+static char *slugify(cchan *ch, const char *title) {
+    cmessage_t req = { .data = strdup(title), .size = strlen(title) + 1 };
+    if (cchan_send(ch, &req) != ccol_success) {   /* owner -> worker */
         free(req.data);
         return NULL;
     }
-    c_message_t reply;
-    ccol_chan_recv_zc(ch, &reply);         /* the owner receives from workers */
+    cmessage_t reply;
+    cchan_recv(ch, &reply);         /* the owner receives from workers */
     return reply.data;                     /* the caller frees it */
 }
 
 int main(void) {
-    ccol_channel *ch = ccol_channel_create(8, NULL);
+    cchan *ch = cchan_create(8, NULL);
     if (!ch) return 1;
 
     pthread_t helper;
     if (pthread_create(&helper, NULL, slugify_worker, ch) != 0) {
-        ccol_channel_destroy(ch);
+        cchan_destroy(ch);
         return 1;
     }
 
@@ -557,10 +556,10 @@ int main(void) {
         free(slug);
     }
 
-    c_message_t stop = { .data = NULL, .size = 0 };
-    ccol_chan_send_zc(ch, &stop);
+    cmessage_t stop = { .data = NULL, .size = 0 };
+    cchan_send(ch, &stop);
     pthread_join(helper, NULL);
-    ccol_channel_destroy(ch);
+    cchan_destroy(ch);
     return 0;
 }
 ```
@@ -569,7 +568,7 @@ int main(void) {
 
 One thread waits on a command queue and a pipe at the same time, and does
 some maintenance work whenever 100 ms pass without input. A pipe is a handy
-way to wake a `ccol_select` from anywhere, a signal handler included.
+way to wake a `cselect` from anywhere, a signal handler included.
 
 ```c
 /* One thread waits on a command queue and a "stop" pipe at once, and does
@@ -583,7 +582,7 @@ way to wake a `ccol_select` from anywhere, a signal handler included.
 #include <unistd.h>
 
 typedef struct {
-    ccol_dynamic_queue *commands;
+    cdynmq *commands;
     int stop_fd;                     /* write end of the stop pipe */
 } feeder_args_t;
 
@@ -597,8 +596,8 @@ static void *feeder(void *arg) {
     const char *cmds[] = { "reload", "rotate-logs", "flush" };
     for (int i = 0; i < 3; i++) {
         sleep_ms(150);
-        c_message_t msg = { .data = strdup(cmds[i]), .size = strlen(cmds[i]) + 1 };
-        if (ccol_dynmq_send_zc(fa->commands, &msg) != ccol_success)
+        cmessage_t msg = { .data = strdup(cmds[i]), .size = strlen(cmds[i]) + 1 };
+        if (cdynmq_send(fa->commands, &msg) != ccol_success)
             free(msg.data);
     }
     sleep_ms(150);
@@ -609,7 +608,7 @@ static void *feeder(void *arg) {
 int main(void) {
     int pfd[2];
     if (pipe(pfd) != 0) return 1;
-    ccol_dynamic_queue *commands = ccol_dynamic_queue_create(NULL);
+    cdynmq *commands = cdynmq_create(NULL);
     if (!commands) return 1;
 
     feeder_args_t fa = { .commands = commands, .stop_fd = pfd[1] };
@@ -619,9 +618,9 @@ int main(void) {
     int ticks = 0;
     for (int running = 1; running;) {
         size_t which;
-        ccol_retval_t rc = ccol_select_timed_va(&which, 100000,   /* 100 ms */
-            ccol_selectable_from_dynq(commands, ccol_select_read),
-            ccol_selectable_from_fd(pfd[0], ccol_select_read));
+        ccol_retval_t rc = cselect_timed_va(&which, 100000,   /* 100 ms */
+            cdynmq_selectable(commands, cselect_read),
+            cselectable_fd(pfd[0], cselect_read));
 
         if (rc == ccol_timed_out) {
             ticks++;                              /* maintenance when idle */
@@ -630,9 +629,9 @@ int main(void) {
         if (rc != ccol_success) break;
 
         if (which == 0) {
-            c_message_t msg;
-            /* ccol_select only says "ready"; we must take the message */
-            while (ccol_dynmq_try_recv_zc(commands, &msg) == ccol_success) {
+            cmessage_t msg;
+            /* cselect only says "ready"; we must take the message */
+            while (cdynmq_try_recv(commands, &msg) == ccol_success) {
                 printf("command: %s\n", (char *)msg.data);
                 free(msg.data);
             }
@@ -645,12 +644,12 @@ int main(void) {
 
     pthread_join(t, NULL);
     /* A command may be queued when the select reports the stop byte. */
-    c_message_t msg;
-    while (ccol_dynmq_try_recv_zc(commands, &msg) == ccol_success) {
+    cmessage_t msg;
+    while (cdynmq_try_recv(commands, &msg) == ccol_success) {
         printf("command: %s\n", (char *)msg.data);
         free(msg.data);
     }
-    ccol_dynamic_queue_destroy(commands);   /* the queue must be empty here */
+    cdynmq_destroy(commands);   /* the queue must be empty here */
     close(pfd[0]);
     close(pfd[1]);
     return 0;
@@ -667,7 +666,7 @@ runs a few blocking clients against its own server, so it needs nothing from
 outside.
 
 ```c
-/* A TCP echo server on one ccol_event_loop: a listening socket, one
+/* A TCP echo server on one ceventloop: a listening socket, one
    registration for each client, and on_removed to release each connection. */
 #define _GNU_SOURCE
 #include <ccollections/cthreadcomm.h>
@@ -694,8 +693,8 @@ static void conn_release(void *arg) {
     free(c);
 }
 
-static void on_client(ccol_event_loop loop, ccol_event_reg reg,
-                      ccol_selectable *sel, void *arg) {
+static void on_client(ceventloop loop, ceventloop_reg reg,
+                      cselectable_t *sel, void *arg) {
     conn_t *c = arg;
     char buf[4096];
     ssize_t n = recv(sel->fd, buf, sizeof(buf), 0);
@@ -708,11 +707,11 @@ static void on_client(ccol_event_loop loop, ccol_event_reg reg,
     }
     if (n < 0 && (errno == EAGAIN || errno == EINTR)) return;
     /* EOF or error: stop the watch; conn_release closes the fd later */
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
 }
 
-static void on_accept(ccol_event_loop loop, ccol_event_reg reg,
-                      ccol_selectable *sel, void *arg) {
+static void on_accept(ceventloop loop, ceventloop_reg reg,
+                      cselectable_t *sel, void *arg) {
     (void)reg; (void)arg;
     for (;;) {
         int fd = accept4(sel->fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
@@ -721,10 +720,10 @@ static void on_accept(ccol_event_loop loop, ccol_event_reg reg,
         conn_t *c = calloc(1, sizeof(*c));
         if (!c) { close(fd); continue; }
         c->fd = fd;
-        ccol_event_handlers_t h = { .on_readable = on_client,
+        ceventloop_handlers_t h = { .on_readable = on_client,
                                     .on_removed = conn_release };
-        if (!ccol_event_loop_add(loop, ccol_selectable_from_fd(fd, ccol_select_read),
-                                 h, c, NULL)) {
+        if (!ceventloop_add(loop, cselectable_fd(fd, cselect_read),
+                            h, c, NULL)) {
             close(fd);
             free(c);
         }
@@ -763,11 +762,11 @@ int main(void) {
     int lfd = listen_on_loopback(&port);
     if (lfd < 0) { perror("listen"); return 1; }
 
-    ccol_event_loop loop = ccol_event_loop_create(64, 1, 1, NULL);
+    ceventloop loop = ceventloop_create(64, 1, 1, NULL);
     if (!loop) return 1;
-    ccol_event_handlers_t lh = { .on_readable = on_accept };
-    ccol_event_reg lreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(lfd, ccol_select_read), lh, NULL, NULL);
+    ceventloop_handlers_t lh = { .on_readable = on_accept };
+    ceventloop_reg lreg = ceventloop_add(
+        loop, cselectable_fd(lfd, cselect_read), lh, NULL, NULL);
     if (!lreg) return 1;
 
     talk(port, "hello");
@@ -775,9 +774,9 @@ int main(void) {
 
     /* Stop the dispatch, then release everything: destroy runs the
        on_removed of every live registration. */
-    ccol_event_loop_shutdown(loop);
-    ccol_event_loop_remove(loop, lreg);
-    ccol_event_loop_destroy(loop);
+    ceventloop_shutdown(loop);
+    ceventloop_remove(loop, lreg);
+    ceventloop_destroy(loop);
     close(lfd);
     return 0;
 }
@@ -792,18 +791,18 @@ kqueue on the BSDs is described in [Platforms](platforms.md).
 After a failed send you are the owner. The send leaves `msg.data`
 alone, so free the data or send the message again, or the memory leaks.
 
-`ccol_circular_queue_destroy`, `ccol_dynamic_queue_destroy` and
-`ccol_channel_destroy` assert when messages are left in the queue, and also
-when a `ccol_select` call or an event loop registration is watching it, so
+`ccircq_destroy`, `cdynmq_destroy` and
+`cchan_destroy` assert when messages are left in the queue, and also
+when a `cselect` call or an event loop registration is watching it, so
 empty the queue and remove its registrations first. We'd rather stop the
 program there than free a queue that still holds your payloads or that
 another thread is about to touch.
 
 In an event loop callback, use the queue calls and not the channel calls. A
 callback runs on a loop thread, which a channel takes for a worker, so for a
-selectable made with `ccol_selectable_from_chan` you receive with
-`ccol_circq_try_recv_zc(sel->cq, ...)` and send with
-`ccol_circq_try_send_zc(sel->cq, ...)`.
+selectable made with `cchan_selectable` you receive with
+`ccircq_try_recv(sel->cq, ...)` and send with
+`ccircq_try_send(sel->cq, ...)`.
 
 A loop can't be destroyed or shut down from its own callback, since both
 would have to wait for the callback that is making the call. A destroy there
@@ -814,7 +813,7 @@ Don't destroy a watched queue from one of its own callbacks either, and
 don't hold a lock that one of its callbacks also takes while you destroy it,
 because the destroy waits for those callbacks to finish.
 
-A write registration can send after `ccol_event_loop_remove` returns
+A write registration can send after `ceventloop_remove` returns
 if its callback had started before the remove. Wait for its `on_removed`
 before you empty and destroy the queue.
 
@@ -827,69 +826,69 @@ and call `exec` immediately. The policy of the whole library is in
 Overview: [cthreadcomm(7)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cthreadcomm.7.html)
 
 Circular queue:
-[ccol_circular_queue_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circular_queue_create.3.html),
-[ccol_circular_queue_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circular_queue_create_mp.3.html),
-[ccol_circular_queue_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circular_queue_destroy.3.html),
-[ccol_circq_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_send_zc.3.html),
-[ccol_circq_try_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_try_send_zc.3.html),
-[ccol_circq_timed_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_timed_send_zc.3.html),
-[ccol_circq_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_recv_zc.3.html),
-[ccol_circq_try_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_try_recv_zc.3.html),
-[ccol_circq_timed_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_timed_recv_zc.3.html),
-[ccol_circq_disable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_disable_sending.3.html),
-[ccol_circq_enable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_enable_sending.3.html),
-[ccol_circq_msg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_msg_count.3.html)
+[ccircq_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_create.3.html),
+[ccircq_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_create_mp.3.html),
+[ccircq_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_destroy.3.html),
+[ccircq_send(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_send.3.html),
+[ccircq_try_send(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_try_send.3.html),
+[ccircq_timed_send(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_timed_send.3.html),
+[ccircq_recv(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_recv.3.html),
+[ccircq_try_recv(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_try_recv.3.html),
+[ccircq_timed_recv(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_timed_recv.3.html),
+[ccircq_disable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_disable_sending.3.html),
+[ccircq_enable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_enable_sending.3.html),
+[ccircq_msg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_msg_count.3.html)
 
 Dynamic queue:
-[ccol_dynamic_queue_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynamic_queue_create.3.html),
-[ccol_dynamic_queue_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynamic_queue_create_mp.3.html),
-[ccol_dynamic_queue_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynamic_queue_destroy.3.html),
-[ccol_dynmq_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_send_zc.3.html),
-[ccol_dynmq_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_recv_zc.3.html),
-[ccol_dynmq_try_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_try_recv_zc.3.html),
-[ccol_dynmq_timed_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_timed_recv_zc.3.html),
-[ccol_dynmq_disable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_disable_sending.3.html),
-[ccol_dynmq_enable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_enable_sending.3.html),
-[ccol_dynmq_msg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_msg_count.3.html)
+[cdynmq_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_create.3.html),
+[cdynmq_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_create_mp.3.html),
+[cdynmq_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_destroy.3.html),
+[cdynmq_send(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_send.3.html),
+[cdynmq_recv(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_recv.3.html),
+[cdynmq_try_recv(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_try_recv.3.html),
+[cdynmq_timed_recv(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_timed_recv.3.html),
+[cdynmq_disable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_disable_sending.3.html),
+[cdynmq_enable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_enable_sending.3.html),
+[cdynmq_msg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_msg_count.3.html)
 
-Channel: [ccol_channel_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_channel_create.3.html),
-[ccol_channel_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_channel_create_mp.3.html),
-[ccol_channel_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_channel_destroy.3.html),
-[ccol_chan_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_send_zc.3.html),
-[ccol_chan_try_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_try_send_zc.3.html),
-[ccol_chan_timed_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_timed_send_zc.3.html),
-[ccol_chan_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_recv_zc.3.html),
-[ccol_chan_try_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_try_recv_zc.3.html),
-[ccol_chan_timed_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_timed_recv_zc.3.html),
-[ccol_chan_disable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_disable_sending.3.html),
-[ccol_chan_enable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_enable_sending.3.html),
-[ccol_chan_msg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_msg_count.3.html)
+Channel: [cchan_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_create.3.html),
+[cchan_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_create_mp.3.html),
+[cchan_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_destroy.3.html),
+[cchan_send(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_send.3.html),
+[cchan_try_send(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_try_send.3.html),
+[cchan_timed_send(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_timed_send.3.html),
+[cchan_recv(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_recv.3.html),
+[cchan_try_recv(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_try_recv.3.html),
+[cchan_timed_recv(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_timed_recv.3.html),
+[cchan_disable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_disable_sending.3.html),
+[cchan_enable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_enable_sending.3.html),
+[cchan_msg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_msg_count.3.html)
 
-Select: [ccol_select(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_select.3.html),
-[ccol_select_timed(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_select_timed.3.html),
-[ccol_select_va(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_select_va.3.html),
-[ccol_select_timed_va(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_select_timed_va.3.html),
-[ccol_selectable_from_circq(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_selectable_from_circq.3.html),
-[ccol_selectable_from_dynq(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_selectable_from_dynq.3.html),
-[ccol_selectable_from_chan(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_selectable_from_chan.3.html),
-[ccol_selectable_from_fd(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_selectable_from_fd.3.html)
+Select: [cselect(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cselect.3.html),
+[cselect_timed(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cselect_timed.3.html),
+[cselect_va(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cselect_va.3.html),
+[cselect_timed_va(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cselect_timed_va.3.html),
+[ccircq_selectable(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_selectable.3.html),
+[cdynmq_selectable(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cdynmq_selectable.3.html),
+[cchan_selectable(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cchan_selectable.3.html),
+[cselectable_fd(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cselectable_fd.3.html)
 
 Event loop:
-[ccol_event_loop_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_create.3.html),
-[ccol_event_loop_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_create_mp.3.html),
-[ccol_event_loop_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_declare.3.html),
-[ccol_event_loop_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_declare_scoped.3.html),
-[ccol_event_loop_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_construct.3.html),
-[ccol_event_loop_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_construct_scoped.3.html),
-[ccol_event_loop_add(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_add.3.html),
-[ccol_event_loop_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_remove.3.html),
-[ccol_event_loop_modify(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_modify.3.html),
-[ccol_event_loop_pause(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_pause.3.html),
-[ccol_event_loop_resume(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_resume.3.html),
-[ccol_event_loop_reg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_reg_count.3.html),
-[ccol_event_loop_reg_generation(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_reg_generation.3.html),
-[ccol_event_loop_shutdown(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_shutdown.3.html),
-[ccol_event_loop_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_destroy.3.html)
+[ceventloop_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_create.3.html),
+[ceventloop_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_create_mp.3.html),
+[ceventloop_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_declare.3.html),
+[ceventloop_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_declare_scoped.3.html),
+[ceventloop_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_construct.3.html),
+[ceventloop_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_construct_scoped.3.html),
+[ceventloop_add(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_add.3.html),
+[ceventloop_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_remove.3.html),
+[ceventloop_modify(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_modify.3.html),
+[ceventloop_pause(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_pause.3.html),
+[ceventloop_resume(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_resume.3.html),
+[ceventloop_reg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_reg_count.3.html),
+[ceventloop_reg_generation(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_reg_generation.3.html),
+[ceventloop_shutdown(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_shutdown.3.html),
+[ceventloop_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ceventloop_destroy.3.html)
 
 Related guides:
 [Thread pool](cthreadpool.md),

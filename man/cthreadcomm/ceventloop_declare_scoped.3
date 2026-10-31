@@ -1,0 +1,49 @@
+.TH CEVENTLOOP_DECLARE_SCOPED 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ceventloop_declare_scoped \- declare a ceventloop with automatic destruction on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ceventloop_declare_scoped(name);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a ceventloop variable set to CEVENTLOOP_NULL and
+tags it with a cleanup attribute, so the loop is destroyed
+automatically, exactly as ceventloop_destroy() would do it, when
+the variable leaves its scope. You must assign the variable with
+ceventloop_construct() or a ceventloop_create*() call before
+you use it.
+
+When the declaration and the initialisation can happen in one place,
+which is the common case, use ceventloop_construct_scoped()
+instead.
+.fi
+.SH PARAMETERS
+.nf
+name  Variable name to declare.
+.fi
+.SH NOTES
+.nf
+The macro uses __attribute__((cleanup)), so it needs GCC or Clang.
+Leaving the variable at CEVENTLOOP_NULL for the whole scope is
+safe, because the cleanup does nothing for that value.
+.fi
+.SH EXAMPLES
+.nf
+{
+    ceventloop_declare_scoped(loop);
+    char *err = NULL;
+    loop = ceventloop_create(32, 1, 1, &err);
+    if (!loop) { fprintf(stderr, "%s\en", err); return; }
+    /* ... */
+}  /* the library destroys loop automatically here */
+.fi
+.SH "SEE ALSO"
+.BR ceventloop_declare (3),
+.BR ceventloop_construct_scoped (3),
+.BR ceventloop_create (3),
+.BR ceventloop_destroy (3)

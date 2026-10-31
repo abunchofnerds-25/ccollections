@@ -11,7 +11,7 @@ ccol_retval_t cbmap_remove(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for cbmap_delete_elem() that returns its result
+Type-inferred wrapper for cbstmap_delete_elem() that returns its result
 code. The tree is rebalanced after the delete.
 
 The lookup key is converted through the DECLARED key type of the tree,
@@ -37,5 +37,5 @@ ccol_key_not_found doesn't stop the program. The memory of the removed key
 and value is freed.
 .fi
 .SH "SEE ALSO"
-.BR cbmap_delete_elem (3),
+.BR cbstmap_delete_elem (3),
 .BR cbmap_insert (3)

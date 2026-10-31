@@ -263,21 +263,21 @@ bool _chttp_tls_client_handshake_for_tests(
  * write need the connection to become readable first and mode 2 makes a TLS
  * read need it to become writable first. Arming clears the counters below,
  * and a test must disarm it before it returns. */
-void _chttpclient_tls_dir_inject_for_tests(int mode);
+void _chttpcli_tls_dir_inject_for_tests(int mode);
 
 /* True once the module has released the injected block by waiting or
  * registering in the direction the injection asked for. */
-bool _chttpclient_tls_dir_released_for_tests(void);
+bool _chttpcli_tls_dir_released_for_tests(void);
 
 /* How many times the module asked for the read direction while it was
  * writing, and for the write direction while it was reading. */
-unsigned _chttpclient_tls_dir_read_interest_while_writing_for_tests(void);
-unsigned _chttpclient_tls_dir_write_interest_while_reading_for_tests(void);
+unsigned _chttpcli_tls_dir_read_interest_while_writing_for_tests(void);
+unsigned _chttpcli_tls_dir_write_interest_while_reading_for_tests(void);
 
 /* How many TLS I/O attempts the armed injection has refused. A caller that
  * follows the reported direction pays one; more than that measures a busy
  * spin. */
-unsigned _chttpclient_tls_dir_block_attempts_for_tests(void);
+unsigned _chttpcli_tls_dir_block_attempts_for_tests(void);
 
 /* ---------------------------------------------------------------------------
  * Response fields and the Tier 1 read loop
@@ -285,7 +285,7 @@ unsigned _chttpclient_tls_dir_block_attempts_for_tests(void);
 
 /* How many record headers of repeated response fields have been read, so a
  * test can check that no operation rescans the block. */
-unsigned long _chttpclient_field_rec_reads_for_tests(void);
+unsigned long _chttpcli_field_rec_reads_for_tests(void);
 
 /* The number of reads and of readability waits in the Tier 1 read loop, so a
  * test can check how the two are ordered. */
@@ -363,72 +363,72 @@ bool _chttp_stalled_read_resume_for_tests(void);
 size_t _chttp_async_chain_struct_size_for_tests(void);
 
 /* The number of references on the engine, and the logger it uses. */
-int _chttpclient_engine_ref_count_for_tests(void);
-clog _chttpclient_engine_logger_for_tests(void);
+int _chttpcli_engine_ref_count_for_tests(void);
+clog _chttpcli_engine_logger_for_tests(void);
 
 /* Removes and closes the logger installed by chttpcli_set_engine_logger, so
  * the next engine run opens a fallback logger. The engine must not be
  * running. */
-void _chttpclient_clear_engine_user_logger_for_tests(void);
+void _chttpcli_clear_engine_user_logger_for_tests(void);
 
 /* Whether the engine runs, and direct calls to its acquire, its release and
  * its wait for quiescence. */
-bool _chttpclient_engine_running_for_tests(void);
-ccol_retval_t _chttpclient_engine_acquire_for_tests(void);
-void _chttpclient_engine_release_for_tests(void);
-void _chttpclient_engine_wait_for_quiescence_for_tests(void);
+bool _chttpcli_engine_running_for_tests(void);
+ccol_retval_t _chttpcli_engine_acquire_for_tests(void);
+void _chttpcli_engine_release_for_tests(void);
+void _chttpcli_engine_wait_for_quiescence_for_tests(void);
 
 /* Whether this process has started initializing the engine globals. */
-bool _chttpclient_engine_globals_entered_for_tests(void);
+bool _chttpcli_engine_globals_entered_for_tests(void);
 
-/* The DNS pool of the running engine, or CTPOOL_NULL when there is no
+/* The DNS pool of the running engine, or CTHRPOOL_NULL when there is no
  * engine. */
-ctpool _chttpclient_engine_dns_pool_for_tests(void);
+cthrpool _chttpcli_engine_dns_pool_for_tests(void);
 
 /* The number of reactor threads the last engine start resolved. */
-size_t _chttpclient_engine_num_reactor_threads_for_tests(void);
+size_t _chttpcli_engine_num_reactor_threads_for_tests(void);
 
 /* Makes the next reaper hold the engine mutex for ms milliseconds in its
  * final critical section. The flag stays set from the start of the hold
  * until the next hold is armed. */
-void _chttpclient_hold_next_reaper_final_section_for_tests(int ms);
-bool _chttpclient_reaper_final_section_was_entered_for_tests(void);
+void _chttpcli_hold_next_reaper_final_section_for_tests(int ms);
+bool _chttpcli_reaper_final_section_was_entered_for_tests(void);
 
 /* Makes the next reaper wait ms milliseconds, holding no lock, after it has
  * closed the fallback logger, and reports when that wait starts and ends. */
-void _chttpclient_hold_next_reaper_tail_for_tests(int ms);
-bool _chttpclient_reaper_tail_was_entered_for_tests(void);
-bool _chttpclient_reaper_tail_was_left_for_tests(void);
+void _chttpcli_hold_next_reaper_tail_for_tests(int ms);
+bool _chttpcli_reaper_tail_was_entered_for_tests(void);
+bool _chttpcli_reaper_tail_was_left_for_tests(void);
 
 /* Waits until no engine teardown is in flight and leaves the reaper that
  * finished it unjoined. */
-void _chttpclient_engine_wait_stopped_unjoined_for_tests(void);
+void _chttpcli_engine_wait_stopped_unjoined_for_tests(void);
 
 /* Copies the handle of the reaper that nobody has joined yet into *out, and
  * returns false when there isn't one. */
-bool _chttpclient_engine_unjoined_reaper_for_tests(_ccol_thread_id_t *out);
+bool _chttpcli_engine_unjoined_reaper_for_tests(_ccol_thread_id_t *out);
 
 /* Holds the next reaper between its creation and the publishing of its
  * handle, for ten seconds at most, until the release. It fires once. */
-void _chttpclient_hold_next_reaper_spawn_for_tests(void);
-bool _chttpclient_reaper_spawn_is_held_for_tests(void);
-void _chttpclient_release_reaper_spawn_for_tests(void);
+void _chttpcli_hold_next_reaper_spawn_for_tests(void);
+bool _chttpcli_reaper_spawn_is_held_for_tests(void);
+void _chttpcli_release_reaper_spawn_for_tests(void);
 
 /* How many reaper threads were created and joined; the two match once the
  * engine is quiescent. */
-unsigned _chttpclient_reaper_created_count_for_tests(void);
-unsigned _chttpclient_reaper_joined_count_for_tests(void);
+unsigned _chttpcli_reaper_created_count_for_tests(void);
+unsigned _chttpcli_reaper_joined_count_for_tests(void);
 
 /* While on, every attempt to create a reaper thread fails, and the counter
  * reports how often the reap was then given up. */
-void _chttpclient_force_reaper_spawn_fail_for_tests(bool on);
-unsigned _chttpclient_engine_reaper_abandoned_count_for_tests(void);
+void _chttpcli_force_reaper_spawn_fail_for_tests(bool on);
+unsigned _chttpcli_engine_reaper_abandoned_count_for_tests(void);
 
 /* -1 until the shutdown of an abandoned ctx has run, then 1 if the last one
  * ran under the ctx's idle_lock (the only safe order) and 0 if it ran after
  * the unlock. The reset sets it back to -1. */
-int _chttpclient_abandon_shutdown_under_lock_for_tests(void);
-void _chttpclient_reset_abandon_shutdown_probe_for_tests(void);
+int _chttpcli_abandon_shutdown_under_lock_for_tests(void);
+void _chttpcli_reset_abandon_shutdown_probe_for_tests(void);
 
 /* ---------------------------------------------------------------------------
  * Idle pools
@@ -436,84 +436,82 @@ void _chttpclient_reset_abandon_shutdown_probe_for_tests(void);
 
 /* Ages every connection in the Tier 2 and Tier 3 idle pool of cli past the
  * staleness limit, so the next take evicts it. */
-void _chttpclient_force_async_idle_stale_for_tests(struct chttpclient *cli);
+void _chttpcli_force_async_idle_stale_for_tests(struct chttpclient *cli);
 
 /* Shuts down the fd of every connection in the Tier 2 and Tier 3 idle pool
  * of cli, so the dispatch of each one frees it on a reactor thread. */
-void _chttpclient_shutdown_async_idle_connections_for_tests(
+void _chttpcli_shutdown_async_idle_connections_for_tests(
     struct chttpclient *cli);
 
 /* The number of connections in the Tier 2 and Tier 3 idle pool of cli, and
  * the number of them that carry a timed_out mark, which should be 0. */
-size_t _chttpclient_async_idle_total_count_for_tests(struct chttpclient *cli);
-size_t _chttpclient_async_idle_timed_out_count_for_tests(
-    struct chttpclient *cli);
+size_t _chttpcli_async_idle_total_count_for_tests(struct chttpclient *cli);
+size_t _chttpcli_async_idle_timed_out_count_for_tests(struct chttpclient *cli);
 
 /* The number of origins with an entry in the Tier 1 idle pool of cli, and in
  * its Tier 2 and Tier 3 idle pool. */
-size_t _chttpclient_idle_pools_key_count_for_tests(struct chttpclient *cli);
-size_t _chttpclient_idle_pools_async_key_count_for_tests(
-    struct chttpclient *cli);
+size_t _chttpcli_idle_pools_key_count_for_tests(struct chttpclient *cli);
+size_t _chttpcli_idle_pools_async_key_count_for_tests(struct chttpclient *cli);
 
 /* Overrides the limit on idle origins for the whole process; 0 restores the
  * real constant. */
-void _chttpclient_set_max_idle_origins_for_tests(size_t n);
+void _chttpcli_set_max_idle_origins_for_tests(size_t n);
 
 /* Makes the next push of a connection onto the idle pool of its origin count
  * as a failure. The flag is consumed by its first use. */
-void _chttpclient_force_offer_push_fail_once_for_tests(void);
+void _chttpcli_force_offer_push_fail_once_for_tests(void);
 
 /* Makes the next plain-HTTP hop that finishes writing its request, or the
  * next connection that lands in the idle pool, turn its own registration
  * back to the write direction, as a late continue-timeout flip of the sweep
  * does. Each flag is consumed by its first use. */
-void _chttpclient_force_stray_write_arm_once_for_tests(void);
-void _chttpclient_force_stray_idle_write_arm_once_for_tests(void);
+void _chttpcli_force_stray_write_arm_once_for_tests(void);
+void _chttpcli_force_stray_idle_write_arm_once_for_tests(void);
 
 /* Holds the IDLE branch of the read dispatch once, between deciding that a
  * ctx with input waiting is idle and reading, so a take can win the race.
  * The wait returns whether the branch got to the hold within timeout_ms; the
  * release ends the hold, or disarms it. */
-void _chttpclient_arm_idle_probe_hold_for_tests(void);
-bool _chttpclient_wait_idle_probe_held_for_tests(long timeout_ms);
-void _chttpclient_release_idle_probe_hold_for_tests(void);
+void _chttpcli_arm_idle_probe_hold_for_tests(void);
+bool _chttpcli_wait_idle_probe_held_for_tests(long timeout_ms);
+void _chttpcli_release_idle_probe_hold_for_tests(void);
 
 /* Widens the window on both sides of the 100-continue carry-over replay by ms
  * milliseconds each; 0 turns it off. */
-void _chttpclient_set_continue_carry_replay_delay_ms_for_tests(long ms);
+void _chttpcli_set_continue_carry_replay_delay_ms_for_tests(long ms);
 
 /* Arms one stray write dispatch: the next take of a pooled connection arms
  * the write direction of its registration while it holds idle_lock, before
  * it builds the new hop, and waits 200 ms. */
-void _chttpclient_arm_stray_write_at_take_for_tests(void);
+void _chttpcli_arm_stray_write_at_take_for_tests(void);
 
 /* Arms one stray write dispatch that races a take: the dispatch classifies
  * the ctx as IDLE, then the take moves it to WRITING and holds idle_lock for
  * 200 ms. The second one tells whether the dispatch was held so, and disarms
  * the hook. */
-void _chttpclient_arm_stray_write_before_take_for_tests(void);
-bool _chttpclient_stray_write_before_take_held_for_tests(void);
+void _chttpcli_arm_stray_write_before_take_for_tests(void);
+bool _chttpcli_stray_write_before_take_held_for_tests(void);
 
 /* How many times the write dispatch has put a stray registration back to the
  * read direction. */
-unsigned long long _chttpclient_stray_write_arm_restores_for_tests(void);
+unsigned long long _chttpcli_stray_write_arm_restores_for_tests(void);
 
-/* Makes the next ccol_event_loop_modify that reactivates a reused connection
+/* Makes the next ceventloop_modify that reactivates a reused connection
  * count as a failure. The flag is consumed by its first use. */
-void _chttpclient_force_reactivate_fail_once_for_tests(void);
+void _chttpcli_force_reactivate_fail_once_for_tests(void);
 
 /* Makes the next read dispatch of a ctx that has already read successfully
  * act as a hard read error (ECONNRESET), without touching the socket. */
-void _chttpclient_force_async_hard_read_error_once_for_tests(void);
+void _chttpcli_force_async_hard_read_error_once_for_tests(void);
 
 /* Reads back the connect, request and inactivity timeouts of cli, in
  * microseconds. Returns false for a handle that doesn't resolve. */
-bool _chttpclient_timeouts_for_tests(chttpcli cli, uint64_t *connect_us,
-                                     uint64_t *request_us,
-                                     uint64_t *inactivity_us);
+bool _chttpcli_timeouts_for_tests(chttpcli cli, uint64_t *connect_us,
+                                  uint64_t *request_us,
+                                  uint64_t *inactivity_us);
 
-/* The primitive initializations of chttpclient_create_mp that
- * _chttpclient_arm_create_fault_for_tests can make fail, in the order the
+/* The primitive initializations of chttpcli_create_mp that
+ * _chttpcli_arm_create_fault_for_tests can make fail, in the order the
  * create makes them. */
 typedef enum {
   _CHTTPCLI_FAULT_NONE = 0,
@@ -528,5 +526,5 @@ typedef enum {
  * fail, as pthread would report it, and the hook disarms itself.
  * _CHTTPCLI_FAULT_NONE disarms it. The failing init is skipped, so the
  * failure path has nothing of it to destroy, as after a real failure. */
-void _chttpclient_arm_create_fault_for_tests(_chttpcli_fault_t step);
+void _chttpcli_arm_create_fault_for_tests(_chttpcli_fault_t step);
 #endif /* RUNNING_UNIT_TESTS */

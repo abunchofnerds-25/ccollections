@@ -28,9 +28,9 @@ creates an object:
 |---|---|
 | `cvector`, `chashmap`, `cbstmap`, `cstring` | `cvec_construct_mp`, `chmap_construct_mp`, `cbmap_construct_mp`, `cstr_construct_mp` (and the related `_init_mp`, `_scoped` and `_full` forms) |
 | `cjson`, `cyaml` | `cjson_parse_mp`, `cjson_create_*_mp`, and the same forms for `cyaml` |
-| `cthreadcomm` | `ccol_circular_queue_create_mp` and the other `_create_mp` constructors |
-| `cmempool` | an argument of `ccol_mempool_create` and `ccol_r_mempool_create` |
-| `clrucache`, `clogger`, `cthreadpool`, `chttpclient`, `chttpserver` | `clrucache_create_full`, `clog_create_from_file_mp`, `ctpool_create_mp`, `chttpclient_create_mp`, `chttpsvr_create_mp` |
+| `cthreadcomm` | `ccircq_create_mp` and the other `_create_mp` constructors |
+| `cmempool` | `cmempool_create_mp`, `crmempool_create_mp` and the other `_create_mp` constructors |
+| `clrucache`, `clogger`, `cthreadpool`, `chttpclient`, `chttpserver` | `clrucache_create_full`, `clog_create_from_file_mp`, `cthrpool_create_mp`, `chttpcli_create_mp`, `chttpsvr_create_mp` |
 
 A form without `_mp` is the same call with `NULL`.
 
@@ -144,7 +144,7 @@ still use them. The library frees each cache later instead, when its thread
 next needs a cache for a different pool, when that thread exits, or when
 the process exits. A thread that does none of these can keep a dead cache
 for the whole life of the process, which means the pool's allocator can run
-after `ccol_mempool_destroy` returns, and even after `main` returns. That
+after `cmempool_destroy` returns, and even after `main` returns. That
 only matters for an allocator that stops working at a known point, like an
 arena that you free at the end of `main`. For such a pool, either give it an
 allocator that lives as long as the process, or create it with
@@ -156,7 +156,7 @@ Tiers 2 and 3 on one engine for the whole process, and
 `chttpcli_set_engine_mem_mgmt_procs()` gives that engine your allocator.
 The engine stops on a thread of its own after the last client that used
 those tiers lets go of it, so it can call your functions after
-`chttpclient_destroy()` returns. Keep them working until
+`chttpcli_destroy()` returns. Keep them working until
 `chttpcli_engine_wait()` returns after you destroy the last client (that
 call blocks until the engine has stopped). The default client of
 `chttp_default_client()` can hold the engine through its idle connections
@@ -286,20 +286,20 @@ per entry:
  * that a pool suits best. This pool has tiers from 2^4 = 16 to 2^12 = 4096
  * bytes and 2^10 entries in its smallest tier, uses the heap only when
  * every tier is empty, and is thread-safe (single_threaded false). */
-static ccol_r_mempool *node_pool;
+static crmempool *node_pool;
 
 static void *pool_malloc(size_t size) {
-    return ccol_r_mempool_alloc_entry(node_pool, size);
+    return crmempool_alloc_entry(node_pool, size);
 }
 static void *pool_calloc(size_t n, size_t size) {
     if (size && n > SIZE_MAX / size) return NULL;
-    return ccol_r_mempool_calloc_entry(node_pool, n * size);
+    return crmempool_calloc_entry(node_pool, n * size);
 }
 static void *pool_realloc(void *p, size_t size) {
-    return ccol_r_mempool_realloc_entry(node_pool, p, size);
+    return crmempool_realloc_entry(node_pool, p, size);
 }
 static void pool_free(void *p) {
-    ccol_r_mempool_free_entry(node_pool, p);
+    crmempool_free_entry(node_pool, p);
 }
 
 static ccol_memmgmt_procs_t pool_procs = {
@@ -309,9 +309,9 @@ static ccol_memmgmt_procs_t pool_procs = {
 
 int main(void) {
     char *err = NULL;
-    node_pool = ccol_r_mempool_create(4, 12, 10,
-                                      ccol_fallback_at_last_exhaustion,
-                                      false, NULL, &err);
+    node_pool = crmempool_create(4, 12, 10,
+                                 crmempool_fallback_at_last_exhaustion,
+                                 false, &err);
     if (!node_pool) { fprintf(stderr, "pool: %s\n", err); return 1; }
 
     cbmap_construct_mp(squares, int, long, &pool_procs);
@@ -320,7 +320,7 @@ int main(void) {
     printf("4999^2 = %ld\n", cbmap_get(squares, 4999));
 
     cbmap_destroy(squares);            /* all nodes go back to the pool */
-    ccol_r_mempool_destroy(node_pool); /* destroy the pool last */
+    crmempool_destroy(node_pool); /* destroy the pool last */
     return 0;
 }
 ```
@@ -329,7 +329,7 @@ A ranged pool only gives out sizes up to its largest tier (4096 bytes
 here), so a container whose arrays grow past that, like a large hash map or
 a long vector, needs a bigger top tier or a different allocator. The
 fallback policy decides what happens when a tier runs out of entries. With
-`ccol_fallback_at_last_exhaustion` the pool only borrows from the heap when
+`crmempool_fallback_at_last_exhaustion` the pool only borrows from the heap when
 all tiers are empty, and it frees such blocks just like any other entry.
 Destroy the container first and the pool last.
 
@@ -366,16 +366,16 @@ a corrupted pool.
 [cstr_construct_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_construct_mp.3.html),
 [cjson_parse_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_parse_mp.3.html),
 [cjson_serialize_free_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_serialize_free_mp.3.html),
-[ccol_circular_queue_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circular_queue_create_mp.3.html),
+[ccircq_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_create_mp.3.html),
 [clrucache_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_create_full.3.html),
-[ctpool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_create_mp.3.html),
+[cthrpool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_create_mp.3.html),
 [chttpcli_set_engine_mem_mgmt_procs(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_engine_mem_mgmt_procs.3.html),
 [chttpcli_engine_wait(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_engine_wait.3.html),
-[ccol_mempool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_create.3.html),
-[ccol_mempool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_destroy.3.html),
-[ccol_r_mempool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_create.3.html),
-[ccol_r_mempool_alloc_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_alloc_entry.3.html),
-[ccol_r_mempool_free_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_free_entry.3.html)
+[cmempool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/cmempool_create_mp.3.html),
+[cmempool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/cmempool_destroy.3.html),
+[crmempool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/crmempool_create_mp.3.html),
+[crmempool_alloc_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/crmempool_alloc_entry.3.html),
+[crmempool_free_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/crmempool_free_entry.3.html)
 
 Related guides:
 [How the library works](design.md),

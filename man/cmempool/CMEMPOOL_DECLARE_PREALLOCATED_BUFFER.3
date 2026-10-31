@@ -1,0 +1,80 @@
+.TH CMEMPOOL_DECLARE_PREALLOCATED_BUFFER 3 "2026-08-28" "c_collections" "C Collections Library - Macros"
+.SH NAME
+CMEMPOOL_DECLARE_PREALLOCATED_BUFFER \- declare buffer for memory pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(name, elem_count, elem_size);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a uint8_t array of the right size for a memory pool with the
+given parameters, which the caller then passes to
+cmempool_create_from_preallocated_buffer_mp(). The size covers the
+stride of each element and one status byte for each element, because
+the pool keeps those status bytes in the same buffer, after the
+entries.
+.fi
+.SH PARAMETERS
+.nf
+name        Variable name for the buffer
+elem_count  Number of elements that the pool holds
+elem_size   Size of each element in bytes
+.fi
+.SH NOTES
+.nf
+The buffer goes on the stack or into static storage, depending on where
+  you declare it
+It is useful on embedded systems, and anywhere you don't want a heap
+  allocation
+The macro declares the buffer with the alignment that every entry of
+  the pool is guaranteed to have, which is 16 bytes, so you can pass
+  the buffer straight to cmempool_create_from_preallocated_buffer_mp()
+  without thinking about alignment
+The 16 is a fixed constant and not _Alignof(max_align_t), because the
+  macro sets the size of an array in the caller's translation unit
+  while the library computes its own layout from the same value. The
+  two sides can be built by different compilers, and those can disagree
+  about _Alignof(max_align_t). A _Static_assert makes sure that 16 is
+  enough for the real requirement of the target
+An elem_size smaller than sizeof(uintptr_t) is rounded up so that it
+  can hold the free-list pointer. The macro does this rounding before
+  it computes the buffer size, the same way
+  cmempool_create_from_preallocated_buffer_mp() does, so the declared
+  buffer always holds exactly elem_count elements when you pass it to
+  that constructor with the same elem_size
+The macro then rounds the stride of each element up to the same
+  alignment, and then to a power of two unless both the library and
+  this translation unit were built with -DCMEMPOOL_COMPACT_LAYOUT=1.
+  This setting must match the library's, and the build checks it: a
+  buffer declared here names an object that the library defines under
+  the name of the setting it was built with, so a mismatch shows up as
+  an undefined reference at link time (to
+  _cmempool_built_with_fast_layout or to
+  _cmempool_built_with_compact_layout) and never as a buffer of the
+  wrong size at run time. The two settings differ only for an element
+  size that is not already a power of two. With either one the stride
+  matches cmempool_create_from_preallocated_buffer_mp() exactly, so
+  every element of the pool, not only the first one, is aligned for any
+  object type
+The status bytes, one for each element, sit after the elements in the
+  same buffer, so the pool needs no separate allocation of its own
+elem_count must be nonzero. A _Static_assert rejects two cases at
+  compile time: an elem_count of zero, and an elem_count times the
+  rounded and aligned elem_size that would overflow size_t
+.fi
+.SH EXAMPLES
+.nf
+CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(my_buffer, 100, 64);
+cmempool *mp = cmempool_create_from_preallocated_buffer(
+    my_buffer, sizeof(my_buffer), 64, false, false, NULL);
+if (!mp)
+    return 1;
+/* ... cmempool_alloc_entry(mp) / cmempool_free_entry(mp, e) ... */
+cmempool_destroy(mp);   /* frees the pool object, not my_buffer */
+.fi
+.SH "SEE ALSO"
+.BR cmempool_create_from_preallocated_buffer_mp (3)

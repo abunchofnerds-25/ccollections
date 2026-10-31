@@ -22,7 +22,7 @@ is declared in one place and created in another. When both happen
 together, chmap_construct(3) creates the same map in one step.
 
 The map picks its implementation from the declared key and value types,
-as chmap_create_full(3) describes.
+as chashmap_create_full(3) describes.
 .fi
 .SH PARAMETERS
 .nf
@@ -35,9 +35,9 @@ None. The macro expands to a statement and is not an expression.
 .SH NOTES
 .nf
 Stops the program through _ccol_fatal_err() if the creation fails; call
-chmap_create(3) directly when a failure has to be handled instead of
+chashmap_create(3) directly when a failure has to be handled instead of
 being fatal
-Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
+Uses CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
 Assigning over a handle that already holds a map leaks that map, so
 destroy the old one with chmap_destroy(3) first
 chmap_destroy(3) destroys the handle, which a handle declared with
@@ -58,5 +58,5 @@ chmap_destroy(scores);
 .BR chmap_init_ch (3),
 .BR chmap_init_full (3),
 .BR chmap_construct (3),
-.BR chmap_create (3),
+.BR chashmap_create (3),
 .BR chmap_destroy (3)

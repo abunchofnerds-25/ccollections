@@ -1,0 +1,49 @@
+.TH CHTTPCLI_DO_POOLED_STREAMING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpcli_do_pooled_streaming \- do an HTTP request on the shared Tier 2 engine and stream the response body, and block until it finishes
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpclient.h>
+
+ccol_retval_t chttpcli_do_pooled_streaming(chttpcli cli,
+                                               const chttp_request_t *req,
+                                               chttpcli_write_fn_t write_fn,
+                                               void *write_ctx,
+                                               int *status_code_out);
+.fi
+.SH DESCRIPTION
+.nf
+This is a thin wrapper over chttpcli_do_async_streaming that takes
+the same arguments as chttpcli_do_streaming. write_fn runs on one of
+the engine's reactor threads and not on the caller's thread, so the two
+rules of chttpcli_do_async_streaming apply: write_fn must not block,
+and it must not call back into the engine. That thread is the only
+difference from chttpcli_do_streaming, whose callback runs on the
+caller's thread. Calling chttpcli_destroy on any client (cli or
+another one) from inside write_fn is a fatal error, because write_fn
+runs on an engine thread; see chttpcli_destroy(3).
+.fi
+.SH PARAMETERS
+.nf
+cli             The client handle. It must not be CHTTPCLI_NULL.
+req             The request to run. It must not be NULL.
+write_fn        The callback that gets each chunk. It must not be
+                NULL.
+write_ctx       An opaque context pointer that the client passes to
+                write_fn unchanged.
+status_code_out Receives the HTTP status code when the call
+                succeeds. It can be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+The same codes as chttpcli_do_pooled, except that this function
+never returns ccol_msg_too_large, because
+chttpcli_set_max_response_body_size has no effect on a streaming
+request.
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_do_streaming (3),
+.BR chttpcli_do_async_streaming (3),
+.BR chttpcli_do_pooled (3)

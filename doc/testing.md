@@ -125,7 +125,7 @@ it:
 
 ```bash
 make -C tests/cmempool clean
-make -C tests/cmempool EXTRA_CFLAGS="-DCCOL_MEMPOOL_COMPACT_LAYOUT=1" test
+make -C tests/cmempool EXTRA_CFLAGS="-DCMEMPOOL_COMPACT_LAYOUT=1" test
 
 make clean
 make EXTRA_CFLAGS="-DCCOL_FORK_SAFETY_REQUIRED=0" test

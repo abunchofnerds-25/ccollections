@@ -33,43 +33,44 @@ SOFTWARE.
 #include <chashmap.h>
 #include <clrucache.h>
 
-void clru_nesting_probe(void);
-void clru_nesting_probe(void) {
-  clru_construct(c, int, int, 4, NULL, NULL, NULL);
+void ccache_nesting_probe(void);
+void ccache_nesting_probe(void) {
+  ccache_construct(c, int, int, 4, NULL, NULL, NULL);
   int got = 0, got2 = 0;
-  (void)clru_set(c, 1, ((void)clru_get(c, 1, &got), got + 1));
-  (void)clru_get(c, ((void)clru_get(c, 1, &got), got), &got2);
-  (void)clru_set(c, ((void)clru_set(c, 2, 2), 3), ((void)clru_set(c, 4, 4), 5));
+  (void)ccache_set(c, 1, ((void)ccache_get(c, 1, &got), got + 1));
+  (void)ccache_get(c, ((void)ccache_get(c, 1, &got), got), &got2);
+  (void)ccache_set(c, ((void)ccache_set(c, 2, 2), 3),
+                   ((void)ccache_set(c, 4, 4), 5));
   chmap_construct(m, int, int);
-  (void)clru_set(c, chmap_get(m, 1), chmap_get(m, 2));
-  chmap_insert(m, 1, ((void)clru_get(c, chmap_get(m, 1), &got), got));
+  (void)ccache_set(c, chmap_get(m, 1), chmap_get(m, 2));
+  chmap_insert(m, 1, ((void)ccache_get(c, chmap_get(m, 1), &got), got));
   chmap_destroy(m);
-  clru_destroy(c);
+  ccache_destroy(c);
 }
 
 /* A const value type, a const struct value type and a const char * key type.
- * clru_get() copies each value into a temporary of the unqualified value type,
- * so the copy compiles, and so does assigning it to a plain variable of that
- * type. */
-struct clru_probe_pt {
+ * ccache_get() copies each value into a temporary of the unqualified value
+ * type, so the copy compiles, and so does assigning it to a plain variable of
+ * that type. */
+struct ccache_probe_pt {
   int x, y;
 };
-void clru_const_value_probe(void);
-void clru_const_value_probe(void) {
-  clru_construct(ci, int, const int, 4, NULL, NULL, NULL);
+void ccache_const_value_probe(void);
+void ccache_const_value_probe(void) {
+  ccache_construct(ci, int, const int, 4, NULL, NULL, NULL);
   int got = 0;
-  (void)clru_set(ci, 1, 7);
-  (void)clru_get(ci, 1, &got);
-  clru_destroy(ci);
-  clru_construct(cs, int, const struct clru_probe_pt, 4, NULL, NULL, NULL);
-  struct clru_probe_pt pt = {1, 2};
-  (void)clru_set(cs, 1, pt);
-  (void)clru_get(cs, 1, &pt);
-  clru_destroy(cs);
-  clru_construct(cc, const char *, const char *, 4, NULL, NULL, NULL);
+  (void)ccache_set(ci, 1, 7);
+  (void)ccache_get(ci, 1, &got);
+  ccache_destroy(ci);
+  ccache_construct(cs, int, const struct ccache_probe_pt, 4, NULL, NULL, NULL);
+  struct ccache_probe_pt pt = {1, 2};
+  (void)ccache_set(cs, 1, pt);
+  (void)ccache_get(cs, 1, &pt);
+  ccache_destroy(cs);
+  ccache_construct(cc, const char *, const char *, 4, NULL, NULL, NULL);
   const char *s = NULL;
-  (void)clru_set(cc, "k", "v");
-  (void)clru_get(cc, "k", &s);
+  (void)ccache_set(cc, "k", "v");
+  (void)ccache_get(cc, "k", &s);
   free((void *)s);
-  clru_destroy(cc);
+  ccache_destroy(cc);
 }

@@ -3623,7 +3623,7 @@ TEST(path, delete_single_component_oom) {
 static void _dict_keys(cyaml dict, char *out, size_t cap) {
   size_t len = 0;
   out[0] = '\0';
-  cyaml_dictionary_iter it;
+  cyaml_dictionary_iter_t it;
   for (bool more = cyaml_dictionary_first(dict, &it); more;
        more = cyaml_dictionary_next(&it)) {
     int w = snprintf(out + len, cap - len, "%s%s", len ? "," : "", it.key);
@@ -3673,7 +3673,7 @@ TEST(dict_order, many_keys_keep_their_order) {
   REQUIRE_NE((void *)doc, NULL);
   int i = 0;
   bool ordered = true;
-  cyaml_dictionary_iter it;
+  cyaml_dictionary_iter_t it;
   for (bool more = cyaml_dictionary_first(doc, &it); more;
        more = cyaml_dictionary_next(&it), i++) {
     char want[16];
@@ -3804,7 +3804,7 @@ TEST(dict_iter, walks_members_in_order_and_ends_cleanly) {
   cyaml_dictionary_set(d, "one", cyaml_create_int(1));
   cyaml_dictionary_set(d, "two", cyaml_create_string("2"));
   cyaml_dictionary_set(d, "three", cyaml_create_list());
-  cyaml_dictionary_iter it;
+  cyaml_dictionary_iter_t it;
   bool ok1 = cyaml_dictionary_first(d, &it);
   bool k1 = ok1 && strcmp(it.key, "one") == 0 &&
             it.value == cyaml_dictionary_get(d, "one");
@@ -3825,7 +3825,7 @@ TEST(dict_iter, walks_members_in_order_and_ends_cleanly) {
 }
 
 TEST(dict_iter, empty_null_and_wrong_type_give_false) {
-  cyaml_dictionary_iter it = {.key = "stale", .value = (cyaml)&it};
+  cyaml_dictionary_iter_t it = {.key = "stale", .value = (cyaml)&it};
   cyaml d = cyaml_create_dictionary();
   cyaml l = cyaml_create_list();
   bool empty =
@@ -3855,7 +3855,7 @@ TEST(dict_iter, removing_the_current_member_keeps_the_cursor_valid) {
     cyaml_dictionary_set(d, names[i], cyaml_create_int(i));
   char seen[16] = "";
   size_t n = 0;
-  cyaml_dictionary_iter it;
+  cyaml_dictionary_iter_t it;
   for (bool more = cyaml_dictionary_first(d, &it); more;
        more = cyaml_dictionary_next(&it)) {
     seen[n++] = it.key[0];
@@ -3885,7 +3885,7 @@ TEST(dict_iter, survives_replacement_of_current_and_other_values) {
   ccol_retval_t r1 = ccol_success, r2 = ccol_success, r3 = ccol_success;
   ccol_retval_t r4 = ccol_success;
   bool value_is_same_node_after_set = false;
-  cyaml_dictionary_iter it;
+  cyaml_dictionary_iter_t it;
   for (bool ok = cyaml_dictionary_first(d, &it); ok;
        ok = cyaml_dictionary_next(&it)) {
     if (visited < sizeof(order) - 1) order[visited] = it.key[0];
@@ -4110,7 +4110,7 @@ TEST(oom, parsing_a_dictionary_never_leaks_under_sustained_allocation_failure) {
    * must never leak an entry the parser has already inserted.
    *
    * __cyaml_destroy's dictionary cleanup is node_clear, which reaches every
-   * child with chmap_destroy_with_dtor (chashmap.h). That function walks the
+   * child with chashmap_destroy_with_dtor (chashmap.h). That function walks the
    * map's internal storage directly and so needs no allocation, while a walk
    * that first lists the map with chashmap_begin_iter() does need one, and
    * that small internal allocation can fail on its own when memory stays
@@ -4272,7 +4272,7 @@ TEST(oom, anchor_or_tag_decorated_key_oom_never_silently_succeeds) {
    * '&' property-scanning branch of try_parse_scalar_dict_key, then
    * register_key_anchor() and anchors_store(). Every allocation of this
    * document is one call to _ccol_mem_alloc, node_alloc or
-   * chmap_insert_elem and nothing retries it, which direct inspection
+   * chashmap_insert_elem and nothing retries it, which direct inspection
    * confirms, since this input's dictionary has one entry and so no retry
    * path of a chmap iterator ever runs.
    *
@@ -12251,7 +12251,7 @@ static bool merge_test_members_are(cyaml map, const char *const *keys,
                                    const long long *vals, size_t n) {
   if (cyaml_type(map) != CYAML_DICTIONARY || cyaml_dictionary_size(map) != n)
     return false;
-  cyaml_dictionary_iter it;
+  cyaml_dictionary_iter_t it;
   size_t i = 0;
   for (bool more = cyaml_dictionary_first(map, &it); more;
        more = cyaml_dictionary_next(&it), i++) {
@@ -14837,7 +14837,7 @@ static bool _rt_deep_equal(cyaml a, cyaml b) {
     case CYAML_DICTIONARY: {
       size_t n = cyaml_dictionary_size(a);
       if (n != cyaml_dictionary_size(b)) return false;
-      cyaml_dictionary_iter it;
+      cyaml_dictionary_iter_t it;
       for (bool more = cyaml_dictionary_first(a, &it); more;
            more = cyaml_dictionary_next(&it)) {
         cyaml other = cyaml_dictionary_get(b, it.key);

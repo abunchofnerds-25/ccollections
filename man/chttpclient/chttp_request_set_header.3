@@ -50,7 +50,7 @@ The function also rejects the name "Transfer-Encoding" (compared
 without regard to case). chttpclient never applies a transfer coding to
 a request body; it always sends a body whole and frames it with
 Content-Length. If that name were accepted, the automatic
-Content-Length of chttpclient_do would put a Content-Length header next
+Content-Length of chttpcli_do would put a Content-Length header next
 to the Transfer-Encoding header on the wire while the body carries no
 transfer coding. That framing is ambiguous, and this library's own
 request and response parser rejects it in any message it parses (RFC
@@ -61,13 +61,13 @@ body length to check the value against, and a check here would also
 need a copy of the request's method and redirect context, which only
 come later. The client validates the header later, when the request
 reaches the wire. On a request that carries a body (method POST, PUT or
-PATCH), chttpclient_do and every other function that runs a request
+PATCH), chttpcli_do and every other function that runs a request
 reject a bad Content-Length from the caller. A valid value is a plain
 unsigned string of decimal digits, with no leading '+' or '-' and no
 whitespace in it, and it must match the body that the client sends
 exactly. The reason is the same as for rejecting Transfer-Encoding:
 the declared framing and the wire must not disagree. See
-chttpclient_do(3).
+chttpcli_do(3).
 
 A Connection header whose value lists the "close" option, in any ASCII
 case and anywhere in its comma-separated list, makes the request the
@@ -79,7 +79,7 @@ An Idempotency-Key or X-Idempotency-Key header (in any ASCII case)
 marks the request as safe to send again. When a reused connection
 accepts the whole request and then dies without a response, the client
 sends it again on a new connection, as it does for a GET; see
-chttpclient_do(3).
+chttpcli_do(3).
 
 A header that you set here follows every redirect, with two
 exceptions. A hop whose scheme, host or port differs from the original
@@ -88,7 +88,7 @@ WWW-Authenticate headers you set. A hop whose host differs carries no
 Host header of yours, and the client writes its own instead. Each hop
 is compared with the original request, so a hop back to the original
 origin carries them again. Hosts are compared without regard to case.
-See chttpclient_do(3).
+See chttpcli_do(3).
 
 The client writes a default value for Host, Accept, User-Agent,
 Content-Length, Content-Type, Authorization and Expect when it needs

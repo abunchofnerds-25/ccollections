@@ -23,7 +23,7 @@ SOFTWARE.
 */
 
 /* An application destructor that runs AFTER the process-exit destructors of
- * cthreadcomm, while it still owns live queues and a live ccol_event_loop.
+ * cthreadcomm, while it still owns live queues and a live ceventloop.
  *
  * The library frees its process-wide bookkeeping (the queue mutex registry
  * and the event-loop slot table) at exit, but as long as anything is live it
@@ -36,7 +36,7 @@ SOFTWARE.
  *      read (make memtest).
  *   2. Once the last object is gone and the bookkeeping is released, a new
  *      queue and a new loop fail cleanly with NULL and
- *      CCOL_EVENT_LOOP_NULL. Without that handling a queue create pushes
+ *      CEVENTLOOP_NULL. Without that handling a queue create pushes
  *      into a freed vector and succeeds, and a loop create asserts inside
  *      cvector_elem_count.
  *   3. A stale loop handle resolves to nothing and the call reports
@@ -63,10 +63,10 @@ SOFTWARE.
 #include <test_signals.h>
 #include <unistd.h>
 
-static ccol_circular_queue *g_cq;
-static ccol_dynamic_queue *g_dq;
-static ccol_event_loop g_loop = CCOL_EVENT_LOOP_NULL;
-static ccol_event_reg g_reg = CCOL_EVENT_REG_NULL;
+static ccircq *g_cq;
+static cdynmq *g_dq;
+static ceventloop g_loop = CEVENTLOOP_NULL;
+static ceventloop_reg g_reg = CEVENTLOOP_REG_NULL;
 static bool g_main_ran;
 
 static int g_failures;
@@ -78,8 +78,8 @@ static void check(bool ok, const char *what) {
   }
 }
 
-static void on_readable_noop(ccol_event_loop loop, ccol_event_reg reg,
-                             ccol_selectable *sel, void *arg) {
+static void on_readable_noop(ceventloop loop, ceventloop_reg reg,
+                             cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)sel;
@@ -90,34 +90,33 @@ __attribute__((destructor(101))) static void late_application_destructor(void) {
   if (!g_main_ran) test_child_exit(1);
 
   /* 1. Tear down what was live when the library destructors ran. */
-  check(ccol_event_loop_remove(g_loop, g_reg) == ccol_success,
+  check(ceventloop_remove(g_loop, g_reg) == ccol_success,
         "remove of a registration that was live at exit");
-  ccol_event_loop stale_loop = g_loop;
-  ccol_event_loop_destroy(g_loop);
-  ccol_circular_queue_destroy(g_cq);
-  ccol_dynamic_queue_destroy(g_dq);
+  ceventloop stale_loop = g_loop;
+  ceventloop_destroy(g_loop);
+  ccircq_destroy(g_cq);
+  cdynmq_destroy(g_dq);
 
   /* 3. A stale handle after the slot table is released. */
-  check(ccol_event_loop_reg_count(stale_loop) == ccol_invalid_size,
+  check(ceventloop_reg_count(stale_loop) == ccol_invalid_size,
         "reg_count of a stale loop handle after the release");
-  check(ccol_event_loop_pause(stale_loop, g_reg) == ccol_invalid_args,
+  check(ceventloop_pause(stale_loop, g_reg) == ccol_invalid_args,
         "pause through a stale loop handle after the release");
 
   /* 2. New objects fail cleanly once the bookkeeping is released. */
   char *err = NULL;
-  ccol_event_loop late_loop = ccol_event_loop_create(8, 1, 1, &err);
-  check(late_loop == CCOL_EVENT_LOOP_NULL,
-        "a loop created after the release fails");
+  ceventloop late_loop = ceventloop_create(8, 1, 1, &err);
+  check(late_loop == CEVENTLOOP_NULL, "a loop created after the release fails");
   check(err != NULL, "a loop created after the release sets err_str");
-  if (late_loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(late_loop);
+  if (late_loop != CEVENTLOOP_NULL) ceventloop_destroy(late_loop);
 
 #if CCOL_FORK_SAFETY_REQUIRED
-  ccol_circular_queue *late_cq = ccol_circular_queue_create(4, NULL);
+  ccircq *late_cq = ccircq_create(4, NULL);
   check(late_cq == NULL, "a circular queue created after the release fails");
-  if (late_cq) ccol_circular_queue_destroy(late_cq);
-  ccol_dynamic_queue *late_dq = ccol_dynamic_queue_create(NULL);
+  if (late_cq) ccircq_destroy(late_cq);
+  cdynmq *late_dq = cdynmq_create(NULL);
   check(late_dq == NULL, "a dynamic queue created after the release fails");
-  if (late_dq) ccol_dynamic_queue_destroy(late_dq);
+  if (late_dq) cdynmq_destroy(late_dq);
 #endif
 
   /* 4. The fork handlers walk the released tables. */
@@ -143,18 +142,17 @@ int main(void) {
   /* The destructor waits for a child, and test_reset_inherited_signals()
    * explains what an inherited signal state does to that. */
   test_reset_inherited_signals();
-  g_cq = ccol_circular_queue_create(4, NULL);
-  g_dq = ccol_dynamic_queue_create(NULL);
-  g_loop = ccol_event_loop_create(8, 1, 1, NULL);
-  if (!g_cq || !g_dq || g_loop == CCOL_EVENT_LOOP_NULL) {
+  g_cq = ccircq_create(4, NULL);
+  g_dq = cdynmq_create(NULL);
+  g_loop = ceventloop_create(8, 1, 1, NULL);
+  if (!g_cq || !g_dq || g_loop == CEVENTLOOP_NULL) {
     fprintf(stderr, "tests_exit_order: FAILED: setup\n");
     return 1;
   }
-  ccol_event_handlers_t handlers = {.on_readable = on_readable_noop};
-  g_reg = ccol_event_loop_add(
-      g_loop, ccol_selectable_from_circq(g_cq, ccol_select_read), handlers,
-      NULL, NULL);
-  if (g_reg == CCOL_EVENT_REG_NULL) {
+  ceventloop_handlers_t handlers = {.on_readable = on_readable_noop};
+  g_reg = ceventloop_add(g_loop, ccircq_selectable(g_cq, cselect_read),
+                         handlers, NULL, NULL);
+  if (g_reg == CEVENTLOOP_REG_NULL) {
     fprintf(stderr, "tests_exit_order: FAILED: setup of the registration\n");
     return 1;
   }

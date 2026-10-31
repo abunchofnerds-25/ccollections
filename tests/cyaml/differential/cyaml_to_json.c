@@ -118,7 +118,7 @@ static void dump_node(cyaml node) {
     case CYAML_DICTIONARY: {
       putchar('{');
       bool first = true;
-      cyaml_dictionary_iter it;
+      cyaml_dictionary_iter_t it;
       for (bool more = cyaml_dictionary_first(node, &it); more;
            more = cyaml_dictionary_next(&it)) {
         if (!first) putchar(',');

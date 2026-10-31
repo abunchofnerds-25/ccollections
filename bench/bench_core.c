@@ -195,7 +195,7 @@ BENCH_MT_SETUP(vec_filled_setup)
 BENCH_MT_SETUP(str_empty_setup)
 
 typedef struct {
-  ccol_mempool *pool;
+  cmempool *pool;
   void **slots;
   size_t count;
 } pool_state_t;
@@ -227,8 +227,8 @@ static inline size_t bench_scatter_next(size_t modulus) {
 static void pool_teardown(void *state) {
   pool_state_t *st = state;
   if (st->pool) {
-    ccol_mempool *p = st->pool;
-    ccol_mempool_destroy(p);
+    cmempool *p = st->pool;
+    cmempool_destroy(p);
   }
   free(st->slots);
   free(st);
@@ -246,9 +246,9 @@ static void *pool_setup_generic(bool single_threaded) {
   /* This pool has no dynamic fallback and the working set fits inside it. A
    * fallback allocation would mean the benchmark had silently started to
    * measure malloc instead of the pool. */
-  st->pool = ccol_mempool_create(st->count, BENCH_POOL_ELEM_SIZE,
-                                 /*fallback_to_dynamic_memory=*/false,
-                                 single_threaded, NULL, NULL);
+  st->pool = cmempool_create(st->count, BENCH_POOL_ELEM_SIZE,
+                             /*fallback_to_dynamic_memory=*/false,
+                             single_threaded, NULL);
   if (!st->pool) {
     pool_teardown(st);
     return NULL;
@@ -289,8 +289,8 @@ static void pool_alloc_free_run(void *state, size_t n) {
   pool_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
     size_t slot = i % st->count;
-    if (st->slots[slot]) ccol_mempool_free_entry(st->pool, st->slots[slot]);
-    st->slots[slot] = ccol_mempool_alloc_entry(st->pool);
+    if (st->slots[slot]) cmempool_free_entry(st->pool, st->slots[slot]);
+    st->slots[slot] = cmempool_alloc_entry(st->pool);
     if (!st->slots[slot]) bench_die("cmempool returned NULL below capacity");
     bench_sink(st->slots[slot]);
   }
@@ -314,12 +314,12 @@ static void pool_burst_run(void *state, size_t n) {
     size_t batch = n - done;
     if (batch > st->count) batch = st->count;
     for (size_t i = 0; i < batch; i++) {
-      st->slots[i] = ccol_mempool_alloc_entry(st->pool);
+      st->slots[i] = cmempool_alloc_entry(st->pool);
       if (!st->slots[i]) bench_die("cmempool returned NULL below capacity");
       bench_sink(st->slots[i]);
     }
     for (size_t i = 0; i < batch; i++) {
-      ccol_mempool_free_entry(st->pool, st->slots[i]);
+      cmempool_free_entry(st->pool, st->slots[i]);
       st->slots[i] = NULL;
     }
     done += batch;
@@ -338,9 +338,9 @@ static void *pool_buffer_setup(size_t n) {
     pool_teardown(st);
     return NULL;
   }
-  st->pool = ccol_mempool_create(st->count, BENCH_POOL_BUFFER_SIZE,
-                                 /*fallback_to_dynamic_memory=*/false,
-                                 /*single_threaded=*/false, NULL, NULL);
+  st->pool = cmempool_create(st->count, BENCH_POOL_BUFFER_SIZE,
+                             /*fallback_to_dynamic_memory=*/false,
+                             /*single_threaded=*/false, NULL);
   if (!st->pool) {
     pool_teardown(st);
     return NULL;
@@ -382,9 +382,9 @@ static void *pool_scattered_setup(size_t n) {
     pool_teardown(st);
     return NULL;
   }
-  st->pool = ccol_mempool_create(st->count, BENCH_POOL_ELEM_SIZE,
-                                 /*fallback_to_dynamic_memory=*/false,
-                                 /*single_threaded=*/false, NULL, NULL);
+  st->pool = cmempool_create(st->count, BENCH_POOL_ELEM_SIZE,
+                             /*fallback_to_dynamic_memory=*/false,
+                             /*single_threaded=*/false, NULL);
   if (!st->pool) {
     pool_teardown(st);
     return NULL;
@@ -397,8 +397,8 @@ static void pool_scattered_run(void *state, size_t n) {
   pool_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
     size_t slot = bench_scatter_next(st->count);
-    if (st->slots[slot]) ccol_mempool_free_entry(st->pool, st->slots[slot]);
-    st->slots[slot] = ccol_mempool_alloc_entry(st->pool);
+    if (st->slots[slot]) cmempool_free_entry(st->pool, st->slots[slot]);
+    st->slots[slot] = cmempool_alloc_entry(st->pool);
     if (!st->slots[slot]) bench_die("cmempool returned NULL below capacity");
     *(volatile uint64_t *)st->slots[slot] = (uint64_t)i;
     bench_sink(st->slots[slot]);
@@ -497,7 +497,7 @@ static void malloc_burst_run(void *state, size_t n) {
  * changes between the single-threaded run and the multi-threaded one is the
  * contention and not the shape of the pool. */
 typedef struct {
-  ccol_mempool *pool;
+  cmempool *pool;
   void **slots;
   size_t count;
   size_t per_thread;
@@ -506,8 +506,8 @@ typedef struct {
 static void pool_mt_teardown(void *state) {
   pool_mt_state_t *st = state;
   if (st->pool) {
-    ccol_mempool *p = st->pool;
-    ccol_mempool_destroy(p);
+    cmempool *p = st->pool;
+    cmempool_destroy(p);
   }
   free(st->slots);
   free(st);
@@ -528,9 +528,9 @@ static void *pool_mt_setup_generic(unsigned threads, bool with_pool) {
     return NULL;
   }
   if (with_pool) {
-    st->pool = ccol_mempool_create(st->count, BENCH_POOL_ELEM_SIZE,
-                                   /*fallback_to_dynamic_memory=*/false,
-                                   /*single_threaded=*/false, NULL, NULL);
+    st->pool = cmempool_create(st->count, BENCH_POOL_ELEM_SIZE,
+                               /*fallback_to_dynamic_memory=*/false,
+                               /*single_threaded=*/false, NULL);
     if (!st->pool) {
       pool_mt_teardown(st);
       return NULL;
@@ -561,8 +561,8 @@ static void pool_alloc_free_mt_run(void *state, size_t n) {
   void **mine = st->slots + (size_t)bench_thread_index() * st->per_thread;
   for (size_t i = 0; i < n; i++) {
     size_t slot = i % st->per_thread;
-    if (mine[slot]) ccol_mempool_free_entry(st->pool, mine[slot]);
-    mine[slot] = ccol_mempool_alloc_entry(st->pool);
+    if (mine[slot]) cmempool_free_entry(st->pool, mine[slot]);
+    mine[slot] = cmempool_alloc_entry(st->pool);
     if (!mine[slot]) bench_die("cmempool returned NULL below capacity");
     bench_sink(mine[slot]);
   }

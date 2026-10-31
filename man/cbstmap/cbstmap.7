@@ -13,7 +13,7 @@ A cbmap maps keys to values and keeps its keys sorted. Underneath it is a
 self-balancing AVL tree, so an insert, a lookup and a delete each take
 O(log n) time in the worst case, whatever order the keys arrive in. An
 iteration visits the entries in ascending key order, and that order is
-part of the contract (see cbmap_begin_iter(3)).
+part of the contract (see cbstmap_begin_iter(3)).
 
 The key type picks the default order:
   - char: the native order of char.
@@ -24,16 +24,19 @@ The key type picks the default order:
   - A string: the strcmp order.
   - Every other key type, a struct for example: a raw memcmp of the key
     bytes. A custom comparison procedure replaces this order.
-cbmap_create_full(3) gives the complete rules, and cbmap_construct_cc(3)
+cbstmap_create_full(3) gives the complete rules, and cbmap_construct_cc(3)
 the contract of a comparison procedure.
 
 There are two layers in the API. The type-inferred macros, such as
 cbmap_construct(3), cbmap_insert(3), cbmap_get(3), cbmap_get_ptr(3) and
 cbmap_remove(3), keep the key type and the value type with the handle and
 stop the program through _ccol_fatal_err() on a hard error. The raw
-functions, cbmap_create_full(3), cbmap_insert_elem(3),
-cbmap_get_elem_ref(3), cbmap_get_elem_copy(3) and cbmap_delete_elem(3),
-take each key and value as a cmap_pair and return a ccol_retval_t.
+functions, cbstmap_create_full(3), cbstmap_insert_elem(3),
+cbstmap_get_elem_ref(3), cbstmap_get_elem_copy(3) and
+cbstmap_delete_elem(3), take each key and value as a cmap_pair and return
+a ccol_retval_t. The typed layer also has cbmap_destroy(3), cbmap_size(3)
+and cbmap_reset(3), short names for cbstmap_destroy(3),
+cbstmap_elem_count(3) and cbstmap_reset(3).
 .fi
 .SH "OWNERSHIP OF KEYS AND VALUES"
 .nf
@@ -46,7 +49,7 @@ contents of the string together with its terminator, and the caller's
 string stays the caller's, free to change or be freed as soon as the
 insert returns.
 
-cbmap_get(3), cbmap_get_ptr(3), cbmap_get_elem_ref(3) and an iterator
+cbmap_get(3), cbmap_get_ptr(3), cbstmap_get_elem_ref(3) and an iterator
 give back string pointers into the map's own storage, so don't free them.
 Such a pointer is valid until the next insert, the next delete, a reset or
 the destroy of the map. To replace a stored string, insert the key again.
@@ -71,9 +74,9 @@ other calls on that map.
 .SH "SEE ALSO"
 .BR cbmap_construct (3),
 .BR cbmap_construct_cc (3),
-.BR cbmap_create_full (3),
+.BR cbstmap_create_full (3),
 .BR cbmap_insert (3),
 .BR cbmap_get_ptr (3),
-.BR cbmap_begin_iter (3),
+.BR cbstmap_begin_iter (3),
 .BR chashmap (7),
 .BR citerators (7)

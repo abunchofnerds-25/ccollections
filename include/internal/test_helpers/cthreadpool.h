@@ -48,108 +48,109 @@ SOFTWARE.
 /* Makes the next push onto the free list of the slot table behave exactly
  * like an allocation failure, then disarms itself, so a test reaches the
  * recovery of a lost index without a real out-of-memory condition. */
-void _ctpool_force_next_free_index_push_failure_for_tests(void);
+void _cthrpool_force_next_free_index_push_failure_for_tests(void);
 
 /* Sets the number of idle points that a trim of the task free list waits
  * for, so a test gets to a trim with a few tasks. 0 restores the value that
  * the library ships with. */
-void _ctpool_set_task_free_list_window_for_tests(uint32_t idle_points);
+void _cthrpool_set_task_free_list_window_for_tests(uint32_t idle_points);
 
 /* When set, the next future allocation of a submit fails the way a failed
  * calloc would. The counter holds how many futures exist right now. */
-extern atomic_bool _ctpool_fail_next_future_alloc_for_tests;
-extern atomic_long _ctpool_live_futures_for_tests;
+extern atomic_bool _cthrpool_fail_next_future_alloc_for_tests;
+extern atomic_long _cthrpool_live_futures_for_tests;
 
 /* How many future blocks exist right now, from the calloc of each to its
  * free, so a future that fails half built is counted too. */
-extern atomic_long _ctpool_future_blocks_for_tests;
+extern atomic_long _cthrpool_future_blocks_for_tests;
 
-/* The steps of pool and future creation that _ctpool_arm_fault_for_tests can
- * make fail: the five primitive initializations of ctpool_create_mp, and the
+/* The steps of pool and future creation that _cthrpool_arm_fault_for_tests can
+ * make fail: the five primitive initializations of cthrpool_create_mp, and the
  * allocation and the two primitive initializations of a future, which every
- * future submit and ctpool_future_create_detached make. */
+ * future submit and cthrpool_future_create_detached make. */
 typedef enum {
-  _CTPOOL_FAULT_NONE = 0,
-  _CTPOOL_FAULT_POOL_MUTEX,
-  _CTPOOL_FAULT_POOL_NOT_EMPTY,
-  _CTPOOL_FAULT_POOL_NOT_FULL,
-  _CTPOOL_FAULT_POOL_IDLE_CV,
-  _CTPOOL_FAULT_POOL_SHUTDOWN_CV,
-  _CTPOOL_FAULT_FUTURE_ALLOC,
-  _CTPOOL_FAULT_FUTURE_MUTEX,
-  _CTPOOL_FAULT_FUTURE_CV
-} _ctpool_fault_t;
+  _CTHRPOOL_FAULT_NONE = 0,
+  _CTHRPOOL_FAULT_POOL_MUTEX,
+  _CTHRPOOL_FAULT_POOL_NOT_EMPTY,
+  _CTHRPOOL_FAULT_POOL_NOT_FULL,
+  _CTHRPOOL_FAULT_POOL_IDLE_CV,
+  _CTHRPOOL_FAULT_POOL_SHUTDOWN_CV,
+  _CTHRPOOL_FAULT_FUTURE_ALLOC,
+  _CTHRPOOL_FAULT_FUTURE_MUTEX,
+  _CTHRPOOL_FAULT_FUTURE_CV
+} _cthrpool_fault_t;
 
 /* Arms one failure of step: the next thread that reaches it sees the call
  * fail, as calloc or the pthread init would, and the hook disarms itself.
- * _CTPOOL_FAULT_NONE disarms it. A failing init is skipped, so the failure
+ * _CTHRPOOL_FAULT_NONE disarms it. A failing init is skipped, so the failure
  * path has nothing of it to destroy, exactly as after a real failure. */
-void _ctpool_arm_fault_for_tests(_ctpool_fault_t step);
+void _cthrpool_arm_fault_for_tests(_cthrpool_fault_t step);
 
 /* Makes the thread creation of worker index fail once, in the next pool that
  * gets that far, after workers 0 to index - 1 have started. SIZE_MAX
  * disarms it. */
-void _ctpool_fail_worker_create_at_for_tests(size_t index);
+void _cthrpool_fail_worker_create_at_for_tests(size_t index);
 
 /* While true, a starting worker skips setting its thread-local mark, as if
  * pthread_setspecific had failed. A test sets it only around the creation of
  * the pool it looks at. */
-extern atomic_bool _ctpool_skip_worker_mark_for_tests;
+extern atomic_bool _cthrpool_skip_worker_mark_for_tests;
 
 /* How many worker threads of any pool are running, counted from the thread
  * create that started a worker to the worker's last statement. When
- * _ctpool_worker_exit_delay_us_for_tests is not 0, every worker pauses that
+ * _cthrpool_worker_exit_delay_us_for_tests is not 0, every worker pauses that
  * many microseconds before its last statement, so a worker that nobody
  * joined is still counted when the call that should have joined it
  * returns. */
-extern atomic_long _ctpool_running_workers_for_tests;
-extern atomic_uint _ctpool_worker_exit_delay_us_for_tests;
+extern atomic_long _cthrpool_running_workers_for_tests;
+extern atomic_uint _cthrpool_worker_exit_delay_us_for_tests;
 
 /* When the first flag is set, the next timed wait for room ignores its
  * deadline, waits for a real wake and then reports ETIMEDOUT. The second
  * flag tells the test that the waiter is inside the wait. */
-extern atomic_bool _ctpool_timeout_after_wake_for_tests;
-extern atomic_bool _ctpool_timeout_after_wake_waiting_for_tests;
+extern atomic_bool _cthrpool_timeout_after_wake_for_tests;
+extern atomic_bool _cthrpool_timeout_after_wake_waiting_for_tests;
 
 /* Resolves h to the pool behind it with no pin, as a bare lookup in the slot
  * table, so there's no unpin to forget. It returns NULL under the same
  * conditions as the real resolve. The accessors below that take a
  * cthread_pool * take the pointer that this returns. */
-cthread_pool *_ctpool_resolve_for_tests(ctpool h);
+cthread_pool *_cthrpool_resolve_for_tests(cthrpool h);
 
 /* The indices on the free list of the slot table right now, and the number
  * of slots the table holds, counting freed slots not reused yet. Read
  * together, they describe the table whatever handles earlier tests held. */
-size_t _ctpool_free_index_count_for_tests(void);
-size_t _ctpool_slot_table_capacity_for_tests(void);
+size_t _cthrpool_free_index_count_for_tests(void);
+size_t _cthrpool_slot_table_capacity_for_tests(void);
 
 /* Reads the shutdown bookkeeping of pool, so a test can wait until one
  * shutdown call has taken ownership before it starts a second one. */
-void _ctpool_shutdown_state_for_tests(struct cthread_pool *pool, bool *started,
-                                      bool *immediate, bool *complete);
+void _cthrpool_shutdown_state_for_tests(struct cthread_pool *pool,
+                                        bool *started, bool *immediate,
+                                        bool *complete);
 
 /* Answers the self-call check for pool on the calling thread, the same check
  * that a wait, a shutdown or a destroy of pool consults. */
-bool _ctpool_is_self_call_for_tests(struct cthread_pool *pool);
+bool _cthrpool_is_self_call_for_tests(struct cthread_pool *pool);
 
 /* The current size and the cap of the task-node free list of pool. */
-size_t _ctpool_task_free_list_size_for_tests(cthread_pool *pool);
-size_t _ctpool_task_free_list_cap_for_tests(cthread_pool *pool);
+size_t _cthrpool_task_free_list_size_for_tests(cthread_pool *pool);
+size_t _cthrpool_task_free_list_cap_for_tests(cthread_pool *pool);
 
 /* How many pins are outstanding against the slot of pool, read with no lock
  * held, so a test can see that a concurrent resolve and pin happened. */
-size_t _ctpool_pending_resolve_count_for_tests(cthread_pool *pool);
+size_t _cthrpool_pending_resolve_count_for_tests(cthread_pool *pool);
 
 /* Waits on the not_full condition of pool until the absolute deadline abs,
  * on whatever clock not_full uses, and returns the status of the wait. */
-int _ctpool_timedwait_not_full_for_tests(cthread_pool *pool,
-                                         const struct timespec *abs);
+int _cthrpool_timedwait_not_full_for_tests(cthread_pool *pool,
+                                           const struct timespec *abs);
 
 /* What the last timed wait for room on the calling thread did: whether it
  * waited at all, the absolute CLOCK_MONOTONIC deadline it waited for, the
  * instant its first wait began, and, when it gave up, whether that was a
  * timeout and the instant it decided so. Only reading the record through
- * _ctpool_timed_wait_record_for_tests() clears it. After a clear, a call
+ * _cthrpool_timed_wait_record_for_tests() clears it. After a clear, a call
  * that found room without waiting leaves every field zero; one that waited
  * sets waited, deadline and wait_started even when it then found room. */
 typedef struct {
@@ -158,29 +159,29 @@ typedef struct {
   struct timespec deadline;
   struct timespec wait_started;
   struct timespec wait_ended;
-} _ctpool_timed_wait_record_t;
+} _cthrpool_timed_wait_record_t;
 
 /* Gives the record of the calling thread and clears it, so the next timed
  * submit starts a fresh one. */
-_ctpool_timed_wait_record_t _ctpool_timed_wait_record_for_tests(void);
+_cthrpool_timed_wait_record_t _cthrpool_timed_wait_record_for_tests(void);
 
 /* How many times the calling thread has locked the mutex of any pool. A test
  * reads it before and after one call to count its critical sections. */
-unsigned long _ctpool_mu_locks_for_tests(void);
+unsigned long _cthrpool_mu_locks_for_tests(void);
 
 /* The current reference count of a future, read under its mutex, so a test
- * can wait until a concurrent ctpool_future_get has taken its reference. */
-int _ctpool_future_refcount_for_tests(ctpool_future *f);
+ * can wait until a concurrent cthrpool_future_get has taken its reference. */
+int _cthrpool_future_refcount_for_tests(cthrpool_future_t *f);
 
 /* Locks and unlocks the write side of the slot table lock directly, so a
  * test can hold it for a window it controls while another thread forks. */
-void ctpool_test_wrlock_slot_table_for_tests(void);
-void ctpool_test_wrunlock_slot_table_for_tests(void);
+void cthrpool_test_wrlock_slot_table_for_tests(void);
+void cthrpool_test_wrunlock_slot_table_for_tests(void);
 
 /* Runs the process-exit cleanup of the slot table right now, which a test
  * calls in a forked child with a pool still live. */
-void _ctpool_run_exit_cleanup_for_tests(void);
+void _cthrpool_run_exit_cleanup_for_tests(void);
 
 /* True while the worker key exists. */
-bool _ctpool_worker_key_live_for_tests(void);
+bool _cthrpool_worker_key_live_for_tests(void);
 #endif /* RUNNING_UNIT_TESTS */

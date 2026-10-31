@@ -13,7 +13,7 @@ ccol_retval_t cyaml_dictionary_remove(cyaml map, const char *key);
 .nf
 Removes the member with this key from the dictionary node map and
 frees its value together with everything below it.  The remaining
-members keep their order.  A cyaml_dictionary_iter cursor survives
+members keep their order.  A cyaml_dictionary_iter_t cursor survives
 the removal of any member except the one its next step reads (the
 successor of the member it stands on).  So a walk may remove its
 current member, but removing that successor invalidates the cursor.

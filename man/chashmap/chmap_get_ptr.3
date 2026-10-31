@@ -11,7 +11,7 @@ value_ptr = chmap_get_ptr(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for chmap_get_elem_ref() that returns a pointer to
+Type-inferred wrapper for chashmap_get_elem_ref() that returns a pointer to
 the value, or NULL when the map does not hold the key. Unlike chmap_get(),
 a missing key does not stop the program.
 
@@ -77,6 +77,6 @@ chmap_destroy(names);
 .fi
 .SH "SEE ALSO"
 .BR chmap_get (3),
-.BR chmap_get_elem_ref (3),
+.BR chashmap_get_elem_ref (3),
 .BR chmap_insert (3),
 .BR chmap_construct (3)

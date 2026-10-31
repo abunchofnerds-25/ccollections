@@ -3,7 +3,7 @@ INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 
 # Our sources, built with strict flags and -Werror. chttpserver.c and
-# chttpclient.c each own a fully separate static ccol_event_loop reactor.
+# chttpclient.c each own a fully separate static ceventloop reactor.
 #
 # This shared source set builds six binaries:
 #   tests            (tests.c) - the main suite.
@@ -25,7 +25,7 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 #   tests_engine_stop (tests_engine_stop.c) - exercises
 #                     chttpsvr_engine_stop(), the forced engine shutdown
 #                     path that a signal handler drives. That path tears
-#                     down the process's one shared ccol_event_loop reactor
+#                     down the process's one shared ceventloop reactor
 #                     under every chttpsvr instance started at that moment.
 #                     g_srv, g_srv2 and the other servers of tests.c stay
 #                     started for its whole run, so a forced stop of the
@@ -141,7 +141,7 @@ build_tsan:
 
 # die_after_fork=0: tests/chttpclient/Makefile explains this on its own
 # test_tsan target, and the same root cause, verified the same way, applies
-# here. A persistent, multi-threaded ccol_event_loop reactor for the whole
+# here. A persistent, multi-threaded ceventloop reactor for the whole
 # process is alive when fork() runs, and that trips TSan's default of
 # die_after_fork=1 as soon as the forked child of
 # concurrent_double_destroy_is_fatal creates its two racing pthreads.

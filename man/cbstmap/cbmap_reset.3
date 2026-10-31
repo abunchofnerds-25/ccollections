@@ -1,32 +1,26 @@
-.TH CBMAP_RESET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CBMAP_RESET 3 "2026-10-31" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cbmap_reset \- clear all elements from the map
+cbmap_reset \- clear all entries from a BST map (type-inferred wrapper)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/cbstmap.h>
 
-ccol_retval_t cbmap_reset(cbmap cbm);
+cbmap_reset(cbm);
 .fi
 .SH DESCRIPTION
 .nf
-Removes every key-value pair from the map. The map is empty afterwards,
-and the caller can keep using it.
+Type-inferred wrapper for cbstmap_reset(). It takes the same arguments
+and gives the same result; cbstmap_reset(3) has the full contract.
 .fi
 .SH PARAMETERS
 .nf
-cbm  BST map to reset
+cbm    BST map to reset
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success on success.
-.fi
-.SH NOTES
-.nf
-O(n). All the nodes are destroyed and their keys and values freed. The
-function asserts if cbm is NULL.
+ccol_success on success, as cbstmap_reset(3) gives it.
 .fi
 .SH "SEE ALSO"
-.BR cbmap_destroy (3),
-.BR cbmap_delete_elem (3)
+.BR cbstmap_reset (3)

@@ -46,7 +46,7 @@
  * hurts a library that a process dlopen()s after it has already used up
  * every slot. Every other C library gets the general model, since musl
  * refuses to dlopen() an object with initial-exec thread-locals. */
-#if defined(CCOL_MEMPOOL_DYNAMIC_TLS) && CCOL_MEMPOOL_DYNAMIC_TLS
+#if defined(CMEMPOOL_DYNAMIC_TLS) && CMEMPOOL_DYNAMIC_TLS
 static __thread unsigned _pin_stripe_id;
 #else
 static __thread unsigned _pin_stripe_id

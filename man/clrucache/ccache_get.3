@@ -1,0 +1,149 @@
+.TH CCACHE_GET 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccache_get \- get a value by key (a type-inferred convenience wrapper)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clrucache.h>
+
+ccol_retval_t ccache_get(name, key, val_ptr);
+.fi
+.SH DESCRIPTION
+.nf
+A type-inferred GNU C statement expression that converts key to the
+cache's declared KeyT, the same way a plain C assignment does, looks
+up the stored value and delivers it through val_ptr. What happens on
+success depends on the value type that you declared when the cache
+was constructed:
+
+A val type other than char*: the stored value is converted to the
+type of *val_ptr, as a plain C assignment would convert it. For
+example, a cache that stores int values and reads into a double *
+out-parameter converts the int to a double instead of copying the raw
+bytes of the int. Nothing is allocated on the heap. val_ptr is a
+pointer to the type of *val_ptr, NOT a cmap_pair *. If the compiler
+cannot implicitly convert the cache's declared ValT to the type of
+*val_ptr, that is a compile error at this point, never a value that
+the macro silently reinterprets.
+
+A char* val type: the macro hands the ownership of the heap string
+straight to the caller through *(char **)val_ptr. The caller must free
+that pointer with the cache's custom free function if a custom
+allocator was configured at construction, and with free() if not.
+
+Call clrucache_get_full() directly only when you need the raw
+cmap_pair output, which ccache_get() hides completely.
+
+A cache with a character-pointer key type takes a const char * key
+without a cast, because the macro keeps the pointer type of such a
+key.
+
+A key of a struct type is the same key as another one only when every
+byte of the two is equal, padding included; see KEYS WITH PADDING in
+clrucache_create_full(3). With GCC 11 or later the macro sets the
+padding of its own copy of the key to zero, so a key with equal
+members finds the entry that ccache_set() stored.
+.fi
+.SH PARAMETERS
+.nf
+name     Cache variable. The companion type variables, which come from
+         ccache_construct, ccache_declare or ccache_redeclare, must be in
+         scope. When a cache crosses a function boundary, call
+         ccache_redeclare() with a simple local alias first, because
+         converting the key type and the value type needs the
+         companion variables name##__ccache_key_type_var and
+         name##__ccache_val_type_var.
+key      Key expression: any expression that the compiler can convert
+         implicitly to KeyT.
+val_ptr  A pointer to the value type, NOT a cmap_pair *.
+         For a val type other than char*, it gets the stored value
+         converted to the type of *val_ptr, for example a double *
+         for a double out-parameter, and nothing is allocated on the
+         heap. *val_ptr is left untouched when the call does not
+         return ccol_success.
+         For a char* val type, it points to a char* variable. On
+         success the macro sets that variable to the heap string,
+         and the caller must free the string with the matching
+         allocator.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success           The macro delivered the value through val_ptr.
+ccol_key_not_found     The key is absent and there is no getter, or
+                       the getter failed.
+ccol_invalid_args      cache is CCACHE_NULL, or cache is a
+                       stale handle that a call already destroyed, or
+                       key is a NULL character pointer, which is not a
+                       string.
+ccol_not_enough_memory An internal allocation failed.
+ccol_unexpected_failure
+                       A remote getter fetched a value whose size does
+                       not match the size of ValT. This applies to a
+                       val type other than char*, where sizeof(ValT)
+                       is the exact size the macro needs, and the
+                       result is the same whether this call ran the
+                       fetch itself or coalesced onto the fetch of
+                       another concurrent caller of the same key. The
+                       macro leaves val_ptr untouched.
+.fi
+.SH NOTES
+.nf
+The macro uses a GNU C statement expression ({...}), so it needs GCC
+or Clang.
+The cache never hands out a pointer into its internal storage; it
+always copies the value out before it unlocks the segment's lock.
+The value type may be const-qualified, such as const int or a const
+struct type: the macro copies the value through a temporary of the
+type without its qualifiers, so val_ptr can point to a plain variable
+of that type.
+.fi
+.SH WARNINGS
+.nf
+For a char* val type, the string that the macro puts in
+*(char **)val_ptr is a heap copy that the caller then owns and MUST
+free, with the cache's custom free function if a custom allocator was
+configured and with free() if not, or the memory leaks. Each ccache_get
+call for a char* value makes its own allocation, so two calls for the
+same key give two independent pointers, and the caller must free each
+of them.
+
+For a val type other than char*, nothing is allocated on the heap:
+the value is converted into *val_ptr, and the caller must NOT call
+free() on it.
+.fi
+.SH EXAMPLES
+.nf
+/* A value type that is not a string: val_ptr is a double *, not a
+   cmap_pair *, and the macro copies the value straight into *val_ptr
+   without any allocation on the heap */
+ccache_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+int k = 5;
+double v = 2.71;
+ccache_set(cache, k, v);
+
+double out = 0.0;
+if (ccache_get(cache, k, &out) == ccol_success) {
+    printf("%.2f\en", out);
+}
+
+ccache_destroy(cache);
+
+/* A string value type. The caller must free the string it gets */
+ccache_construct(str_cache, int, char *, 64, NULL, NULL, NULL);
+
+char *greeting = "hello";
+ccache_set(str_cache, 1, greeting);
+
+char *result = NULL;
+if (ccache_get(str_cache, 1, &result) == ccol_success) {
+    printf("%s\en", result);
+    free(result);
+}
+
+ccache_destroy(str_cache);
+.fi
+.SH "SEE ALSO"
+.BR ccache_set (3),
+.BR clrucache_get_full (3)

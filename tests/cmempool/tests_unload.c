@@ -35,7 +35,7 @@ SOFTWARE.
 TAU_MAIN()
 
 typedef struct {
-  ccol_mempool *mp;
+  cmempool *mp;
   int failed_allocs;
   size_t thread_magazines;
 } user_args_t;
@@ -45,14 +45,14 @@ typedef struct {
 static void *pool_user(void *arg) {
   user_args_t *a = (user_args_t *)arg;
   for (int i = 0; i < 100; i++) {
-    void *e = ccol_mempool_alloc_entry(a->mp);
+    void *e = cmempool_alloc_entry(a->mp);
     if (!e) {
       a->failed_allocs++;
       continue;
     }
-    ccol_mempool_free_entry(a->mp, e);
+    cmempool_free_entry(a->mp, e);
   }
-  a->thread_magazines = _ccol_mempool_thread_magazines_for_tests();
+  a->thread_magazines = _cmempool_thread_magazines_for_tests();
   return NULL;
 }
 
@@ -64,44 +64,44 @@ static void *pool_user(void *arg) {
  * one, and the pool would go on counting it after the join. */
 TEST(mempool_unload, no_thread_cache_is_built_after_the_module_unloads) {
   char *err = NULL;
-  ccol_mempool *mp = ccol_mempool_create(64, 32, false, false, NULL, &err);
+  cmempool *mp = cmempool_create(64, 32, false, false, &err);
   REQUIRE_NE((void *)mp, (void *)NULL);
 
   /* Before the unload this thread gets a magazine. */
-  void *e = ccol_mempool_alloc_entry(mp);
+  void *e = cmempool_alloc_entry(mp);
   bool got_first = e != NULL;
-  if (e) ccol_mempool_free_entry(mp, e);
-  size_t mags_before_unload = _ccol_mempool_live_magazines_for_tests(mp);
+  if (e) cmempool_free_entry(mp, e);
+  size_t mags_before_unload = _cmempool_live_magazines_for_tests(mp);
 
   /* The unload drains this thread and deletes the key. */
-  _ccol_mempool_unload_cache_for_tests();
-  size_t mags_after_unload = _ccol_mempool_live_magazines_for_tests(mp);
-  size_t own_after_unload = _ccol_mempool_thread_magazines_for_tests();
+  _cmempool_unload_cache_for_tests();
+  size_t mags_after_unload = _cmempool_live_magazines_for_tests(mp);
+  size_t own_after_unload = _cmempool_thread_magazines_for_tests();
 
   user_args_t args = {.mp = mp};
   pthread_t t;
   int created = pthread_create(&t, NULL, pool_user, &args);
   if (created == 0) pthread_join(t, NULL);
-  size_t mags_after_join = _ccol_mempool_live_magazines_for_tests(mp);
+  size_t mags_after_join = _cmempool_live_magazines_for_tests(mp);
 
   /* With no magazine this thread keeps working through the locked path. */
   int own_failed = 0;
   for (int i = 0; i < 100; i++) {
-    void *x = ccol_mempool_alloc_entry(mp);
+    void *x = cmempool_alloc_entry(mp);
     if (!x) {
       own_failed++;
       continue;
     }
-    ccol_mempool_free_entry(mp, x);
+    cmempool_free_entry(mp, x);
   }
-  size_t own_after_use = _ccol_mempool_thread_magazines_for_tests();
-  size_t used_at_end = ccol_mempool_used_count(mp);
+  size_t own_after_use = _cmempool_thread_magazines_for_tests();
+  size_t used_at_end = cmempool_used_count(mp);
 
   /* A pool created after the unload has no cache, so no reserve either. */
-  ccol_mempool *late = ccol_mempool_create(64, 32, false, false, NULL, &err);
-  size_t late_reserve = late ? _ccol_mempool_reserve_for_tests(late) : 1;
-  if (late) ccol_mempool_destroy(late);
-  ccol_mempool_destroy(mp);
+  cmempool *late = cmempool_create(64, 32, false, false, &err);
+  size_t late_reserve = late ? _cmempool_reserve_for_tests(late) : 1;
+  if (late) cmempool_destroy(late);
+  cmempool_destroy(mp);
 
   REQUIRE_TRUE(got_first);
   REQUIRE_EQ(mags_before_unload, (size_t)1);

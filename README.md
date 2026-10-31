@@ -24,7 +24,7 @@ int main(void) {
   // Using cvec_at for incremental writing
   cvec_at(scores, 0) += 2; // 91 --> 93
 
-  // Sorting the scored in ascending order.
+  // Sorting the cvector 'scores' in ascending order.
   cvec_sort(scores);
 
   for (size_t i = 0; i < cvec_size(scores); i++)
@@ -46,6 +46,8 @@ int main(void) {
   *chmap_get_ptr(ages, "bob") += 2; // We know "bob" is present
   printf("bob is %d\n", chmap_get(ages, "bob"));
 
+  // The cvector and the chashmap will automatically get
+  // destroyed when the scope for the function main ends.
   return 0;
 }
 ```

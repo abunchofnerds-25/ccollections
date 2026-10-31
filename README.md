@@ -16,25 +16,36 @@ If you have used `vector` and `unordered_map` in C++, `ArrayList` and `HashMap` 
 
 int main(void) {
   /* A vector of ints. */
-  cvec_construct(scores, int);
+  cvec_construct_scoped(scores, int); // Will be automatically destroyed
   cvec_push(scores, 91);
   cvec_push(scores, 74);
   cvec_push(scores, 88);
-  cvec_sort(scores);
-  for (size_t i = 0; i < cvec_size(scores); i++)
-    printf("%d ", cvec_at(scores, i));
-  printf("\n");                                   /* 74 88 91 */
 
-  /* A map from names to ints; the compiler checks both the key type and
+  // Using cvec_at for incremental writing
+  cvec_at(scores, 0) += 2; // 91 --> 93
+
+  // Sorting the scored in ascending order.
+  cvec_sort(scores);
+
+  for (size_t i = 0; i < cvec_size(scores); i++)
+    printf("%d ", cvec_at(scores, i)); // Using cvec_at for reading
+  printf("\n");                                   /* 74 88 93 */
+
+  /* A hash-map from names to ints; the compiler tracks both the key type and
    * the value type. */
-  chmap_construct(ages, char *, int);
+  chmap_construct_scoped(ages, char *, int); // Will be automatically destroyed
   chmap_insert(ages, "alice", 31);
   chmap_insert(ages, "bob", 27);
-  printf("alice is %d\n", chmap_get(ages, "alice"));
-  if (chmap_get_ptr(ages, "carol") == NULL) printf("no carol\n");
 
-  chmap_destroy(ages);
-  cvec_destroy(scores);
+  printf("alice is %d\n", chmap_get(ages, "alice"));
+  if (!chmap_get_ptr(ages, "carol")) {
+    printf("no carol\n");
+  }
+
+  // In-place modification of an element
+  *chmap_get_ptr(ages, "bob") += 2; // We know "bob" is present
+  printf("bob is %d\n", chmap_get(ages, "bob"));
+
   return 0;
 }
 ```

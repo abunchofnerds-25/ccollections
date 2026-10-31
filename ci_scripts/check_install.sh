@@ -64,9 +64,16 @@ export PKG_CONFIG_PATH
 awk '/^```c$/ { on = 1; next } on && /^```$/ { exit } on { print }' \
 	README.md >"$tmp/hello.c"
 [ -s "$tmp/hello.c" ] || fail "README.md holds no C example"
-# The first line ends in a space because the example prints each number
-# followed by a space.
-expected=$(printf '74 88 91 \nalice is 31\nno carol')
+# What the example prints is the first ```text block after it, so whoever
+# edits the example sees the output right below it. Both sides lose their
+# trailing blanks: the example prints a space after each number, and an editor
+# may strip that space from README.md.
+strip_trailing() { sed 's/[[:space:]]*$//'; }
+expected=$(awk '/^```c$/ { c = 1; next } c && /^```$/ { c = 0; after = 1; next }
+	after && /^```text$/ { on = 1; next } on && /^```$/ { exit } on { print }' \
+	README.md | strip_trailing)
+[ -n "$expected" ] ||
+	fail "README.md shows no output (a \`\`\`text block) after its C example"
 
 cflags=$(pkg-config --cflags ccollections) || fail "pkg-config --cflags failed"
 libs=$(pkg-config --libs ccollections) || fail "pkg-config --libs failed"
@@ -83,6 +90,7 @@ rpath=""
 }
 out=$(env -u LD_LIBRARY_PATH -u DYLD_LIBRARY_PATH "$tmp/hello_shared") ||
 	fail "the example, linked against the shared library, did not run"
+out=$(printf '%s\n' "$out" | strip_trailing)
 [ "$out" = "$expected" ] ||
 	fail "the shared example printed '$out', not '$expected'"
 # The program has to load the installed library, not one that an older install
@@ -115,6 +123,7 @@ static_libs=$(printf '%s\n' "$static_libs" | sed 's/-lccollections//')
 }
 out=$("$tmp/hello_static") ||
 	fail "the example, linked against the archive, did not run"
+out=$(printf '%s\n' "$out" | strip_trailing)
 [ "$out" = "$expected" ] ||
 	fail "the static example printed '$out', not '$expected'"
 if [ "$os" = Darwin ]; then

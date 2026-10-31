@@ -22,7 +22,7 @@ int main(void) {
   cvec_push(scores, 88);
 
   // Using cvec_at for incremental writing
-  cvec_at(scores, 0) += 2; // 91 --> 93
+  cvec_at(scores, 0) += 2; // 91 -> 93
 
   // Sorting the cvector 'scores' in ascending order.
   cvec_sort(scores);
@@ -50,6 +50,15 @@ int main(void) {
   // destroyed when the scope for the function main ends.
   return 0;
 }
+```
+
+It prints:
+
+```text
+74 88 93
+alice is 31
+no carol
+bob is 29
 ```
 
 You don't need a code generator or any `void *` casts, and there is no runtime hiding behind it. It's the headers, one library and a C11 compiler.

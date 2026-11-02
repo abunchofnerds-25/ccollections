@@ -62,6 +62,7 @@ SOFTWARE.
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_accept.h>
 #include <test_connect.h>
 #include <test_coverage.h>
 #include <test_fds.h>
@@ -1705,7 +1706,7 @@ static bool srv_accept_failed_keep_going(const char *which) {
 static void *srv_accept_loop(void *arg) {
   (void)arg;
   while (atomic_load(&g_srv.running)) {
-    int conn_fd = accept(g_srv.server_fd, NULL, NULL);
+    int conn_fd = test_accept(g_srv.server_fd);
     if (conn_fd < 0) {
       if (srv_accept_failed_keep_going("tcp4")) continue;
       break;
@@ -1735,7 +1736,7 @@ static void *srv_accept_loop(void *arg) {
 static void *srv_accept_loop6(void *arg) {
   (void)arg;
   while (atomic_load(&g_srv.running)) {
-    int conn_fd = accept(g_srv.server_fd6, NULL, NULL);
+    int conn_fd = test_accept(g_srv.server_fd6);
     if (conn_fd < 0) {
       if (srv_accept_failed_keep_going("tcp6")) continue;
       break;
@@ -1765,7 +1766,7 @@ static void *srv_accept_loop6(void *arg) {
 static void *srv_accept_loop_unix(void *arg) {
   (void)arg;
   while (atomic_load(&g_srv.running)) {
-    int conn_fd = accept(g_srv.server_fd_unix, NULL, NULL);
+    int conn_fd = test_accept(g_srv.server_fd_unix);
     if (conn_fd < 0) {
       if (srv_accept_failed_keep_going("unix")) continue;
       break;
@@ -11809,7 +11810,7 @@ typedef struct {
 
 static void *tls_black_hole_accept_thread(void *arg) {
   tls_black_hole_srv_t *s = (tls_black_hole_srv_t *)arg;
-  int conn_fd = accept(s->listen_fd, NULL, NULL);
+  int conn_fd = test_accept(s->listen_fd);
   if (conn_fd >= 0) {
     char buf[16];
     while (recv(conn_fd, buf, sizeof(buf), 0) > 0) { /* it sends nothing */
@@ -13636,7 +13637,7 @@ static void *_tls_conn_thread_body(void *arg) {
 static void *_tls_accept_loop(void *arg) {
   (void)arg;
   while (atomic_load(&g_tls_srv_running)) {
-    int fd = accept(g_tls_srv_fd, NULL, NULL);
+    int fd = test_accept(g_tls_srv_fd);
     if (fd < 0) {
       if (!atomic_load(&g_tls_srv_running)) break;
       continue;
@@ -15547,7 +15548,7 @@ static void *hs_loop(void *arg) {
   char *buf = (char *)malloc(TEST_SERVER_BUF);
   if (!buf) return NULL;
   while (atomic_load(&s->running)) {
-    int c = accept(s->fd, NULL, NULL);
+    int c = test_accept(s->fd);
     if (c < 0) {
       if (!atomic_load(&s->running)) break;
       continue;
@@ -17670,7 +17671,7 @@ out:
 static void *ers_accept_loop(void *arg) {
   ers_srv_t *s = (ers_srv_t *)arg;
   while (atomic_load(&s->running)) {
-    int fd = accept(s->fd, NULL, NULL);
+    int fd = test_accept(s->fd);
     if (fd < 0) {
       if (!atomic_load(&s->running)) break;
       continue;
@@ -18920,7 +18921,7 @@ typedef struct {
 
 static void *cwin_srv_thread(void *arg) {
   cwin_srv_t *s = (cwin_srv_t *)arg;
-  int fd = accept(s->lfd, NULL, NULL);
+  int fd = test_accept(s->lfd);
   char *buf = (char *)malloc(TEST_SERVER_BUF);
   if (fd < 0 || !buf) goto out;
   for (int req = 1; req <= 2; req++) {

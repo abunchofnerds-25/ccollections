@@ -16,8 +16,8 @@ thread beside it, to stop, and forces them down even while other
 chttpsvr instances in the same process hold a reference and are fully
 started.  This reactor is separate from the engine of chttpclient, so
 this call has no effect on the async work of chttpclient in the same
-process (chttpclient_do_async, chttpclient_do_async_streaming,
-chttpclient_do_pooled and chttpclient_do_pooled_streaming).  It
+process (chttpcli_do_async, chttpcli_do_async_streaming,
+chttpcli_do_pooled and chttpcli_do_pooled_streaming).  It
 returns at once; use chttpsvr_engine_wait() to block until the stop
 completes.
 

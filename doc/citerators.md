@@ -315,7 +315,7 @@ Overview: [citerators(7)](https://abunchofnerds-25.github.io/ccollections/man/ci
 The per-container functions that `ccol_begin` calls:
 [cvector_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_begin_iter.3.html),
 [chashmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_begin_iter.3.html),
-[cbmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_begin_iter.3.html)
+[cbstmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap_begin_iter.3.html)
 
 Related guides:
 [Vectors](cvector.md),

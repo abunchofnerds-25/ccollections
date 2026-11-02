@@ -4,8 +4,8 @@ SRC_FILE_PREFIX = clogger
 # cvector.c is here for clog's generation-tagged handle slot table, which is
 # a cvec of slots, a cvec free-index stack, and the live-shareds and atfork
 # scratch cvectors (see "Fork safety" in src/clogger.c). cthreadcomm.c is
-# here for the writer-thread queue of async logging (ccol_circular_queue and
-# ccol_dynamic_queue), and cthreadpool.c comes in as a dependency of
+# here for the writer-thread queue of async logging (ccircq and
+# cdynmq), and cthreadpool.c comes in as a dependency of
 # cthreadcomm.c. csort.c is needed by cvector.c, whose sort runs on csort.
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c \
             ../../src/chashmap.c ../../src/cvector.c ../../src/csort.c \

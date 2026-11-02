@@ -1,0 +1,41 @@
+.TH CCHAN_DISABLE_SENDING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cchan_disable_sending \- turn off sends on a cchan direction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t cchan_disable_sending(cchan *ch, cchan_direction_t d);
+.fi
+.SH DESCRIPTION
+.nf
+Refuses every new send on the given direction and wakes every thread
+that is blocked inside a send on that direction.
+
+From then on the queue of that direction counts as ready for a write
+selectable of cselect() and for a write registration of a
+ceventloop, the same way a pipe whose reader has gone is ready for
+POLLOUT. The send that the waiter makes after that wake returns
+ccol_not_permitted at once. ccircq_disable_sending(3) has the
+details.
+.fi
+.SH PARAMETERS
+.nf
+ch   Channel to change
+d    Direction that gets sends turned off (cchan_owner_to_workers or
+     cchan_workers_to_owner)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       - Sends are off
+ccol_invalid_args  - ch is NULL, or d is not valid
+.fi
+.SH NOTES
+.nf
+Only the given direction changes; the other one keeps its state. To
+turn sends back on, call cchan_enable_sending().
+.fi
+.SH "SEE ALSO"
+.BR cchan_enable_sending (3)

@@ -1,0 +1,32 @@
+.TH CBSTMAP_RESET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cbstmap_reset \- clear all elements from the map
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+ccol_retval_t cbstmap_reset(cbmap cbm);
+.fi
+.SH DESCRIPTION
+.nf
+Removes every key-value pair from the map. The map is empty afterwards,
+and the caller can keep using it.
+.fi
+.SH PARAMETERS
+.nf
+cbm  BST map to reset
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+.fi
+.SH NOTES
+.nf
+O(n). All the nodes are destroyed and their keys and values freed. The
+function asserts if cbm is NULL.
+.fi
+.SH "SEE ALSO"
+.BR cbmap_destroy (3),
+.BR cbstmap_delete_elem (3)

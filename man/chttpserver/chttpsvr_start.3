@@ -62,7 +62,7 @@ and 104 bytes on the BSDs, the terminating NUL included, and the
 engine log then names ENAMETOOLONG.  A relative path is resolved
 against the working directory at the time of the start.
 
-If the shared ccol_event_loop reactor of the process, and the
+If the shared ceventloop reactor of the process, and the
 idle-timeout sweep thread beside it, are not running yet, this call
 starts them and blocks until the library confirms that they run
 before it goes on.  This reactor is separate from the engine of
@@ -84,7 +84,7 @@ effect with port 0 because every such listener gets a port of its
 own.  When cfg->host is a "unix://" path the port means nothing and
 is ignored.
 
-At start time the server creates a ctpool and dispatches every
+At start time the server creates a cthrpool and dispatches every
 buffered handler through it.  The pool has cfg->worker_thread_count
 threads and a queue capacity of cfg->worker_queue_capacity, where 0
 means 1024 slots per thread and CHTTPSVR_QUEUE_UNBOUNDED means no
@@ -97,7 +97,7 @@ are destroyed with it.
 
 Rejection of a route: a route that does not match, or that is
 malformed, is refused with 404, 405 or 500, and the server decides
-this before it reads any body byte.  A matched route whose ctpool is
+this before it reads any body byte.  A matched route whose cthrpool is
 full is refused with 503 and a "Retry-After: 5" header.  Both get a
 courtesy error response, and any middleware of that rejection runs on
 a small dedicated pool of the server's own.  No thread ever waits for

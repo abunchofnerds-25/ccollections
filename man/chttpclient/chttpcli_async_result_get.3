@@ -1,0 +1,44 @@
+.TH CHTTPCLI_ASYNC_RESULT_GET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpcli_async_result_get \- block until the future of an async request is fulfilled, then give its typed result
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpclient.h>
+
+chttpcli_async_result_t *chttpcli_async_result_get(cthrpool_future_t *f);
+.fi
+.SH DESCRIPTION
+.nf
+This is a thin wrapper over cthrpool_future_get that casts its void*
+result to chttpcli_async_result_t*. As with cthrpool_future_get, you can
+call it more than once on the same future: every later call returns the
+same result pointer, which the future owns until it is freed.
+
+The result has two public fields:
+  - rv holds the code that chttpcli_do would return for the same
+    request.
+  - resp is not NULL only when rv == ccol_success. The caller then owns
+    resp and frees it with chttpcli_resp_free before calling
+    chttpcli_async_result_free.
+A successful request from chttpcli_do_async_streaming fills resp as
+well, and its status_code means the same thing. resp->body is NULL,
+resp->body_len is 0 and resp->headers is NULL there, though, because
+the write callback received the body and the client keeps no headers.
+.fi
+.SH PARAMETERS
+.nf
+f The future from chttpcli_do_async or from
+  chttpcli_do_async_streaming.
+.fi
+.SH RETURN VALUE
+.nf
+The result, or NULL if f is NULL or the future was cancelled before it
+was fulfilled.
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_do_async (3),
+.BR chttpcli_do_async_streaming (3),
+.BR chttpcli_async_result_free (3),
+.BR cthrpool_future_get (3)

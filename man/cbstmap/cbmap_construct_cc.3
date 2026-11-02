@@ -74,7 +74,7 @@ fails, and it uses the default allocator.
 The procedure must stay callable for the whole life of the map.
 
 A walk visits the elements in ascending key order, by the order of this
-procedure; cbmap_begin_iter(3) describes that contract.
+procedure; cbstmap_begin_iter(3) describes that contract.
 
 Destroy the map with cbmap_destroy(3). The companion type variables
 follow the scope of the handle, so a function that receives the handle
@@ -111,6 +111,6 @@ cbmap_destroy(releases);
 .BR cbmap_init_cc (3),
 .BR cbmap_declare (3),
 .BR cbmap_redeclare (3),
-.BR cbmap_begin_iter (3),
-.BR cbmap_create_full (3),
+.BR cbstmap_begin_iter (3),
+.BR cbstmap_create_full (3),
 .BR cbmap_destroy (3)

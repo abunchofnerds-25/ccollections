@@ -11,7 +11,7 @@ ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 .fi
 .SH DESCRIPTION
 .nf
-All chttpcli instances of a process share one ccol_event_loop reactor
+All chttpcli instances of a process share one ceventloop reactor
 for their Tier 2 and Tier 3 work. This function routes every
 allocation of that reactor (the registration table, the per-connection
 dispatch state, the worker pool for DNS and connect, and more) to the
@@ -20,13 +20,13 @@ management procs of every other module of this library work. An mp of
 NULL brings the default allocator back.
 
 Each chttpcli instance also has its own allocator for its requests and
-connections, which you set with chttpclient_create_mp by the usual _mp
+connections, which you set with chttpcli_create_mp by the usual _mp
 convention. That allocator is separate from this one, which only
 affects how the single shared reactor is built.
 
 You can call this function at only two points: before the reactor
 first starts in this process (before the first call to
-chttpclient_do_async or chttpclient_do_async_streaming anywhere), or
+chttpcli_do_async or chttpcli_do_async_streaming anywhere), or
 after the engine has stopped completely. The engine stops once every
 async user of a chttpcli has dropped its reference and the automatic
 teardown has finished, and chttpcli_engine_wait blocks until that
@@ -60,6 +60,6 @@ ccol_not_permitted, while the engine runs. Wait for the engine to stop
 .BR chttpcli_engine_wait (3),
 .BR chttpcli_set_engine_logger (3),
 .BR chttpcli_set_engine_num_reactor_threads (3),
-.BR chttpclient_do_async (3),
-.BR chttpclient_do_pooled (3),
+.BR chttpcli_do_async (3),
+.BR chttpcli_do_pooled (3),
 .BR chttpsvr_set_engine_mem_mgmt_procs (3)

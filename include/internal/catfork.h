@@ -47,11 +47,11 @@ SOFTWARE.
  * build instead of leaving a stale copy in a caller.
  */
 
-/* cthreadcomm: ccol_event_loop and the queues. */
+/* cthreadcomm: ceventloop and the queues. */
 void _cthreadcomm_ensure_atfork_registered_before_caller(void);
 
-/* cthreadpool: ctpool. */
-void _ctpool_ensure_atfork_registered_before_caller(void);
+/* cthreadpool: cthrpool. */
+void _cthrpool_ensure_atfork_registered_before_caller(void);
 
 /* clogger: clog. */
 void _clog_ensure_atfork_registered_before_caller(void);

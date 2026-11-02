@@ -9,7 +9,7 @@ C Collections (libccollections, \-lccollections)
 
 ccol_retval_t chttp_put(const char *url,
                         const chttp_request_body_t *body,
-                        chttpcli_response **resp_out);
+                        chttpcli_response_t **resp_out);
 .fi
 .SH DESCRIPTION
 .nf
@@ -17,7 +17,7 @@ This is a convenience wrapper that sends an HTTP PUT.
 .fi
 .SH RETURN VALUE
 .nf
-The same codes as chttpclient_do, plus ccol_invalid_args for a body
+The same codes as chttpcli_do, plus ccol_invalid_args for a body
 whose data is NULL while its len is not zero, which
 chttp_request_create refuses. ccol_not_enough_memory also covers a
 failed allocation of the internal request object.

@@ -1,0 +1,45 @@
+.TH CDYNMQ_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cdynmq_create \- create a dynamic queue with no size limit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+cdynmq_create(err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a queue with no size limit, kept in a linked list. A send
+never blocks, and the queue can grow without limit. Memory comes from
+the standard malloc and free.
+
+It is the same as calling cdynmq_create_mp() with NULL
+memory management procedures.
+.fi
+.SH PARAMETERS
+.nf
+err_str  Optional pointer that gets an error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+A pointer to the new dynamic queue, or NULL on failure.
+.fi
+.SH NOTES
+.nf
+All operations on this queue are thread-safe. When you are done with
+the queue, destroy it with cdynmq_destroy().
+
+fork(2) and this queue can be combined in two supported ways: call
+fork(2) before you create the queue, or create it and then call fork(2)
+followed at once by exec(3). A program that keeps running with no
+exec(3) after the fork while a queue from before the fork is live is
+not supported. As a defense in depth beyond that rule, the child never
+inherits a lock that another thread held, in the locked state, at the
+instant of the fork. The queue owns no thread of its own either, so a
+queue that a child inherits this way stays fully usable.
+.fi
+.SH "SEE ALSO"
+.BR cdynmq_create_mp (3),
+.BR cdynmq_destroy (3)

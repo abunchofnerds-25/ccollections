@@ -44,7 +44,7 @@ struct clrucache;
 
 /* Resolves h to the cache behind it without a pin, so there is no unpin to
  * forget; NULL under the same conditions as the real resolve. */
-struct clrucache *_clrucache_resolve_for_tests(clru_cache h);
+struct clrucache *_clrucache_resolve_for_tests(ccache h);
 
 /* Makes the very next push onto the free list of the handle table behave
  * exactly like an allocation failure, then disarms itself, so a test reaches
@@ -53,12 +53,12 @@ void _clrucache_force_next_free_index_push_failure_for_tests(void);
 
 /* The sum of the segment capacities, and the number of segments in
  * *out_segments, so a test can pin how a capacity is split. */
-size_t _clrucache_segment_capacity_sum_for_tests(clru_cache cache,
+size_t _clrucache_segment_capacity_sum_for_tests(ccache cache,
                                                  size_t *out_segments);
 
 /* The number of segments whose map hashes in the keyed mode of chashmap,
  * and the number of segments in *out_segments. */
-size_t _clrucache_keyed_segment_maps_for_tests(clru_cache cache,
+size_t _clrucache_keyed_segment_maps_for_tests(ccache cache,
                                                size_t *out_segments);
 
 /* The indices on the free list of the handle table, and the number of slots
@@ -70,13 +70,12 @@ size_t _clrucache_slot_table_capacity_for_tests(void);
 /* How many waiter references the entry of key_pair holds right now, or -1
  * when the cache doesn't hold the key, so a test knows that a getter really
  * waits on an operation in flight. */
-int _clrucache_key_waiters_for_tests(clru_cache cache,
-                                     const cmap_pair *key_pair);
+int _clrucache_key_waiters_for_tests(ccache cache, const cmap_pair *key_pair);
 
 /* Makes a thread that publishes an entry hold the mutex of its segment for
  * delay_us more before it wakes the waiters, so another thread can queue for
  * that mutex first. It doesn't disarm itself: a test sets it back to 0. The
  * second call tells whether the publishing thread has entered that delay. */
-void clru_test_set_post_publish_delay_us(unsigned int delay_us);
-bool clru_test_post_publish_delay_entered(void);
+void ccache_test_set_post_publish_delay_us(unsigned int delay_us);
+bool ccache_test_post_publish_delay_entered(void);
 #endif /* RUNNING_UNIT_TESTS */

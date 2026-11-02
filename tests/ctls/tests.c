@@ -56,6 +56,16 @@ SOFTWARE.
 #include <time.h>
 #include <unistd.h>
 
+#if !defined(LIBRESSL_VERSION_NUMBER)
+#include <openssl/rand.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/core_names.h>
+#include <openssl/params.h>
+#else
+#include <openssl/rand_drbg.h>
+#endif
+#endif
+
 TAU_MAIN()
 
 /* ========================================================================== */
@@ -107,7 +117,57 @@ __attribute__((constructor(101))) static void _hook_openssl_allocator(void) {
 }
 #endif
 
+/* The helper function _openssl_set_drbg_reseed tells OpenSSL when the random
+ * number generators of the calling thread reseed. After secs seconds, and after
+ * requests calls that draw random bytes. A 0 turns that trigger off. The
+ * library never calls this; only the test thread does.
+ *
+ * Some background first. OpenSSL makes its random bytes with DRBGs
+ * (deterministic random bit generators). A DRBG stretches a small secret seed
+ * into as many random bytes as you ask for. Every thread has two of them, a
+ * public and a private one, and both take their seeds from one shared primary
+ * DRBG. Now and then OpenSSL drops the seed of a DRBG and takes a fresh one,
+ * so that a leaked state exposes as little as possible. That's a reseed, and
+ * it allocates memory.
+ *
+ * The OpenSSL allocation sweeps in this file depend on something a reseed
+ * breaks. A sweep runs a call once to count its OpenSSL allocations, then runs
+ * it again and again, failing allocation 1, then allocation 2, and so on. That
+ * works only if every run allocates exactly like the counted one. The DRBGs of
+ * a thread reseed every 7 minutes or every 65536 requests, and under valgrind
+ * this suite runs past the 7 minutes. The run that meets the reseed then makes
+ * more allocations than the sweep counted, and the sweep reports a failure
+ * that our code didn't cause. That's why _ossl_arm calls this with (0, 0)
+ * before every count. Asking for the two DRBGs here also creates them, so
+ * their creation doesn't fall inside a count either.
+ *
+ * The OpenSSL manual explains both triggers and that 0 turns each one off. See
+ * "Automatic Reseeding" in EVP_RAND(7) for OpenSSL 3
+ * (https://docs.openssl.org/3.0/man7/EVP_RAND/) and RAND_DRBG_reseed(3)
+ * for 1.1.1 (https://docs.openssl.org/1.1.1/man3/RAND_DRBG_reseed/).
+ */
+static void _openssl_set_drbg_reseed(unsigned int secs, unsigned int requests) {
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+  OSSL_PARAM params[3] = {
+      OSSL_PARAM_construct_uint(OSSL_DRBG_PARAM_RESEED_TIME_INTERVAL, &secs),
+      OSSL_PARAM_construct_uint(OSSL_DRBG_PARAM_RESEED_REQUESTS, &requests),
+      OSSL_PARAM_construct_end()};
+  EVP_RAND_CTX_set_params(RAND_get0_public(NULL), params);
+  EVP_RAND_CTX_set_params(RAND_get0_private(NULL), params);
+#elif !defined(LIBRESSL_VERSION_NUMBER)
+  RAND_DRBG *drbgs[2] = {RAND_DRBG_get0_public(), RAND_DRBG_get0_private()};
+  for (int i = 0; i < 2; ++i) {
+    RAND_DRBG_set_reseed_time_interval(drbgs[i], (time_t)secs);
+    RAND_DRBG_set_reseed_interval(drbgs[i], requests);
+  }
+#else
+  (void)secs;
+  (void)requests;
+#endif
+}
+
 static void _ossl_arm(long nth) {
+  _openssl_set_drbg_reseed(0, 0);
   g_ossl_alloc_thread = pthread_self();
   atomic_store(&g_ossl_alloc_seen, 0);
   atomic_store(&g_ossl_alloc_fired, false);

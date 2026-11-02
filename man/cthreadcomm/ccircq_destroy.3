@@ -1,0 +1,70 @@
+.TH CCIRCQ_DESTROY 3 "2026-09-26" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccircq_destroy \- destroy a circular queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccircq_destroy(cq);
+.fi
+.SH DESCRIPTION
+.nf
+Frees everything the queue holds and then sets the queue pointer to
+NULL.
+
+ceventloop_remove() doesn't wait for a callback that it has
+already handed to a reactor thread, so such a callback can still be
+working inside this queue when the removal returns. This call blocks
+until every one of those callbacks is done with the queue and only then
+frees it, which is what makes the documented teardown order (drain,
+remove, destroy) safe as written.
+
+A callback that the loop runs for a different registration can run that
+whole sequence for this queue, with any num_reactor_threads. A dispatch
+that the loop collected for the removed registration but did not start
+yet doesn't hold the destroy up, and it never runs its callback after
+the removal.
+.fi
+.SH PARAMETERS
+.nf
+cq   Circular queue to destroy. The macro sets it to NULL.
+.fi
+.SH NOTES
+.nf
+You can call this with a NULL pointer.
+
+cq is evaluated exactly once and must be a modifiable lvalue, such as
+a variable or an array element. An expression with a side effect, such
+as handles[i++], therefore destroys and clears a single element.
+.fi
+.SH WARNINGS
+.nf
+A message left in the queue causes an assertion failure, so drain the
+queue before you destroy it. The messages are counted only after every
+callback that the removal left running has finished, and a write
+callback that was still running when ceventloop_remove() returned
+can send, so its message fails the assertion too. When a write
+registration watches the queue, remove it, wait for its on_removed
+callback, and only then drain and destroy the queue.
+
+A watcher on this queue causes an assertion failure as well. A watcher
+is a cselect() call, a cselect_timed() call or a
+ceventloop registration (ccircq_selectable or
+cchan_selectable). Without the assertion the waiter would stay
+linked and keep pointing at the mutex of this queue, which the destroy
+is about to free. Call ceventloop_remove() first, or let every
+cselect() and cselect_timed() call that watches the queue
+return.
+
+Do not call this from inside a ceventloop callback that dispatches
+this queue, because the destroy would wait for that very callback. It
+is a caller error, and the program stops through _ccol_fatal_err().
+
+Do not hold an application lock across this call when one of those
+callbacks takes the same lock: the destroy waits for the callback while
+the callback waits for the lock.
+.fi
+.SH "SEE ALSO"
+.BR ccircq_create (3)

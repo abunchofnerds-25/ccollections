@@ -34,8 +34,8 @@ By that test these are internal, and none of them has a page:
         Every caller reaches these through csort_get_default_comparison_proc,
         which picks one from the type of its argument.
 
-    _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
-        The size arithmetic that CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER
+    _CRMEMPOOL_CALCULATE_PREALLOCATED_BUFFER_SIZE
+        The size arithmetic that CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER
         performs on the caller's behalf.
 
     _ccol_find_nearest_gte_power_of_two, ccol_strdup, ccol_growbuf_*

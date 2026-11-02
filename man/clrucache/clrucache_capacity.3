@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clrucache.h>
 
-size_t clrucache_capacity(clru_cache cache);
+size_t clrucache_capacity(ccache cache);
 .fi
 .SH DESCRIPTION
 .nf
@@ -22,7 +22,7 @@ cache  Cache handle.
 .SH RETURN VALUE
 .nf
 The capacity, which is always >= 1 for a valid handle. It is 0 when
-cache is CLRU_CACHE_NULL, and 0 when cache is a stale handle that a
+cache is CCACHE_NULL, and 0 when cache is a stale handle that a
 call already destroyed.
 .fi
 .SH NOTES
@@ -30,7 +30,7 @@ call already destroyed.
 cache is an opaque VALUE handle, which the library resolves through a
 slot table of its own before it touches the cache object behind it. A
 stale handle is an ordinary error here and not a fatal one; only
-clru_destroy() treats a stale handle as fatal.
+ccache_destroy() treats a stale handle as fatal.
 The function takes no lock, because the capacity is fixed when the
 cache is created and nothing writes it afterwards. It is the total
 across the cache's segments, exactly the value that the caller gave to

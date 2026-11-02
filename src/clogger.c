@@ -393,8 +393,8 @@ typedef struct clog_shared {
   bool async_enabled;
   bool is_bounded_queue; /* meaningful only if async_enabled */
   union {
-    ccol_circular_queue *circq;
-    ccol_dynamic_queue *dynmq;
+    ccircq *circq;
+    cdynmq *dynmq;
   } q;
   /* Deadline, in CLOCK_MONOTONIC nanoseconds, of the exit drain or CLOG_FATAL
    * drain that turned q's sends off. The drain stores it before turning them
@@ -828,7 +828,7 @@ static void _clog_slot_table_init_globals(void) {
 /* Not in clogger.h (internal/catfork.h declares it) and not part of the
  * public API: a narrow escape hatch, kept on purpose, that follows
  * _cthreadcomm_ensure_atfork_registered_before_caller() in cthreadcomm.c and
- * _ctpool_ensure_atfork_registered_before_caller() in cthreadpool.c exactly.
+ * _cthrpool_ensure_atfork_registered_before_caller() in cthreadpool.c exactly.
  * It's there for a dependent module, chttpserver.c, which needs to make sure
  * this module's _ccol_at_fork() triple is registered BEFORE its own.
  * pthread_atfork runs prepare handlers in the reverse order of registration,
@@ -1268,7 +1268,7 @@ static void _clog_atfork_release(bool in_child) {
     if (in_child && sh->async_enabled) {
       /* This shared target depends on a writer thread, which doesn't exist in
        * the child at all because fork() copies only the calling thread. The
-       * internals of ccol_circular_queue and ccol_dynamic_queue are opaque
+       * internals of ccircq and cdynmq are opaque
        * and there's no safe way to reach in and reset whatever lock state
        * the child inherited, so we don't try. Every code path in this file
        * already gates ALL access to sh->q, sh->writer_thread and
@@ -2281,7 +2281,7 @@ typedef struct {
   char proc[CLOG_PROC_VAL_LEN]; /* "<progname>(<pid>):<name>(<tid>)" */
 } clog_thread_ident_t;
 
-#if defined(CCOL_MEMPOOL_DYNAMIC_TLS) && CCOL_MEMPOOL_DYNAMIC_TLS
+#if defined(CMEMPOOL_DYNAMIC_TLS) && CMEMPOOL_DYNAMIC_TLS
 static __thread clog_thread_ident_t *_clog_tident;
 #else
 static __thread clog_thread_ident_t *_clog_tident
@@ -2691,7 +2691,7 @@ enum {
 /* Initial-exec model, as for the thread-local state of cpintable and
  * cmempool: under the general model every access from a shared library is a
  * __tls_get_addr call, and this one sits on every write to a pipe. */
-#if defined(CCOL_MEMPOOL_DYNAMIC_TLS) && CCOL_MEMPOOL_DYNAMIC_TLS
+#if defined(CMEMPOOL_DYNAMIC_TLS) && CMEMPOOL_DYNAMIC_TLS
 static __thread unsigned char _clog_sig_thread;
 #else
 static __thread unsigned char _clog_sig_thread
@@ -6242,7 +6242,7 @@ typedef struct clog_async_job {
 
   clog_field_view_t *fields; /* An array of field_count views, or NULL when
       field_count == 0. One allocation of the exact size given by
-      chmap_elem_count(), a count that is O(1) and known before the walk, so
+      chashmap_elem_count(), a count that is O(1) and known before the walk, so
       no separate counting pass is needed */
   size_t field_count;
   ccol_growbuf_t field_pool;   /* The key and value bytes, separated by NUL.
@@ -6872,8 +6872,8 @@ void _clog_test_write_unrepresentable_record(clog logger, clog_format_t fmt,
 
 static chmap _fields_create(ccol_memmgmt_procs_t *m_procs) {
   char *err = NULL;
-  chmap m = chmap_create_mp(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
-                            ccol_string, m_procs, &err);
+  chmap m = chashmap_create_mp(CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
+                               ccol_string, ccol_string, m_procs, &err);
   return m; /* NULL on failure */
 }
 
@@ -7012,7 +7012,7 @@ static struct clogger *_logger_alloc(clog_shared_t *shared,
   }
 
   if (_ccol_mutex_init(lg->fields_mutex) != 0) {
-    __chmap_destroy(lg->fields);
+    __chashmap_destroy(lg->fields);
     _buf_free(&lg->buf);
     _ccol_mem_free(shared->m_procs, lg);
     return NULL;
@@ -7026,7 +7026,7 @@ static struct clogger *_logger_alloc(clog_shared_t *shared,
 /* Frees a fully initialised logger without touching the shared store. */
 static void _logger_free(struct clogger *lg) {
   _ccol_mutex_destroy(lg->fields_mutex);
-  __chmap_destroy(lg->fields);
+  __chashmap_destroy(lg->fields);
   lg->fields = NULL;
   _buf_free(&lg->buf);
   _ccol_mem_free(lg->shared->m_procs, lg);
@@ -7070,7 +7070,7 @@ static void _snapshot_fields(struct clogger *lg, clog_field_view_t **out_fields,
   *out_failed = false;
 
   _ccol_mutex_lock(lg->fields_mutex);
-  size_t n = chmap_elem_count(lg->fields);
+  size_t n = chashmap_elem_count(lg->fields);
   if (n == 0) {
     _ccol_mutex_unlock(lg->fields_mutex);
     /* ccol_growbuf_init() always allocates a 256-byte backing store, and
@@ -7704,11 +7704,10 @@ static void *_clog_writer_thread_main(void *arg) {
     /* With nothing to deliver the wait has no limit (UINT64_MAX saturates the
      * deadline), so an idle logger sleeps until a message comes. */
     if (no_work) remaining_us = UINT64_MAX;
-    c_message_t m = {0};
-    ccol_retval_t rv =
-        sh->is_bounded_queue
-            ? ccol_circq_timed_recv_zc(sh->q.circq, &m, remaining_us)
-            : ccol_dynmq_timed_recv_zc(sh->q.dynmq, &m, remaining_us);
+    cmessage_t m = {0};
+    ccol_retval_t rv = sh->is_bounded_queue
+                           ? ccircq_timed_recv(sh->q.circq, &m, remaining_us)
+                           : cdynmq_timed_recv(sh->q.dynmq, &m, remaining_us);
 
     /* A wait that timed out means the interval is over. A remaining time of 0
      * (right after an interval flush, with an interval shorter than that
@@ -7731,7 +7730,7 @@ static void *_clog_writer_thread_main(void *arg) {
     }
     if (rv != ccol_success) {
       /* A real, documented return value, not a theoretical one: the header
-       * doc of ccol_circq_timed_recv_zc() and ccol_dynmq_timed_recv_zc() says
+       * doc of ccircq_timed_recv() and cdynmq_timed_recv() says
        * "ccol_unexpected_failure on system error (check errno)".
        *
        * Just looping back to the timed receive does NOT stop a tight spin by
@@ -8046,19 +8045,18 @@ static bool _shared_async_init(clog_shared_t *sh,
   char *err = NULL; /* Thrown away, because clog_create_from_*_mp gives no error
         string on any failure, which is this file's convention */
   if (sh->is_bounded_queue) {
-    sh->q.circq =
-        ccol_circular_queue_create_mp(async_cfg->queue_size, sh->m_procs, &err);
+    sh->q.circq = ccircq_create_mp(async_cfg->queue_size, sh->m_procs, &err);
     if (!sh->q.circq) return false;
   } else {
-    sh->q.dynmq = ccol_dynamic_queue_create_mp(sh->m_procs, &err);
+    sh->q.dynmq = cdynmq_create_mp(sh->m_procs, &err);
     if (!sh->q.dynmq) return false;
   }
 
   if (_buf_init(&sh->async_buf, sh->m_procs) != 0) {
     if (sh->is_bounded_queue)
-      ccol_circular_queue_destroy(sh->q.circq);
+      ccircq_destroy(sh->q.circq);
     else
-      ccol_dynamic_queue_destroy(sh->q.dynmq);
+      cdynmq_destroy(sh->q.dynmq);
     return false;
   }
   /* A flush_buffer_size the caller sets above CLOG_BUF_MAX must be
@@ -8073,9 +8071,9 @@ static bool _shared_async_init(clog_shared_t *sh,
       0) {
     _buf_free(&sh->async_buf);
     if (sh->is_bounded_queue)
-      ccol_circular_queue_destroy(sh->q.circq);
+      ccircq_destroy(sh->q.circq);
     else
-      ccol_dynamic_queue_destroy(sh->q.dynmq);
+      cdynmq_destroy(sh->q.dynmq);
     return false;
   }
 
@@ -8089,9 +8087,9 @@ static bool _shared_async_init(clog_shared_t *sh,
  * queue takes it, and never giving up after one attempt.
  *
  * For a BOUNDED queue one unchecked attempt would do in practice:
- * ccol_circq_send_zc() blocks until space frees up, and the writer thread is
+ * ccircq_send() blocks until space frees up, and the writer thread is
  * still draining at this point, so space always shows up. For the UNBOUNDED
- * queue it wouldn't: ccol_dynmq_send_zc() never blocks, and it can fail with
+ * queue it wouldn't: cdynmq_send() never blocks, and it can fail with
  * ccol_not_enough_memory when its own internal node allocation fails under
  * memory pressure, which is exactly the situation that can make a caller
  * close loggers.
@@ -8113,10 +8111,10 @@ static bool _shared_async_init(clog_shared_t *sh,
 static void _clog_send_shutdown_sentinel_blocking(clog_shared_t *sh) {
   unsigned int delay_us = 1000; /* 1ms */
   for (;;) {
-    c_message_t sentinel = {.data = NULL, .size = 0};
+    cmessage_t sentinel = {.data = NULL, .size = 0};
     ccol_retval_t rv = sh->is_bounded_queue
-                           ? ccol_circq_send_zc(sh->q.circq, &sentinel)
-                           : ccol_dynmq_send_zc(sh->q.dynmq, &sentinel);
+                           ? ccircq_send(sh->q.circq, &sentinel)
+                           : cdynmq_send(sh->q.dynmq, &sentinel);
     if (rv == ccol_success) return;
     /* Two failures get here: a transient failure of the unbounded queue's
      * node allocation, and ccol_not_permitted, which _shared_async_teardown()
@@ -8145,15 +8143,15 @@ static void _shared_async_teardown(clog_shared_t *sh) {
    * after it, from a destructor, still has to reach the writer thread. This
    * is the target's last handle, so no other send can race it. */
   if (sh->is_bounded_queue)
-    (void)ccol_circq_enable_sending(sh->q.circq);
+    (void)ccircq_enable_sending(sh->q.circq);
   else
-    (void)ccol_dynmq_enable_sending(sh->q.dynmq);
+    (void)cdynmq_enable_sending(sh->q.dynmq);
   _clog_send_shutdown_sentinel_blocking(sh);
   _ccol_thread_join(sh->writer_thread);
   if (sh->is_bounded_queue)
-    ccol_circular_queue_destroy(sh->q.circq);
+    ccircq_destroy(sh->q.circq);
   else
-    ccol_dynamic_queue_destroy(sh->q.dynmq);
+    cdynmq_destroy(sh->q.dynmq);
   _buf_free(&sh->async_buf);
 }
 
@@ -8853,7 +8851,7 @@ clog _clog_derive_checked(clog parent_h, ccol_retval_t *rv) {
       /* ccol_key_already_present is a documented success, meaning the map
        * wrote the value in place, not a failure. Only a real failure, such as
        * ccol_invalid_args or ccol_not_enough_memory, stops the derive. */
-      ccol_retval_t rv = chmap_insert_elem(child->fields, &kp, &vp);
+      ccol_retval_t rv = chashmap_insert_elem(child->fields, &kp, &vp);
       if (rv != ccol_success && rv != ccol_key_already_present) {
         _ccol_mutex_unlock(parent->fields_mutex);
         _logger_free(child);
@@ -9049,7 +9047,7 @@ ccol_retval_t clog_set_field(clog h, const char *key, const char *value) {
 
   cmap_pair kp = {.ptr = (void *)key, .size = strlen(key) + 1};
   cmap_pair vp = {.ptr = (void *)value, .size = strlen(value) + 1};
-  ccol_retval_t rv = chmap_insert_elem(lg->fields, &kp, &vp);
+  ccol_retval_t rv = chashmap_insert_elem(lg->fields, &kp, &vp);
 
   _ccol_mutex_unlock(lg->fields_mutex);
   _clog_resolve_unpin(lg);
@@ -9070,7 +9068,7 @@ void clog_remove_field(clog h, const char *key) {
   _ccol_mutex_lock(lg->fields_mutex);
 
   cmap_pair kp = {.ptr = (void *)key, .size = strlen(key) + 1};
-  chmap_delete_elem(lg->fields, &kp);
+  chashmap_delete_elem(lg->fields, &kp);
 
   _ccol_mutex_unlock(lg->fields_mutex);
   _clog_resolve_unpin(lg);
@@ -9083,7 +9081,7 @@ void clog_clear_fields(clog h) {
         "clog_clear_fields: clog handle is invalid, stale, or already closed");
 
   _ccol_mutex_lock(lg->fields_mutex);
-  chmap_reset(lg->fields, 0);
+  chashmap_reset(lg->fields, 0);
   _ccol_mutex_unlock(lg->fields_mutex);
   _clog_resolve_unpin(lg);
 }
@@ -9351,12 +9349,12 @@ static void _clog_flush_pinned(struct clogger *lg);
 static clog_async_msg_t _clog_wake_envelope = {.kind = CLOG_ASYNC_MSG_WAKE};
 
 static __attribute__((cold)) void _clog_wake_writer(clog_shared_t *sh) {
-  c_message_t m = {.data = &_clog_wake_envelope,
-                   .size = sizeof(_clog_wake_envelope)};
+  cmessage_t m = {.data = &_clog_wake_envelope,
+                  .size = sizeof(_clog_wake_envelope)};
   if (sh->is_bounded_queue)
-    (void)ccol_circq_try_send_zc(sh->q.circq, &m);
+    (void)ccircq_try_send(sh->q.circq, &m);
   else
-    (void)ccol_dynmq_send_zc(sh->q.dynmq, &m);
+    (void)cdynmq_send(sh->q.dynmq, &m);
 }
 
 /*
@@ -9472,10 +9470,10 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
   _snapshot_fields(lg, &job->fields, &job->field_count, &job->field_pool,
                    &job->fields_snapshot_failed);
 
-  c_message_t m = {.data = envelope, .size = sizeof(*envelope)};
+  cmessage_t m = {.data = envelope, .size = sizeof(*envelope)};
   ccol_retval_t rv = lg->shared->is_bounded_queue
-                         ? ccol_circq_send_zc(lg->shared->q.circq, &m)
-                         : ccol_dynmq_send_zc(lg->shared->q.dynmq, &m);
+                         ? ccircq_send(lg->shared->q.circq, &m)
+                         : cdynmq_send(lg->shared->q.dynmq, &m);
   if (rv != ccol_success &&
       atomic_load_explicit(&lg->shared->drain_left, memory_order_acquire)) {
     /* An exit drain left this target: its writer thread doesn't answer and
@@ -9636,7 +9634,7 @@ static inline bool _clog_test_consume_forced_flush_condvar_init_failure(void) {
  *
  * The pin is held for this whole call, the blocking wait below included,
  * just as _clog_write() and _clog_write_async() each hold their own pin
- * across their own blocking ccol_circq_send_zc or ccol_dynmq_send_zc call.
+ * across their own blocking ccircq_send or cdynmq_send call.
  * That's what lets clog_close()'s poll-wait serialise against a flush in
  * flight, as it already does for a write in flight.
  */
@@ -9678,10 +9676,10 @@ static void _clog_flush_pinned(struct clogger *lg) {
   clog_async_msg_t envelope;
   envelope.kind = CLOG_ASYNC_MSG_FLUSH;
   envelope.u.ctrl = &ctrl;
-  c_message_t m = {.data = &envelope, .size = sizeof(envelope)};
+  cmessage_t m = {.data = &envelope, .size = sizeof(envelope)};
   ccol_retval_t rv = lg->shared->is_bounded_queue
-                         ? ccol_circq_send_zc(lg->shared->q.circq, &m)
-                         : ccol_dynmq_send_zc(lg->shared->q.dynmq, &m);
+                         ? ccircq_send(lg->shared->q.circq, &m)
+                         : cdynmq_send(lg->shared->q.dynmq, &m);
 
   if (rv == ccol_success) {
     _ccol_mutex_lock(ctrl.mutex);
@@ -9976,7 +9974,7 @@ static clog_owner_flush_t _clog_owner_flush(clog_shared_t *sh,
   req->ctrl.done = false;
   req->envelope.kind = CLOG_ASYNC_MSG_FLUSH;
   req->envelope.u.ctrl = &req->ctrl;
-  c_message_t m = {.data = &req->envelope, .size = sizeof(req->envelope)};
+  cmessage_t m = {.data = &req->envelope, .size = sizeof(req->envelope)};
   ccol_retval_t rv;
   if (sh->is_bounded_queue) {
     /* Once the deadline has passed the send doesn't wait, and a full queue
@@ -9985,9 +9983,9 @@ static clog_owner_flush_t _clog_owner_flush(clog_shared_t *sh,
 #ifdef RUNNING_UNIT_TESTS
     if (atomic_load(&_clog_test_exit_drain_send_no_wait)) left_us = 0;
 #endif
-    rv = ccol_circq_owner_send_zc(sh->q.circq, &m, left_us);
+    rv = ccircq_owner_send(sh->q.circq, &m, left_us);
   } else {
-    rv = ccol_dynmq_owner_send_zc(sh->q.dynmq, &m);
+    rv = cdynmq_owner_send(sh->q.dynmq, &m);
   }
   bool done = false;
   if (rv == ccol_success) {
@@ -10026,9 +10024,9 @@ static bool _clog_exit_drain_async(clog_shared_t *sh,
       (uint64_t)deadline->tv_sec * 1000000000ull + (uint64_t)deadline->tv_nsec,
       memory_order_relaxed);
   if (sh->is_bounded_queue)
-    (void)ccol_circq_disable_sending(sh->q.circq);
+    (void)ccircq_disable_sending(sh->q.circq);
   else
-    (void)ccol_dynmq_disable_sending(sh->q.dynmq);
+    (void)cdynmq_disable_sending(sh->q.dynmq);
   clog_owner_flush_t r = _clog_owner_flush(sh, deadline);
   if (r == CLOG_OWNER_FLUSH_NO_MEMORY) return true;
   /* A writer thread that didn't answer, or a bounded queue that stayed full
@@ -10044,7 +10042,7 @@ static bool _clog_exit_drain_async(clog_shared_t *sh,
    * record. */
   if (r != CLOG_OWNER_FLUSH_DONE || !_clog_exit_lock_target(sh, deadline)) {
     atomic_store_explicit(&sh->drain_left, true, memory_order_release);
-    if (!sh->is_bounded_queue) (void)ccol_dynmq_enable_sending(sh->q.dynmq);
+    if (!sh->is_bounded_queue) (void)cdynmq_enable_sending(sh->q.dynmq);
     return false;
   }
   int left = _clog_ms_until(deadline);

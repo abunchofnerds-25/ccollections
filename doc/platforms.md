@@ -91,7 +91,7 @@ initial-exec, but it is much faster than musl's own `malloc`: about
 it with several threads, where musl's allocator contends on one lock. So on
 musl the pool is well worth using even with the slower model. A
 program that links the library at build time and never loads it with
-`dlopen()` can build it with `CCOL_MEMPOOL_DYNAMIC_TLS=0` and get the fast
+`dlopen()` can build it with `CMEMPOOL_DYNAMIC_TLS=0` and get the fast
 model back.
 
 Finally, musl's `dlclose()` never unloads a library, so the library and its
@@ -179,7 +179,7 @@ If you can't control the environment, build the library with the general
 model:
 
 ```bash
-make EXTRA_CFLAGS="-DCCOL_MEMPOOL_DYNAMIC_TLS=1"
+make EXTRA_CFLAGS="-DCMEMPOOL_DYNAMIC_TLS=1"
 ```
 
 With this model `dlopen()` always works. Most of the cost is on the

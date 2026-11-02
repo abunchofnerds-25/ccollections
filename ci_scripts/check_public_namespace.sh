@@ -63,14 +63,16 @@ AR_LIB="${2:-libccollections.a}"
   exit 2
 }
 
-# A prefix is acceptable when it's ccol_ or CCOL_, the library's full name, or
-# the name of the module that owns the symbol. ccollections_ shows up on enum
-# tags, the one surface that uses the full library name instead of the short
-# form, and it's as clearly ours as ccol_ is.
-NS='^_*(ccol_|CCOL_|ccollections_|cvec|cvector|chmap|chashmap|cbmap|cbstmap|cstr|cstring|csort|cjson|cyaml|clog|clru|cmap|cmempool|cthreadcomm|cthreadpool|ctpool|chttp|ctls|citer|CVEC|CHMAP|CBMAP|CSTR|CSORT|CJSON|CYAML|CLOG|CLRU|CMAP|CMEMPOOL|CTHREAD|CTPOOL|CHTTP|CTLS|CITER)'
+# A prefix is acceptable when it's ccol_ or CCOL_, the library's full name, the
+# name of the module that owns the symbol, or the short name of one of its
+# handle types or APIs (cvec, ccache, crmempool, ccircq, cdynmq, cchan,
+# ceventloop, cselect). ccollections_ shows up on enum tags, the one surface
+# that uses the full library name instead of the short form, and it's as
+# clearly ours as ccol_ is.
+NS='^_*(ccol_|CCOL_|ccollections_|cvec|cvector|chmap|chashmap|cbmap|cbstmap|cstr|cstring|csort|cjson|cyaml|clog|clru|ccache|cmap|cmempool|crmempool|cthreadcomm|ccircq|cdynmq|cchan|ceventloop|cselect|cthreadpool|cthrpool|chttp|ctls|citer|CVEC|CHMAP|CBMAP|CSTR|CSORT|CJSON|CYAML|CLOG|CLRU|CCACHE|CMAP|CMEMPOOL|CRMEMPOOL|CTHREAD|CEVENTLOOP|CSELECT|CTHRPOOL|CHTTP|CTLS|CITER)'
 
 # Struct tags that already start with c and aren't generic English words.
-ALLOW='^(cbinarymap|c_message_t|cthread_pool)$'
+ALLOW='^(cmessage_t|cthread_pool)$'
 
 # The headers that ship are exactly include/*.h. An internal header lives in
 # include/internal/, has no visibility block and is left out by make install,

@@ -1,0 +1,68 @@
+.TH CCIRCQ_SELECTABLE 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccircq_selectable \- build a cselectable_t from a ccircq
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccircq_selectable(q, dir);
+.fi
+.SH DESCRIPTION
+.nf
+Builds a cselectable_t value (a tagged union, here of type
+cselectable_type_ccircq) that wraps the given ccircq pointer
+with the given direction.
+
+  cselect_read; wait for at least one message to arrive (read-wait)
+  cselect_write; wait until the queue has room for a send, or until
+                     its sends are turned off (write-wait)
+
+The macro expands to a compound literal, so at run time it costs no
+more than loading the pointer.
+
+For either direction cselect() only reports readiness. It never
+takes or reserves anything, so the caller has to make the call itself:
+ccircq_try_recv() when the read direction wins, and
+ccircq_try_send() when the write direction wins. Since nothing
+is claimed or reserved, there is a time-of-check to time-of-use gap,
+the same one as in POSIX select(2).
+.fi
+.SH PARAMETERS
+.nf
+q    ccircq pointer to wrap. A NULL value makes a
+     selectable that cselect() rejects with ccol_invalid_args.
+dir  cselect_read or cselect_write.
+.fi
+.SH RETURN VALUE
+.nf
+cselectable_t value (not a pointer).
+.fi
+.SH EXAMPLES
+.nf
+ccircq *q0 = ccircq_create(8, NULL);
+ccircq *q1 = ccircq_create(8, NULL);
+
+size_t idx;
+/* Read-wait on two queues: */
+cselect_va(&idx,
+    ccircq_selectable(q0, cselect_read),
+    ccircq_selectable(q1, cselect_read));
+/* on ccol_success, claim the message with ccircq_try_recv() on
+   whichever of q0 and q1 idx points at */
+
+/* Mixed: wait until q0 has room to send or q1 has a message: */
+cselect_va(&idx,
+    ccircq_selectable(q0, cselect_write),
+    ccircq_selectable(q1, cselect_read));
+
+ccircq_destroy(q0);
+ccircq_destroy(q1);
+.fi
+.SH "SEE ALSO"
+.BR cselect (3),
+.BR cselect_va (3),
+.BR cdynmq_selectable (3),
+.BR cchan_selectable (3),
+.BR cselectable_fd (3)

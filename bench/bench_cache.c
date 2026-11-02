@@ -59,7 +59,7 @@
 #define BENCH_LRU_MT_N 20000
 
 typedef struct {
-  clru_cache cache;
+  ccache cache;
   int *keys;
   /* The total lru_get_run reaches when every lookup hits. Setup computes it
      once, so the timed loop needs no counter of its own. */
@@ -68,9 +68,9 @@ typedef struct {
 
 static void lru_teardown(void *state) {
   lru_state_t *st = state;
-  if (st->cache != CLRU_CACHE_NULL) {
-    clru_cache c = st->cache;
-    clru_destroy(c);
+  if (st->cache != CCACHE_NULL) {
+    ccache c = st->cache;
+    ccache_destroy(c);
   }
   free(st->keys);
   free(st);
@@ -93,15 +93,15 @@ static lru_state_t *lru_make(size_t n, size_t key_span, bool prefill) {
     st->expected_acc += st->keys[i];
   }
 
-  clru_construct(c, int, int, BENCH_LRU_CAPACITY, NULL, NULL, NULL);
-  if (c == CLRU_CACHE_NULL) {
+  ccache_construct(c, int, int, BENCH_LRU_CAPACITY, NULL, NULL, NULL);
+  if (c == CCACHE_NULL) {
     lru_teardown(st);
     return NULL;
   }
   st->cache = c;
   if (prefill) {
     for (size_t k = 0; k < key_span && k < BENCH_LRU_CAPACITY; k++)
-      clru_set(c, (int)k, (int)k);
+      ccache_set(c, (int)k, (int)k);
   }
   return st;
 }
@@ -129,12 +129,12 @@ static void *lru_set_setup(size_t n) {
 
 static void lru_get_run(void *state, size_t n) {
   lru_state_t *st = state;
-  clru_cache c = st->cache;
-  clru_redeclare(c, int, int);
+  ccache c = st->cache;
+  ccache_redeclare(c, int, int);
   long long acc = 0;
   for (size_t i = 0; i < n; i++) {
     int out = 0;
-    if (clru_get(c, st->keys[i], &out) == ccol_success) acc += out;
+    if (ccache_get(c, st->keys[i], &out) == ccol_success) acc += out;
   }
   /* Every key here comes from below the capacity and setup put every one of
      them into the cache, so a miss is impossible and this case really does
@@ -156,15 +156,15 @@ static void lru_get_run(void *state, size_t n) {
  * capacity, so most passes miss, insert and evict. */
 static void lru_get_or_fill_run(void *state, size_t n) {
   lru_state_t *st = state;
-  clru_cache c = st->cache;
-  clru_redeclare(c, int, int);
+  ccache c = st->cache;
+  ccache_redeclare(c, int, int);
   long long acc = 0;
   for (size_t i = 0; i < n; i++) {
     int out = 0;
-    if (clru_get(c, st->keys[i], &out) == ccol_success) {
+    if (ccache_get(c, st->keys[i], &out) == ccol_success) {
       acc += out;
     } else {
-      clru_set(c, st->keys[i], st->keys[i]);
+      ccache_set(c, st->keys[i], st->keys[i]);
     }
   }
   bench_sink_value((long long)acc);
@@ -172,9 +172,9 @@ static void lru_get_or_fill_run(void *state, size_t n) {
 
 static void lru_set_run(void *state, size_t n) {
   lru_state_t *st = state;
-  clru_cache c = st->cache;
-  clru_redeclare(c, int, int);
-  for (size_t i = 0; i < n; i++) clru_set(c, st->keys[i], (int)i);
+  ccache c = st->cache;
+  ccache_redeclare(c, int, int);
+  for (size_t i = 0; i < n; i++) ccache_set(c, st->keys[i], (int)i);
   bench_sink(&c);
 }
 

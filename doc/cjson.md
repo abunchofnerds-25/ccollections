@@ -224,7 +224,7 @@ source and it's the same on every run.
 The cursor visits every member:
 
 ```c
-cjson_dictionary_iter it;
+cjson_dictionary_iter_t it;
 for (bool ok = cjson_dictionary_first(obj, &it); ok;
      ok = cjson_dictionary_next(&it)) {
     printf("%s is a %s\n", it.key, cjson_type_str(it.value));
@@ -491,7 +491,7 @@ int main(void) {
     /* The words that occur more than once, in the order of their first
      * occurrence. */
     cjson repeated = cjson_create_list();
-    cjson_dictionary_iter it;
+    cjson_dictionary_iter_t it;
     for (bool ok = cjson_dictionary_first(words, &it); ok;
          ok = cjson_dictionary_next(&it)) {
         if (cjson_int_val(it.value) > 1)
@@ -554,7 +554,7 @@ static void scrub(cjson node) {
     }
     if (cjson_type(node) != CJSON_DICTIONARY) return;
 
-    cjson_dictionary_iter it;
+    cjson_dictionary_iter_t it;
     for (bool ok = cjson_dictionary_first(node, &it); ok;
          ok = cjson_dictionary_next(&it)) {
         if (cjson_type(it.value) == CJSON_NULL) {

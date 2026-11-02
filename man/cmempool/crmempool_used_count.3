@@ -1,0 +1,45 @@
+.TH CRMEMPOOL_USED_COUNT 3 "2026-09-17" "c_collections" "C Collections Library - Functions"
+.SH NAME
+crmempool_used_count \- get number of used entries for a size
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+size_t crmempool_used_count(crmempool *rmp, size_t size);
+.fi
+.SH DESCRIPTION
+.nf
+Returns how many entries are allocated from the pool that would serve
+the given size, without any dynamic allocation.
+.fi
+.SH PARAMETERS
+.nf
+rmp   Ranged memory pool to query
+size  Size in bytes to query (maps to a specific sub-pool)
+.fi
+.SH RETURN VALUE
+.nf
+Returns the number of entries in use for this size
+Returns 0 when size is invalid
+.fi
+.SH NOTES
+.nf
+It returns 0 if size is invalid, which means 0 or above largest_size
+It asserts if rmp is NULL
+It rounds size up to the next power-of-two pool
+Thread-safe if the pool was created with single_threaded=false
+Dynamic allocations are tracked separately
+
+The count is exact whenever the sub-pool is quiet. An entry parked in a
+thread's cache counts as free, since nobody holds it. Under concurrent
+allocation on a tier that keeps a cache for each thread, the result can
+be a few entries above crmempool_total_capacity() for that size
+for a short time, but never above the physical slot count that
+crmempool_allocated_bytes(3) accounts for.
+cmempool_total_capacity(3) explains why.
+.fi
+.SH "SEE ALSO"
+.BR crmempool_total_capacity (3),
+.BR crmempool_dynamic_allocs_count (3)

@@ -1,0 +1,44 @@
+.TH CCACHE_INIT 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccache_init \- initialise a previously declared LRU cache variable
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clrucache.h>
+
+ccache_init(name, capacity, getter, setter, evict_cb);
+.fi
+.SH DESCRIPTION
+.nf
+Calls clrucache_create_full() and assigns the result to name, with the
+key type and the value type taken from the companion variables that
+ccache_declare() created. It calls _ccol_fatal_err() when the creation
+fails.
+.fi
+.SH PARAMETERS
+.nf
+name       Cache variable. Declare it with ccache_declare or
+           ccache_declare_scoped first
+capacity   The total number of live entries; see
+           clrucache_create_full(3). It must be greater than 0
+getter     Remote getter callback, or NULL
+setter     Remote setter callback, or NULL
+evict_cb   Eviction callback, or NULL
+.fi
+.SH NOTES
+.nf
+The macro calls _ccol_fatal_err() when an allocation fails, so call
+clrucache_create_full() directly when you must handle an error
+yourself.
+.fi
+.SH EXAMPLES
+.nf
+ccache_declare(cache, int, double);
+ccache_init(cache, 64, NULL, NULL, NULL);
+ccache_destroy(cache);
+.fi
+.SH "SEE ALSO"
+.BR ccache_declare (3),
+.BR ccache_construct (3),
+.BR clrucache_create_full (3)

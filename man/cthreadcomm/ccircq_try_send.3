@@ -1,0 +1,40 @@
+.TH CCIRCQ_TRY_SEND 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccircq_try_send \- try to send a message with no block
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ccircq_try_send(ccircq *cq, cmessage_t *msg);
+.fi
+.SH DESCRIPTION
+.nf
+Puts the message into the queue if there is room, and returns
+ccol_container_full at once when the queue is full. On success the
+ownership of msg->data moves to the queue.
+.fi
+.SH PARAMETERS
+.nf
+cq   Circular queue to send to
+msg  Message to send. On success the ownership of the data moves to the
+     queue.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success         - The message was sent
+ccol_invalid_args    - cq or msg is NULL, msg->data is NULL while
+                       msg->size is not 0, or msg->data is not NULL
+                       while msg->size is 0
+ccol_not_permitted   - Sends on the queue are turned off
+ccol_container_full  - The queue is full
+.fi
+.SH NOTES
+.nf
+This call never blocks. On failure the caller keeps the ownership of
+msg->data.
+.fi
+.SH "SEE ALSO"
+.BR ccircq_send (3),
+.BR ccircq_timed_send (3)

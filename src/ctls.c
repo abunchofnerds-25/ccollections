@@ -1450,7 +1450,7 @@ static bool _ctls_apply_alpn(SSL_CTX *ctx, ctls_ctx_t *tls, bool *oom) {
 static SSL_CTX *_ctls_named_ctx_for_pattern(ctls_ctx_t *tls, char *pattern) {
   cmap_pair kp = {.ptr = pattern, .size = strlen(pattern) + 1};
   cmap_pair vp;
-  if (chmap_get_elem_ref(tls->named_certs, &kp, &vp) != ccol_success)
+  if (chashmap_get_elem_ref(tls->named_certs, &kp, &vp) != ccol_success)
     return NULL;
   ctls_named_cert *nc;
   memcpy(&nc, vp.ptr, sizeof(nc));
@@ -1647,7 +1647,7 @@ static ccol_retval_t _ctls_ctx_rebuild_locked(ctls_ctx_t *tls) {
       tls->default_self_signed_name, &oom);
   if (!new_default) return _ctls_rebuild_failure(oom);
 
-  if (tls->named_certs && chmap_elem_count(tls->named_certs) > 0) {
+  if (tls->named_certs && chashmap_elem_count(tls->named_certs) > 0) {
     SSL_CTX_set_tlsext_servername_callback(new_default, _ctls_servername_cb);
     SSL_CTX_set_tlsext_servername_arg(new_default, tls);
   }
@@ -1658,7 +1658,7 @@ static ccol_retval_t _ctls_ctx_rebuild_locked(ctls_ctx_t *tls) {
    * rebuilds successfully and they're all swapped in together, or none of
    * them is swapped in. */
   size_t named_count =
-      tls->named_certs ? chmap_elem_count(tls->named_certs) : 0;
+      tls->named_certs ? chashmap_elem_count(tls->named_certs) : 0;
   SSL_CTX **new_named_ctxs = NULL;
   ctls_named_cert **new_named_entries = NULL;
   if (named_count > 0) {
@@ -1806,7 +1806,7 @@ ctls_ctx_t *ctls_ctx_new_mp(ccol_memmgmt_procs_t *mp, char **err_str) {
   }
   char *err = NULL;
   tls->named_certs =
-      chmap_create_mp(16, ccol_string, ccol_pointer, tls->m_procs, &err);
+      chashmap_create_mp(16, ccol_string, ccol_pointer, tls->m_procs, &err);
   if (!tls->named_certs) {
     _ccol_mutex_destroy(tls->lock);
     _ccol_mem_free(mp, tls->m_procs);
@@ -1815,7 +1815,7 @@ ctls_ctx_t *ctls_ctx_new_mp(ccol_memmgmt_procs_t *mp, char **err_str) {
     return NULL;
   }
   if (_ctls_ctx_rebuild_locked(tls) != ccol_success) {
-    __chmap_destroy(tls->named_certs);
+    __chashmap_destroy(tls->named_certs);
     _ccol_mutex_destroy(tls->lock);
     _ccol_mem_free(mp, tls->m_procs);
     _ccol_mem_free(mp, tls);
@@ -2029,10 +2029,10 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
     ctls_named_cert *old_nc = NULL;
     /* Only the pointer VALUE is taken here, because old_vp.ptr points into
      * the map's storage and the insert below may move that storage. */
-    if (chmap_get_elem_ref(ctx->named_certs, &kp, &old_vp) == ccol_success)
+    if (chashmap_get_elem_ref(ctx->named_certs, &kp, &old_vp) == ccol_success)
       memcpy(&old_nc, old_vp.ptr, sizeof(old_nc));
     cmap_pair vp = {.ptr = &nc, .size = sizeof(nc)};
-    rv = chmap_insert_elem(ctx->named_certs, &kp, &vp);
+    rv = chashmap_insert_elem(ctx->named_certs, &kp, &vp);
     /* ccol_key_already_present means the map updated this hostname's value
      * slot to point at nc because the entry already existed, for example
      * because this call rotates the certificate of a name an earlier call
@@ -2058,11 +2058,11 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
       if (old_nc) {
         cmap_pair old_vp_pair = {.ptr = &old_nc, .size = sizeof(old_nc)};
         ccol_retval_t back =
-            chmap_insert_elem(ctx->named_certs, &kp, &old_vp_pair);
+            chashmap_insert_elem(ctx->named_certs, &kp, &old_vp_pair);
         _ccol_assert(back == ccol_key_already_present);
         (void)back;
       } else {
-        ccol_retval_t gone = chmap_delete_elem(ctx->named_certs, &kp);
+        ccol_retval_t gone = chashmap_delete_elem(ctx->named_certs, &kp);
         _ccol_assert(gone == ccol_success);
         (void)gone;
       }
@@ -2336,7 +2336,7 @@ void ctls_ctx_release(ctls_ctx_t *ctx) {
       memcpy(&nc, val_bytes, sizeof(nc));
       _ctls_named_cert_destroy(ctx, nc);
     }
-    __chmap_destroy(ctx->named_certs);
+    __chashmap_destroy(ctx->named_certs);
   }
 
   for (size_t i = 0; i < ctx->trust_count; ++i)

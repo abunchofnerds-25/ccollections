@@ -1,0 +1,38 @@
+.TH CCIRCQ_TRY_RECV 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccircq_try_recv \- try to receive a message with no block
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ccircq_try_recv(ccircq *cq,
+                              cmessage_t *target_buf);
+.fi
+.SH DESCRIPTION
+.nf
+Takes a message from the queue if one is there, and returns
+ccol_container_empty at once when the queue is empty. The data is
+handed over without a copy.
+.fi
+.SH PARAMETERS
+.nf
+cq          Circular queue to receive from
+target_buf  Buffer that gets the message
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success         - A message was received. The caller must free
+                       target_buf->data.
+ccol_invalid_args    - cq or target_buf is NULL
+ccol_container_empty - The queue is empty
+.fi
+.SH NOTES
+.nf
+This call never blocks. After a successful call the data belongs to
+the caller, who must free target_buf->data.
+.fi
+.SH "SEE ALSO"
+.BR ccircq_recv (3),
+.BR ccircq_timed_recv (3)

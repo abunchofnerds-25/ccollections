@@ -33,8 +33,8 @@ TAU_MAIN()
 /*                                                                            */
 /* chttp_default_client() builds a process-wide singleton on first use, with  */
 /* _ccol_call_once, and hands out its raw handle. Its own doc comment tells   */
-/* the caller to pass that handle to a chttpclient_set_* function, and        */
-/* nothing stops the caller from passing it to chttpclient_destroy as well.   */
+/* the caller to pass that handle to a chttpcli_set_* function, and        */
+/* nothing stops the caller from passing it to chttpcli_destroy as well.   */
 /* Such a call must not leave the static default_client_bundler.client        */
 /* pointer dangling, because the destroy macro only sets the caller's local   */
 /* variable to NULL.                                                          */
@@ -46,7 +46,7 @@ TAU_MAIN()
 /* file destroys it a second time at process exit, whether anything used it   */
 /* in between or not.                                                         */
 /*                                                                            */
-/* So __chttpclient_destroy clears default_client_bundler.client, with a      */
+/* So __chttpcli_destroy clears default_client_bundler.client, with a      */
 /* defensive compare-and-swap, whenever the handle it gets is the singleton.  */
 /* The header documents that a default client somebody destroyed is never     */
 /* rebuilt; from then on every convenience function fails cleanly and none    */
@@ -66,7 +66,7 @@ TEST(default_client, destroying_it_directly_does_not_crash_or_double_free) {
   /* The misuse this test makes safe: the caller destroys the handle that
      chttp_default_client() owns, although that function is the one in
      charge of tearing it down at process exit. */
-  chttpclient_destroy(cli);
+  chttpcli_destroy(cli);
   REQUIRE_EQ(cli, CHTTPCLI_NULL); /* the macro clears the local, as it
                                         always does */
 
@@ -86,7 +86,7 @@ TEST(default_client, destroying_it_directly_does_not_crash_or_double_free) {
   chttp_request_t *req =
       chttp_request_create(CHTTP_GET, "http://127.0.0.1:1/x", NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
-  chttpcli_response *resp = NULL;
+  chttpcli_response_t *resp = NULL;
   REQUIRE_EQ(chttp_do(req, &resp), ccol_unexpected_failure);
   REQUIRE_EQ((void *)resp, NULL);
   chttp_request_free(req);

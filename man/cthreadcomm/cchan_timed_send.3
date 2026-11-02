@@ -1,0 +1,61 @@
+.TH CCHAN_TIMED_SEND 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cchan_timed_send \- send a message with a timeout
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t cchan_timed_send(cchan *ch,
+                               cmessage_t *msg,
+                               uint64_t timeout_us);
+.fi
+.SH DESCRIPTION
+.nf
+Works like cchan_send(), but waits for free space for at most
+timeout_us microseconds. The queue is the one that the channel picks
+for the calling thread.
+.fi
+.SH PARAMETERS
+.nf
+ch          Channel to send through
+msg         Message to send. On success the ownership of the data moves to
+            the channel.
+timeout_us  Longest time to wait, in microseconds, from the call. 0
+            does not wait, which makes the call cchan_try_send.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - The message was sent
+ccol_invalid_args         - ch or msg is NULL, msg->data is NULL
+                            while msg->size is not 0, or msg->data
+                            is not NULL while msg->size is 0
+ccol_not_permitted        - Sends on the chosen direction are turned off
+ccol_container_full       - The timeout is 0 and the chosen queue is
+                            full
+ccol_timed_out            - The timeout ended
+ccol_unexpected_failure   - The wait failed with an error other than a
+                            timeout; errno holds that error
+.fi
+.SH NOTES
+.nf
+The call never blocks for longer than the timeout. The direction is
+decided from the ID of the calling thread.
+
+With a timeout of 0 the call doesn't wait at all. It does exactly what
+cchan_try_send does and returns that result, so a full queue
+gives ccol_container_full and not ccol_timed_out.
+
+A timeout too large to form a deadline, such as UINT64_MAX, saturates
+to the latest deadline the clock can hold, which in practice means
+waiting with no end. It never wraps around into the past.
+
+The timeout is measured on CLOCK_MONOTONIC. Changes to the system's
+wall clock (made by an administrator, by NTP, or by resuming a virtual
+machine) don't make it longer or shorter, and the call waits for the
+duration that the caller gave.
+.fi
+.SH "SEE ALSO"
+.BR cchan_send (3),
+.BR cchan_try_send (3)

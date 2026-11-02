@@ -27,7 +27,7 @@
  * @brief INTERNAL ONLY. An insert into chashmap that hands back the entry of
  *        a key that is already present, in one hash and one probe.
  *
- * chmap_insert_elem() overwrites the value of a key that is already there.
+ * chashmap_insert_elem() overwrites the value of a key that is already there.
  * A module that keeps an owning pointer as the value (the JSON and YAML
  * object parsers do) has to read the old pointer before it gets overwritten,
  * so that it can free what that pointer owns. Without this entry point that
@@ -54,12 +54,12 @@
  *        unchanged when it is present, and give the location and the size of
  *        the value of the key in both cases.
  *
- * Arguments are validated exactly as chmap_insert_elem() validates them, and
+ * Arguments are validated exactly as chashmap_insert_elem() validates them, and
  * the key is hashed once and probed once.
  *
  * On both success codes *val_slot (a cmap_pair that belongs to the caller)
  * gets the location and the size of the value that the map holds for the
- * key, with the same contract as chmap_get_elem_ref(). So the caller may
+ * key, with the same contract as chashmap_get_elem_ref(). So the caller may
  * overwrite the bytes that val_slot->ptr addresses within val_slot->size,
  * for example to store a pointer it builds after the call, or to replace an
  * owning pointer once it has freed what the old one owned. The pointer is
@@ -67,7 +67,7 @@
  * tells the two cases apart.
  *
  * @param chm      The map.
- * @param key_pair The key. The same rules as chmap_insert_elem() apply.
+ * @param key_pair The key. The same rules as chashmap_insert_elem() apply.
  * @param val_pair The value to store when the key is absent. The map doesn't
  *                 read it when the key is present.
  * @param val_slot Out parameter, which must not be NULL. It is set to
@@ -78,7 +78,7 @@
  * @return ccol_key_already_present when the key was there. The map is
  *         unchanged and *val_slot describes the entry that was already
  *         there.
- * @return Any other code of chmap_insert_elem() when the insert fails
+ * @return Any other code of chashmap_insert_elem() when the insert fails
  *         (ccol_invalid_args, ccol_not_enough_memory or ccol_container_full);
  *         *val_slot stays {NULL, 0} and the map is unchanged. A NULL val_slot
  *         gives ccol_invalid_args.
@@ -111,7 +111,7 @@ ccol_retval_t ccol_chmap_insert_or_get_elem(chmap chm,
  * refuses such a map.
  * @param chm      The map. It must use separate chaining, which every map
  *                 with a key or a value that is not integral does.
- * @param key_pair The key. The same rules as chmap_insert_elem() apply.
+ * @param key_pair The key. The same rules as chashmap_insert_elem() apply.
  * @param val_pair The value to store when the key is absent. The map doesn't
  *                 read it when the key is present.
  * @param key_slot Out parameter, which must not be NULL. It is set to NULL
@@ -121,7 +121,7 @@ ccol_retval_t ccol_chmap_insert_or_get_elem(chmap chm,
  * @return ccol_success or ccol_key_already_present, with the same meaning as
  *         for ccol_chmap_insert_or_get_elem(). Both out parameters name the
  *         entry of the key.
- * @return Any other code of chmap_insert_elem() when the insert fails. Both
+ * @return Any other code of chashmap_insert_elem() when the insert fails. Both
  *         out parameters stay NULL and the map is unchanged. A NULL out
  *         parameter, a NULL chm and an open-addressing map give
  *         ccol_invalid_args.
@@ -205,8 +205,8 @@ bool ccol_chmap_walk_next(chmap chm, ccol_chmap_walk *walk, const void **key,
  * @brief Create a map whose first bucket array is smaller than the public
  *        minimum, for a module that makes lots of maps that mostly stay
  *        small.
- * The map behaves exactly like one from chmap_create_mp() with
- * CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, apart from where its bucket array
+ * The map behaves exactly like one from chashmap_create_mp() with
+ * CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, apart from where its bucket array
  * starts. A separate-chaining map starts with 4 buckets inside the map's own
  * block, so creating it is one allocation. It grows by the same factor and
  * at the same load as any other map, which means that after the first growth
@@ -218,7 +218,7 @@ bool ccol_chmap_walk_next(chmap chm, ccol_chmap_walk *walk, const void **key,
  * @param val_type    The type of the values.
  * @param mmgmt_procs The allocator, or NULL for the default one. A pointer
  *                    that ccol_procs_intern() gave is kept as it is; any
- *                    other is copied, as chmap_create_mp() does.
+ *                    other is copied, as chashmap_create_mp() does.
  * @param err         Out parameter for an error message, or NULL.
  * @return The map, or NULL with *err set when the creation fails.
  */

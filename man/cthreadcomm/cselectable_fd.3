@@ -1,0 +1,82 @@
+.TH CSELECTABLE_FD 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cselectable_fd \- build a cselectable_t from a raw file descriptor
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+cselectable_fd(fd, dir);
+.fi
+.SH DESCRIPTION
+.nf
+Builds a cselectable_t value (a tagged union, here of type
+cselectable_type_fd) that wraps the given file descriptor with the
+given I/O direction.
+
+  cselect_read; wake when the fd becomes readable (data available or
+                     EOF / error condition)
+  cselect_write; wake when the fd becomes writable (send buffer has room)
+
+The macro expands to a compound literal, so it costs nothing at run
+time.
+
+cselect() never reads or writes the fd; it only reports readiness
+(see cselect(3)). When the read direction wins, the caller does its
+own read(2) or recv(2) on fd, and when the write direction wins, its
+own write(2) or send(2). Either call can find nothing, or get
+EWOULDBLOCK, if another reader or writer gets there first. POSIX
+select(2) has the same time-of-check to time-of-use contract.
+
+fd selectables and queue selectables can be mixed in one cselect()
+call. As soon as there is an fd selectable, the wait goes through
+epoll(7) (kqueue(2) on FreeBSD); with queue selectables only, the
+lighter condition variable path is used.
+.fi
+.SH PARAMETERS
+.nf
+fd        An open file descriptor, >= 0. A negative value gives a
+          selectable that cselect() refuses with
+          ccol_invalid_args.
+dir       cselect_read or cselect_write.
+.fi
+.SH RETURN VALUE
+.nf
+cselectable_t value (not a pointer).
+.fi
+.SH EXAMPLES
+.nf
+int pfd[2];
+if (pipe(pfd) != 0) { perror("pipe"); exit(1); }  /* pfd[0] read, pfd[1] write */
+int src = 42;
+if (write(pfd[1], &src, sizeof(src)) != (ssize_t)sizeof(src)) {
+    perror("write");
+    exit(1);
+}
+
+/* Wake when the pipe read end has data OR q has a message: */
+size_t idx;
+ccol_retval_t r = cselect_va(&idx,
+    ccircq_selectable(q, cselect_read),
+    cselectable_fd(pfd[0], cselect_read));
+if (r == ccol_success && idx == 1) {
+    /* the fd is ready; read it here */
+    int val;
+    if (read(pfd[0], &val, sizeof(val)) == (ssize_t)sizeof(val))
+        printf("read %d\en", val);
+}
+
+/* Watch a socket for writability: */
+r = cselect_va(&idx, cselectable_fd(sock_fd, cselect_write));
+if (r == ccol_success && write(sock_fd, "hi", 2) < 0)
+    perror("write");  /* EAGAIN: a different writer used the room */
+.fi
+.SH "SEE ALSO"
+.BR cselect (3),
+.BR cselect_timed (3),
+.BR cselect_va (3),
+.BR cselect_timed_va (3),
+.BR ccircq_selectable (3),
+.BR cdynmq_selectable (3),
+.BR cchan_selectable (3)

@@ -1,0 +1,80 @@
+.TH CMEMPOOL_CREATE_FROM_PREALLOCATED_BUFFER_MP 3 "2026-08-28" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cmempool_create_from_preallocated_buffer_mp \- create pool from user buffer
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+cmempool *cmempool_create_from_preallocated_buffer_mp(
+    void *buffer,
+    size_t buf_size,
+    size_t elem_size,
+    bool fallback_to_dynamic_memory,
+    bool single_threaded,
+    ccol_memmgmt_procs_t *mmgmt_procs,
+    char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a memory pool on top of a buffer that the caller provides, so
+the pool takes no memory from the heap for its entries. It is useful on
+embedded systems, and anywhere you don't want a heap allocation.
+.fi
+.SH PARAMETERS
+.nf
+buffer                     Pointer to the preallocated buffer
+buf_size                   Size of the buffer in bytes
+elem_size                  Size of each element in bytes. It must be
+                          > 0. If it is smaller than sizeof(uintptr_t),
+                          it is rounded up, the same way as in
+                          cmempool_create_mp(). The maximum is
+                          SIZE_MAX less the stride rounding
+fallback_to_dynamic_memory If true, allocate from the heap when the pool
+                          is empty
+single_threaded           If true, take no lock
+mmgmt_procs               Custom memory management, or NULL
+err                       Optional pointer that receives an error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to the new memory pool on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+The element count is buf_size / (stride + 1), and an entry carries no
+  header. The stride is elem_size rounded up to 16 bytes and then up to
+  a power of two unless the library was built with
+  -DCMEMPOOL_COMPACT_LAYOUT=1, so every element of the pool, not
+  only the first one, is aligned for any object type. The extra byte
+  for each element is its status byte, which lives in the same buffer
+  after the entries. CMEMPOOL_DECLARE_PREALLOCATED_BUFFER sizes its
+  buffer with the same arithmetic, so use it to get the size right
+  instead of writing the formula out a second time
+cmempool_destroy() does not free the buffer; its lifetime is the
+  caller's business
+The pool struct itself comes from mmgmt_procs
+The pool calls the functions of mmgmt_procs for its dynamic fallback
+entries, and for its own bookkeeping of them, in the middle of an
+update of its own state and with its lock held when it has one. Those
+functions must not call back into the same pool: with a lock the call
+deadlocks, and without one it corrupts that state. An allocator built
+on a pool must draw from a different pool
+Returns NULL with an error if elem_size is zero
+A nonzero elem_size below sizeof(uintptr_t) is rounded up, as in
+  cmempool_create_mp()
+Returns NULL with an error if elem_size would overflow size_t after
+the stride rounding
+Returns NULL with an error if the buffer is not aligned to at least 16
+  bytes. Every entry of the pool is aligned to 16 bytes and entry 0
+  sits at the address of the buffer, so the buffer must have that
+  alignment. A buffer declared with
+  CMEMPOOL_DECLARE_PREALLOCATED_BUFFER already has it
+.fi
+.SH "SEE ALSO"
+.BR cmempool_create_from_preallocated_buffer (3),
+.BR CMEMPOOL_DECLARE_PREALLOCATED_BUFFER (3),
+.BR cmempool_create_mp (3),
+.BR cmempool_destroy (3)

@@ -2869,8 +2869,8 @@ TEST(custom_alloc, open_file_async_init_failure_does_not_leak_fd) {
 
 /* Every public entry point has to assert when it gets a NULL logger handle
  * instead of segfaulting without any diagnostic. That's this project's
- * convention for an invalid raw handle: chmap_elem_count and chmap_reset in
- * chashmap.c and the raw-layer functions of cvector.c, for example, all call
+ * convention for an invalid raw handle: chashmap_elem_count and chashmap_reset
+ * in chashmap.c and the raw-layer functions of cvector.c, for example, all call
  * _ccol_assert(false) on NULL instead of dereferencing it. Each check below
  * runs in a forked child, because the assertion aborts the whole process. */
 
@@ -5231,7 +5231,7 @@ static void *_field_race_mutator(void *arg) {
 }
 
 /* The live-field source of _clog_emit_fields() must not read
- * chmap_elem_count(lg->fields) BEFORE it locks fields_mutex, because such a
+ * chashmap_elem_count(lg->fields) BEFORE it locks fields_mutex, because such a
  * read races a concurrent clog_set_field() or clog_remove_field() call on the
  * same handle from another thread.
  *
@@ -7017,7 +7017,7 @@ TEST(async, flush_drains_a_slow_to_self_flush_setup) {
 
 /* An allocator whose malloc() can fail on demand. The test uses it to make
  * the unbounded queue's internal node allocation fail inside
- * ccol_dynmq_send_zc(), which pins the path where clog_flush() returns at
+ * cdynmq_send(), which pins the path where clog_flush() returns at
  * once instead of hanging when the enqueue itself fails. See
  * _clog_flush_pinned(). */
 static _Atomic bool g_flush_oom_fail_malloc = false;
@@ -7162,13 +7162,13 @@ static void *_teardown_retry_closer(void *arg) {
 
 /* _shared_async_teardown() should check whether sending the shutdown
  * sentinel to the writer thread succeeded before it joins that thread. With
- * the default unbounded queue that send through ccol_dynmq_send_zc() can
+ * the default unbounded queue that send through cdynmq_send() can
  * really fail under memory pressure, when its own internal node allocation
  * fails, which is exactly the situation in which a caller may close loggers.
  * Without a retry the writer thread then waits for ever for a sentinel that
  * never comes and clog_close() hangs for ever, with the closing thread
  * parked in pthread_join inside _shared_async_teardown while the writer
- * thread sits in ccol_dynmq_timed_recv_zc. So the code retries the sentinel
+ * thread sits in cdynmq_timed_recv. So the code retries the sentinel
  * send with a bounded backoff instead of giving up after one try. */
 TEST(async, close_recovers_from_transient_oom_instead_of_hanging) {
   char dir[256];
@@ -7226,7 +7226,7 @@ TEST(async, close_recovers_from_transient_oom_instead_of_hanging) {
 /* An allocator that fails exactly its Nth call, counting malloc, calloc and
  * realloc together to match the real allocation order. The test uses it to
  * land a forced failure on the internal node allocation of
- * ccol_dynmq_send_zc() inside _clog_write_async().
+ * cdynmq_send() inside _clog_write_async().
  *
  * The allocator of flush_returns_promptly_when_enqueue_fails above is a
  * different one. It fails every allocation instead of one numbered call, so
@@ -7252,7 +7252,7 @@ static void *_enqueue_fail_realloc(void *p, size_t sz) {
 }
 
 /* The enqueue-failure fallback of _clog_write_async() runs when
- * ccol_dynmq_send_zc() or ccol_circq_send_zc() itself fails, for example
+ * cdynmq_send() or ccircq_send() itself fails, for example
  * when the unbounded queue's node allocation fails under memory pressure.
  * That fallback has to run both rotation checks that every other write path
  * in this file runs before it writes the record straight to sh->fd. Without
@@ -7294,7 +7294,7 @@ TEST(async, enqueue_failure_fallback_still_rotates_on_size) {
   /* Fail exactly the 2nd allocation of the next clog_info() call. This
    * logger holds no fields and the message is short, so allocation #1 is
    * the envelope's calloc and #2 is the internal node allocation of
-   * ccol_dynmq_send_zc(). So the failure lands on the enqueue call itself
+   * cdynmq_send(). So the failure lands on the enqueue call itself
    * and not on anything before it, which would go through the ordinary,
    * already correct _clog_write_sync() fallback. _snapshot_fields() skips
    * its own ccol_growbuf_init() completely for a logger with no fields, so
@@ -7355,7 +7355,7 @@ TEST(async, enqueue_failure_fallback_still_rotates_on_time) {
 
   /* See the comment of enqueue_failure_fallback_still_rotates_on_size. This
    * logger holds no fields, so allocation #1 is the envelope's calloc and
-   * allocation #2 is the internal node allocation of ccol_dynmq_send_zc(),
+   * allocation #2 is the internal node allocation of cdynmq_send(),
    * which is the enqueue call itself. _snapshot_fields() skips its own
    * ccol_growbuf_init() completely for a logger with no fields, so that call
    * is never part of this count. */
@@ -7411,7 +7411,7 @@ TEST(async,
 
   /* Fails exactly the enqueue call of the very next clog_info(): allocation
    * #1 is the envelope calloc and allocation #2 is the internal node
-   * allocation of ccol_dynmq_send_zc(). The comment of
+   * allocation of cdynmq_send(). The comment of
    * enqueue_failure_fallback_still_rotates_on_size above explains this
    * choice. */
   atomic_store(&g_enqueue_fail_call_count, 0);

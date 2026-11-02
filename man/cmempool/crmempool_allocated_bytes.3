@@ -1,0 +1,50 @@
+.TH CRMEMPOOL_ALLOCATED_BYTES 3 "2026-09-16" "c_collections" "C Collections Library - Functions"
+.SH NAME
+crmempool_allocated_bytes \- report the memory a ranged pool holds for its entries
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+size_t crmempool_allocated_bytes(crmempool *rmp);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the sizes of the entry blocks of all the tiers added together,
+in bytes, which is what a ranged pool really costs.
+
+Each tier is a pool of its own with its own element size and element
+count, and every tier that is large enough to keep a cache for each
+thread holds its own reserve, so this total is larger than the sum of
+the tier capacities. Use this figure to fit a ranged pool into a memory
+budget, which is the case where working it out by hand is hardest.
+.fi
+.SH PARAMETERS
+.nf
+rmp                       Ranged memory pool to query (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+Returns the size in bytes of the entry block of every tier, added
+together
+.fi
+.SH NOTES
+.nf
+Only the entry blocks of the tiers are counted, on the same terms as
+cmempool_allocated_bytes(3). The handles, each thread's cache and
+every entry that a fallback policy serves are all left out.
+
+The value stays the same for the whole lifetime of the pool.
+The function asserts if rmp is NULL.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Thread-safe when the pool was created with single_threaded = false.
+The call takes the lock of each tier in turn, so it belongs on a cold
+path; don't use it inside a hot loop.
+.fi
+.SH "SEE ALSO"
+.BR cmempool_allocated_bytes (3),
+.BR crmempool_total_capacity (3),
+.BR crmempool_create_mp (3)

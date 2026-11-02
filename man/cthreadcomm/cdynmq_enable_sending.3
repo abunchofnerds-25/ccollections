@@ -1,0 +1,46 @@
+.TH CDYNMQ_ENABLE_SENDING 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cdynmq_enable_sending \- turn sends on again on a dynamic queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t cdynmq_enable_sending(cdynmq *dq);
+.fi
+.SH DESCRIPTION
+.nf
+Clears the flag that cdynmq_disable_sending() set, so sends are
+accepted again instead of returning ccol_not_permitted. A new queue
+starts with sends on, so you only need this call after sends were
+turned off.
+
+It wakes every write-direction waiter on the queue (a cselect()
+call, a cselect_timed() call or a ceventloop registration),
+and each of them scans again and sees the new state. While sends are
+off the queue is ready for the write direction (see
+cdynmq_disable_sending(3)); with sends on, it is ready while it
+holds fewer than ccol_max_elem_count messages.
+
+Turning sends off and on again never drops anything: the messages that
+were in the queue before stay as they were.
+.fi
+.SH PARAMETERS
+.nf
+dq   Dynamic queue that gets sends turned on
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       - Sends are on again
+ccol_invalid_args  - dq is NULL
+.fi
+.SH NOTES
+.nf
+The function is thread-safe.
+.fi
+.SH "SEE ALSO"
+.BR cdynmq_disable_sending (3),
+.BR cdynmq_send (3),
+.BR cdynmq_msg_count (3),
+.BR ccircq_enable_sending (3)

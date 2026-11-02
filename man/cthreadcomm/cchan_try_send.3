@@ -1,0 +1,39 @@
+.TH CCHAN_TRY_SEND 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cchan_try_send \- try to send a message with no block
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t cchan_try_send(cchan *ch, cmessage_t *msg);
+.fi
+.SH DESCRIPTION
+.nf
+Puts the message into the queue that the channel picks for the calling
+thread if there is room, and returns at once when that queue is full.
+.fi
+.SH PARAMETERS
+.nf
+ch   Channel to send through
+msg  Message to send. On success the ownership of the data moves to the
+     channel.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success         - The message was sent
+ccol_invalid_args    - ch or msg is NULL, msg->data is NULL while
+                       msg->size is not 0, or msg->data is not NULL
+                       while msg->size is 0
+ccol_not_permitted   - Sends on the chosen direction are turned off
+ccol_container_full  - The chosen queue is full
+.fi
+.SH NOTES
+.nf
+This call never blocks. The direction comes from the ID of the
+calling thread, as described in cchan_send(3).
+.fi
+.SH "SEE ALSO"
+.BR cchan_send (3),
+.BR cchan_timed_send (3)

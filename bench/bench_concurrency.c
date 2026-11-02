@@ -74,7 +74,7 @@
 /* ------------------------------------------------------------------------ */
 
 typedef struct {
-  ctpool pool;
+  cthrpool pool;
   atomic_size_t counter;
 } pool_state_t;
 
@@ -89,9 +89,9 @@ static void pool_task(void *arg) {
 
 static void pool_teardown(void *state) {
   pool_state_t *st = state;
-  if (st->pool != CTPOOL_NULL) {
-    ctpool p = st->pool;
-    ctpool_destroy(p);
+  if (st->pool != CTHRPOOL_NULL) {
+    cthrpool p = st->pool;
+    cthrpool_destroy(p);
   }
   free(st);
 }
@@ -100,8 +100,8 @@ static void *pool_setup_n(size_t workers) {
   pool_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
   atomic_init(&st->counter, 0);
-  st->pool = ctpool_create(workers, 0, NULL);
-  if (st->pool == CTPOOL_NULL) {
+  st->pool = cthrpool_create(workers, 0, NULL);
+  if (st->pool == CTHRPOOL_NULL) {
     free(st);
     return NULL;
   }
@@ -125,14 +125,14 @@ static void pool_submit_run(void *state, size_t n) {
      * a failing submit costs much less than one that queues the task, so an
      * unchecked loop would keep measuring and report the failure as
      * speed. */
-    if (ctpool_submit(st->pool, pool_task, st, NULL) != ccol_success)
-      bench_die("ctpool_submit failed");
+    if (cthrpool_submit(st->pool, pool_task, st, NULL) != ccol_success)
+      bench_die("cthrpool_submit failed");
   }
   /* The wait sits inside the timed region on purpose, because a submit that
    * only queues the task is half the operation. If the clock stopped before
    * the queue drained, the reported number would get better whenever the pool
    * got slower at running the work. */
-  ctpool_wait(st->pool);
+  cthrpool_wait(st->pool);
   bench_sink(&st->counter);
 }
 
@@ -141,9 +141,9 @@ static void pool_submit_run(void *state, size_t n) {
 /* ------------------------------------------------------------------------ */
 
 typedef struct {
-  ccol_circular_queue *cq;
-  ccol_dynamic_queue *dq;
-  ccol_channel *ch;
+  ccircq *cq;
+  cdynmq *dq;
+  cchan *ch;
   void *payload;
   size_t payload_size;
 } q_state_t;
@@ -159,7 +159,7 @@ typedef struct {
  * drain the harness would stop the process on the very path it was written to
  * survive. */
 static void q_drain(q_state_t *st) {
-  c_message_t out = {0};
+  cmessage_t out = {0};
   /* There's no channel arm here. A channel routes by thread identity, so the
    * teardown thread can't receive from the side its peer sent into, and no
    * arm is needed anyway: the one case that uses a channel sends exactly as
@@ -168,11 +168,11 @@ static void q_drain(q_state_t *st) {
    * that has to drain the channel from the peer's thread before that thread
    * exits. */
   if (st->cq) {
-    while (ccol_circq_try_recv_zc(st->cq, &out) == ccol_success) {
+    while (ccircq_try_recv(st->cq, &out) == ccol_success) {
     }
   }
   if (st->dq) {
-    while (ccol_dynmq_try_recv_zc(st->dq, &out) == ccol_success) {
+    while (cdynmq_try_recv(st->dq, &out) == ccol_success) {
     }
   }
 }
@@ -181,16 +181,16 @@ static void q_teardown(void *state) {
   q_state_t *st = state;
   q_drain(st);
   if (st->cq) {
-    ccol_circular_queue *q = st->cq;
-    ccol_circular_queue_destroy(q);
+    ccircq *q = st->cq;
+    ccircq_destroy(q);
   }
   if (st->dq) {
-    ccol_dynamic_queue *q = st->dq;
-    ccol_dynamic_queue_destroy(q);
+    cdynmq *q = st->dq;
+    cdynmq_destroy(q);
   }
   if (st->ch) {
-    ccol_channel *c = st->ch;
-    ccol_channel_destroy(c);
+    cchan *c = st->ch;
+    cchan_destroy(c);
   }
   free(st->payload);
   free(st);
@@ -212,7 +212,7 @@ static void *circq_setup(size_t n) {
   (void)n;
   q_state_t *st = q_alloc();
   if (!st) return NULL;
-  st->cq = ccol_circular_queue_create(BENCH_QUEUE_CAPACITY, NULL);
+  st->cq = ccircq_create(BENCH_QUEUE_CAPACITY, NULL);
   if (!st->cq) {
     q_teardown(st);
     return NULL;
@@ -224,7 +224,7 @@ static void *dynq_setup(size_t n) {
   (void)n;
   q_state_t *st = q_alloc();
   if (!st) return NULL;
-  st->dq = ccol_dynamic_queue_create(NULL);
+  st->dq = cdynmq_create(NULL);
   if (!st->dq) {
     q_teardown(st);
     return NULL;
@@ -236,7 +236,7 @@ static void *chan_setup(size_t n) {
   (void)n;
   q_state_t *st = q_alloc();
   if (!st) return NULL;
-  st->ch = ccol_channel_create(BENCH_QUEUE_CAPACITY, NULL);
+  st->ch = cchan_create(BENCH_QUEUE_CAPACITY, NULL);
   if (!st->ch) {
     q_teardown(st);
     return NULL;
@@ -246,12 +246,12 @@ static void *chan_setup(size_t n) {
 
 static void circq_roundtrip_run(void *state, size_t n) {
   q_state_t *st = state;
-  c_message_t msg = {.data = st->payload, .size = st->payload_size};
+  cmessage_t msg = {.data = st->payload, .size = st->payload_size};
   for (size_t i = 0; i < n; i++) {
-    c_message_t out = {0};
-    if (ccol_circq_send_zc(st->cq, &msg) != ccol_success)
+    cmessage_t out = {0};
+    if (ccircq_send(st->cq, &msg) != ccol_success)
       bench_die("circular queue send failed");
-    if (ccol_circq_recv_zc(st->cq, &out) != ccol_success)
+    if (ccircq_recv(st->cq, &out) != ccol_success)
       bench_die("circular queue receive failed");
     msg = out;
   }
@@ -264,12 +264,12 @@ static void circq_roundtrip_run(void *state, size_t n) {
 
 static void dynq_roundtrip_run(void *state, size_t n) {
   q_state_t *st = state;
-  c_message_t msg = {.data = st->payload, .size = st->payload_size};
+  cmessage_t msg = {.data = st->payload, .size = st->payload_size};
   for (size_t i = 0; i < n; i++) {
-    c_message_t out = {0};
-    if (ccol_dynmq_send_zc(st->dq, &msg) != ccol_success)
+    cmessage_t out = {0};
+    if (cdynmq_send(st->dq, &msg) != ccol_success)
       bench_die("dynamic queue send failed");
-    if (ccol_dynmq_recv_zc(st->dq, &out) != ccol_success)
+    if (cdynmq_recv(st->dq, &out) != ccol_success)
       bench_die("dynamic queue receive failed");
     msg = out;
   }
@@ -285,15 +285,15 @@ static void dynq_roundtrip_run(void *state, size_t n) {
  * channel here is the one that ran setup, which is also the thread running
  * this function. */
 typedef struct {
-  ccol_channel *ch;
+  cchan *ch;
   size_t n;
 } chan_arg_t;
 
 static void *chan_peer_consumer(void *arg) {
   chan_arg_t *a = arg;
   for (size_t i = 0; i < a->n; i++) {
-    c_message_t out = {0};
-    if (ccol_chan_recv_zc(a->ch, &out) != ccol_success)
+    cmessage_t out = {0};
+    if (cchan_recv(a->ch, &out) != ccol_success)
       bench_die("channel receive failed");
     bench_sink(out.data);
   }
@@ -313,8 +313,8 @@ static void chan_pc_run(void *state, size_t n) {
   if (pthread_create(&peer, NULL, chan_peer_consumer, &arg) != 0)
     bench_die("channel peer thread could not be started");
   for (size_t i = 0; i < n; i++) {
-    c_message_t msg = {.data = st->payload, .size = st->payload_size};
-    if (ccol_chan_send_zc(st->ch, &msg) != ccol_success)
+    cmessage_t msg = {.data = st->payload, .size = st->payload_size};
+    if (cchan_send(st->ch, &msg) != ccol_success)
       bench_die("channel send failed");
   }
   pthread_join(peer, NULL);
@@ -323,7 +323,7 @@ static void chan_pc_run(void *state, size_t n) {
 /* --- producer and consumer, really contending ---------------------------- */
 
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   size_t n;
   void *seed_payload;
 } pc_arg_t;
@@ -339,7 +339,7 @@ typedef struct {
  * blocking calls and stops the process on every result it doesn't expect.
  *
  * ccol_not_permitted is the one exception, because that's how a deliberate
- * ccol_circq_disable_sending reaches a blocked producer, and circq_pc_run uses
+ * ccircq_disable_sending reaches a blocked producer, and circq_pc_run uses
  * exactly that to unwind when the consumer never
  * started. */
 static void *pc_producer(void *arg) {
@@ -348,8 +348,8 @@ static void *pc_producer(void *arg) {
    * nothing gets allocated inside the measured loop. A fresh allocation per
    * message would measure the allocator and not the queue. */
   for (size_t i = 0; i < a->n; i++) {
-    c_message_t msg = {.data = a->seed_payload, .size = BENCH_MSG_SIZE};
-    ccol_retval_t r = ccol_circq_send_zc(a->cq, &msg);
+    cmessage_t msg = {.data = a->seed_payload, .size = BENCH_MSG_SIZE};
+    ccol_retval_t r = ccircq_send(a->cq, &msg);
     if (r == ccol_not_permitted) break;
     if (r != ccol_success) bench_die("circular queue send failed");
   }
@@ -359,8 +359,8 @@ static void *pc_producer(void *arg) {
 static void *pc_consumer(void *arg) {
   pc_arg_t *a = arg;
   for (size_t i = 0; i < a->n; i++) {
-    c_message_t out = {0};
-    if (ccol_circq_recv_zc(a->cq, &out) != ccol_success)
+    cmessage_t out = {0};
+    if (ccircq_recv(a->cq, &out) != ccol_success)
       bench_die("circular queue receive failed");
     bench_sink(out.data);
   }
@@ -383,7 +383,7 @@ static void circq_pc_run(void *state, size_t n) {
   if (pthread_create(&prod, NULL, pc_producer, &arg) != 0)
     bench_die("producer thread could not be started");
   if (pthread_create(&cons, NULL, pc_consumer, &arg) != 0) {
-    ccol_circq_disable_sending(st->cq);
+    ccircq_disable_sending(st->cq);
     pthread_join(prod, NULL);
     /* Unwind first and only then stop the run: the producer has to be woken
      * and joined before anything else happens, and reporting the time that
@@ -460,7 +460,7 @@ static void *glib_pool_setup(size_t n) {
   return st;
 }
 
-/* Drains by waiting until every task has run, which is what ctpool_wait does
+/* Drains by waiting until every task has run, which is what cthrpool_wait does
  * on the other side of this comparison, and leaves the pool standing.
  * g_thread_pool_free(wait=TRUE) would drain too, but it also joins the worker
  * threads before returning, so this arm would be timed doing a teardown the
@@ -506,7 +506,7 @@ static void *pool_setup_workers_mt(size_t n, unsigned threads) {
 
 /* The shared-pool variant submits without draining, which is why it's named
  * for submission alone and doesn't share the single-threaded cases' name.
- * ctpool_wait documents that no other thread may submit while it runs, and on
+ * cthrpool_wait documents that no other thread may submit while it runs, and on
  * an unbounded queue a concurrent submitter can block it indefinitely. Every
  * thread here submits into the one pool, so calling it would break that
  * contract and measure the wrong thing as well, since the first thread to
@@ -517,8 +517,8 @@ static void pool_submit_only_run(void *state, size_t n) {
   pool_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
     /* See pool_submit_run. */
-    if (ctpool_submit(st->pool, pool_task, st, NULL) != ccol_success)
-      bench_die("ctpool_submit failed");
+    if (cthrpool_submit(st->pool, pool_task, st, NULL) != ccol_success)
+      bench_die("cthrpool_submit failed");
   }
   bench_sink(&st->counter);
 }
@@ -591,12 +591,12 @@ static void *dynq_mt_setup(size_t n, unsigned threads) {
 static void circq_roundtrip_mt_run(void *state, size_t n) {
   q_mt_state_t *st = state;
   void **mine = &st->payloads[bench_thread_index()];
-  c_message_t msg = {.data = *mine, .size = BENCH_MSG_SIZE};
+  cmessage_t msg = {.data = *mine, .size = BENCH_MSG_SIZE};
   for (size_t i = 0; i < n; i++) {
-    c_message_t out = {0};
-    if (ccol_circq_send_zc(st->q->cq, &msg) != ccol_success)
+    cmessage_t out = {0};
+    if (ccircq_send(st->q->cq, &msg) != ccol_success)
       bench_die("circular queue send failed");
-    if (ccol_circq_recv_zc(st->q->cq, &out) != ccol_success)
+    if (ccircq_recv(st->q->cq, &out) != ccol_success)
       bench_die("circular queue receive failed");
     msg = out;
   }
@@ -607,12 +607,12 @@ static void circq_roundtrip_mt_run(void *state, size_t n) {
 static void dynq_roundtrip_mt_run(void *state, size_t n) {
   q_mt_state_t *st = state;
   void **mine = &st->payloads[bench_thread_index()];
-  c_message_t msg = {.data = *mine, .size = BENCH_MSG_SIZE};
+  cmessage_t msg = {.data = *mine, .size = BENCH_MSG_SIZE};
   for (size_t i = 0; i < n; i++) {
-    c_message_t out = {0};
-    if (ccol_dynmq_send_zc(st->q->dq, &msg) != ccol_success)
+    cmessage_t out = {0};
+    if (cdynmq_send(st->q->dq, &msg) != ccol_success)
       bench_die("dynamic queue send failed");
-    if (ccol_dynmq_recv_zc(st->q->dq, &out) != ccol_success)
+    if (cdynmq_recv(st->q->dq, &out) != ccol_success)
       bench_die("dynamic queue receive failed");
     msg = out;
   }

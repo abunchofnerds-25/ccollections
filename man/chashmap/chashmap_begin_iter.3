@@ -37,7 +37,7 @@ be allocated.
 .SH "ITERATION ORDER"
 .nf
 The order depends on the map's implementation, which
-chmap_create_full(3) describes. With either implementation the order is
+chashmap_create_full(3) describes. With either implementation the order is
 not part of the map's contract, so do not depend on it.
 
 Separate chaining keeps a list of every live entry and links each new
@@ -49,14 +49,14 @@ the first slot to the last, so the order follows where each key hashed
 to and not when it was inserted. The hash depends on the mode of the
 map, and the keyed mode depends on a secret of the process, so that
 order changes when the map switches to the keyed mode and from then on
-differs from one process to the next. See chmap_create_full(3).
+differs from one process to the next. See chashmap_create_full(3).
 .fi
 .SH NOTES
 .nf
 The function sets *err to NULL first thing on entry. To tell an empty
 result from a failure, test *err and not the return value.
 A NULL chm iterates as an empty map and reports no error. This contract
-is shared on purpose with cvector_begin_iter(3) and cbmap_begin_iter(3),
+is shared on purpose with cvector_begin_iter(3) and cbstmap_begin_iter(3),
 so you can iterate a lazily created map field that is still NULL
 because nothing was put in it yet, without a NULL check of your own.
 The iterator frees itself when ccol_iter_next(3) steps past the last
@@ -65,7 +65,7 @@ ccol_iter_destroy(3), or you can declare the iterator with
 ccol_iter_declare(3) so that leaving the scope destroys it.
 The iterator is allocated through the map's own memory management
 procedures. For a map whose values need a destructor on each entry,
-chmap_destroy_with_dtor(3) is the better way to destroy it, since it
+chashmap_destroy_with_dtor(3) is the better way to destroy it, since it
 walks the map without allocating anything while an iterator doing the
 same job can fail under memory pressure.
 An insert into the map or a removal from it invalidates an open
@@ -94,6 +94,6 @@ chmap_destroy(scores);
 .BR ccol_iter_next (3),
 .BR ccol_iter_destroy (3),
 .BR ccol_iter_declare (3),
-.BR chmap_destroy_with_dtor (3),
-.BR cbmap_begin_iter (3),
+.BR chashmap_destroy_with_dtor (3),
+.BR cbstmap_begin_iter (3),
 .BR cvector_begin_iter (3)

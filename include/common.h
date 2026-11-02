@@ -77,7 +77,7 @@ SOFTWARE.
  *        fork() safety machinery of this library, which uses
  *        pthread_atfork().
  *
- * Some modules (cthreadpool, the ccol_event_loop and the queue types of
+ * Some modules (cthreadpool, the ceventloop and the queue types of
  * cthreadcomm, clogger, chttpserver and chttpclient) register
  * pthread_atfork() prepare, parent and child handlers. A fork() can happen
  * while a thread holds one of their internal locks, and the handlers make
@@ -1875,8 +1875,8 @@ typedef enum ccollections_data_type {
  * caller's cmap_pair against.
  *
  * A caller can build a cmap_pair by hand and pass it through a map module's
- * raw layer, such as chmap_insert_elem() or cbmap_insert_elem(), and the map
- * modules use this function to validate such a pair. A container that
+ * raw layer, such as chashmap_insert_elem() or cbstmap_insert_elem(), and the
+ * map modules use this function to validate such a pair. A container that
  * dispatches on its declared key type reads a fixed number of bytes out of
  * the key it gets, so it rejects a key_pair whose size disagrees with this
  * value with ccol_invalid_args. Without that check the container would read
@@ -2386,8 +2386,8 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
  * one of them says nothing about the other.
  *
  * The first one is alignment. A caller gets here through cbstmap's raw
- * cmap_pair layer (cbmap_insert_elem, cbmap_get_elem_ref and
- * cbmap_delete_elem), which accepts a pair the caller built by hand with no
+ * cmap_pair layer (cbstmap_insert_elem, cbstmap_get_elem_ref and
+ * cbstmap_delete_elem), which accepts a pair the caller built by hand with no
  * alignment guarantee at all: key bytes parsed out of a packed network frame
  * sit at whatever offset the frame put them. A load through a T * from such
  * an address is undefined. It faults on a strict-alignment target, and

@@ -1,0 +1,35 @@
+.TH CCHAN_MSG_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cchan_msg_count \- get the current message count of a direction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+size_t cchan_msg_count(cchan *ch, cchan_direction_t d);
+.fi
+.SH DESCRIPTION
+.nf
+Returns how many messages the queue of the given direction holds at
+the moment of the call.
+.fi
+.SH PARAMETERS
+.nf
+ch   Channel to ask
+d    Direction to ask about (cchan_owner_to_workers or
+     cchan_workers_to_owner)
+.fi
+.SH RETURN VALUE
+.nf
+The number of messages in that direction, or (size_t)-1 when the
+cchan is NULL or the direction is not valid.
+.fi
+.SH NOTES
+.nf
+Reading the count is thread-safe, but it is only a snapshot: other
+threads can change it as soon as the call returns.
+.fi
+.SH "SEE ALSO"
+.BR cchan_send (3),
+.BR cchan_recv (3)

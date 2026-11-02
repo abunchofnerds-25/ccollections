@@ -24,9 +24,9 @@ source level and at the binary level.
 - One unit of time for the whole public API. Every timeout, deadline,
   interval and duration is a `uint64_t` count of microseconds, and its name
   ends in `_us`. That covers the timed calls of `cthreadcomm` and
-  `cthreadpool`, `ccol_select_timed()`, `chttpclient_set_connect_timeout()`,
-  `chttpclient_set_request_timeout()` and
-  `chttpclient_set_inactivity_timeout()`, every duration of
+  `cthreadpool`, `cselect_timed()`, `chttpcli_set_connect_timeout()`,
+  `chttpcli_set_request_timeout()` and
+  `chttpcli_set_inactivity_timeout()`, every duration of
   `chttpsvr_config_t`, and `flush_interval_us` and `rotation_interval_us` of
   `clogger`. No public signature takes a `struct timespec` or a `time_t`,
   so an application and the library never need to agree on the width of
@@ -36,14 +36,14 @@ source level and at the binary level.
   open addressing for integral key and value types and separate chaining for
   every other type; `cbstmap`, an ordered AVL map; and `citerators`, one
   iteration API that all three share.
-  - `chmap_create_full()`, `chmap_init_full()` and `chmap_construct_full()`
+  - `chashmap_create_full()`, `chmap_init_full()` and `chmap_construct_full()`
     take an optional key equality function of type
     `ccol_key_equality_proc_t` beside the custom hash function, so a struct
     key with padding bytes can compare by its members.
   - An open-addressing `chashmap` deletes by backward shift and leaves no
     marker for a deleted slot, so only live entries decide a resize, and a
     steady stream of inserts and deletes never rebuilds the table.
-  - `chmap_get_elem_ref()` and `cbmap_get_elem_ref()` fill a `cmap_pair`
+  - `chashmap_get_elem_ref()` and `cbstmap_get_elem_ref()` fill a `cmap_pair`
     that the caller owns with the location and the size of the stored value,
     so an open-addressing `chashmap` keeps no accessor for each slot and its
     table takes 17 bytes for each slot.
@@ -71,26 +71,26 @@ source level and at the binary level.
   and a persistent `epoll(7)` reactor, `cthreadpool` with a bounded or an
   unbounded task queue, completion callbacks and futures, and `clrucache`, a
   thread-safe LRU cache with an optional remote getter and setter.
-  - A `ccol_event_loop` callback can run the documented drain, remove and
+  - A `ceventloop` callback can run the documented drain, remove and
     destroy sequence for a different watched queue or channel, whatever
     `num_reactor_threads` is.
-  - `ccol_select_timed()` with a timeout of 0 polls every selectable without
+  - `cselect_timed()` with a timeout of 0 polls every selectable without
     blocking, and no timed wait ends before its deadline.
   - A send to a queue whose event-loop listener already has a wake pending
     makes no system call, so a steady stream of messages costs one `write(2)`
     for each dispatch and not one for each message.
-  - Inside an event-loop callback for a `ccol_selectable_from_chan()`
+  - Inside an event-loop callback for a `cchan_selectable()`
     selectable, the documented receive and send calls are
-    `ccol_circq_try_recv_zc()` and `ccol_circq_try_send_zc()` on `sel->cq`.
+    `ccircq_try_recv()` and `ccircq_try_send()` on `sel->cq`.
   - Every timed call of `cthreadcomm` and `cthreadpool` takes its timeout as
     a `uint64_t` count of microseconds. A timeout of 0 doesn't wait, and the
     call does exactly what its `try_` variant does. A timeout too large to
     form a deadline, such as `UINT64_MAX`, waits with no end instead of
     wrapping into the past. Each one measures its deadline on
     `CLOCK_MONOTONIC`, so a step of the wall clock does not change the wait.
-    `ccol_select_timed()` takes microseconds too, and `UINT64_MAX` is its
+    `cselect_timed()` takes microseconds too, and `UINT64_MAX` is its
     wait with no limit.
-  - A `ctpool` keeps the task nodes of its recent traffic for reuse, at most
+  - A `cthrpool` keeps the task nodes of its recent traffic for reuse, at most
     32768 idle nodes per pool (more only for a pool with over 8192 workers),
     and halves what the traffic does not need at every 256th idle point.
 - Serialization: `cjson` and `cyaml`, each a parser, a serializer and a
@@ -180,10 +180,10 @@ source level and at the binary level.
   next `clogger` record carry the new name.
 - Every module accepts allocation functions that the caller supplies.
 - Every function that creates a handle is named `<module>_create...`, like
-  `chmap_create_full()`, `ctpool_create_mp()`, `chttpsvr_create_mp()`,
-  `chttpclient_create_mp()`, `chttp_request_create_mp()`,
+  `chashmap_create_full()`, `cthrpool_create_mp()`, `chttpsvr_create_mp()`,
+  `chttpcli_create_mp()`, `chttp_request_create_mp()`,
   `clog_create_from_fd_mp()`, `clog_create_from_file_mp()` and
-  `ccol_event_loop_create_mp()`. A form that ends in `_mp` takes an
+  `ceventloop_create_mp()`. A form that ends in `_mp` takes an
   allocator table, and the same name without `_mp` passes `NULL`.
 - Networking: `chttpclient`, which speaks HTTP/1.1 over TLS or plain text in a
   synchronous, an asynchronous, and a pooled-synchronous form; and
@@ -202,10 +202,10 @@ source level and at the binary level.
   application. A client response and an asynchronous result can be freed
   after their client is destroyed. A `405` of the server carries an `Allow`
   header, and accepted TCP connections keep the kernel's buffer autotuning.
-  - `chttpclient_resp_header()` returns a field that a response repeats as
+  - `chttpcli_resp_header()` returns a field that a response repeats as
     one value joined with `, ` in wire order (RFC 9110 section 5.3), except
-    `Set-Cookie`, which it never joins; `chttpclient_resp_header_count()` and
-    `chttpclient_resp_header_at()` return every occurrence one by one.
+    `Set-Cookie`, which it never joins; `chttpcli_resp_header_count()` and
+    `chttpcli_resp_header_at()` return every occurrence one by one.
   - `chttpsvr_resp_add_header()` adds another field line of a name, so a
     handler can send several `Set-Cookie` headers. A `304` carries a
     `Content-Length` only when the handler sets one.
@@ -254,19 +254,19 @@ source level and at the binary level.
     asynchronous and pooled client tiers has stopped completely, so a
     program knows when the engine allocator and the engine logger may be
     released.
-- The readable, writable and error callbacks of a `ccol_event_loop` receive
+- The readable, writable and error callbacks of a `ceventloop` receive
   their own registration handle, so a callback that runs before
-  `ccol_event_loop_add()` has returned can remove or pause itself.
-  `ccol_event_loop_destroy()` drains while the handle still resolves, so a
+  `ceventloop_add()` has returned can remove or pause itself.
+  `ceventloop_destroy()` drains while the handle still resolves, so a
   callback that runs during the drain can remove its registrations before it
   frees their argument.
-- The `on_complete` callback of every `ctpool` submit takes a `bool ran`
+- The `on_complete` callback of every `cthrpool` submit takes a `bool ran`
   argument and runs exactly once for every accepted task, with `ran` false
-  for a task that `ctpool_shutdown_immediate()` discards, so it can always
-  release what the task owns. `ctpool_submit_future()` stores the reason for
+  for a task that `cthrpool_shutdown_immediate()` discards, so it can always
+  release what the task owns. `cthrpool_submit_future()` stores the reason for
   a `NULL` return in its `rv_out` argument, with the same codes that
-  `ctpool_submit()` returns, and `ctpool_try_submit_future()` and
-  `ctpool_timed_submit_future()` return that code.
+  `cthrpool_submit()` returns, and `cthrpool_try_submit_future()` and
+  `cthrpool_timed_submit_future()` return that code.
 - An asynchronous `clogger` target delivers its queued records when the
   process calls `exit()` or returns from `main` without `clog_close()`, and a
   compressed generation is written under a temporary name and published only
@@ -275,7 +275,7 @@ source level and at the binary level.
   logger.
 - Every public destroy and free macro evaluates its argument exactly once,
   so an argument such as `handles[i++]` destroys and clears one element.
-- A queue listener of a `ccol_event_loop` that moves one message per
+- A queue listener of a `ceventloop` that moves one message per
   callback is woken again while its queue stays ready, so it drains a
   backlog without further sends.
 - `CLOG_FATAL` always terminates the process, even when its own output or
@@ -289,7 +289,7 @@ source level and at the binary level.
   wrappers, the type introspection helpers other than
   `ccol_determine_ccol_data_type()`, `_CCOL_ERR_STR()`, and the test hooks of
   `cthreadcomm.h`, `clogger.h` and `cstring.h`.
-- A `ccol_event_loop` registration that has no `on_error` handler receives an
+- A `ceventloop` registration that has no `on_error` handler receives an
   error or a hang-up of its descriptor through its read or write handler, as
   libevent and libuv deliver it, so a connected UDP socket keeps receiving
   after an ICMP error.
@@ -323,12 +323,12 @@ source level and at the binary level.
 - `CCOL_FORK_SAFETY_REQUIRED`, a compile-time switch for the fork protection
   that `cthreadpool`, `cthreadcomm`, `clogger` and `chttpserver` build on
   `pthread_atfork()`.
-- `CCOL_MEMPOOL_COMPACT_LAYOUT`, a compile-time switch that gives you a stride
+- `CMEMPOOL_COMPACT_LAYOUT`, a compile-time switch that gives you a stride
   the library doesn't round up to a power of two, at the cost of a little
   speed on every `cmempool` allocation and release. It is part of the
   interface between an application and the library, so if the two sides
   disagree you get a link error and not a pool of the wrong size.
-- `CCOL_MEMPOOL_DYNAMIC_TLS`, a compile-time switch that selects the general
+- `CMEMPOOL_DYNAMIC_TLS`, a compile-time switch that selects the general
   thread-local storage model instead of initial-exec for the library's
   thread-local fast paths. Use it when you must `dlopen()` the library into a
   process whose static thread-local block is already full.
@@ -349,7 +349,7 @@ source level and at the binary level.
   answering. A new client connects with a 30 s timeout
   (`CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US`) and gives up on a connection that
   moves no byte for 60 s (`CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US`, set with
-  `chttpclient_set_inactivity_timeout()`). Every byte resets the inactivity
+  `chttpcli_set_inactivity_timeout()`). Every byte resets the inactivity
   count, so a slow download that keeps moving runs to the end, and the time a
   streaming `write_fn` takes doesn't count. The request timeout stays off
   unless you set one.
@@ -432,7 +432,7 @@ source level and at the binary level.
   `insecure_skip_hostname_check`, are named for what turning them on gives
   up, so a caller can't end up with a weaker setting by writing less than
   they meant to.
-  `chttpclient_set_tls()` refuses `insecure_skip_verify` beside a
+  `chttpcli_set_tls()` refuses `insecure_skip_verify` beside a
   `ca_bundle_path`, because that pair states two incompatible policies.
 - A redirect can never add the `http+unix` transport to a chain and can
   never point it at another socket, and that rule is unconditional. Without

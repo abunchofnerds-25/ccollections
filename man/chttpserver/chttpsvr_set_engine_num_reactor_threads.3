@@ -11,9 +11,9 @@ ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
 .fi
 .SH DESCRIPTION
 .nf
-Sets how many OS threads the shared ccol_event_loop reactor uses for
+Sets how many OS threads the shared ceventloop reactor uses for
 its own polling and dispatch, with the meaning of the
-num_reactor_threads parameter of ccol_event_loop_create_mp (see
+num_reactor_threads parameter of ceventloop_create_mp (see
 cthreadcomm.h).  With 1, one thread polls and also dispatches inline.
 With a larger value there is one dedicated polling thread plus
 (num_threads - 1) dispatch worker threads.

@@ -1053,8 +1053,8 @@ hash_key_data(const void* key_ptr, size_t key_size, ccol_data_type key_type,
   // copy into a single unaligned load. Every multi-byte read below goes
   // through memcpy rather than dereferencing a cast pointer, because key_ptr
   // can come straight from a cmap_pair the caller built (through the raw
-  // function layer of chmap_insert_elem, chmap_get_elem_ref and
-  // chmap_delete_elem), and such a pointer carries no alignment guarantee,
+  // function layer of chashmap_insert_elem, chashmap_get_elem_ref and
+  // chashmap_delete_elem), and such a pointer carries no alignment guarantee,
   // while the address of a type-inferred macro's local variable does. A
   // direct `*(uint32_t*)key_ptr` style read from a misaligned pointer is
   // undefined behavior and can fault on a strict-alignment architecture. The
@@ -1763,7 +1763,7 @@ static __attribute__((noinline)) size_t oa_window_end(open_addr_map* map,
  * ccol_container_full.
  *
  * The bytes key_pair and val_pair point at can be inside the block the
- * rebuild frees: the ptr chmap_get_elem_ref reports for another key points
+ * rebuild frees: the ptr chashmap_get_elem_ref reports for another key points
  * at the value bytes of a slot in that block. So both sizes and both sets of
  * bytes (at most 8 each in this backend) are copied before the rebuild, and
  * only those copies are read after it. */
@@ -1821,7 +1821,7 @@ static __attribute__((noinline)) ccol_retval_t oa_insert_with_growth(
  * The probe for an existing entry comes FIRST, with no thought of growth at
  * all. A pure value update for a key already present never changes
  * elem_count, so it can never start a rehash, and it can never invalidate
- * the chmap_get_elem_ref pointer of ANY OTHER key; in the other order it
+ * the chashmap_get_elem_ref pointer of ANY OTHER key; in the other order it
  * could, just because earlier unrelated inserts left the map above its
  * growth threshold. The load factor count / capacity is only looked at once
  * the key is confirmed absent. With no tombstones count is the whole load,
@@ -1851,16 +1851,16 @@ static __attribute__((noinline)) ccol_retval_t oa_insert_with_growth(
  * ccol_container_full: ccol_not_enough_memory from oa_insert_with_growth,
  * and ccol_container_full at the end of this function.
  *
- * The caller, chmap_insert_elem, already rejects any key_pair or val_pair
+ * The caller, chashmap_insert_elem, already rejects any key_pair or val_pair
  * whose size isn't exactly map->key_size or map->val_size, so both memcpy
  * calls below stay inside the 8-byte key_data and val_data fields they
  * target, and nothing here can spill into a neighbouring slot. */
 /* slot_out decides what happens for a key that is already present. NULL
- * overwrites its value, which is chmap_insert_elem(). Non-NULL leaves such an
- * entry alone and, once the call succeeds, fills *slot_out with the
- * {ptr, size} pair of the value of the entry the key names, whether it was
- * present or just inserted, which is ccol_chmap_insert_or_get_elem(). Every
- * caller passes a constant, so each instantiation keeps only its own arm. */
+ * overwrites its value, which is chashmap_insert_elem(). Non-NULL leaves such
+ * an entry alone and, once the call succeeds, fills *slot_out with the {ptr,
+ * size} pair of the value of the entry the key names, whether it was present or
+ * just inserted, which is ccol_chmap_insert_or_get_elem(). Every caller passes
+ * a constant, so each instantiation keeps only its own arm. */
 static inline __attribute__((always_inline)) ccol_retval_t
 oa_insert_impl(open_addr_map* map, const cmap_pair* key_pair,
                const cmap_pair* val_pair, cmap_pair* slot_out) {
@@ -1891,8 +1891,8 @@ oa_insert_impl(open_addr_map* map, const cmap_pair* key_pair,
         return ccol_key_already_present;
       }
       // val_pair->ptr can alias this slot's val_data, for example when a
-      // caller inserts a value again through the raw chmap_insert_elem
-      // layer, from a pointer chmap_get_elem_ref or chmap_get_ptr gave for
+      // caller inserts a value again through the raw chashmap_insert_elem
+      // layer, from a pointer chashmap_get_elem_ref or chmap_get_ptr gave for
       // this exact key. memcpy needs its source and destination to never
       // overlap, so when they do overlap the value is copied into a small
       // stack buffer first; val_pair->size is always 8 bytes or less for
@@ -2210,7 +2210,7 @@ static __attribute__((noinline)) void oa_backward_shift_close_gap(
  * oa_backward_shift_close_gap. Like oa_get's search, the search stops after
  * probe_span slots. An entry of the same cluster can move one or more slots
  * toward its home slot, so every reference the map handed out becomes
- * invalid, as chmap_get_elem_ref's contract says. The table is halved when
+ * invalid, as chashmap_get_elem_ref's contract says. The table is halved when
  * the load factor after the delete drops below OPEN_ADDR_MIN_LOAD_FACTOR. */
 static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
@@ -2251,7 +2251,7 @@ static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
 }
 
 /* Frees the table. The state itself lives in the map's block, which
- * __chmap_destroy frees. */
+ * __chashmap_destroy frees. */
 static void oa_destroy(open_addr_map* map) {
   _ccol_mem_free(map->m_procs, map->slots);
 }
@@ -2280,7 +2280,7 @@ static void oa_clear_in_place(open_addr_map* map) {
  * same. The hash mode stays as it is, and the insert window restarts.
  *
  * Every element is destroyed whatever the return value is, which matches
- * chmap_reset's documented contract. When the allocation for new_capacity
+ * chashmap_reset's documented contract. When the allocation for new_capacity
  * fails we fall back to oa_clear_in_place() at the map's current, unchanged
  * capacity, rather than returning with the old table and every element in
  * it fully intact. */
@@ -2570,7 +2570,7 @@ static inline __attribute__((always_inline)) llist_node* sc_find_in_llist(
  * larger value, which reallocs the heap buffer or allocates a new one.
  *
  * val_ptr may alias this entry's current value storage, because a caller is
- * free to insert a value again from a pointer that chmap_get_elem_ref,
+ * free to insert a value again from a pointer that chashmap_get_elem_ref,
  * chmap_get_ptr or chmap_get gave it for this exact key. For a char* value
  * type chmap_get and chmap_get_ptr hand out a pointer straight into a
  * separate-chaining entry's stored bytes, which is their own documented
@@ -2938,8 +2938,8 @@ static void sc_scale(sep_chain_map* map, bool up) {
   // Dividing by scale_factor (4x) can go below the minimum bucket array
   // size for any bucket_arr_size that isn't on the
   // "minimum_allowed_bucket_array_size * 4^k" line, 32 for example:
-  // chmap_create_full and chmap_reset get to 32 directly for any requested
-  // size between minimum_allowed_bucket_array_size and
+  // chashmap_create_full and chashmap_reset get to 32 directly for any
+  // requested size between minimum_allowed_bucket_array_size and
   // minimum_allowed_bucket_array_size * scale_factor, and 32 / 4 == 8 is
   // below the floor. sc_delete's caller only guarantees
   // bucket_arr_size > minimum_allowed_bucket_array_size before this call,
@@ -3147,7 +3147,7 @@ static ccol_retval_t sc_insert_or_get_entry(sep_chain_map* map,
 /* Looks up key_pair and points *val_pair at the node's value accessor. The
  * accessor stays at its address until that key is deleted, and its fields
  * only change when an update gives the key a value of a different size. It
- * has two callers, sc_get() and _chmap_get_val_accessor(), and is forced
+ * has two callers, sc_get() and _chashmap_get_val_accessor(), and is forced
  * inline into both, because calling an out-of-line copy costs a string
  * lookup about 15 percent more instructions. */
 static inline __attribute__((always_inline)) ccol_retval_t sc_find_accessor(
@@ -3207,7 +3207,7 @@ static ccol_retval_t sc_delete(sep_chain_map* map, const cmap_pair* key_pair) {
 }
 
 /* Destroys every bucket chain and frees the bucket array unless it's the
- * in-block one; the state itself lives in that block, which __chmap_destroy
+ * in-block one; the state itself lives in that block, which __chashmap_destroy
  * frees. The insertion-order dllist's root (&map->all_elems) is passed to
  * each chain's teardown, which detaches every node from that list before
  * freeing it, so the root never names a freed node. */
@@ -3245,13 +3245,13 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
       new_bucket_array_size != map->bucket_arr_size) {
     /* We form the byte count here instead of leaving it to the allocator,
        which can't check a product that arrives already multiplied.
-       chmap_reset accepts any power of two up to ccol_max_elem_count, and
+       chashmap_reset accepts any power of two up to ccol_max_elem_count, and
        that many pointers overflow size_t on every supported target. A
        product that wraps to zero is the dangerous one: realloc may then
        release the block and return NULL, and the recovery path below would
        write through a pointer the allocator already took back. We report a
        failed allocation, which is what it is, and every element above is
-       destroyed anyway, as chmap_reset documents. */
+       destroyed anyway, as chashmap_reset documents. */
     if (new_bucket_array_size > SIZE_MAX / sizeof(llist_node*)) {
       memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
       map->elem_count = 0;
@@ -3452,12 +3452,12 @@ static chmap chmap_create_impl(
   return chm;
 }
 
-chmap chmap_create_full(size_t initial_bucket_array_size,
-                        ccol_data_type key_type, ccol_data_type val_type,
-                        ccol_memmgmt_procs_t* mmgmt_procs,
-                        ccol_hashing_proc_t custom_hashing_proc,
-                        ccol_key_equality_proc_t custom_key_equality_proc,
-                        char** err) {
+chmap chashmap_create_full(size_t initial_bucket_array_size,
+                           ccol_data_type key_type, ccol_data_type val_type,
+                           ccol_memmgmt_procs_t* mmgmt_procs,
+                           ccol_hashing_proc_t custom_hashing_proc,
+                           ccol_key_equality_proc_t custom_key_equality_proc,
+                           char** err) {
   return chmap_create_impl(initial_bucket_array_size, key_type, val_type,
                            mmgmt_procs, custom_hashing_proc,
                            custom_key_equality_proc,
@@ -3579,9 +3579,9 @@ static inline bool oa_val_size_matches(const open_addr_map* map,
  *
  * So this check must run for BOTH backends whenever key_type has a fixed
  * width, not just for open-addressing. A caller can pass a cmap_pair through
- * the raw chmap_insert_elem, chmap_get_elem_ref or chmap_delete_elem layer
- * with a key_size smaller than the type's real size, and without this check
- * hash_key_data(), canonicalize_key_pair_if_needed(),
+ * the raw chashmap_insert_elem, chashmap_get_elem_ref or chashmap_delete_elem
+ * layer with a key_size smaller than the type's real size, and without this
+ * check hash_key_data(), canonicalize_key_pair_if_needed(),
  * hash_long_double_value() and long_double_keys_equal() then read past the
  * end of that caller's buffer. It's reachable on the separate-chaining
  * backend whenever a fixed-width key type comes with a value type that isn't
@@ -3627,7 +3627,7 @@ static inline bool key_size_matches_type_if_fixed_width(ccol_data_type key_type,
  * naming chmap_get() and hinting at a missing chmap_redeclare(). This check
  * moves the rejection to the call that really built the bad pair.
  *
- * Only the raw chmap_insert_elem() layer can get here, because the
+ * Only the raw chashmap_insert_elem() layer can get here, because the
  * type-inferred chmap_insert() macro converts the value through the map's
  * declared value type first, so every pair it builds is exactly
  * sizeof(ValT) bytes wide by construction.
@@ -3696,8 +3696,8 @@ chmap_insert_elem_impl(chmap chm, const cmap_pair* key_pair,
 
 /* The public dispatch for an insert and for an update: checks the inputs,
  * then calls the backend's insert function. */
-ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
-                                const cmap_pair* val_pair) {
+ccol_retval_t chashmap_insert_elem(chmap chm, const cmap_pair* key_pair,
+                                   const cmap_pair* val_pair) {
   return chmap_insert_elem_impl(chm, key_pair, val_pair, NULL, NULL, NULL);
 }
 
@@ -3794,8 +3794,8 @@ ccol_retval_t ccol_chmap_insert_or_get_entry(chmap chm,
  * ptr points at the value bytes inside the slot or the node, and size is the
  * stored size. Every failure with a non-NULL val_pair sets it to
  * {NULL, 0}. */
-ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
-                                 cmap_pair* val_pair) {
+ccol_retval_t chashmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
+                                    cmap_pair* val_pair) {
   if (!val_pair) {
     return ccol_invalid_args;
   }
@@ -3830,8 +3830,8 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
  * this hands out the address of that accessor. An open-addressing map has
  * no accessor to hand out and is refused with ccol_invalid_args. Every
  * failure with a non-NULL val_accessor sets it to NULL. */
-ccol_retval_t _chmap_get_val_accessor(chmap chm, const cmap_pair* key_pair,
-                                      const cmap_pair** val_accessor) {
+ccol_retval_t _chashmap_get_val_accessor(chmap chm, const cmap_pair* key_pair,
+                                         const cmap_pair** val_accessor) {
   if (!val_accessor) {
     return ccol_invalid_args;
   }
@@ -3860,13 +3860,13 @@ ccol_retval_t _chmap_get_val_accessor(chmap chm, const cmap_pair* key_pair,
 /* Looks up key_pair and copies up to target_buf_size bytes of the value into
  * target_buf. When the stored value is smaller than target_buf_size, the
  * remaining bytes are zeroed. */
-ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
-                                  void* target_buf, size_t target_buf_size) {
+ccol_retval_t chashmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
+                                     void* target_buf, size_t target_buf_size) {
   if (!target_buf || target_buf_size == 0) {
     return ccol_invalid_args;
   }
   cmap_pair val_pair;
-  ccol_retval_t ret = chmap_get_elem_ref(chm, key_pair, &val_pair);
+  ccol_retval_t ret = chashmap_get_elem_ref(chm, key_pair, &val_pair);
   if (ret == ccol_success) {
     size_t copy_size =
         val_pair.size < target_buf_size ? val_pair.size : target_buf_size;
@@ -3881,7 +3881,7 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
 
 /* The public dispatch for a delete: checks the inputs, then calls the
  * backend. */
-ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
+ccol_retval_t chashmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
   if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0) {
     return ccol_invalid_args;
   }
@@ -3904,7 +3904,7 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
 }
 
 /* Gives the number of live key-value pairs in the map. */
-size_t chmap_elem_count(chmap chm) {
+size_t chashmap_elem_count(chmap chm) {
   if (!chm) {
     _ccol_assert(false);
   }
@@ -3920,7 +3920,7 @@ size_t chmap_elem_count(chmap chm) {
  * rounding the size up to the nearest power of two and clamping it to
  * minimum_allowed_bucket_array_size. Pass 0 to keep the current
  * size. */
-ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
+ccol_retval_t chashmap_reset(chmap chm, size_t new_bucket_array_size) {
   if (!chm) {
     _ccol_assert(false);
   }
@@ -3966,7 +3966,7 @@ static cmap_iterator* chmap_iter_next(cmap_iterator* iter);
 #ifdef RUNNING_UNIT_TESTS
 /* A white-box regression guard tracking the NET count of
  * chmap_cmap_iterator allocations that chashmap_begin_iter() made and
- * __chmap_iterator_destroy() hasn't freed yet, across every chmap in the
+ * __chashmap_iterator_destroy() hasn't freed yet, across every chmap in the
  * process.
  *
  * valgrind alone isn't a dependable guard for this balance, because
@@ -4023,7 +4023,7 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
     real_iter->user_iter.key_pair = &(host->key_pair_accessor);
     real_iter->user_iter.val_pair = &(host->val_pair_accessor);
     real_iter->user_iter._next_fn = chmap_iter_next;
-    real_iter->user_iter._free_fn = __chmap_iterator_destroy;
+    real_iter->user_iter._free_fn = __chashmap_iterator_destroy;
     real_iter->user_iter._direct_ptr = false;
 
     return &(real_iter->user_iter);
@@ -4066,7 +4066,7 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
     real_iter->user_iter.key_pair = &real_iter->oa_key_pair;
     real_iter->user_iter.val_pair = &real_iter->oa_val_pair;
     real_iter->user_iter._next_fn = chmap_iter_next;
-    real_iter->user_iter._free_fn = __chmap_iterator_destroy;
+    real_iter->user_iter._free_fn = __chashmap_iterator_destroy;
     real_iter->user_iter._direct_ptr = false;
 
     return &(real_iter->user_iter);
@@ -4076,7 +4076,7 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
 /* Frees the iterator struct chashmap_begin_iter allocated, with the free
  * function the iterator copied at creation. It reads nothing of the map, so
  * it stays valid after the map is destroyed. */
-void __chmap_iterator_destroy(cmap_iterator* iter) {
+void __chashmap_iterator_destroy(cmap_iterator* iter) {
   if (iter) {
     chmap_cmap_iterator* real_iter = cmapIter2ChmapIter(iter);
 #ifdef RUNNING_UNIT_TESTS
@@ -4108,7 +4108,7 @@ static cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
       iter->key_pair = &(host->key_pair_accessor);
       iter->val_pair = &(host->val_pair_accessor);
     } else {
-      __chmap_iterator_destroy(iter);
+      __chashmap_iterator_destroy(iter);
       iter = NULL;
     }
   } else {
@@ -4122,7 +4122,7 @@ static cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
     }
 
     if (i >= map->capacity) {
-      __chmap_iterator_destroy(iter);
+      __chashmap_iterator_destroy(iter);
       iter = NULL;
     } else {
       real_iter->iter.oa_index = i;
@@ -4146,7 +4146,7 @@ static cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
  * function, which is copied into the free_func local before procs is freed,
  * so the function pointer is still valid once the procs struct itself is
  * gone. */
-void __chmap_destroy(chmap chm) {
+void __chashmap_destroy(chmap chm) {
   if (chm) {
     ccol_memmgmt_procs_t* procs;
     if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
@@ -4168,7 +4168,7 @@ void __chmap_destroy(chmap chm) {
 }
 
 /* See this function's doc comment in chashmap.h. It's the same as
- * __chmap_destroy() above, except that it threads a destructor callback into
+ * __chashmap_destroy() above, except that it threads a destructor callback into
  * the same walk below, the walk oa_destroy() and sc_destroy() make quietly
  * for their own backend, and it allocates nothing. The two walks below are
  * deliberately NOT moved into oa_destroy() and sc_destroy(), and the loop
@@ -4181,13 +4181,13 @@ void __chmap_destroy(chmap chm) {
  * it and frees what the value itself owns, while assigning to either field
  * is a compile error. On the separate-chaining side the accessor is the
  * node's live one, so the rule isn't only about this function's stack. */
-void chmap_destroy_with_dtor(chmap chm,
-                             void (*val_dtor)(const cmap_pair* val_pair,
-                                              void* dtor_ctx),
-                             void* dtor_ctx) {
+void chashmap_destroy_with_dtor(chmap chm,
+                                void (*val_dtor)(const cmap_pair* val_pair,
+                                                 void* dtor_ctx),
+                                void* dtor_ctx) {
   if (!chm) return;
   if (!val_dtor) {
-    __chmap_destroy(chm);
+    __chashmap_destroy(chm);
     return;
   }
 
@@ -4209,7 +4209,7 @@ void chmap_destroy_with_dtor(chmap chm,
     }
   }
 
-  __chmap_destroy(chm);
+  __chashmap_destroy(chm);
 }
 
 #ifdef RUNNING_UNIT_TESTS

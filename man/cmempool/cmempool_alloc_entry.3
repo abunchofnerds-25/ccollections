@@ -1,0 +1,57 @@
+.TH CMEMPOOL_ALLOC_ENTRY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cmempool_alloc_entry \- allocate an entry from the pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+void *cmempool_alloc_entry(cmempool *mp);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a pointer to a free entry of the pool. When the pool is empty
+and the fallback is on, the entry comes from the heap instead. The
+contents of the entry are uninitialized.
+.fi
+.SH PARAMETERS
+.nf
+mp   Memory pool to allocate from (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to the allocated entry on success
+Returns NULL when the pool is empty and the fallback is off
+.fi
+.SH NOTES
+.nf
+O(1) complexity
+The memory that comes back is uninitialized
+The pointer that comes back is aligned for any object type, as with
+malloc(), so any object that you can keep in heap memory can go into a
+pool entry
+The caller must free the entry with cmempool_free_entry()
+
+On a thread-safe pool the entry comes from a small cache of the calling
+thread, and the shared free list is reached only when that cache needs
+a refill. A pool too small to keep a cache (fewer than 8 elements)
+takes the pool's lock on every call instead, and so does a thread that
+the pool has no cache left for; that is one lock for each call, as on
+a pool without a cache. A refill, and every call that has to go past
+the cache, costs one lock. cmempool_create_mp(3) explains how to size
+a pool, and also asks you to measure a configuration before you settle
+on it.
+
+A NULL mp is a fatal error: the call prints a message and ends the
+process with abort(), in every build.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Thread-safe if the pool was created with single_threaded = false.
+Concurrent callers don't contend on the common path.
+.fi
+.SH "SEE ALSO"
+.BR cmempool_calloc_entry (3),
+.BR cmempool_free_entry (3),
+.BR cmempool_create_mp (3)

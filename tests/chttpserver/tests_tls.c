@@ -93,7 +93,7 @@ static char g_other_cert_path[320];
 static char g_other_key_path[320];
 static bool g_cert_ready = false;
 
-static void _hello_tls_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _hello_tls_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                void *ctx) {
   (void)req;
   (void)ctx;
@@ -101,7 +101,7 @@ static void _hello_tls_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* Answers with the length of the body it got, as decimal text. */
-static void _body_len_tls_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _body_len_tls_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                   void *ctx) {
   (void)ctx;
   size_t len = 0;
@@ -207,7 +207,7 @@ static void _teardown(void) {
     g_tls_srv = CHTTPSVR_NULL;
   }
   /* __chttpsvr_destroy releases this server's shared-engine reference, but it
-   * doesn't wait synchronously for chttpserver's shared ccol_event_loop reactor
+   * doesn't wait synchronously for chttpserver's shared ceventloop reactor
    * to stop. chttpsvr_engine_wait() blocks until that reactor stops, which this
    * file needs so that the library gets back the logger the engine holds
    * (g_engine_logger in chttpserver.c, installed by chttpsvr_set_engine_logger)
@@ -275,7 +275,7 @@ __attribute__((constructor)) static void _setup(void) {
 
   /* Registered here, after chttpsvr_start, only so that g_tls_srv is set by the
      time _teardown() (which stops and destroys it) can run. The shared
-     ccol_event_loop engine has no atexit-based teardown of its own to race with
+     ceventloop engine has no atexit-based teardown of its own to race with
      (see the doc comment of chttpsvr_engine_wait(): the teardown runs on a
      reaper thread that is explicitly joined, not in a process-exit hook). */
   atexit(_teardown);
@@ -297,20 +297,19 @@ TEST(chttpserver_tls, handshake_succeeds_when_ca_is_trusted) {
     return;
   }
 
-  chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      chttpclient_create(NULL);
+  chttpcli cli _ccol_destructor(___chttpcli_destroy) = chttpcli_create(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
-  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+  REQUIRE_EQ(chttpcli_set_tls(cli, &tls), ccol_success);
 
   chttp_request_t *req =
       chttp_request_create(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
 
-  chttpcli_response *resp = NULL;
-  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttpcli_response_t *resp = NULL;
+  ccol_retval_t rv = chttpcli_do(cli, req, &resp);
   chttp_request_free(req);
 
   /* Every check on the contents of resp is captured into a local first, and
@@ -321,7 +320,7 @@ TEST(chttpserver_tls, handshake_succeeds_when_ca_is_trusted) {
   int status_code = resp_present ? resp->status_code : -1;
   bool body_present = resp_present && resp->body != NULL;
   bool body_matches = body_present && strcmp(resp->body, "Hello, TLS!") == 0;
-  if (resp_present) chttpclient_resp_free(resp);
+  if (resp_present) chttpcli_resp_free(resp);
 
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(resp_present);
@@ -346,8 +345,8 @@ TEST(chttpserver_tls, handshake_fails_when_ca_is_untrusted) {
       chttp_request_create(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
 
-  chttpcli_response *resp = NULL;
-  ccol_retval_t rv = chttpclient_do(chttp_default_client(), req, &resp);
+  chttpcli_response_t *resp = NULL;
+  ccol_retval_t rv = chttpcli_do(chttp_default_client(), req, &resp);
   chttp_request_free(req);
 
   /* resp is freed before any REQUIRE_* that could return early and leak it, no
@@ -355,7 +354,7 @@ TEST(chttpserver_tls, handshake_fails_when_ca_is_untrusted) {
      includes the regression this test is here to catch (verification silently
      bypassed), where resp would be non-NULL. */
   bool resp_present = resp != NULL;
-  if (resp_present) chttpclient_resp_free(resp);
+  if (resp_present) chttpcli_resp_free(resp);
 
   REQUIRE_EQ(rv, ccol_http_tls_cert_verification_failed);
   REQUIRE_FALSE(resp_present);
@@ -376,27 +375,26 @@ TEST(chttpserver_tls, hostname_mismatch_rejected_by_default) {
     return;
   }
 
-  chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      chttpclient_create(NULL);
+  chttpcli cli _ccol_destructor(___chttpcli_destroy) = chttpcli_create(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
-  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+  REQUIRE_EQ(chttpcli_set_tls(cli, &tls), ccol_success);
 
   chttp_request_t *req = chttp_request_create(
       CHTTP_GET, BASE_URL_MISMATCHED_HOST "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
 
-  chttpcli_response *resp = NULL;
-  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttpcli_response_t *resp = NULL;
+  ccol_retval_t rv = chttpcli_do(cli, req, &resp);
   chttp_request_free(req);
 
   /* resp is freed before any REQUIRE_* that could return early and leak it, no
      matter what. That includes the regression this test is here to catch
      (hostname verification silently bypassed), where resp would be non-NULL. */
   bool resp_present = resp != NULL;
-  if (resp_present) chttpclient_resp_free(resp);
+  if (resp_present) chttpcli_resp_free(resp);
 
   REQUIRE_EQ(rv, ccol_http_tls_cert_verification_failed);
   REQUIRE_FALSE(resp_present);
@@ -415,21 +413,20 @@ TEST(chttpserver_tls, hostname_mismatch_allowed_when_hostname_check_skipped) {
     return;
   }
 
-  chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      chttpclient_create(NULL);
+  chttpcli cli _ccol_destructor(___chttpcli_destroy) = chttpcli_create(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
   tls.insecure_skip_hostname_check = true;
-  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+  REQUIRE_EQ(chttpcli_set_tls(cli, &tls), ccol_success);
 
   chttp_request_t *req = chttp_request_create(
       CHTTP_GET, BASE_URL_MISMATCHED_HOST "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
 
-  chttpcli_response *resp = NULL;
-  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttpcli_response_t *resp = NULL;
+  ccol_retval_t rv = chttpcli_do(cli, req, &resp);
   chttp_request_free(req);
 
   /* Every check on the contents of resp is captured into a local first, and
@@ -440,7 +437,7 @@ TEST(chttpserver_tls, hostname_mismatch_allowed_when_hostname_check_skipped) {
   int status_code = resp_present ? resp->status_code : -1;
   bool body_present = resp_present && resp->body != NULL;
   bool body_matches = body_present && strcmp(resp->body, "Hello, TLS!") == 0;
-  if (resp_present) chttpclient_resp_free(resp);
+  if (resp_present) chttpcli_resp_free(resp);
 
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(resp_present);
@@ -464,22 +461,21 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
     return;
   }
 
-  chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      chttpclient_create(NULL);
+  chttpcli cli _ccol_destructor(___chttpcli_destroy) = chttpcli_create(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
   tls.cert_path = g_client_cert_path;
   tls.key_path = g_client_key_path;
-  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+  REQUIRE_EQ(chttpcli_set_tls(cli, &tls), ccol_success);
 
   chttp_request_t *req =
       chttp_request_create(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
 
-  chttpcli_response *resp = NULL;
-  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttpcli_response_t *resp = NULL;
+  ccol_retval_t rv = chttpcli_do(cli, req, &resp);
   chttp_request_free(req);
 
   /* Every check on the contents of resp is captured into a local first, and
@@ -490,7 +486,7 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
   int status_code = resp_present ? resp->status_code : -1;
   bool body_present = resp_present && resp->body != NULL;
   bool body_matches = body_present && strcmp(resp->body, "Hello, TLS!") == 0;
-  if (resp_present) chttpclient_resp_free(resp);
+  if (resp_present) chttpcli_resp_free(resp);
 
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(resp_present);
@@ -509,7 +505,7 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
 /* answers with what chttpsvr_req_peer_cert_verified reports.                 */
 /* ========================================================================== */
 
-static void _peer_cert_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _peer_cert_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                void *ctx) {
   (void)ctx;
   chttpsvr_resp_printf(resp, "verified=%d",
@@ -540,33 +536,32 @@ static chttpsvr _mtls_server(uint16_t port, bool client_cert_optional) {
 
 /* Sends GET /peer to 127.0.0.1:port over TLS, trusting this suite's server
    certificate and presenting cert_path and key_path when they aren't NULL.
-   Returns the result of chttpclient_do and, on success, stores the status and
+   Returns the result of chttpcli_do and, on success, stores the status and
    the body in *status_out and body_out. */
 static ccol_retval_t _mtls_get(uint16_t port, const char *cert_path,
                                const char *key_path, int *status_out,
                                char *body_out, size_t body_cap) {
   *status_out = -1;
   body_out[0] = '\0';
-  chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      chttpclient_create(NULL);
+  chttpcli cli _ccol_destructor(___chttpcli_destroy) = chttpcli_create(NULL);
   if (cli == CHTTPCLI_NULL) return ccol_not_enough_memory;
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
   tls.cert_path = cert_path;
   tls.key_path = key_path;
-  ccol_retval_t rv = chttpclient_set_tls(cli, &tls);
+  ccol_retval_t rv = chttpcli_set_tls(cli, &tls);
   if (rv != ccol_success) return rv;
   char url[128];
   snprintf(url, sizeof(url), "https://127.0.0.1:%u/peer", (unsigned)port);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   if (!req) return ccol_not_enough_memory;
-  chttpcli_response *resp = NULL;
-  rv = chttpclient_do(cli, req, &resp);
+  chttpcli_response_t *resp = NULL;
+  rv = chttpcli_do(cli, req, &resp);
   chttp_request_free(req);
   if (resp) {
     *status_out = resp->status_code;
     if (resp->body) snprintf(body_out, body_cap, "%s", resp->body);
-    chttpclient_resp_free(resp);
+    chttpcli_resp_free(resp);
   }
   return rv;
 }
@@ -750,7 +745,7 @@ TEST(chttpserver_tls, start_rejects_ca_bundle_path_without_cert_key_pair) {
      it would start the server as plain, unencrypted HTTP on a port the caller
      believed was HTTPS with mutual-TLS client verification. It's exactly how
      you configure custom-CA verification on the client side
-     (chttpclient_set_tls, like curl's --cacert), so a caller who carries the
+     (chttpcli_set_tls, like curl's --cacert), so a caller who carries the
      same mental model over to the server makes a realistic mistake and not a
      contrived one. The test needs no real certificate files and no g_cert_ready
      gate, because this must be rejected before any TLS work is tried. */
@@ -2140,7 +2135,7 @@ TEST(tls_identity, a_resumed_session_reports_the_same_identity) {
 }
 
 /* Answers with what chttpserver's identity accessors report. */
-static void _identity_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _identity_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                               void *ctx) {
   (void)ctx;
   size_t len = 7;

@@ -1,0 +1,53 @@
+.TH CEVENTLOOP_CONSTRUCT 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ceventloop_construct \- declare and initialise a ceventloop in one step
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ceventloop_construct(name, max_events_per_wait, num_lock_stripes,
+                     num_reactor_threads);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a ceventloop variable called name and initialises it
+with ceventloop_create(). If the create fails, the macro calls
+_ccol_fatal_err().
+.fi
+.SH PARAMETERS
+.nf
+name                  Name of the variable for the ceventloop handle.
+max_events_per_wait   Size of the polling thread's event batch buffer,
+                      from 1 to INT_MAX. It must also be small enough
+                      that max_events_per_wait times the size of one
+                      kernel event record (struct epoll_event on Linux,
+                      struct kevent on FreeBSD) fits in a size_t.
+num_lock_stripes      Number of independent lock stripes for the
+                      registry of fds and entries, at least 1. With 1
+                      there is a single shared lock.
+num_reactor_threads   Number of background reactor threads, at least 1.
+                      With 1, a single thread both polls and dispatches
+                      the callbacks in line.
+.fi
+.SH NOTES
+.nf
+Because a failure ends in _ccol_fatal_err(), call
+ceventloop_create() or ceventloop_create_mp() directly when
+you want to handle the error yourself.
+.fi
+.SH EXAMPLES
+.nf
+ceventloop_construct(loop, 32, 1, 1);
+ceventloop_reg reg = ceventloop_add(loop, cselectable_fd(fd, cselect_read),
+                                    handlers, NULL, NULL);
+ceventloop_remove(loop, reg);
+ceventloop_destroy(loop);
+.fi
+.SH "SEE ALSO"
+.BR ceventloop_construct_scoped (3),
+.BR ceventloop_declare (3),
+.BR ceventloop_create (3),
+.BR ceventloop_add (3),
+.BR ceventloop_destroy (3)

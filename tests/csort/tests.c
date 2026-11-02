@@ -1705,7 +1705,7 @@ TEST(csort, csort_sort_uses_the_provided_custom_allocator_for_a_real_sort) {
 // four of malloc, free, calloc and realloc. ccol_memmgmt_procs_t documents
 // that "all-or-nothing" contract, and every other entry point of this
 // library that accepts an allocator (cvector_create_full and
-// chmap_create_full, for example) enforces it by calling
+// chashmap_create_full, for example) enforces it by calling
 // _ccol_verify_memmgmt_procs() before touching the struct. Without that
 // check, a struct with .malloc, .calloc and .realloc set and .free left NULL
 // lets the temp buffer allocation succeed, and the sort then finishes and

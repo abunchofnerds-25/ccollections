@@ -24,7 +24,7 @@ SOFTWARE.
 
 /*
  * INTERNAL ONLY. The readiness interface behind the event loop and
- * ccol_select(): epoll(7) on Linux, kqueue(2) on the BSDs and macOS.
+ * cselect(): epoll(7) on Linux, kqueue(2) on the BSDs and macOS.
  *
  * The interface is the epoll interface. The event loop is written against
  * epoll semantics, so on Linux every name below is just the epoll name and
@@ -214,7 +214,7 @@ typedef union ccol_poll_event {
 
 /* The kevent udata bit that marks the error-only read filter. Every tag a
  * caller registers has it clear, since an event loop entry is a user-space
- * address and ccol_select() registers bit 63 with a descriptor or a small
+ * address and cselect() registers bit 63 with a descriptor or a small
  * index. */
 #define _CCOL_POLL_UDATA_ERR_ONLY ((uint64_t)1 << 62)
 

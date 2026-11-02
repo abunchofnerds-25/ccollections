@@ -36,7 +36,7 @@ object, even when the document comes from an untrusted peer.  Each
 object hashes its keys with a secret seed that the library picks
 once per process, and an object whose keys collide anyway switches
 to a hash keyed with a secret 128-bit key, so a peer cannot keep a
-set of keys in one chain.  See chmap_create_full(3).
+set of keys in one chain.  See chashmap_create_full(3).
 
 An integer literal with no decimal point and no exponent is stored
 as CJSON_INTEGER, and every other number, an integer that overflows

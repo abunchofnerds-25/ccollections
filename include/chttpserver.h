@@ -41,14 +41,14 @@ SOFTWARE.
 
 /**
  * @file chttpserver.h
- * @brief HTTP/1.1 server that runs on ccol_event_loop (a persistent,
+ * @brief HTTP/1.1 server that runs on ceventloop (a persistent,
  * multi-threaded epoll reactor), with routes, middleware,
  *        sub-routers, TLS, and optional dispatch of a streaming body.
  *
  * ### Quick start
  *
  * @code
- * void hello(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+ * void hello(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
  *     (void)req; (void)ctx;
  *     chttpsvr_resp_write_str(resp, "Hello, world!");
  * }
@@ -77,7 +77,7 @@ SOFTWARE.
  * handler code ever blocks it.
  *
  * A route registered with chttpsvr_register_handler (buffered body) runs on
- * the server's worker pool, a ctpool that chttpsvr_start() creates and that
+ * the server's worker pool, a cthrpool that chttpsvr_start() creates and that
  * chttpsvr_config_t.worker_thread_count and
  * chttpsvr_config_t.worker_queue_capacity size.  A worker reads the body
  * straight off the socket and never waits for a slow client: a body that
@@ -146,7 +146,7 @@ SOFTWARE.
  *
  * ### Engine lifecycle (implicit)
  *
- * The first chttpsvr_start() starts the shared ccol_event_loop reactor (the
+ * The first chttpsvr_start() starts the shared ceventloop reactor (the
  * "engine") on its own, and destroying the last running server stops it on
  * its own, so you don't need to call the engine lifecycle functions
  * yourself.
@@ -307,17 +307,17 @@ typedef uint64_t chttpsvr;
 #define CHTTPSVR_NULL ((chttpsvr)0)
 
 /** @brief Opaque route group (sub-router) handle. */
-typedef struct chttpsvr_router chttpsvr_router;
+typedef struct chttpsvr_router_t chttpsvr_router_t;
 
 /** @brief Opaque context for one request, which the chttpsvr_req_* functions
  *         read. */
-typedef struct chttpsvr_req chttpsvr_req;
+typedef struct chttpsvr_req_t chttpsvr_req_t;
 
 /**
  * @brief Opaque response accumulator for one request, which the
  *        chttpsvr_resp_* functions write to.
  */
-typedef struct chttpsvr_resp chttpsvr_resp;
+typedef struct chttpsvr_resp_t chttpsvr_resp_t;
 
 /* ========================================================================== */
 /*                         CALLBACK TYPES                                     */
@@ -336,8 +336,8 @@ typedef struct chttpsvr_resp chttpsvr_resp;
  * @param ctx  Opaque context for this route, which you set at registration
  *             time.
  */
-typedef void (*chttpsvr_handler_fn)(chttpsvr_req *req, chttpsvr_resp *resp,
-                                    void *ctx);
+typedef void (*chttpsvr_handler_fn_t)(chttpsvr_req_t *req,
+                                      chttpsvr_resp_t *resp, void *ctx);
 
 /**
  * @brief Continuation function that the server gives to each middleware.
@@ -350,7 +350,7 @@ typedef void (*chttpsvr_handler_fn)(chttpsvr_req *req, chttpsvr_resp *resp,
  * is already the last in the chain the second call runs the final handler
  * again. That's never useful.
  */
-typedef void (*chttpsvr_next_fn)(chttpsvr_req *req, chttpsvr_resp *resp);
+typedef void (*chttpsvr_next_fn_t)(chttpsvr_req_t *req, chttpsvr_resp_t *resp);
 
 /**
  * @brief Middleware function.
@@ -359,7 +359,7 @@ typedef void (*chttpsvr_next_fn)(chttpsvr_req *req, chttpsvr_resp *resp);
  * before every sub-router middleware. Call next(req, resp) to hand control
  * to the next handler.
  *
- * It runs on a ctpool worker thread and may block.
+ * It runs on a cthrpool worker thread and may block.
  *
  * @param req   Request object.
  * @param resp  Response accumulator.
@@ -367,8 +367,9 @@ typedef void (*chttpsvr_next_fn)(chttpsvr_req *req, chttpsvr_resp *resp);
  *              to chttpsvr_use.
  * @param next  Call it to go to the next handler in the chain.
  */
-typedef void (*chttpsvr_middleware_fn)(chttpsvr_req *req, chttpsvr_resp *resp,
-                                       void *ctx, chttpsvr_next_fn next);
+typedef void (*chttpsvr_middleware_fn_t)(chttpsvr_req_t *req,
+                                         chttpsvr_resp_t *resp, void *ctx,
+                                         chttpsvr_next_fn_t next);
 
 /* ========================================================================== */
 /*                         SERVER CONFIGURATION                               */
@@ -667,7 +668,7 @@ typedef struct chttpsvr_config {
   size_t max_connections;
   /** TLS configuration. NULL means plaintext. */
   const chttp_tls_config_t *tls;
-  /** Number of worker threads in the server's own ctpool. The default is the
+  /** Number of worker threads in the server's own cthrpool. The default is the
    *  CPU count, which passing 0 also gives you. */
   int worker_thread_count;
   /** Capacity of the worker task queue.
@@ -854,7 +855,7 @@ typedef struct chttpsvr_config {
 /* ========================================================================== */
 
 /**
- * @brief Install a custom logger for the shared ccol_event_loop engine's own
+ * @brief Install a custom logger for the shared ceventloop engine's own
  *        diagnostics.
  *
  * The engine logger captures the reactor's own diagnostics (TLS handshake
@@ -916,10 +917,10 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 /* ========================================================================== */
 
 /**
- * @brief Install custom memory management procs for the shared ccol_event_loop
+ * @brief Install custom memory management procs for the shared ceventloop
  *        engine's own internal allocations.
  *
- * Every chttpsvr instance in this process shares one ccol_event_loop
+ * Every chttpsvr instance in this process shares one ceventloop
  * reactor (see the module notes on the shared engine). By default that
  * reactor allocates its own memory (the registration table, each
  * connection's dispatch state and other internal data) with the default
@@ -955,7 +956,7 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 /* ========================================================================== */
 
 /**
- * @brief Configure how many OS threads the shared ccol_event_loop engine
+ * @brief Configure how many OS threads the shared ceventloop engine
  * devotes to its own polling and dispatch.
  *
  * The shared reactor uses exactly 1 thread by default, which is what you
@@ -964,7 +965,7 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
  * dispatch callback (parsing headers, stepping the TLS handshake) inline,
  * with no separate dispatch worker pool at all. Calling it with num_threads
  * above 1 starts that many OS threads instead, following the
- * num_reactor_threads rules of ccol_event_loop_create_mp (cthreadcomm.h):
+ * num_reactor_threads rules of ceventloop_create_mp (cthreadcomm.h):
  * one dedicated polling thread plus (num_threads - 1) separate dispatch
  * worker threads that run the callbacks.
  *
@@ -1023,7 +1024,7 @@ ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
 /* ========================================================================== */
 
 /**
- * @brief Block until the shared ccol_event_loop engine's reactor threads exit.
+ * @brief Block until the shared ceventloop engine's reactor threads exit.
  *
  * Returns at once if the engine never started or has already stopped.
  *
@@ -1052,7 +1053,7 @@ ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
 void chttpsvr_engine_wait(void);
 
 /**
- * @brief Signal the shared ccol_event_loop engine to stop.
+ * @brief Signal the shared ceventloop engine to stop.
  *
  * It doesn't block and it is async-signal-safe, so you can call it from a
  * signal handler. The engine drains in-flight requests and exits; use
@@ -1143,8 +1144,8 @@ chttpsvr_create(clog cl, char **err_str) {
  *
  * Stops the server if it is running, drains its worker pool, closes every
  * remaining connection, and frees this server's reference to the shared
- * ccol_event_loop engine along with every resource the server owns,
- * including its sub-routers, its routes and its own ctpool.
+ * ceventloop engine along with every resource the server owns,
+ * including its sub-routers, its routes and its own cthrpool.
  *
  * From the moment the teardown starts, srv takes no new request.
  * Connections waiting idle for their next request are closed. A request
@@ -1350,11 +1351,11 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  * system picks again on every start, so a restart may move the server to
  * another port.  If
  * this is the first chttpsvr_start() in the process, the library starts the
- * shared ccol_event_loop reactor automatically on background threads, and
+ * shared ceventloop reactor automatically on background threads, and
  * a later call for another server reuses the engine that is already
  * running.
  *
- * The server creates its own ctpool here, with worker_thread_count threads
+ * The server creates its own cthrpool here, with worker_thread_count threads
  * and a queue depth of worker_queue_capacity. If the server ran before, the
  * new pools replace the old ones at once while the old ones drain in the
  * background: a request of the previous run that is still going finishes
@@ -1577,7 +1578,7 @@ ccol_retval_t chttpsvr_bound_address(chttpsvr srv, char *buf, size_t buflen);
  * @brief Register a buffered-body route on the server.
  *
  * The server buffers the complete request body, if there is one, before it
- * calls the handler, which runs on a ctpool worker thread and may block.
+ * calls the handler, which runs on a cthrpool worker thread and may block.
  *
  * @param srv      Server handle.
  * @param method   The HTTP method to match, or CHTTP_ANY to match every
@@ -1607,7 +1608,7 @@ ccol_retval_t chttpsvr_bound_address(chttpsvr srv, char *buf, size_t buflen);
  */
 ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
                                         const char *pattern,
-                                        chttpsvr_handler_fn fn, void *ctx);
+                                        chttpsvr_handler_fn_t fn, void *ctx);
 
 /**
  * @brief Register a streaming-body route on the server.
@@ -1655,7 +1656,7 @@ ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
 ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr srv,
                                                   chttp_method_t method,
                                                   const char *pattern,
-                                                  chttpsvr_handler_fn fn,
+                                                  chttpsvr_handler_fn_t fn,
                                                   void *ctx);
 
 /**
@@ -1709,7 +1710,8 @@ ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr srv,
  *         the middleware chain of the root router is already at the cap of
  *         32 entries (see "Middleware chain limit" above).
  */
-ccol_retval_t chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx);
+ccol_retval_t chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn_t fn,
+                           void *ctx);
 
 /* ========================================================================== */
 /*                         SUB-ROUTERS                                        */
@@ -1775,7 +1777,7 @@ ccol_retval_t chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx);
  *         with '/', when prefix has two slashes together, or when the
  *         library runs out of memory.
  */
-chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix);
+chttpsvr_router_t *chttpsvr_subrouter(chttpsvr srv, const char *prefix);
 
 /**
  * @brief Register a buffered-body route on a sub-router.
@@ -1804,9 +1806,9 @@ chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix);
  *         more than once, or when something destroyed the server that owns
  *         router.
  */
-ccol_retval_t chttpsvr_router_on(chttpsvr_router *router, chttp_method_t method,
-                                 const char *pattern, chttpsvr_handler_fn fn,
-                                 void *ctx);
+ccol_retval_t chttpsvr_router_on(chttpsvr_router_t *router,
+                                 chttp_method_t method, const char *pattern,
+                                 chttpsvr_handler_fn_t fn, void *ctx);
 
 /**
  * @brief Register a streaming-body route on a sub-router.
@@ -1833,10 +1835,10 @@ ccol_retval_t chttpsvr_router_on(chttpsvr_router *router, chttp_method_t method,
  *         more than once, or when something destroyed the server that owns
  *         router.
  */
-ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
+ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router_t *router,
                                         chttp_method_t method,
                                         const char *pattern,
-                                        chttpsvr_handler_fn fn, void *ctx);
+                                        chttpsvr_handler_fn_t fn, void *ctx);
 
 /**
  * @brief Add middleware to a sub-router.
@@ -1860,8 +1862,8 @@ ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
  *         this router is already at the cap of 32 entries (see "Middleware
  *         chain limit" above).
  */
-ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
-                                  chttpsvr_middleware_fn fn, void *ctx);
+ccol_retval_t chttpsvr_router_use(chttpsvr_router_t *router,
+                                  chttpsvr_middleware_fn_t fn, void *ctx);
 
 /* ========================================================================== */
 /*                         REQUEST API                                        */
@@ -1878,7 +1880,7 @@ ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
  * whose method it doesn't recognize with 501 before any handler runs, so
  * req always belongs to a request whose method is one of the seven.
  */
-chttp_method_t chttpsvr_req_method(const chttpsvr_req *req);
+chttp_method_t chttpsvr_req_method(const chttpsvr_req_t *req);
 
 /**
  * @brief Return the URL-decoded request path, which ends with a NUL byte.
@@ -1907,7 +1909,7 @@ chttp_method_t chttpsvr_req_method(const chttpsvr_req *req);
  *
  * The pointer stays valid for the lifetime of the request.
  */
-const char *chttpsvr_req_path(const chttpsvr_req *req);
+const char *chttpsvr_req_path(const chttpsvr_req_t *req);
 
 /**
  * @brief Report whether the client of this request presented a TLS
@@ -1929,7 +1931,7 @@ const char *chttpsvr_req_path(const chttpsvr_req *req);
  * connection reports the same value, and a resumed TLS session reports the
  * answer of the handshake that established it.
  */
-bool chttpsvr_req_peer_cert_verified(const chttpsvr_req *req);
+bool chttpsvr_req_peer_cert_verified(const chttpsvr_req_t *req);
 
 /** The length, in bytes, of the digest that chttpsvr_req_peer_cert_sha256()
  *  writes. */
@@ -1954,7 +1956,7 @@ bool chttpsvr_req_peer_cert_verified(const chttpsvr_req *req);
  * @return A pointer to the bytes, which stay valid for the lifetime of the
  *         request and which you must not free.
  */
-const void *chttpsvr_req_peer_cert_der(const chttpsvr_req *req,
+const void *chttpsvr_req_peer_cert_der(const chttpsvr_req_t *req,
                                        size_t *len_out);
 
 /**
@@ -1978,7 +1980,8 @@ const void *chttpsvr_req_peer_cert_der(const chttpsvr_req *req,
  *         ccol_invalid_args       req or out is NULL.
  */
 ccol_retval_t chttpsvr_req_peer_cert_sha256(
-    const chttpsvr_req *req, unsigned char out[CHTTPSVR_PEER_CERT_SHA256_LEN]);
+    const chttpsvr_req_t *req,
+    unsigned char out[CHTTPSVR_PEER_CERT_SHA256_LEN]);
 
 /**
  * @brief Give the subject of the client certificate of this request as an
@@ -1999,7 +2002,7 @@ ccol_retval_t chttpsvr_req_peer_cert_sha256(
  * @return A NUL-terminated string that stays valid for the lifetime of the
  *         request and that you must not free.
  */
-const char *chttpsvr_req_peer_cert_subject(const chttpsvr_req *req);
+const char *chttpsvr_req_peer_cert_subject(const chttpsvr_req_t *req);
 
 /**
  * @brief Return the value of a request header by name, with a name
@@ -2028,7 +2031,7 @@ const char *chttpsvr_req_peer_cert_subject(const chttpsvr_req *req);
  * accessor at all; a deployment that needs trailer semantics should
  * terminate the trailers in front of this server.
  */
-const char *chttpsvr_req_header(const chttpsvr_req *req, const char *name);
+const char *chttpsvr_req_header(const chttpsvr_req_t *req, const char *name);
 
 /**
  * @brief Return the request body of a buffered route.
@@ -2043,7 +2046,7 @@ const char *chttpsvr_req_header(const chttpsvr_req *req, const char *name);
  *         route, and never a partial or stale view of the body.
  *         The pointer stays valid for the lifetime of the request.
  */
-const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
+const void *chttpsvr_req_body(const chttpsvr_req_t *req, size_t *len_out);
 
 /**
  * @brief Read body bytes on a streaming route, in a pull-reader model.
@@ -2106,7 +2109,7 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
  * @return The number of bytes that it read, which is above 0; 0 at EOF and
  *         for a buflen of 0; or -1 on an error.
  */
-ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen);
+ssize_t chttpsvr_req_read(chttpsvr_req_t *req, void *buf, size_t buflen);
 
 /**
  * @brief Report why the last chttpsvr_req_read() call returned -1, covering
@@ -2138,7 +2141,7 @@ ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen);
  *         of the misuse cases above caused the -1. ccol_invalid_args means
  *         that req is NULL, or that it names no request.
  */
-ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req);
+ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req_t *req);
 
 /**
  * @brief Return a named path parameter that the server took from the URL
@@ -2154,7 +2157,7 @@ ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req);
  *         parameter of the route that matched.  The pointer stays valid for
  *         the lifetime of the request.
  */
-const char *chttpsvr_req_param(const chttpsvr_req *req, const char *name);
+const char *chttpsvr_req_param(const chttpsvr_req_t *req, const char *name);
 
 /**
  * @brief Return every value for one query parameter key, including a key
@@ -2190,7 +2193,7 @@ const char *chttpsvr_req_param(const chttpsvr_req *req, const char *name);
  * Call chttpsvr_req_query_oom() after a NULL return to tell the two apart,
  * or use chttpsvr_req_query_one for a key that has one value.
  */
-const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
+const char **chttpsvr_req_query(chttpsvr_req_t *req, const char *key,
                                 size_t *count_out);
 
 /**
@@ -2212,7 +2215,7 @@ const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
  *                                   parse buffer for the query string.
  *         ccol_invalid_args         req or key is NULL.
  */
-ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req, const char *key,
+ccol_retval_t chttpsvr_req_query_one(chttpsvr_req_t *req, const char *key,
                                      const char **val_out);
 
 /**
@@ -2222,7 +2225,7 @@ ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req, const char *key,
  * For example, for /search?q=hello%20world&page=2 this function gives
  * "q=hello%20world&page=2".
  */
-const char *chttpsvr_req_raw_query(const chttpsvr_req *req);
+const char *chttpsvr_req_raw_query(const chttpsvr_req_t *req);
 
 /**
  * @brief Return true when an allocation for the query string of this request
@@ -2245,7 +2248,7 @@ const char *chttpsvr_req_raw_query(const chttpsvr_req *req);
  *
  * Returns false when req is NULL.
  */
-bool chttpsvr_req_query_oom(const chttpsvr_req *req);
+bool chttpsvr_req_query_oom(const chttpsvr_req_t *req);
 
 /**
  * @brief Attach a value to the request under a key, for a later middleware
@@ -2289,7 +2292,7 @@ bool chttpsvr_req_query_oom(const chttpsvr_req *req);
  *                                 allocated; the request keeps the values
  *                                 that it had.
  */
-ccol_retval_t chttpsvr_req_set_context(chttpsvr_req *req, const void *key,
+ccol_retval_t chttpsvr_req_set_context(chttpsvr_req_t *req, const void *key,
                                        void *value);
 
 /**
@@ -2302,7 +2305,7 @@ ccol_retval_t chttpsvr_req_set_context(chttpsvr_req *req, const void *key,
  *         no value is attached under key. A stored NULL value also gives
  *         NULL.
  */
-void *chttpsvr_req_context(const chttpsvr_req *req, const void *key);
+void *chttpsvr_req_context(const chttpsvr_req_t *req, const void *key);
 
 /* ========================================================================== */
 /*                         RESPONSE API                                       */
@@ -2327,7 +2330,7 @@ void *chttpsvr_req_context(const chttpsvr_req *req, const void *key);
  * Registry gives the code, such as "Reset Content" for 205, or "Unknown"
  * for a code the registry doesn't list. Clients ignore the phrase.
  */
-void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
+void chttpsvr_resp_set_status(chttpsvr_resp_t *resp, int status_code);
 
 /**
  * @brief Set a response header, replacing every field of the same name.
@@ -2434,7 +2437,7 @@ void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
  *         "Content-Length" and value is not a number as described above. A
  *         failed call changes nothing in the response.
  */
-ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
+ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp_t *resp, const char *name,
                                        const char *value);
 
 /**
@@ -2461,7 +2464,7 @@ ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
  *         cases that chttpsvr_resp_set_header() lists. A failed call
  *         changes nothing in the response.
  */
-ccol_retval_t chttpsvr_resp_add_header(chttpsvr_resp *resp, const char *name,
+ccol_retval_t chttpsvr_resp_add_header(chttpsvr_resp_t *resp, const char *name,
                                        const char *value);
 
 /**
@@ -2489,7 +2492,7 @@ ccol_retval_t chttpsvr_resp_add_header(chttpsvr_resp *resp, const char *name,
  * @param len   The number of bytes.
  * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
  */
-ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp, const void *data,
+ccol_retval_t chttpsvr_resp_write(chttpsvr_resp_t *resp, const void *data,
                                   size_t len);
 
 /**
@@ -2498,7 +2501,7 @@ ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp, const void *data,
  * The body is dropped for a 204, a 205 and a 304 here exactly the same
  * way; see the doc comment of chttpsvr_resp_write.
  */
-ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp, const char *str);
+ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp_t *resp, const char *str);
 
 /**
  * @brief Format and append a printf-style string to the response body.
@@ -2516,7 +2519,7 @@ ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp, const char *str);
  *         library gives ccol_invalid_args when resp or fmt is NULL, and
  *         when the vsnprintf encoding under it fails.
  */
-ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp, const char *fmt, ...)
+ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp_t *resp, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 
 /**
@@ -2544,7 +2547,7 @@ ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp, const char *fmt, ...)
  * @param len   The length of json in bytes, which must be above 0.
  * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
  */
-ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp, const char *json,
+ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp_t *resp, const char *json,
                                        size_t len);
 
 #pragma GCC visibility pop

@@ -1,0 +1,28 @@
+.TH CCACHE_CAPACITY 3 "2026-10-31" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccache_capacity \- get the capacity of an LRU cache (type-inferred wrapper)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clrucache.h>
+
+ccache_capacity(cache);
+.fi
+.SH DESCRIPTION
+.nf
+Type-inferred wrapper for clrucache_capacity(). It takes the same arguments
+and gives the same result; clrucache_capacity(3) has the full contract.
+.fi
+.SH PARAMETERS
+.nf
+cache  Cache handle to query
+.fi
+.SH RETURN VALUE
+.nf
+The capacity, which is always >= 1 for a valid handle. It is 0 when
+cache is CCACHE_NULL, and 0 when cache is a stale handle that a
+call already destroyed.
+.fi
+.SH "SEE ALSO"
+.BR clrucache_capacity (3)

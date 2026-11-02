@@ -810,7 +810,7 @@ static void destroy_worklist_push(destroy_worklist_t *wl, cyaml_node_t *child) {
   wl->items[wl->len++] = child;
 }
 
-/* The destructor callback for chmap_destroy_with_dtor(), used by the
+/* The destructor callback for chashmap_destroy_with_dtor(), used by the
  * CYAML_DICTIONARY case of node_clear_value(). It pushes the child node of
  * one dictionary entry onto the worklist that dtor_ctx carries instead of
  * recursing into it, so dictionary values drain through the same worklist
@@ -842,8 +842,8 @@ _CYAML_PARSE_HOT void node_clear_value(cyaml_node_t *n,
       break;
     }
     case CYAML_DICTIONARY: {
-      chmap_destroy_with_dtor(n->value.dictionary, _cyaml_enqueue_dict_child,
-                              wl);
+      chashmap_destroy_with_dtor(n->value.dictionary, _cyaml_enqueue_dict_child,
+                                 wl);
       n->value.dictionary = NULL;
       break;
     }
@@ -1453,7 +1453,7 @@ size_t cyaml_dictionary_size(cyaml node) {
     _ccol_fatal_err(
         "cyaml_dictionary_size: node is %s, expected CYAML_DICTIONARY",
         cyaml_type_str(node));
-  return chmap_elem_count(n->value.dictionary);
+  return chashmap_elem_count(n->value.dictionary);
 }
 
 /* ========================================================================== */
@@ -1520,7 +1520,7 @@ cyaml cyaml_list_get(cyaml seq, size_t index) {
 
 /* Replaces the child that the dictionary slot slot_vp describes with child.
  * slot_vp is the pair that ccol_chmap_insert_or_get_elem() or
- * chmap_get_elem_ref() filled for a key that was already present. The old
+ * chashmap_get_elem_ref() filled for a key that was already present. The old
  * child is freed first (through parse_discard(), which keeps its anchored
  * nodes while a parse runs) and then the new pointer goes into the slot, so
  * the slot never names freed memory once this returns. Freeing the old child
@@ -1572,7 +1572,7 @@ static ccol_retval_t dictionary_set_impl(cyaml map, const char *key,
      * call and touch neither child nor the slot. child == map was already
      * refused at the top of the function. */
     cmap_pair held_vp;
-    if (chmap_get_elem_ref(n->value.dictionary, &kp, &held_vp) ==
+    if (chashmap_get_elem_ref(n->value.dictionary, &kp, &held_vp) ==
             ccol_success &&
         _cyaml_read_child(held_vp.ptr) == c)
       return ccol_success;
@@ -1592,7 +1592,7 @@ static ccol_retval_t dictionary_set_impl(cyaml map, const char *key,
   size_t entry_bytes = _CYAML_BYTES_PER_DICT_ENTRY + kp.size;
   if (parse_bytes_would_refuse(entry_bytes)) {
     cmap_pair held_vp;
-    if (chmap_get_elem_ref(n->value.dictionary, &kp, &held_vp) ==
+    if (chashmap_get_elem_ref(n->value.dictionary, &kp, &held_vp) ==
         ccol_success) {
       dict_slot_replace_child(&held_vp, c);
       return ccol_success;
@@ -1606,8 +1606,8 @@ static ccol_retval_t dictionary_set_impl(cyaml map, const char *key,
   }
 
   /* ccol_chmap_insert_or_get_elem only answers ccol_invalid_args in three
-   * cases, exactly like chmap_insert_elem: a NULL map, a pair that is NULL or
-   * has size zero, and a key whose size doesn't agree with a fixed-width key
+   * cases, exactly like chashmap_insert_elem: a NULL map, a pair that is NULL
+   * or has size zero, and a key whose size doesn't agree with a fixed-width key
    * type. This map belongs to the node and cyaml_create_dictionary_mp() built
    * it with a ccol_string key, which has no fixed width, so the width check
    * always passes; the map is therefore separately chained and the value-size
@@ -1652,7 +1652,7 @@ cyaml cyaml_dictionary_get(cyaml map, const char *key) {
   if (n->type != CYAML_DICTIONARY) return NULL;
   cmap_pair kp = {.ptr = (void *)key, .size = strlen(key) + 1};
   cmap_pair vp;
-  if (chmap_get_elem_ref(n->value.dictionary, &kp, &vp) != ccol_success)
+  if (chashmap_get_elem_ref(n->value.dictionary, &kp, &vp) != ccol_success)
     return NULL;
   return _cyaml_read_child(vp.ptr);
 }
@@ -1691,7 +1691,7 @@ ccol_retval_t cyaml_list_remove(cyaml seq, size_t index) {
 /* The cursor reads a member's successor at the moment it steps onto that
  * member. Removing the current member frees only that member's entry, so the
  * successor the cursor holds stays valid. */
-bool cyaml_dictionary_next(cyaml_dictionary_iter *it) {
+bool cyaml_dictionary_next(cyaml_dictionary_iter_t *it) {
   if (!it) return false;
   const ccol_chmap_entry_ref *e = (const ccol_chmap_entry_ref *)it->_cyaml_next;
   if (!e) {
@@ -1706,7 +1706,7 @@ bool cyaml_dictionary_next(cyaml_dictionary_iter *it) {
   return true;
 }
 
-bool cyaml_dictionary_first(cyaml dict, cyaml_dictionary_iter *it) {
+bool cyaml_dictionary_first(cyaml dict, cyaml_dictionary_iter_t *it) {
   if (!it) return false;
   cyaml_node_t *n = (cyaml_node_t *)dict;
   it->_cyaml_next =
@@ -1726,10 +1726,10 @@ ccol_retval_t cyaml_dictionary_remove(cyaml map, const char *key) {
   if (n->type != CYAML_DICTIONARY) return ccol_invalid_args;
   cmap_pair kp = {.ptr = (void *)key, .size = strlen(key) + 1};
   cmap_pair vp;
-  if (chmap_get_elem_ref(n->value.dictionary, &kp, &vp) != ccol_success)
+  if (chashmap_get_elem_ref(n->value.dictionary, &kp, &vp) != ccol_success)
     return ccol_key_not_found;
   cyaml_node_t *child = _cyaml_read_child(vp.ptr);
-  ccol_retval_t r = chmap_delete_elem(n->value.dictionary, &kp);
+  ccol_retval_t r = chashmap_delete_elem(n->value.dictionary, &kp);
   if (r == ccol_success) __cyaml_destroy((cyaml)child);
   return r;
 }
@@ -1988,7 +1988,7 @@ static cyaml clone_node(cyaml_node_t *src, size_t max_levels, bool *too_deep,
         break;
       }
       cmap_pair vp = {.ptr = &cc, .size = sizeof(cc)};
-      if (chmap_insert_elem(f->dst->value.dictionary, key, &vp) !=
+      if (chashmap_insert_elem(f->dst->value.dictionary, key, &vp) !=
           ccol_success) {
         __cyaml_destroy((cyaml)cc);
         failed = true;
@@ -3384,8 +3384,8 @@ static inline bool at_col0_bom(parse_ctx_t *ctx) {
 static bool anchors_ensure(parse_ctx_t *ctx) {
   if (ctx->anchors) return true;
   char *err = NULL;
-  ctx->anchors = chmap_create_mp(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
-                                 ccol_string, ccol_pointer, ctx->mp, &err);
+  ctx->anchors = chashmap_create_mp(CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
+                                    ccol_string, ccol_pointer, ctx->mp, &err);
   if (!ctx->anchors) return false;
   _parse_discard_ctx = ctx;
   return true;
@@ -3576,7 +3576,7 @@ static void anchor_speculation_reject(parse_ctx_t *ctx,
     _anchor_undo_entry_t *e = &sp->undo.entries[i];
     cmap_pair kp = {.ptr = e->name, .size = strlen(e->name) + 1};
     cmap_pair vp;
-    if (chmap_get_elem_ref(ctx->anchors, &kp, &vp) == ccol_success)
+    if (chashmap_get_elem_ref(ctx->anchors, &kp, &vp) == ccol_success)
       memcpy(vp.ptr, &e->old, sizeof(e->old));
   }
   /* Every node the speculation kept belongs to the rejected reading, since
@@ -3599,7 +3599,8 @@ static cyaml_node_t *anchors_lookup(parse_ctx_t *ctx, const char *name) {
   if (!ctx->anchors) return NULL;
   cmap_pair kp = {.ptr = (void *)name, .size = strlen(name) + 1};
   cmap_pair vp;
-  if (chmap_get_elem_ref(ctx->anchors, &kp, &vp) != ccol_success) return NULL;
+  if (chashmap_get_elem_ref(ctx->anchors, &kp, &vp) != ccol_success)
+    return NULL;
   return _cyaml_read_child(vp.ptr);
 }
 
@@ -3616,7 +3617,7 @@ static void anchors_destroy(parse_ctx_t *ctx) {
   ctx->kept_cap = 0;
   ctx->kept_reserved = 0;
   if (!ctx->anchors) return;
-  __chmap_destroy(ctx->anchors);
+  __chashmap_destroy(ctx->anchors);
   ctx->anchors = NULL;
 }
 
@@ -3629,7 +3630,7 @@ static void anchors_destroy(parse_ctx_t *ctx) {
  * at the end of parse_one_document. Unlike anchors, though, this table starts
  * out truly empty, without the two default YAML 1.2 handles, because
  * tag_handles_lookup falls back to the fixed defaults itself when the table
- * has no explicit entry. So tag_handles_set can use chmap_insert_elem's
+ * has no explicit entry. So tag_handles_set can use chashmap_insert_elem's
  * "already present" signal directly to spot a second %TAG directive that
  * defines the same handle again within one document, with no separate
  * structure to track it. The first %TAG for any handle, "!" and "!!"
@@ -3639,8 +3640,9 @@ static void anchors_destroy(parse_ctx_t *ctx) {
 static bool tag_handles_ensure(parse_ctx_t *ctx) {
   if (ctx->tag_handles) return true;
   char *err = NULL;
-  ctx->tag_handles = chmap_create_mp(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
-                                     ccol_string, ccol_string, ctx->mp, &err);
+  ctx->tag_handles =
+      chashmap_create_mp(CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
+                         ccol_string, ctx->mp, &err);
   return ctx->tag_handles != NULL;
 }
 
@@ -3653,7 +3655,7 @@ static ccol_retval_t tag_handles_set(parse_ctx_t *ctx, const char *handle,
   if (!tag_handles_ensure(ctx)) return ccol_not_enough_memory;
   cmap_pair kp = {.ptr = (void *)handle, .size = strlen(handle) + 1};
   cmap_pair vp = {.ptr = (void *)prefix, .size = strlen(prefix) + 1};
-  return chmap_insert_elem(ctx->tag_handles, &kp, &vp);
+  return chashmap_insert_elem(ctx->tag_handles, &kp, &vp);
 }
 
 /* A borrowed pointer to the resolved prefix for `handle`: the one a %TAG
@@ -3664,7 +3666,7 @@ static const char *tag_handles_lookup(parse_ctx_t *ctx, const char *handle) {
   if (ctx->tag_handles) {
     cmap_pair kp = {.ptr = (void *)handle, .size = strlen(handle) + 1};
     cmap_pair vp;
-    if (chmap_get_elem_ref(ctx->tag_handles, &kp, &vp) == ccol_success)
+    if (chashmap_get_elem_ref(ctx->tag_handles, &kp, &vp) == ccol_success)
       return (const char *)vp.ptr;
   }
   if (strcmp(handle, "!") == 0) return "!";
@@ -3674,7 +3676,7 @@ static const char *tag_handles_lookup(parse_ctx_t *ctx, const char *handle) {
 
 static void tag_handles_destroy(parse_ctx_t *ctx) {
   if (!ctx->tag_handles) return;
-  __chmap_destroy(ctx->tag_handles);
+  __chashmap_destroy(ctx->tag_handles);
   ctx->tag_handles = NULL;
 }
 
@@ -7715,7 +7717,7 @@ static _pstep_t _pfd_step(parse_ctx_t *ctx, _pframe_t *f, _preq_t *rq) {
       _ccol_mem_free(ctx->mp, key_str);
       if (!merge_entry_push(ctx, &f->u.fd.merges, &f->u.fd.merge_count,
                             &f->u.fd.merge_cap, val,
-                            chmap_elem_count(f->u.fd.map->value.dictionary)))
+                            chashmap_elem_count(f->u.fd.map->value.dictionary)))
         return _PSTEP_FAIL;
     } else {
       ccol_retval_t r =
@@ -9543,9 +9545,9 @@ static bool merge_move_to_end(parse_ctx_t *ctx, cyaml_node_t *map,
     memcpy(key, kp->ptr, key_size);
     cmap_pair key_pair = {.ptr = key, .size = key_size};
     cmap_pair val_pair = {.ptr = &child, .size = sizeof(child)};
-    ccol_retval_t r = chmap_delete_elem(map->value.dictionary, &key_pair);
+    ccol_retval_t r = chashmap_delete_elem(map->value.dictionary, &key_pair);
     if (r == ccol_success)
-      r = chmap_insert_elem(map->value.dictionary, &key_pair, &val_pair);
+      r = chashmap_insert_elem(map->value.dictionary, &key_pair, &val_pair);
     if (key != stack_key) _ccol_mem_free(ctx->mp, key);
     if (r != ccol_success) {
       __cyaml_destroy((cyaml)child);
@@ -9674,7 +9676,7 @@ static bool merge_apply(parse_ctx_t *ctx, cyaml_node_t *map,
       }
     }
   }
-  size_t explicit_count = chmap_elem_count(map->value.dictionary);
+  size_t explicit_count = chashmap_elem_count(map->value.dictionary);
 
   if (n == 1) {
     /* One merge entry: an earlier source wins, which is exactly the order in
@@ -9685,7 +9687,7 @@ static bool merge_apply(parse_ctx_t *ctx, cyaml_node_t *map,
       if (!merge_one_source_into(ctx, map, merge_source_at(entries[0].val, j)))
         return false;
     _cyaml_merge_seg_t seg = {.merged_count =
-                                  chmap_elem_count(map->value.dictionary) -
+                                  chashmap_elem_count(map->value.dictionary) -
                                   explicit_count};
     return merge_reorder(ctx, map, entries, &seg, 1, explicit_count);
   }
@@ -9713,7 +9715,7 @@ static bool merge_apply(parse_ctx_t *ctx, cyaml_node_t *map,
         const cmap_pair *kp, *vp;
         cmap_pair slot;
         e = ccol_chmap_entry_read(e, &kp, &vp);
-        if (chmap_get_elem_ref(map->value.dictionary, kp, &slot) ==
+        if (chashmap_get_elem_ref(map->value.dictionary, kp, &slot) ==
             ccol_success)
           continue;
         cyaml_node_t *child = _cyaml_read_child(vp->ptr);
@@ -9732,7 +9734,7 @@ static bool merge_apply(parse_ctx_t *ctx, cyaml_node_t *map,
   for (size_t i = 0; ok && i < n; i++) {
     cyaml_node_t *val = entries[i].val;
     size_t cnt = merge_source_count(val);
-    size_t before = chmap_elem_count(map->value.dictionary);
+    size_t before = chashmap_elem_count(map->value.dictionary);
     for (size_t j = 0; ok && j < cnt; j++) {
       cyaml_node_t *src = merge_source_at(val, j);
       for (const ccol_chmap_entry_ref *e = dict_first_entry(src); e;) {
@@ -9760,10 +9762,10 @@ static bool merge_apply(parse_ctx_t *ctx, cyaml_node_t *map,
       }
     }
     if (ok)
-      seg[i].merged_count = chmap_elem_count(map->value.dictionary) - before;
+      seg[i].merged_count = chashmap_elem_count(map->value.dictionary) - before;
   }
   if (ok) ok = merge_reorder(ctx, map, entries, seg, n, explicit_count);
-  if (winners) __chmap_destroy(winners);
+  if (winners) __chashmap_destroy(winners);
   _ccol_mem_free(ctx->mp, seg);
   return ok;
 }
@@ -9961,7 +9963,7 @@ static _pstep_t _pbd_step(parse_ctx_t *ctx, _pframe_t *f, _preq_t *rq) {
     if (f->u.bd.entry_is_merge_candidate && strcmp(f->u.bd.key, "<<") == 0) {
       if (!merge_entry_push(ctx, &f->u.bd.merges, &f->u.bd.merge_count,
                             &f->u.bd.merge_cap, val,
-                            chmap_elem_count(f->u.bd.map->value.dictionary)))
+                            chashmap_elem_count(f->u.bd.map->value.dictionary)))
         return _PSTEP_FAIL;
     } else if (dictionary_set_impl((cyaml)f->u.bd.map, f->u.bd.key,
                                    (cyaml)val) != ccol_success) {
@@ -12076,7 +12078,7 @@ serialize_block_head(ybuf_t *b, cyaml_node_t *n, int depth, size_t *count_out,
         b->oom = true;
         break;
       }
-      *count_out = chmap_elem_count(n->value.dictionary);
+      *count_out = chashmap_elem_count(n->value.dictionary);
       if (*count_out == 0) {
         yb_indent(b, depth);
         yb_append_cstr(b, "{}\n");
@@ -12403,7 +12405,7 @@ serialize_flow_head(ybuf_t *b, cyaml_node_t *n, int depth, size_t *count_out,
         b->oom = true;
         break;
       }
-      *count_out = chmap_elem_count(n->value.dictionary);
+      *count_out = chashmap_elem_count(n->value.dictionary);
       if (*count_out == 0) {
         yb_put(b, "{}", 2, limit);
         break;
@@ -12830,7 +12832,8 @@ static cyaml navigate_y(cyaml root, char *path_copy,
     } else if (n->type == CYAML_DICTIONARY) {
       cmap_pair kp = {.ptr = p, .size = strlen(p) + 1};
       cmap_pair vp;
-      if (chmap_get_elem_ref(n->value.dictionary, &kp, &vp) != ccol_success) {
+      if (chashmap_get_elem_ref(n->value.dictionary, &kp, &vp) !=
+          ccol_success) {
         fail_reason = ccol_utf8_is_valid(p, kp.size - 1) ? CYAML_NAV_NOT_FOUND
                                                          : CYAML_NAV_BAD_UTF8;
         node = NULL;
@@ -13025,7 +13028,7 @@ ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
            * the map never keeps a NULL child. Deleting a key the map holds
            * always succeeds: a bucket array shrink that can't get memory is
            * skipped and the entry is removed anyway. */
-          chmap_delete_elem(pn->value.dictionary, &kp);
+          chashmap_delete_elem(pn->value.dictionary, &kp);
         }
       } else {
         ret = r;

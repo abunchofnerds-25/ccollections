@@ -214,7 +214,7 @@ if [ -z "$current" ]; then
 	exit 1
 fi
 
-# CCOL_MEMPOOL_COMPACT_LAYOUT changes cmempool's entry stride and with it the
+# CMEMPOOL_COMPACT_LAYOUT changes cmempool's entry stride and with it the
 # layout of a struct the corpus baseline records, so a compact build really is
 # different from the recorded one. It's a supported build configuration, not a
 # defect, but the baseline describes the default build, so we report the
@@ -225,9 +225,9 @@ fi
 # because it can come in through EXTRA_CFLAGS, a CFLAGS override or an edit to
 # the header. The library names the setting it was built with, so the artifact
 # can answer this question by itself.
-if printf '%s\n' "$current" | grep -qx '_ccol_mempool_built_with_compact_layout'; then
+if printf '%s\n' "$current" | grep -qx '_cmempool_built_with_compact_layout'; then
 	echo "check_public_abi: skipped, this library was built with"
-	echo "                  CCOL_MEMPOOL_COMPACT_LAYOUT=1. That setting changes"
+	echo "                  CMEMPOOL_COMPACT_LAYOUT=1. That setting changes"
 	echo "                  cmempool's entry stride and the layout that goes with"
 	echo "                  it, so it is a different ABI by construction, and the"
 	echo "                  committed baseline describes the default build."

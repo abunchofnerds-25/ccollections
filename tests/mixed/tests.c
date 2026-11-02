@@ -36,7 +36,7 @@ TEST(vec_of_hmaps, int_int_maps_stored_and_retrieved) {
   for (int i = 0; i < 3; i++) {
     chmap inner = cvec_at(maps, i);
     chmap_redeclare(inner, int, int);
-    REQUIRE_EQ(chmap_elem_count(inner), 5);
+    REQUIRE_EQ(chashmap_elem_count(inner), 5);
     for (int j = 0; j < 5; j++) {
       int key = i * 10 + j;
       int val = chmap_get(inner, key);
@@ -99,13 +99,13 @@ TEST(vec_of_hmaps, delete_entry_in_inner_map) {
   int k2 = 2;
 
   REQUIRE_EQ(chmap_remove(target, k2), ccol_success);
-  REQUIRE_EQ(chmap_elem_count(target), 3);
+  REQUIRE_EQ(chashmap_elem_count(target), 3);
   REQUIRE_EQ((void *)chmap_get_ptr(target, k2), NULL);
 
   // The first map keeps all 4 entries.
   chmap other = cvec_at(maps, 0);
   chmap_redeclare(other, int, int);
-  REQUIRE_EQ(chmap_elem_count(other), 4);
+  REQUIRE_EQ(chashmap_elem_count(other), 4);
 
   for (size_t i = 0; i < cvec_size(maps); i++) {
     chmap_destroy(cvec_at(maps, i));
@@ -139,7 +139,7 @@ TEST(vec_of_bmaps, sorted_traversal_per_map) {
   for (int i = 0; i < 3; i++) {
     cbmap bm = cvec_at(maps, i);
     cbmap_redeclare(bm, int, int);
-    REQUIRE_EQ(cbmap_elem_count(bm), 5);
+    REQUIRE_EQ(cbstmap_elem_count(bm), 5);
 
     int prev_key = -1;
     ccol_for_each(bm, it, {
@@ -181,8 +181,8 @@ TEST(vec_of_bmaps, independent_maps_do_not_interfere) {
 
   int k3 = 3;
   cbmap_remove(bm0, k3);
-  REQUIRE_EQ(cbmap_elem_count(bm0), 4);
-  REQUIRE_EQ(cbmap_elem_count(bm1), 5);  // not changed
+  REQUIRE_EQ(cbstmap_elem_count(bm0), 4);
+  REQUIRE_EQ(cbstmap_elem_count(bm1), 5);  // not changed
 
   for (size_t i = 0; i < cvec_size(maps); i++) {
     cbmap_destroy(cvec_at(maps, i));
@@ -209,7 +209,7 @@ TEST(hmap_of_vecs, category_to_int_list) {
   for (int i = 0; i < 5; i++) cvec_push(odds, i * 2 + 1);
   chmap_insert(hm, "odds", odds);
 
-  REQUIRE_EQ(chmap_elem_count(hm), 2);
+  REQUIRE_EQ(chashmap_elem_count(hm), 2);
 
   cvec ev = chmap_get(hm, "evens");
   cvec_redeclare(ev, int);
@@ -279,7 +279,7 @@ TEST(bmap_of_vecs, ordered_groups) {
     cbmap_insert(bm, g, v);
   }
 
-  REQUIRE_EQ(cbmap_elem_count(bm), 4);
+  REQUIRE_EQ(cbstmap_elem_count(bm), 4);
 
   // The in-order traversal visits the groups in key order, 0, 1, 2,
   // 3.
@@ -329,18 +329,18 @@ TEST(hmap_of_hmaps, nested_string_key_lookup) {
   chmap_insert(vegs, "broccoli", v20);
   chmap_insert(outer, "vegs", vegs);
 
-  REQUIRE_EQ(chmap_elem_count(outer), 2);
+  REQUIRE_EQ(chashmap_elem_count(outer), 2);
 
   chmap inner_f = chmap_get(outer, "fruits");
   chmap_redeclare(inner_f, char *, int);
-  REQUIRE_EQ(chmap_elem_count(inner_f), 3);
+  REQUIRE_EQ(chashmap_elem_count(inner_f), 3);
   REQUIRE_EQ(chmap_get(inner_f, "apple"), 1);
   REQUIRE_EQ(chmap_get(inner_f, "banana"), 2);
   REQUIRE_EQ(chmap_get(inner_f, "cherry"), 3);
 
   chmap inner_v = chmap_get(outer, "vegs");
   chmap_redeclare(inner_v, char *, int);
-  REQUIRE_EQ(chmap_elem_count(inner_v), 2);
+  REQUIRE_EQ(chashmap_elem_count(inner_v), 2);
   REQUIRE_EQ(chmap_get(inner_v, "carrot"), 10);
   REQUIRE_EQ(chmap_get(inner_v, "broccoli"), 20);
 
@@ -368,7 +368,7 @@ TEST(hmap_of_hmaps, add_and_remove_inner_entries) {
   chmap_insert(sq, k6, v36);
   int k1 = 1;
   REQUIRE_EQ(chmap_remove(sq, k1), ccol_success);
-  REQUIRE_EQ(chmap_elem_count(sq), 5);  // 5, plus 1 entry, less 1 entry = 5
+  REQUIRE_EQ(chashmap_elem_count(sq), 5);  // 5, plus 1 entry, less 1 entry = 5
 
   // Check the result with a fresh read.
   chmap sq2 = chmap_get(outer, "squares");
@@ -407,7 +407,7 @@ TEST(bmap_of_bmaps, nested_sorted_maps) {
     cbmap_insert(outer, i, inner);
   }
 
-  REQUIRE_EQ(cbmap_elem_count(outer), 3);
+  REQUIRE_EQ(cbstmap_elem_count(outer), 3);
 
   int expected_outer_key = 0;
   ccol_for_each(outer, it, {
@@ -416,7 +416,7 @@ TEST(bmap_of_bmaps, nested_sorted_maps) {
 
     cbmap *inner_p = ccol_iter_val_ptr(it);
     cbmap_redeclare(*inner_p, int, int);
-    REQUIRE_EQ(cbmap_elem_count(*inner_p), 5);
+    REQUIRE_EQ(cbstmap_elem_count(*inner_p), 5);
 
     // The inner traversal gives 0..4 in order, with the right values.
     int expected_inner_key = 0;
@@ -674,7 +674,7 @@ TEST(hmap_of_vec_of_cstrings, three_level_nesting) {
   }
   chmap_insert(catalog, "farewells", farewells);
 
-  REQUIRE_EQ(chmap_elem_count(catalog), 2);
+  REQUIRE_EQ(chashmap_elem_count(catalog), 2);
 
   cvec gv = chmap_get(catalog, "greetings");
   cvec_redeclare(gv, cstr);
@@ -732,7 +732,7 @@ TEST(bmap_of_hmap_of_vecs, three_level_nesting) {
     cbmap_insert(outer, g, hm);
   }
 
-  REQUIRE_EQ(cbmap_elem_count(outer), 2);
+  REQUIRE_EQ(cbstmap_elem_count(outer), 2);
 
   // Navigate: outer[0]["a"][1] == 1
   int k0 = 0;

@@ -1,0 +1,38 @@
+.TH CCACHE_DECLARE_SCOPED 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccache_declare_scoped \- declare an LRU cache that is destroyed at scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clrucache.h>
+
+ccache_declare_scoped(name, KeyT, ValT);
+.fi
+.SH DESCRIPTION
+.nf
+The same as ccache_declare(), plus
+__attribute__((cleanup(___clrucache_destroy))) on the variable, so the
+compiler destroys the cache when the variable leaves its scope. Call
+ccache_init() on the variable before you use the cache.
+.fi
+.SH PARAMETERS
+.nf
+name  Variable name for the cache handle
+KeyT  Key type
+ValT  Value type
+.fi
+.SH NOTES
+.nf
+The macro needs GCC or Clang, because it uses __attribute__((cleanup)).
+
+An array key type or value type, such as int[2] or char[16], is a
+compile error, and the message says to wrap the array in a struct. The
+macros copy a key or a value by assignment, C cannot assign an array,
+and without the error the cache would store the address of the
+caller's array instead of its elements. A struct that holds the
+array works.
+.fi
+.SH "SEE ALSO"
+.BR ccache_declare (3),
+.BR ccache_construct_scoped (3)

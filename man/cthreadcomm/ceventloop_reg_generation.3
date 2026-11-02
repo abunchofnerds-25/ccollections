@@ -1,0 +1,93 @@
+.TH CEVENTLOOP_REG_GENERATION 3 "2026-07-13" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ceventloop_reg_generation \- caller-visible identity token for a registration's fd
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+uint64_t ceventloop_reg_generation(ceventloop loop, ceventloop_reg reg);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a value that only grows and is unique within one loop. reg
+belongs to an fd, or to the bridge of a queue or a cchan, and the
+value is minted once, when ceventloop_add() first registers that
+fd and creates its entry. Every registration on that fd shares the
+value for as long as the fd lives. That includes ceventloop_modify()
+calls, since flipping the direction keeps the same fd and the same
+connection behind it, and it includes a read and a write registration
+on the same fd, which share one generation because they stand for one
+logical connection.
+
+The value is for a caller's own defensive bookkeeping when fd numbers
+get reused. A caller that keeps a connection object across several
+asynchronous steps can stamp it with the generation read right after
+ceventloop_add() returns and compare that stamp with a fresh read
+later on. A mismatch means that the fd number was closed and an
+unrelated new connection has taken it, not the logical connection the
+caller had in mind.
+
+Basic correctness doesn't depend on the generation. The dispatch path
+always checks that a registration is live before it calls a callback,
+whether or not anybody calls this function. With more than one reactor
+thread, the single poller thread collects readiness and a separate
+dispatch worker runs the callback afterwards, so a registration can
+disappear between those two steps of a batch, because it was removed or
+a brand new registration reused its fd. The loop then skips it safely
+at dispatch time, never dispatches it wrongly and never causes a
+use-after-free. The generation only adds application bookkeeping on
+top of that guarantee.
+.fi
+.SH PARAMETERS
+.nf
+loop  ceventloop reg belongs to.
+reg   Registration to query.
+.fi
+.SH RETURN VALUE
+.nf
+The generation value. 0 when reg is CEVENTLOOP_REG_NULL or fails
+to resolve for another reason, such as an earlier removal, and also
+when loop is CEVENTLOOP_NULL, a stale handle, or a handle that
+has already been destroyed. A real registration never has generation 0,
+because the counter starts at 1.
+.fi
+.SH NOTES
+.nf
+You can call it at any time with any ceventloop_reg value that
+ceventloop_add ever returned for this loop, even one that has been
+removed, earlier on this thread or by another thread racing with this
+call. reg is resolved against loop's registration table before anything
+is dereferenced, so a stale or removed handle is always caught and
+reported as generation 0, never as a use-after-free.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call from any thread at any time, including while a dispatch,
+a ceventloop_modify() or a ceventloop_remove() runs.
+.fi
+.SH EXAMPLES
+.nf
+typedef struct conn {
+    ceventloop_reg reg;
+    uint64_t generation;
+} conn_t;
+
+conn_t *c = malloc(sizeof(*c));
+if (!c) { perror("malloc"); exit(1); }
+/* A callback of this registration can run before the next two stores,
+   so it takes the handle from its reg parameter, never from c->reg. */
+c->reg = ceventloop_add(loop, cselectable_fd(fd, cselect_read),
+                        handlers, c, NULL);
+c->generation = ceventloop_reg_generation(loop, c->reg);
+
+/* ... later, from another asynchronous step that holds a conn_t* ... */
+if (ceventloop_reg_generation(loop, c->reg) != c->generation) {
+    /* stale: something closed this fd number and reused it */
+}
+.fi
+.SH "SEE ALSO"
+.BR ceventloop_add (3),
+.BR ceventloop_modify (3),
+.BR ceventloop_remove (3)

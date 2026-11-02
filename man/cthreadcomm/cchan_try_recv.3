@@ -1,0 +1,36 @@
+.TH CCHAN_TRY_RECV 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cchan_try_recv \- try to receive a message with no block
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t cchan_try_recv(cchan *ch, cmessage_t *target_buf);
+.fi
+.SH DESCRIPTION
+.nf
+Takes a message from the queue that the channel picks for the calling
+thread, if one is there, and returns at once when that queue is empty.
+.fi
+.SH PARAMETERS
+.nf
+ch          Channel to receive from
+target_buf  Buffer that gets the message
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success         - A message was received. The caller must free
+                       target_buf->data.
+ccol_invalid_args    - ch or target_buf is NULL
+ccol_container_empty - The chosen queue is empty
+.fi
+.SH NOTES
+.nf
+This call never blocks. The direction comes from the ID of the
+calling thread, as described in cchan_recv(3).
+.fi
+.SH "SEE ALSO"
+.BR cchan_recv (3),
+.BR cchan_timed_recv (3)

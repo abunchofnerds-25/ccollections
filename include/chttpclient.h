@@ -44,15 +44,15 @@ SOFTWARE.
  * @brief A hand-written HTTP/1.1 client. An internal chttp1_parser frames
  *        the request and the response over raw sockets, ctls (the same
  *        reactor-agnostic OpenSSL wrapper that chttpserver uses for its own
- *        TLS) handles TLS, and ccol_event_loop is the reactor of Tier 2 and
+ *        TLS) handles TLS, and ceventloop is the reactor of Tier 2 and
  *        Tier 3.
  *
  * ### Connection pool
  *
  * Each chttpcli handle has two independent layers. The first one limits
  * concurrency, so only so many requests are in flight at the same time:
- * chttpclient_do blocks once the client reaches that limit, which is the CPU
- * count unless chttpclient_set_pool_size says otherwise. The second one is a
+ * chttpcli_do blocks once the client reaches that limit, which is the CPU
+ * count unless chttpcli_set_pool_size says otherwise. The second one is a
  * keep-alive cache of idle connections, keyed by the origin (the scheme, the
  * host compared without regard to case, and the port). A request can reuse a
  * connection that an earlier request opened (and for HTTPS, one whose
@@ -69,20 +69,20 @@ SOFTWARE.
  *
  * chttp_default_client() gives you one default client for the whole process,
  * which the library initializes on the first call. You configure it with the
- * same chttpclient_set_* functions as any other client, and the short
+ * same chttpcli_set_* functions as any other client, and the short
  * wrappers (chttp_get, chttp_post and the others) use it for you.
  *
  * ### Thread safety
  *
  * Every function that takes a chttpcli handle is thread-safe, with the one
  * exception described in the next paragraph. Several threads can call
- * chttpclient_do, chttpclient_do_async or chttpclient_do_pooled on the same
- * client at the same time, and the same goes for the chttpclient_set_*
- * configuration functions. A chttpclient_destroy of that client may also run
+ * chttpcli_do, chttpcli_do_async or chttpcli_do_pooled on the same
+ * client at the same time, and the same goes for the chttpcli_set_*
+ * configuration functions. A chttpcli_destroy of that client may also run
  * concurrently with those calls; it waits for the requests that are already
  * in flight.
  *
- * The exception is one destroy against another: two chttpclient_destroy
+ * The exception is one destroy against another: two chttpcli_destroy
  * calls that overlap on one handle stop the process with _ccol_fatal_err,
  * because the second call finds a handle that the first one already retired
  * and can't tell it apart from a stale handle of some other client. So the
@@ -90,9 +90,9 @@ SOFTWARE.
  * the last thing any thread of the caller does with that handle.
  *
  * This thread safety does NOT extend to changing one caller-owned
- * chttp_request_t or chttpcli_response object from more than one thread at
+ * chttp_request_t or chttpcli_response_t object from more than one thread at
  * the same time, since neither object has any synchronization of its own:
- * chttp_request_set_header, chttp_request_get_header, chttpclient_resp_header
+ * chttp_request_set_header, chttp_request_get_header, chttpcli_resp_header
  * and direct field access all need exclusive access to that object. If you
  * share one request or one response between threads, you must add your own
  * external synchronization.
@@ -101,30 +101,30 @@ SOFTWARE.
  *
  * @code
  * // A simple GET with the default client
- * chttpcli_response *resp;
+ * chttpcli_response_t *resp;
  * if (chttp_get("https://api.example.com/users", &resp) == ccol_success) {
  *     // resp->body is NULL for a body that is truly empty, for example a
- *     // 204 or a HEAD. See the doc comment of chttpcli_response below.
+ *     // 204 or a HEAD. See the doc comment of chttpcli_response_t below.
  *     printf("status=%d body=%s\n", resp->status_code,
  *            resp->body ? resp->body : "");
- *     chttpclient_resp_free(resp);
+ *     chttpcli_resp_free(resp);
  * }
  *
  * // Custom client
  * chttpcli_construct(cli);
- * chttpclient_set_pool_size(cli, 8);
- * chttpclient_set_request_timeout(cli, 5000000); // 5 s
+ * chttpcli_set_pool_size(cli, 8);
+ * chttpcli_set_request_timeout(cli, 5000000); // 5 s
  *
  * chttp_request_t *req = chttp_request_create(CHTTP_POST,
  *     "https://api.example.com/items",
  *     &CHTTP_JSON_BODY(json_str, json_len), NULL);
  * chttp_request_set_header(req, "Authorization", "Bearer token");
  *
- * chttpcli_response *r;
- * chttpclient_do(cli, req, &r);
+ * chttpcli_response_t *r;
+ * chttpcli_do(cli, req, &r);
  * chttp_request_free(req);
- * chttpclient_resp_free(r);
- * chttpclient_destroy(cli);
+ * chttpcli_resp_free(r);
+ * chttpcli_destroy(cli);
  * @endcode
  */
 
@@ -145,7 +145,7 @@ SOFTWARE.
  * handle. That way the library always detects a handle whose slot is free
  * again, or whose slot belongs to a different, later client, and it never
  * dereferences freed memory or the memory of the wrong object. The doc
- * comment of chttpclient_destroy says what a stale handle does in that one
+ * comment of chttpcli_destroy says what a stale handle does in that one
  * function.
  */
 typedef uint64_t chttpcli;
@@ -155,11 +155,11 @@ typedef uint64_t chttpcli;
 #define CHTTPCLI_NULL ((chttpcli)0)
 
 /** The connect timeout of a new client: 30 s, in microseconds (see
- *  chttpclient_set_connect_timeout). */
+ *  chttpcli_set_connect_timeout). */
 #define CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US ((uint64_t)30000000)
 
 /** The inactivity timeout of a new client: 60 s, in microseconds (see
- *  chttpclient_set_inactivity_timeout). */
+ *  chttpcli_set_inactivity_timeout). */
 #define CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US ((uint64_t)60000000)
 
 /* ========================================================================== */
@@ -168,14 +168,14 @@ typedef uint64_t chttpcli;
 
 /**
  * @brief The streaming callback for a response body, for
- *        chttpclient_do_streaming.
+ *        chttpcli_do_streaming.
  *
  * The client calls it zero or more times as the bytes of the response body
  * arrive. Return the number of bytes you consumed; anything less than len
  * aborts the transfer. For a Tier 2 or Tier 3 request no call starts after
  * the request's future is fulfilled, so the caller may free ctx once it has
  * the result. A callback must not destroy the client that runs its request;
- * see __chttpclient_destroy.
+ * see __chttpcli_destroy.
  *
  * @param data  The chunk that arrived. It is not NUL-terminated.
  * @param len   The number of bytes in this chunk.
@@ -183,7 +183,7 @@ typedef uint64_t chttpcli;
  * @return      The number of bytes you handled; it must equal len for the
  *              transfer to continue.
  */
-typedef size_t (*chttpcli_write_fn)(const void *data, size_t len, void *ctx);
+typedef size_t (*chttpcli_write_fn_t)(const void *data, size_t len, void *ctx);
 
 /* ========================================================================== */
 /*                         REQUEST OBJECT                                     */
@@ -223,13 +223,13 @@ typedef struct chttp_request {
    *  body and never reuses the connection. Any other interim status, such
    *  as "103 Early Hints", is dropped and the wait goes on, and once a
    *  second passes with no byte of a response the client sends the body
-   *  anyway. The chttpclient_do(3) man page has the full protocol. The
+   *  anyway. The chttpcli_do(3) man page has the full protocol. The
    *  field has no effect when the request has no body, or when the caller
    *  already set an explicit "Expect" header. It defaults to false because
    *  chttp_request_create_mp fills it with zero. Every tier honors it the
-   *  same way: chttpclient_do and chttpclient_do_streaming,
-   *  chttpclient_do_async and chttpclient_do_async_streaming, and
-   *  chttpclient_do_pooled and chttpclient_do_pooled_streaming (the last
+   *  same way: chttpcli_do and chttpcli_do_streaming,
+   *  chttpcli_do_async and chttpcli_do_async_streaming, and
+   *  chttpcli_do_pooled and chttpcli_do_pooled_streaming (the last
    *  two sit on the async engine).
    *
    *  Only this field turns on the real 100-Continue wait; the client does
@@ -265,7 +265,7 @@ typedef struct chttp_request {
    *  Some protection holds whatever this field says. An Authorization value
    *  that the library injected from a URL's userinfo is dropped as soon as
    *  the origin changes. The headers you set yourself follow the redirect
-   *  rule of chttpclient_do: a hop whose scheme, host or port differs from
+   *  rule of chttpcli_do: a hop whose scheme, host or port differs from
    *  the original request carries none of your Authorization, Cookie,
    *  Cookie2 and WWW-Authenticate headers, and a hop whose host differs
    *  carries none of your Host header either. All your other headers follow
@@ -278,10 +278,10 @@ typedef struct chttp_request {
    *  An UPGRADE from http to https is never affected; since it can only add
    *  protection, the client always follows it.
    *
-   *  Every tier honours this field the same way: chttpclient_do and
-   *  chttpclient_do_streaming, chttpclient_do_async and
-   *  chttpclient_do_async_streaming, and chttpclient_do_pooled and
-   *  chttpclient_do_pooled_streaming. */
+   *  Every tier honours this field the same way: chttpcli_do and
+   *  chttpcli_do_streaming, chttpcli_do_async and
+   *  chttpcli_do_async_streaming, and chttpcli_do_pooled and
+   *  chttpcli_do_pooled_streaming. */
   bool prevent_tls_downgrade_on_redirect;
 } chttp_request_t;
 
@@ -296,7 +296,7 @@ typedef struct chttp_request {
  *
  * body is a NUL-terminated heap buffer, and it is never NULL when it holds
  * one byte or more; body_len counts the bytes before that terminating NUL.
- * body is NULL in two cases. One is a call to chttpclient_do_streaming, or
+ * body is NULL in two cases. One is a call to chttpcli_do_streaming, or
  * to its async or pooled equivalent, where the write callback gets the body
  * instead. The other is a zero-length body on the non-streaming path, such
  * as a 204, a response to HEAD or an explicit "Content-Length: 0": body_len
@@ -311,16 +311,16 @@ typedef struct chttp_request {
  * 5.3, which is every occurrence in wire order joined with ", ". Set-Cookie
  * is the one exception, because RFC 9110 section 5.3 and RFC 6265 section 3
  * forbid combining it: "set-cookie" maps to its FIRST occurrence.
- * chttpclient_resp_header reads that same value, while
- * chttpclient_resp_header_count and chttpclient_resp_header_at give you
+ * chttpcli_resp_header reads that same value, while
+ * chttpcli_resp_header_count and chttpcli_resp_header_at give you
  * each occurrence separately, and that's how you read every Set-Cookie.
  *
- * chttpclient_resp_free frees all the memory that the response owns. The
+ * chttpcli_resp_free frees all the memory that the response owns. The
  * response doesn't depend on the client that produced it, so you can free
- * it before or after chttpclient_destroy; chttpclient_resp_free has the
+ * it before or after chttpcli_destroy; chttpcli_resp_free has the
  * details.
  */
-typedef struct chttpcli_response {
+typedef struct chttpcli_response_t {
   int status_code;
   char *body; /* heap buffer ending with a NUL. NULL on the streaming path,
                * and for a zero-length body on the non-streaming path. */
@@ -328,7 +328,7 @@ typedef struct chttpcli_response {
   chmap_declare(headers, char *, char *); /* chmap(char* -> char*) */
   ccol_memmgmt_procs_t *_m_procs;
   void *_field_lines; /* internal: every occurrence of each repeated name */
-} chttpcli_response;
+} chttpcli_response_t;
 
 /* ========================================================================== */
 /*                    REQUEST LIFECYCLE */
@@ -383,22 +383,22 @@ chttp_request_create(chttp_method_t method, const char *url,
  * goes out whole, framed with Content-Length), so it can't obey a
  * Transfer-Encoding header from the caller, and it must not take one
  * silently either. If it did, the automatic Content-Length header of
- * chttpclient_do would sit beside it on the wire over a body with no
+ * chttpcli_do would sit beside it on the wire over a body with no
  * transfer coding; that framing is ambiguous, and this library's own
  * chttp1_parser rejects it in any message it parses.
  *
  * A "Content-Length" header IS accepted here, since there is no body length
  * to check it against yet, and checking it here would also need a copy of
  * the request's method and redirect context, which only come later. The
- * client validates it when the request reaches the wire: chttpclient_do,
- * chttpclient_do_streaming, chttpclient_do_async,
- * chttpclient_do_async_streaming, chttpclient_do_pooled,
- * chttpclient_do_pooled_streaming and chttp_run_query all reject a bad
+ * client validates it when the request reaches the wire: chttpcli_do,
+ * chttpcli_do_streaming, chttpcli_do_async,
+ * chttpcli_do_async_streaming, chttpcli_do_pooled,
+ * chttpcli_do_pooled_streaming and chttp_run_query all reject a bad
  * Content-Length from the caller. A good Content-Length is a plain unsigned
  * string of decimal digits with no leading '+' or '-' and no whitespace in
  * it, and it must match exactly the body that the client sends, for the
  * same reason Transfer-Encoding is rejected above: the declared framing
- * must not disagree with the wire. The doc comment of chttpclient_do has
+ * must not disagree with the wire. The doc comment of chttpcli_do has
  * more.
  *
  * @param req    The request to change.
@@ -441,9 +441,9 @@ void chttp_request_free(chttp_request_t *req);
  * @brief Create an HTTP client with a custom allocator.
  *
  * The new client starts with the default settings, and you change its
- * behaviour with the chttpclient_set_* functions before the first request.
+ * behaviour with the chttpcli_set_* functions before the first request.
  *
- * Until any chttpclient_set_* call, the configuration is:
+ * Until any chttpcli_set_* call, the configuration is:
  *   pool_size              = the CPU count (resolved on the first request)
  *   connect_timeout_us     = CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US (30 s)
  *   inactivity_timeout_us  = CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US (60 s)
@@ -456,7 +456,7 @@ void chttp_request_free(chttp_request_t *req);
  *                 fails.
  * @return A new client handle, or CHTTPCLI_NULL on failure.
  */
-chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str);
+chttpcli chttpcli_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str);
 
 /**
  * @brief Create an HTTP client with the default allocator.
@@ -464,8 +464,8 @@ chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str);
  * @return A new client handle, or CHTTPCLI_NULL on failure.
  */
 static inline __attribute__((always_inline)) chttpcli
-chttpclient_create(char **err_str) {
-  return chttpclient_create_mp(NULL, err_str);
+chttpcli_create(char **err_str) {
+  return chttpcli_create_mp(NULL, err_str);
 }
 
 /* ========================================================================== */
@@ -476,12 +476,12 @@ chttpclient_create(char **err_str) {
  * @brief Set the maximum number of requests that can be in flight at the
  *        same time.
  *
- * The cap applies ONLY to Tier 1 (chttpclient_do and
- * chttpclient_do_streaming): a caller of either function blocks once the
+ * The cap applies ONLY to Tier 1 (chttpcli_do and
+ * chttpcli_do_streaming): a caller of either function blocks once the
  * client reaches it and waits for a free slot, much like a counting
- * semaphore. It does NOT apply to Tier 2 (chttpclient_do_async and
- * chttpclient_do_async_streaming) and it does NOT apply to Tier 3
- * (chttpclient_do_pooled and chttpclient_do_pooled_streaming). You can
+ * semaphore. It does NOT apply to Tier 2 (chttpcli_do_async and
+ * chttpcli_do_async_streaming) and it does NOT apply to Tier 3
+ * (chttpcli_do_pooled and chttpcli_do_pooled_streaming). You can
  * submit any number of Tier 2 and Tier 3 requests at the same time; the
  * shared async engine's reactor processes all of them and a submit never
  * blocks. That engine has its own process-wide thread-count setting (see
@@ -501,7 +501,7 @@ chttpclient_create(char **err_str) {
  * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_NULL
  *         or a stale handle of a client that has been destroyed.
  */
-ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
+ccol_retval_t chttpcli_set_pool_size(chttpcli cli, size_t n);
 
 /**
  * @brief Set the TCP connect timeout in microseconds. 0 means no timeout.
@@ -512,15 +512,15 @@ ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
  * connect phase, so this timeout bounds the handshake as well.
  *
  * A name lookup is a single blocking getaddrinfo() call, and the system
- * gives no way to cancel it. chttpclient_do makes that call on the calling
+ * gives no way to cancel it. chttpcli_do makes that call on the calling
  * thread, and if the lookup alone runs past this timeout, the connect that
  * would follow is skipped and the call gives ccol_timed_out once the lookup
- * returns. chttpclient_do_async and chttpclient_do_pooled give
+ * returns. chttpcli_do_async and chttpcli_do_pooled give
  * ccol_timed_out at the deadline itself, while the lookup goes on in the
  * background and its result is thrown away. A request to an address literal
  * or to a unix socket makes no lookup at all.
  *
- * For chttpclient_do_async and chttpclient_do_pooled, an engine thread
+ * For chttpcli_do_async and chttpcli_do_pooled, an engine thread
  * watches the deadline and wakes at the earliest deadline among the
  * requests in flight, so a request ends within a few milliseconds of its
  * deadline, however short the timeout is.
@@ -529,7 +529,7 @@ ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
  * for example while its allocator fails. The request then ends with
  * ccol_timed_out at most about 100 ms after the deadline, and its connection
  * is closed in the background once the engine can run it again; until that
- * happens, chttpclient_destroy of that client waits for it.
+ * happens, chttpcli_destroy of that client waits for it.
  *
  * Any value other than 0 is honoured as a limit, however far away it is. A
  * value too large for the clock to reach, such as UINT64_MAX, saturates to
@@ -540,32 +540,32 @@ ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
  * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_NULL
  *         or a stale handle of a client that has been destroyed.
  */
-ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, uint64_t us);
+ccol_retval_t chttpcli_set_connect_timeout(chttpcli cli, uint64_t us);
 
 /**
  * @brief Set the total request timeout in microseconds. 0 means no timeout.
  *
- * It is the longest time allowed from the call to chttpclient_do until the
+ * It is the longest time allowed from the call to chttpcli_do until the
  * last byte of the response body arrives.
  *
  * Every tier checks this deadline before each read of the response. Once
  * the deadline has passed the request ends with ccol_timed_out, even if the
  * rest of the response is already there and one more read would complete
  * it, but a response that the client finished reading before the deadline
- * is a success. chttpclient_do, chttpclient_do_async and
- * chttpclient_do_pooled, and their streaming forms, all give the same
+ * is a success. chttpcli_do, chttpcli_do_async and
+ * chttpcli_do_pooled, and their streaming forms, all give the same
  * result for the same timeline.
  *
  * A name lookup is one blocking getaddrinfo() call that the system has no
- * way to cancel. chttpclient_do runs it on the calling thread, and when the
+ * way to cancel. chttpcli_do runs it on the calling thread, and when the
  * lookup alone goes past this timeout, the call skips the connect that
  * follows and gives ccol_timed_out once the lookup returns.
- * chttpclient_do_async and chttpclient_do_pooled give ccol_timed_out right
+ * chttpcli_do_async and chttpcli_do_pooled give ccol_timed_out right
  * at the deadline, and the lookup keeps running in the background with its
  * result unused. Requests to an address literal or a unix socket make no
  * lookup.
  *
- * chttpclient_do_async and chttpclient_do_pooled have an engine thread
+ * chttpcli_do_async and chttpcli_do_pooled have an engine thread
  * watch the deadline, waking at the earliest deadline of the requests in
  * flight, so a request ends within a few milliseconds of its deadline
  * however short the timeout is.
@@ -574,7 +574,7 @@ ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, uint64_t us);
  * request's work (say, because its allocator fails): the request ends with
  * ccol_timed_out at most about 100 ms after the deadline, and its
  * connection gets closed in the background once the engine can run it
- * again. chttpclient_destroy of that client waits for it until then.
+ * again. chttpcli_destroy of that client waits for it until then.
  *
  * Any value other than 0 is honoured as a limit, however far off it is. A
  * value the clock can't reach, such as UINT64_MAX, saturates to the latest
@@ -585,7 +585,7 @@ ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, uint64_t us);
  * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_NULL
  *         or a stale handle of a client that has been destroyed.
  */
-ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, uint64_t us);
+ccol_retval_t chttpcli_set_request_timeout(chttpcli cli, uint64_t us);
 
 /**
  * @brief Set the inactivity timeout in microseconds. 0 means no timeout.
@@ -597,7 +597,7 @@ ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, uint64_t us);
  * way starts the count again, so a transfer that keeps moving, however
  * slowly and however long it takes in total, never reaches this timeout.
  * Only time spent waiting on the connection counts: time spent in the
- * chttpcli_write_fn of a streaming request is not counted.
+ * chttpcli_write_fn_t of a streaming request is not counted.
  *
  * The count starts once the connection is up (the connect timeout bounds
  * the connect and the TLS handshake) and covers the sending of the request,
@@ -606,9 +606,9 @@ ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, uint64_t us);
  * response, such as one that holds a long poll open, needs a larger value
  * or 0.
  *
- * chttpclient_do, chttpclient_do_async and chttpclient_do_pooled, and their
+ * chttpcli_do, chttpcli_do_async and chttpcli_do_pooled, and their
  * streaming forms, apply it on every hop of the request. For
- * chttpclient_do_async and chttpclient_do_pooled an engine thread watches
+ * chttpcli_do_async and chttpcli_do_pooled an engine thread watches
  * it, and a request ends at most about 100 ms after its connection has
  * been silent for the timeout.
  *
@@ -621,19 +621,19 @@ ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, uint64_t us);
  * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_NULL
  *         or a stale handle of a client that has been destroyed.
  */
-ccol_retval_t chttpclient_set_inactivity_timeout(chttpcli cli, uint64_t us);
+ccol_retval_t chttpcli_set_inactivity_timeout(chttpcli cli, uint64_t us);
 
 /**
  * @brief Cap the size of a buffered response body. 0 means no limit, and 0
  *        is the default.
  *
  * The cap covers every request path that buffers the body instead of
- * streaming it: chttpclient_do, chttpclient_do_async, the pooled-sync
- * wrappers on top of chttpclient_do_async, chttp_get, chttp_post,
+ * streaming it: chttpcli_do, chttpcli_do_async, the pooled-sync
+ * wrappers on top of chttpcli_do_async, chttp_get, chttp_post,
  * chttp_put, chttp_delete, chttp_patch and chttp_run_query. It has no
- * effect on chttpclient_do_streaming, chttpclient_do_async_streaming or
- * chttpclient_do_pooled_streaming: a streaming caller controls its own
- * memory through the value its chttpcli_write_fn returns (anything less
+ * effect on chttpcli_do_streaming, chttpcli_do_async_streaming or
+ * chttpcli_do_pooled_streaming: a streaming caller controls its own
+ * memory through the value its chttpcli_write_fn_t returns (anything less
  * than len aborts the transfer), so there is nothing for this cap to bound
  * on those paths.
  *
@@ -643,14 +643,14 @@ ccol_retval_t chttpclient_set_inactivity_timeout(chttpcli cli, uint64_t us);
  * when the connection closes, declares no length up front, so the client
  * counts it as it arrives and fails the request as soon as the body so far
  * goes past max_bytes. Either way the error is ccol_msg_too_large, which
- * chttpclient_do returns, the result of chttpclient_do_async holds, and
- * chttpclient_do_pooled returns. That connection is never reused: it is
+ * chttpcli_do returns, the result of chttpcli_do_async holds, and
+ * chttpcli_do_pooled returns. That connection is never reused: it is
  * dropped instead of going back into the pool, like after any other
  * malformed response.
  *
  * A redirect hop isn't subject to the cap, whatever the declared and the
  * real size of its body, because the client always drops the body of an
- * intermediate hop without buffering it (the chttpclient_do documentation
+ * intermediate hop without buffering it (the chttpcli_do documentation
  * explains how redirects are followed). Only the body of the final response
  * that reaches the caller counts against max_bytes.
  *
@@ -664,8 +664,8 @@ ccol_retval_t chttpclient_set_inactivity_timeout(chttpcli cli, uint64_t us);
  * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_NULL
  *         or a stale handle of a client that has been destroyed.
  */
-ccol_retval_t chttpclient_set_max_response_body_size(chttpcli cli,
-                                                     size_t max_bytes);
+ccol_retval_t chttpcli_set_max_response_body_size(chttpcli cli,
+                                                  size_t max_bytes);
 
 /**
  * @brief Set the TLS configuration of this client.
@@ -695,8 +695,8 @@ ccol_retval_t chttpclient_set_max_response_body_size(chttpcli cli,
  * Whether cert_path, key_path and ca_bundle_path can be read is not checked
  * here; the client checks each path later, when an HTTPS request needs it.
  * So a path that doesn't exist is accepted here without an error, and it
- * gives ccol_http_tls_cert_load_failed from chttpclient_do or
- * chttpclient_do_streaming once a request needs it.
+ * gives ccol_http_tls_cert_load_failed from chttpcli_do or
+ * chttpcli_do_streaming once a request needs it.
  *
  * cert_path and key_path go together. If you set one and leave the other
  * NULL you get ccol_invalid_args rather than "no client certificate",
@@ -712,7 +712,7 @@ ccol_retval_t chttpclient_set_max_response_body_size(chttpcli cli,
  *         cert_path and key_path set, and insecure_skip_verify set together
  *         with a ca_bundle_path.
  */
-ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
+ccol_retval_t chttpcli_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
 
 /* ========================================================================== */
 /*                         ENGINE LOGGER                                      */
@@ -722,9 +722,9 @@ ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
  * @brief Install a custom logger for the reactor-level events of the
  *        chttpclient async engine (Tier 2 and Tier 3).
  *
- * chttpclient_do_async, chttpclient_do_async_streaming and the pooled-sync
- * wrappers on top of them (chttpclient_do_pooled and
- * chttpclient_do_pooled_streaming) share one ccol_event_loop reactor for the
+ * chttpcli_do_async, chttpcli_do_async_streaming and the pooled-sync
+ * wrappers on top of them (chttpcli_do_pooled and
+ * chttpcli_do_pooled_streaming) share one ceventloop reactor for the
  * whole process and for every chttpcli instance in it, the default client
  * included, and the library starts it only when it is first needed. The
  * engine logger gets that reactor's diagnostics, such as a failed TLS
@@ -788,7 +788,7 @@ ccol_retval_t chttpcli_set_engine_logger(clog cl);
  * @brief Install custom memory management procs for the reactor-level
  *        allocations of the chttpclient async engine (Tier 2 and Tier 3).
  *
- * All chttpcli instances of the process share one ccol_event_loop reactor
+ * All chttpcli instances of the process share one ceventloop reactor
  * for their Tier 2 and Tier 3 work. That reactor allocates its own memory
  * (the registration table, each connection's dispatch state, the worker
  * pool for name lookups and connects, and more) with the default allocator
@@ -799,11 +799,11 @@ ccol_retval_t chttpcli_set_engine_logger(clog cl);
  *
  * Only the construction of the shared reactor is affected; the allocator of
  * a single chttpcli instance is configured separately with
- * chttpclient_create_mp.
+ * chttpcli_create_mp.
  *
  * There are only two moments when you may call this function: before the
  * reactor has ever started in this process (so before the first call to
- * chttpclient_do_async or chttpclient_do_async_streaming anywhere), and
+ * chttpcli_do_async or chttpcli_do_async_streaming anywhere), and
  * after the engine has stopped completely. The engine stops once every
  * async user of a chttpcli drops its reference and the automatic teardown
  * finishes, and chttpcli_engine_wait() blocks until that teardown is over.
@@ -839,7 +839,7 @@ ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
  * call this function and also when you call it with num_threads == 0, and a
  * positive num_threads overrides the automatic size and pins the reactor to
  * exactly that many OS threads. The num_reactor_threads rules of
- * ccol_event_loop_create_mp apply here as well (see cthreadcomm.h): 1 means
+ * ceventloop_create_mp apply here as well (see cthreadcomm.h): 1 means
  * a single thread that polls and dispatches inline, and a larger value
  * means one dedicated poller thread plus (num_threads - 1) dispatch worker
  * threads.
@@ -849,7 +849,7 @@ ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
  *
  * You may call this function at two moments only: before the reactor has
  * ever started in this process (before the first call to
- * chttpclient_do_async or chttpclient_do_async_streaming anywhere), or once
+ * chttpcli_do_async or chttpcli_do_async_streaming anywhere), or once
  * the engine has stopped completely. It stops when every async user of a
  * chttpcli has dropped its reference and the automatic teardown has
  * finished; chttpcli_engine_wait() blocks until that teardown is over.
@@ -871,9 +871,9 @@ ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads);
  *
  * The engine starts with the first Tier 2 or Tier 3 request and stops on
  * its own once no client holds it: the last request has ended and the last
- * idle connection of those tiers is closed, which chttpclient_destroy does
+ * idle connection of those tiers is closed, which chttpcli_destroy does
  * for its own client. The teardown then runs on an engine thread, after
- * chttpclient_destroy has returned. This function waits for that teardown
+ * chttpcli_destroy has returned. This function waits for that teardown
  * and joins the thread that ran it, so by the time it returns no engine
  * thread is running and the engine makes no further call to the allocator
  * of chttpcli_set_engine_mem_mgmt_procs or to the logger of
@@ -887,7 +887,7 @@ ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads);
  * first.
  *
  * Called from an engine thread, meaning from the write_fn of
- * chttpclient_do_async_streaming or chttpclient_do_pooled_streaming, it
+ * chttpcli_do_async_streaming or chttpcli_do_pooled_streaming, it
  * would wait for its own thread, so in that case it calls _ccol_fatal_err()
  * instead.
  */
@@ -898,13 +898,13 @@ void chttpcli_engine_wait(void);
 /* ========================================================================== */
 
 /**
- * @brief The internal destroy. Use the chttpclient_destroy macro instead.
+ * @brief The internal destroy. Use the chttpcli_destroy macro instead.
  *
  * It waits until every request in flight has finished and then frees the
  * resources.
  *
- * cli must be a live handle: one that chttpclient_create,
- * chttpclient_create_mp or chttp_default_client gave you and that nothing
+ * cli must be a live handle: one that chttpcli_create,
+ * chttpcli_create_mp or chttp_default_client gave you and that nothing
  * has destroyed yet. Anything else is a fatal error, and that covers a
  * stale handle that an earlier, finished call to this function destroyed,
  * a stale handle that another thread is destroying at the same moment, and
@@ -913,27 +913,27 @@ void chttpcli_engine_wait(void);
  * safer than risking a use-after-free or a double free, and it does so
  * whether the two destroy calls come one after the other or overlap in
  * time. The one exception is CHTTPCLI_NULL (0), which is a silent
- * no-op, so it fits the idiom of chttpclient_destroy where a destroy sets
+ * no-op, so it fits the idiom of chttpcli_destroy where a destroy sets
  * the handle to NULL.
  *
  * Destroying a client from inside one of its own requests is fatal too. A
- * call from the write_fn of chttpclient_do_streaming,
- * chttpclient_do_async_streaming or chttpclient_do_pooled_streaming on that
+ * call from the write_fn of chttpcli_do_streaming,
+ * chttpcli_do_async_streaming or chttpcli_do_pooled_streaming on that
  * client would wait for ever for the very request that runs it, so the
  * function calls _ccol_fatal_err() instead, the same way a self-destroy of
  * a thread pool or an event loop does.
  *
  * Destroying ANY client on a thread of the async engine (from the write_fn
- * of chttpclient_do_async_streaming or chttpclient_do_pooled_streaming) is
+ * of chttpcli_do_async_streaming or chttpcli_do_pooled_streaming) is
  * fatal as well. The destroy waits for that client's Tier 2 and Tier 3
  * requests and for the teardown of its idle connections, and it's the
  * engine threads that run that work, so with one or two reactor threads
  * the thread that would do it is the one waiting and the destroy would
  * never return. Destroying another client from the write_fn of
- * chttpclient_do_streaming, which runs on the caller's thread, is an
+ * chttpcli_do_streaming, which runs on the caller's thread, is an
  * ordinary destroy.
  */
-void __chttpclient_destroy(chttpcli cli);
+void __chttpcli_destroy(chttpcli cli);
 
 /**
  * @brief The RAII cleanup helper, used with _ccol_destructor.
@@ -941,12 +941,12 @@ void __chttpclient_destroy(chttpcli cli);
  * Calling it on a *pp that is already CHTTPCLI_NULL is a safe no-op.
  * Calling it on a stale handle that isn't CHTTPCLI_NULL, one whose
  * client something else has already destroyed, is the same fatal misuse
- * that __chttpclient_destroy describes.
+ * that __chttpcli_destroy describes.
  */
-static inline __attribute__((always_inline)) void ___chttpclient_destroy(
+static inline __attribute__((always_inline)) void ___chttpcli_destroy(
     chttpcli *pp) {
   if (pp && *pp) {
-    __chttpclient_destroy(*pp);
+    __chttpcli_destroy(*pp);
     *pp = CHTTPCLI_NULL;
   }
 }
@@ -959,24 +959,24 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * macro waits for it instead of cutting it off. Do not run this macro at
  * the same time as ANOTHER DESTROY of the same handle; that misuse is a
  * fatal error and not a silent race, as the doc comment of
- * __chttpclient_destroy explains.
+ * __chttpcli_destroy explains.
  *
  * @note The macro evaluates cli exactly once, and it must be a modifiable
  * lvalue, such as a variable or an element of an array.
  */
-#define chttpclient_destroy(cli)  \
-  _ccol_chttpclient_destroy_impl( \
+#define chttpcli_destroy(cli)  \
+  _ccol_chttpcli_destroy_impl( \
       cli, _ccol_uniq(__ccol_chttpcli_destroy_slot, __COUNTER__))
 
-/* Internal. The body of chttpclient_destroy. slot is a name from
+/* Internal. The body of chttpcli_destroy. slot is a name from
  * _ccol_uniq(), which lets the macro nest inside the argument of another
  * destroy macro without a -Wshadow warning. The argument is evaluated
  * exactly once. */
-#define _ccol_chttpclient_destroy_impl(cli, slot) \
-  do {                                            \
-    __typeof__(cli) *slot = &(cli);               \
-    __chttpclient_destroy(*slot);                 \
-    *slot = CHTTPCLI_NULL;                        \
+#define _ccol_chttpcli_destroy_impl(cli, slot) \
+  do {                                         \
+    __typeof__(cli) *slot = &(cli);            \
+    __chttpcli_destroy(*slot);                 \
+    *slot = CHTTPCLI_NULL;                     \
   } while (0)
 
 /* ========================================================================== */
@@ -990,7 +990,7 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *  when the scope ends.
  */
 #define chttpcli_declare_scoped(name) \
-  chttpcli name _ccol_destructor(___chttpclient_destroy) = CHTTPCLI_NULL;
+  chttpcli name _ccol_destructor(___chttpcli_destroy) = CHTTPCLI_NULL;
 
 /**
  * @brief Declare and initialize an HTTP client, and call _ccol_fatal_err
@@ -999,21 +999,21 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * Example:
  * @code
  * chttpcli_construct(cli);
- * chttpclient_set_pool_size(cli, 4);
- * chttpclient_set_request_timeout(cli, 10000000); // 10 s
- * chttpcli_response *resp;
- * if (chttpclient_do(cli, req, &resp) == ccol_success) {
+ * chttpcli_set_pool_size(cli, 4);
+ * chttpcli_set_request_timeout(cli, 10000000); // 10 s
+ * chttpcli_response_t *resp;
+ * if (chttpcli_do(cli, req, &resp) == ccol_success) {
  *   // ... use resp ...
- *   chttpclient_resp_free(resp);
+ *   chttpcli_resp_free(resp);
  * }
- * chttpclient_destroy(cli);
+ * chttpcli_destroy(cli);
  * @endcode
  */
 #define chttpcli_construct(name)                                \
   chttpcli name = CHTTPCLI_NULL;                                \
   do {                                                          \
     char *_clic_err = NULL;                                     \
-    (name) = chttpclient_create(&_clic_err);                    \
+    (name) = chttpcli_create(&_clic_err);                       \
     if (!(name)) {                                              \
       _ccol_fatal_err("chttpcli_construct('%s'): %s", #name,    \
                       _clic_err ? _clic_err : "unknown error"); \
@@ -1025,15 +1025,15 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *        on its own when the scope ends, and call _ccol_fatal_err if the
  *        creation fails.
  */
-#define chttpcli_construct_scoped(name)                                   \
-  chttpcli name _ccol_destructor(___chttpclient_destroy) = CHTTPCLI_NULL; \
-  do {                                                                    \
-    char *_clic_err = NULL;                                               \
-    (name) = chttpclient_create(&_clic_err);                              \
-    if (!(name)) {                                                        \
-      _ccol_fatal_err("chttpcli_construct_scoped('%s'): %s", #name,       \
-                      _clic_err ? _clic_err : "unknown error");           \
-    }                                                                     \
+#define chttpcli_construct_scoped(name)                                \
+  chttpcli name _ccol_destructor(___chttpcli_destroy) = CHTTPCLI_NULL; \
+  do {                                                                 \
+    char *_clic_err = NULL;                                            \
+    (name) = chttpcli_create(&_clic_err);                              \
+    if (!(name)) {                                                     \
+      _ccol_fatal_err("chttpcli_construct_scoped('%s'): %s", #name,    \
+                      _clic_err ? _clic_err : "unknown error");        \
+    }                                                                  \
   } while (0)
 
 /* ========================================================================== */
@@ -1045,10 +1045,10 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *
  * The function blocks until a pool slot is free, runs the request
  * synchronously and gives back a response on the heap, which the caller
- * owns and must free with chttpclient_resp_free when done. *resp_out is set
+ * owns and must free with chttpcli_resp_free when done. *resp_out is set
  * to NULL right away, before any other work, and it stays NULL on every
  * return that isn't a success. So you can always call
- * chttpclient_resp_free(resp) after this call, whatever ccol_retval_t it
+ * chttpcli_resp_free(resp) after this call, whatever ccol_retval_t it
  * returned, without initializing your own local pointer first.
  *
  * Redirects are followed automatically. The redirect codes are 301, 302,
@@ -1193,8 +1193,8 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * never reused. Because a reset throws away what the client hasn't read
  * yet, an answer is returned only if the client reads it before a reset
  * arrives. This function waits for
- * readability during every wait of the send, and chttpclient_do_async and
- * chttpclient_do_pooled look for an answer whenever a write would block,
+ * readability during every wait of the send, and chttpcli_do_async and
+ * chttpcli_do_pooled look for an answer whenever a write would block,
  * and after a write once 32 KiB or more have gone out since the last look.
  *
  * Every socket of the client is close-on-exec, so a process the
@@ -1282,15 +1282,15 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *             belong to another protocol.
  *         ccol_msg_too_large
  *             The response body went past the cap of
- *             chttpclient_set_max_response_body_size (see the doc comment
+ *             chttpcli_set_max_response_body_size (see the doc comment
  *             of that function). You only get this code once you have set
  *             that cap.
  *         ccol_unexpected_failure
  *             Any other internal failure that the codes above don't
  *             cover.
  */
-ccol_retval_t chttpclient_do(chttpcli cli, const chttp_request_t *req,
-                             chttpcli_response **resp_out);
+ccol_retval_t chttpcli_do(chttpcli cli, const chttp_request_t *req,
+                          chttpcli_response_t **resp_out);
 
 /**
  * @brief Do an HTTP request and stream the response body.
@@ -1307,52 +1307,52 @@ ccol_retval_t chttpclient_do(chttpcli cli, const chttp_request_t *req,
  * @param write_ctx       Passed to write_fn unchanged.
  * @param status_code_out Gets the HTTP status code after a successful
  *                        call. It can be NULL.
- * @return The same codes as chttpclient_do, with two differences. You
+ * @return The same codes as chttpcli_do, with two differences. You
  *         never get ccol_msg_too_large here, since
- *         chttpclient_set_max_response_body_size has no effect on this
+ *         chttpcli_set_max_response_body_size has no effect on this
  *         streaming path (see the doc comment of that function). And you
  *         get ccol_http_transfer_aborted when write_fn returns a value
  *         other than len, which aborts the transfer; that is the contract
- *         of chttpcli_write_fn, which covers a value above len as well as
+ *         of chttpcli_write_fn_t, which covers a value above len as well as
  *         one below it.
  */
-ccol_retval_t chttpclient_do_streaming(chttpcli cli, const chttp_request_t *req,
-                                       chttpcli_write_fn write_fn,
-                                       void *write_ctx, int *status_code_out);
+ccol_retval_t chttpcli_do_streaming(chttpcli cli, const chttp_request_t *req,
+                                    chttpcli_write_fn_t write_fn,
+                                    void *write_ctx, int *status_code_out);
 
 /* ========================================================================== */
 /*                         ASYNC API (TIER 2)                                 */
 /* ========================================================================== */
 
 /**
- * @brief The result of a request submitted with chttpclient_do_async or
- *        chttpclient_do_async_streaming.
+ * @brief The result of a request submitted with chttpcli_do_async or
+ *        chttpcli_do_async_streaming.
  *
- * rv holds the same result codes as chttpclient_do (see that function's
+ * rv holds the same result codes as chttpcli_do (see that function's
  * documentation), ccol_msg_too_large included when the response goes past
- * the cap of chttpclient_set_max_response_body_size. The one exception is
- * a request submitted with chttpclient_do_async_streaming, which is never
- * under that cap, exactly like chttpclient_do_streaming, so it never gives
+ * the cap of chttpcli_set_max_response_body_size. The one exception is
+ * a request submitted with chttpcli_do_async_streaming, which is never
+ * under that cap, exactly like chttpcli_do_streaming, so it never gives
  * ccol_msg_too_large. resp is not NULL only when rv == ccol_success. Free
- * resp with chttpclient_resp_free before you free this result, the same
- * order as for the resp_out of chttpclient_do. A request from
- * chttpclient_do_async_streaming also gets resp filled after a success, so
+ * resp with chttpcli_resp_free before you free this result, the same
+ * order as for the resp_out of chttpcli_do. A request from
+ * chttpcli_do_async_streaming also gets resp filled after a success, so
  * status_code reads the same way from a streaming and a non-streaming
  * result. But there resp->headers is always NULL and resp->body_len is
  * always 0, because the response headers are dropped instead of kept and
  * the write callback has already received the body as it arrived, with
  * nothing buffering it. That follows the convention of
- * chttpclient_do_streaming, where chttpcli_response.body is NULL on the
+ * chttpcli_do_streaming, where chttpcli_response_t.body is NULL on the
  * streaming path.
  *
- * You get this result with chttpclient_async_result_get, a thin typed
- * wrapper over ctpool_future_get, and you free it with
- * chttpclient_async_result_free before calling ctpool_future_free on the
+ * You get this result with chttpcli_async_result_get, a thin typed
+ * wrapper over cthrpool_future_get, and you free it with
+ * chttpcli_async_result_free before calling cthrpool_future_free on the
  * future itself.
  */
 typedef struct chttpcli_async_result {
   ccol_retval_t rv;
-  chttpcli_response *resp;
+  chttpcli_response_t *resp;
   ccol_memmgmt_procs_t *_m_procs;
 } chttpcli_async_result_t;
 
@@ -1362,13 +1362,13 @@ typedef struct chttpcli_async_result {
  * This function doesn't block. It puts the request in the queue of the
  * shared reactor engine of chttpclient and returns at once. The library
  * starts that engine the first time it's needed, and the engine is
- * independent of the synchronous connection work of chttpclient_do and of
+ * independent of the synchronous connection work of chttpcli_do and of
  * chttpserver's engine (see "Async engine" below). The whole request and
  * response cycle, every redirect hop included, runs on the engine's
  * threads.
  *
  * @param cli The client handle.
- * @param req The request to run. Unlike with chttpclient_do, req doesn't
+ * @param req The request to run. Unlike with chttpcli_do, req doesn't
  *            have to stay valid after this call returns, because the
  *            library copies or serializes everything it needs before
  *            returning.
@@ -1377,32 +1377,32 @@ typedef struct chttpcli_async_result {
  *         client that has been destroyed, for a malformed URL, for TLS
  *         that can't be used, when memory runs out, and when the engine
  *         fails to start. On success the caller owns the future and must
- *         call chttpclient_async_result_get, then
- *         chttpclient_async_result_free, and then exactly one
- *         ctpool_future_free.
+ *         call chttpcli_async_result_get, then
+ *         chttpcli_async_result_free, and then exactly one
+ *         cthrpool_future_free.
  *
  * ### Async engine
  *
- * The first call to chttpclient_do_async or
- * chttpclient_do_async_streaming anywhere in the process starts a small
+ * The first call to chttpcli_do_async or
+ * chttpcli_do_async_streaming anywhere in the process starts a small
  * shared pool of reactor threads sized to the CPU count, plus a companion
  * worker pool of the same size for name lookups, which block. A request to
  * an address literal or to a unix socket makes no lookup and never waits
  * for that pool, so lookups that hang don't delay such requests. If a
  * request's lookup outlives its connect or request timeout, the request
  * ends with ccol_timed_out at its deadline and the lookup goes on in the
- * background; until it returns, chttpclient_destroy of that client waits
+ * background; until it returns, chttpcli_destroy of that client waits
  * for it and the exit handler below counts it as a request in flight. The
  * same goes for a request whose deadline passes while the engine can't run
- * its work (see chttpclient_set_request_timeout). The engine is
+ * its work (see chttpcli_set_request_timeout). The engine is
  * refcounted: it stops on its own once no request is in flight and no
  * connection is left in the async idle pool of any chttpcli, and it starts
  * again on the next call without the caller doing anything. This engine
  * owns its own static reactor, fully separate from chttpserver's
  * independent reactor and from the synchronous connection work of
- * chttpclient_do. So one process can run chttpserver together with
- * chttpclient_do_async and chttpclient_do_async_streaming, and can mix
- * chttpclient_do with those two functions, without any limits, because the
+ * chttpcli_do. So one process can run chttpserver together with
+ * chttpcli_do_async and chttpcli_do_async_streaming, and can mix
+ * chttpcli_do with those two functions, without any limits, because the
  * two engines share no state at all.
  *
  * The engine's threads are stopped before the process exits. The library
@@ -1421,77 +1421,77 @@ typedef struct chttpcli_async_result {
  * write to a socket, TLS records and the close_notify of a TLS teardown
  * included, is a send(2) with MSG_NOSIGNAL.
  */
-ctpool_future *chttpclient_do_async(chttpcli cli, const chttp_request_t *req);
+cthrpool_future_t *chttpcli_do_async(chttpcli cli, const chttp_request_t *req);
 
 /**
  * @brief Submit an HTTP request for asynchronous execution, and stream the
  *        response body.
  *
- * The submit works as in chttpclient_do_async and doesn't block, but
+ * The submit works as in chttpcli_do_async and doesn't block, but
  * write_fn is called one or more times with chunks of the response body as
- * they come off the wire, as in chttpclient_do_streaming.
+ * they come off the wire, as in chttpcli_do_streaming.
  *
  * write_fn runs on one of the engine's reactor threads, NOT on the
  * caller's thread and NOT on a thread of its own for this request. Since
- * the callback of chttpclient_do_streaming runs on the caller's thread,
+ * the callback of chttpcli_do_streaming runs on the caller's thread,
  * this path comes with two hard rules. First, write_fn must not block: no
  * blocking I/O, no lock held for a long time, and no wait on the future of
  * another request, because blocking there stalls every other connection
  * that the engine multiplexes on that reactor thread. Second, write_fn
- * must not call chttpclient_do_async or chttpclient_do_async_streaming
+ * must not call chttpcli_do_async or chttpcli_do_async_streaming
  * again, and must not call anything that waits on the future of this same
  * request, directly or indirectly, whether for the same chttpcli or for
  * another chttpcli sharing the engine, because such a call can deadlock
  * against the reactor thread that runs write_fn.
  *
  * @param cli       The client handle.
- * @param req       The request to run; see chttpclient_do_async.
+ * @param req       The request to run; see chttpcli_do_async.
  * @param write_fn  The callback that gets each chunk. It must not be NULL.
  *                  If it returns a value other than len the transfer is
- *                  aborted, following the contract of chttpcli_write_fn
+ *                  aborted, following the contract of chttpcli_write_fn_t
  *                  (which covers a value above len as well as one below
  *                  it), and the future's result then holds
  *                  ccol_http_transfer_aborted.
  * @param write_ctx Passed to write_fn unchanged.
- * @return A future, or NULL in the same cases as chttpclient_do_async,
+ * @return A future, or NULL in the same cases as chttpcli_do_async,
  *         plus a NULL write_fn.
  */
-ctpool_future *chttpclient_do_async_streaming(chttpcli cli,
-                                              const chttp_request_t *req,
-                                              chttpcli_write_fn write_fn,
-                                              void *write_ctx);
+cthrpool_future_t *chttpcli_do_async_streaming(chttpcli cli,
+                                               const chttp_request_t *req,
+                                               chttpcli_write_fn_t write_fn,
+                                               void *write_ctx);
 
 /**
  * @brief Block until the future of an async request is fulfilled, then
  *        give its typed result.
  *
- * A thin wrapper over ctpool_future_get that casts its void* result to
- * chttpcli_async_result_t*. As in the contract of ctpool_future_get, it's
+ * A thin wrapper over cthrpool_future_get that casts its void* result to
+ * chttpcli_async_result_t*. As in the contract of cthrpool_future_get, it's
  * safe to call it more than once on the same future: every call after the
  * first gives the same result pointer, which the future owns until it is
  * freed.
  *
- * @param f The future from chttpclient_do_async or
- *          chttpclient_do_async_streaming.
+ * @param f The future from chttpcli_do_async or
+ *          chttpcli_do_async_streaming.
  * @return The result, or NULL if f is NULL or if the future was cancelled
  *         before it was fulfilled.
  */
-chttpcli_async_result_t *chttpclient_async_result_get(ctpool_future *f);
+chttpcli_async_result_t *chttpcli_async_result_get(cthrpool_future_t *f);
 
 /**
- * @brief Free a chttpcli_async_result_t that chttpclient_async_result_get
+ * @brief Free a chttpcli_async_result_t that chttpcli_async_result_get
  *        gave you.
  *
  * This function does NOT free result->resp, so if rv == ccol_success free
- * that first, on its own, with chttpclient_resp_free. It does NOT free the
- * future either; pair it with exactly one ctpool_future_free, called
+ * that first, on its own, with chttpcli_resp_free. It does NOT free the
+ * future either; pair it with exactly one cthrpool_future_free, called
  * separately before or after this call, in either order. The result keeps
  * its own copy of the client's allocator, which makes this call valid
- * before or after chttpclient_destroy of that client.
+ * before or after chttpcli_destroy of that client.
  *
  * @param result The result to free. NULL is a safe no-op.
  */
-void chttpclient_async_result_free(chttpcli_async_result_t *result);
+void chttpcli_async_result_free(chttpcli_async_result_t *result);
 
 /* ========================================================================== */
 /*                    POOLED-SYNC API (TIER 3)                                */
@@ -1501,42 +1501,42 @@ void chttpclient_async_result_free(chttpcli_async_result_t *result);
  * @brief Do an HTTP request on the shared Tier 2 engine and block until it
  *        finishes.
  *
- * A thin wrapper over chttpclient_do_async: it submits the request to the
+ * A thin wrapper over chttpcli_do_async: it submits the request to the
  * shared engine and blocks until the request is done. It gives the same
- * ccol_retval_t and the same resp_out call shape as chttpclient_do, but the
+ * ccol_retval_t and the same resp_out call shape as chttpcli_do, but the
  * connect, the write and the read run on the engine's reactor threads and
  * not on the caller's thread. So many callers across many chttpcli handles
  * share one small, fixed-size pool of reactor threads, while with
- * chttpclient_do every caller blocks its own OS thread for the whole
+ * chttpcli_do every caller blocks its own OS thread for the whole
  * request.
  *
  * @param cli      The client handle.
  * @param req      The request to run.
  * @param resp_out It must not be NULL. It is set to NULL at once and
  *                 gets the response on success, the same *resp_out
- *                 contract as in chttpclient_do.
- * @return The same result codes as chttpclient_do. A failed allocation,
+ *                 contract as in chttpcli_do.
+ * @return The same result codes as chttpcli_do. A failed allocation,
  *         whether before the request reaches the engine or while the
  *         engine runs it, gives ccol_not_enough_memory, and an engine that
  *         fails to start gives the code of that failure
  *         (ccol_not_enough_memory or ccol_unexpected_failure). A bad URL,
  *         a TLS failure, a connection failure, a transfer error, a timeout
  *         and too many redirects each give the same specific code as in
- *         chttpclient_do.
+ *         chttpcli_do.
  */
-ccol_retval_t chttpclient_do_pooled(chttpcli cli, const chttp_request_t *req,
-                                    chttpcli_response **resp_out);
+ccol_retval_t chttpcli_do_pooled(chttpcli cli, const chttp_request_t *req,
+                                 chttpcli_response_t **resp_out);
 
 /**
  * @brief Do an HTTP request on the shared Tier 2 engine, stream the
  *        response body, and block until the request finishes.
  *
- * A thin wrapper over chttpclient_do_async_streaming, with the call shape
- * of chttpclient_do_streaming. write_fn runs on one of the engine's
+ * A thin wrapper over chttpcli_do_async_streaming, with the call shape
+ * of chttpcli_do_streaming. write_fn runs on one of the engine's
  * reactor threads instead of the caller's thread, so the two rules in the
- * documentation of chttpclient_do_async_streaming apply: write_fn must not
+ * documentation of chttpcli_do_async_streaming apply: write_fn must not
  * block, and it must not call back into the engine. Which thread runs
- * write_fn is the only difference from chttpclient_do_streaming, whose
+ * write_fn is the only difference from chttpcli_do_streaming, whose
  * callback runs on the caller's thread.
  *
  * @param cli             The client handle.
@@ -1546,16 +1546,16 @@ ccol_retval_t chttpclient_do_pooled(chttpcli cli, const chttp_request_t *req,
  * @param write_ctx       Passed to write_fn unchanged.
  * @param status_code_out Gets the HTTP status code after a successful
  *                        call. It can be NULL.
- * @return The same codes as chttpclient_do_pooled, except that you never
+ * @return The same codes as chttpcli_do_pooled, except that you never
  *         get ccol_msg_too_large, because
- *         chttpclient_set_max_response_body_size has no effect on this
+ *         chttpcli_set_max_response_body_size has no effect on this
  *         streaming path (see the doc comment of that function).
  */
-ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
-                                              const chttp_request_t *req,
-                                              chttpcli_write_fn write_fn,
-                                              void *write_ctx,
-                                              int *status_code_out);
+ccol_retval_t chttpcli_do_pooled_streaming(chttpcli cli,
+                                           const chttp_request_t *req,
+                                           chttpcli_write_fn_t write_fn,
+                                           void *write_ctx,
+                                           int *status_code_out);
 
 /* ========================================================================== */
 /*                    DEFAULT CLIENT AND CONVENIENCE API */
@@ -1569,9 +1569,9 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
  * settings (pool_size is the CPU count, a 30 s connect timeout, a 60 s
  * inactivity timeout, no request timeout, TLS verification on),
  * and you can configure it by passing the handle from this function to a
- * chttpclient_set_* function.
+ * chttpcli_set_* function.
  *
- * Do NOT pass this handle to chttpclient_destroy. The module owns the
+ * Do NOT pass this handle to chttpcli_destroy. The module owns the
  * default client and destroys it on its own when the process exits, from a
  * handler that it registers with atexit(3) the first time it builds the
  * default client; calling this function from an exit handler that runs
@@ -1582,7 +1582,7 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
  * and fails for the rest of the process's life, because there is no way
  * to build the default client again after such a destroy. If you need a
  * client whose lifetime you bound and control yourself, make your own with
- * chttpclient_create or chttpclient_create_mp.
+ * chttpcli_create or chttpcli_create_mp.
  *
  * @return The handle of the default client, or CHTTPCLI_NULL if its
  *         initialization fails.
@@ -1592,10 +1592,10 @@ chttpcli chttp_default_client(void);
 /**
  * @brief Do a request with the default client.
  *
- * Same as chttpclient_do(chttp_default_client(), req, resp_out).
+ * Same as chttpcli_do(chttp_default_client(), req, resp_out).
  */
 ccol_retval_t chttp_do(const chttp_request_t *req,
-                       chttpcli_response **resp_out);
+                       chttpcli_response_t **resp_out);
 
 /**
  * @brief Run one request with the default client.
@@ -1612,7 +1612,7 @@ ccol_retval_t chttp_do(const chttp_request_t *req,
  *                  function borrows it for the duration of the call and
  *                  doesn't consume it.
  * @param resp_out  Gets the pointer to the response on success.
- * @return The same codes as chttpclient_do. The function gives
+ * @return The same codes as chttpcli_do. The function gives
  *         ccol_invalid_args for a method that names no HTTP method
  *         (CHTTP_ANY included) and for a body with NULL data and a
  *         non-zero len, since chttp_request_create refuses both, and
@@ -1621,7 +1621,7 @@ ccol_retval_t chttp_do(const chttp_request_t *req,
  */
 ccol_retval_t chttp_run_query(chttp_method_t method, const char *url,
                               const chttp_request_body_t *body, chmap headers,
-                              chttpcli_response **resp_out);
+                              chttpcli_response_t **resp_out);
 
 /**
  * @brief A GET request with the default client.
@@ -1629,14 +1629,14 @@ ccol_retval_t chttp_run_query(chttp_method_t method, const char *url,
  * @param url      The target URL.
  * @param resp_out Gets the pointer to the response after a successful
  *                 call.
- * @return The same codes as chttpclient_do: ccol_success,
+ * @return The same codes as chttpcli_do: ccol_success,
  *         ccol_invalid_args, ccol_not_enough_memory, ccol_timed_out and
  *         ccol_unexpected_failure, plus ccol_msg_too_large and
  *         ccol_not_permitted, and the ccol_http_ codes that handling the
  *         URL, a redirect or TLS can produce. The full list in
- *         chttpclient_do is the one that decides.
+ *         chttpcli_do is the one that decides.
  */
-ccol_retval_t chttp_get(const char *url, chttpcli_response **resp_out);
+ccol_retval_t chttp_get(const char *url, chttpcli_response_t **resp_out);
 
 /**
  * @brief A POST request with the default client.
@@ -1648,7 +1648,7 @@ ccol_retval_t chttp_get(const char *url, chttpcli_response **resp_out);
  * @return The same codes as chttp_run_query with CHTTP_POST.
  */
 ccol_retval_t chttp_post(const char *url, const chttp_request_body_t *body,
-                         chttpcli_response **resp_out);
+                         chttpcli_response_t **resp_out);
 
 /**
  * @brief A PUT request with the default client.
@@ -1656,14 +1656,14 @@ ccol_retval_t chttp_post(const char *url, const chttp_request_body_t *body,
  * @return The same codes as chttp_run_query with CHTTP_PUT.
  */
 ccol_retval_t chttp_put(const char *url, const chttp_request_body_t *body,
-                        chttpcli_response **resp_out);
+                        chttpcli_response_t **resp_out);
 
 /**
  * @brief A DELETE request with the default client.
  *
  * @return The same codes as chttp_run_query with CHTTP_DELETE.
  */
-ccol_retval_t chttp_delete(const char *url, chttpcli_response **resp_out);
+ccol_retval_t chttp_delete(const char *url, chttpcli_response_t **resp_out);
 
 /**
  * @brief A PATCH request with the default client.
@@ -1671,7 +1671,7 @@ ccol_retval_t chttp_delete(const char *url, chttpcli_response **resp_out);
  * @return The same codes as chttp_run_query with CHTTP_PATCH.
  */
 ccol_retval_t chttp_patch(const char *url, const chttp_request_body_t *body,
-                          chttpcli_response **resp_out);
+                          chttpcli_response_t **resp_out);
 
 /* ========================================================================== */
 /*                    RESPONSE API */
@@ -1685,17 +1685,17 @@ ccol_retval_t chttp_patch(const char *url, const chttp_request_body_t *body,
  * every occurrence in wire order joined with ", ". Set-Cookie isn't
  * combined, because RFC 9110 section 5.3 and RFC 6265 section 3 forbid it
  * (a cookie value can hold a comma), so for "set-cookie" you get the FIRST
- * occurrence; chttpclient_resp_header_count and chttpclient_resp_header_at
+ * occurrence; chttpcli_resp_header_count and chttpcli_resp_header_at
  * read every occurrence.
  *
  * @param resp  The response to query.
  * @param name  The header name, for example "Content-Type".
  * @return A pointer to the value string, or NULL if the header isn't
- *         there. The pointer stays valid until chttpclient_resp_free is
+ *         there. The pointer stays valid until chttpcli_resp_free is
  *         called.
  */
-const char *chttpclient_resp_header(const chttpcli_response *resp,
-                                    const char *name);
+const char *chttpcli_resp_header(const chttpcli_response_t *resp,
+                                 const char *name);
 
 /**
  * @brief Count the occurrences of a response header.
@@ -1709,8 +1709,8 @@ const char *chttpclient_resp_header(const chttpcli_response *resp,
  *         header isn't there, when resp or name is NULL, and for the
  *         response of a streaming request, which keeps no headers.
  */
-size_t chttpclient_resp_header_count(const chttpcli_response *resp,
-                                     const char *name);
+size_t chttpcli_resp_header_count(const chttpcli_response_t *resp,
+                                  const char *name);
 
 /**
  * @brief Get one occurrence of a response header.
@@ -1722,14 +1722,14 @@ size_t chttpclient_resp_header_count(const chttpcli_response *resp,
  * @param resp   The response to query.
  * @param name   The header name, for example "Set-Cookie".
  * @param index  Which occurrence, from 0 to
- *               chttpclient_resp_header_count(resp, name) - 1.
+ *               chttpcli_resp_header_count(resp, name) - 1.
  * @return A pointer to the value string, or NULL when index isn't below
  *         that count, when resp or name is NULL, and for the response of a
  *         streaming request. The pointer stays valid until
- *         chttpclient_resp_free is called.
+ *         chttpcli_resp_free is called.
  */
-const char *chttpclient_resp_header_at(const chttpcli_response *resp,
-                                       const char *name, size_t index);
+const char *chttpcli_resp_header_at(const chttpcli_response_t *resp,
+                                    const char *name, size_t index);
 
 /**
  * @brief Free a response and everything it owns.
@@ -1737,11 +1737,11 @@ const char *chttpclient_resp_header_at(const chttpcli_response *resp,
  * Calling it with NULL is safe.
  *
  * The response keeps its own copy of the allocator procs that you passed to
- * chttpclient_create_mp when you created the client, and it refers neither
+ * chttpcli_create_mp when you created the client, and it refers neither
  * to the client nor to the client's copy, so this call is valid before or
- * after chttpclient_destroy of that client. The functions that the procs
+ * after chttpcli_destroy of that client. The functions that the procs
  * name must stay callable, as for any allocation they made.
  */
-void chttpclient_resp_free(chttpcli_response *resp);
+void chttpcli_resp_free(chttpcli_response_t *resp);
 
 #pragma GCC visibility pop

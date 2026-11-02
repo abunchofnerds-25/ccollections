@@ -62,7 +62,7 @@ SOFTWARE.
  * header would fail a build with -Wredundant-decls -Werror. */
 struct cvector;
 struct chashmap;
-struct cbinarymap;
+struct cbstmap;
 
 /**
  * @brief Create an iterator positioned at the first element.
@@ -84,7 +84,7 @@ struct cbinarymap;
  * @note Changing the vector during the iteration invalidates the iterator.
  * @note A NULL v is treated like an empty vector: you get NULL, not an
  * error. This is on purpose and it's the same NULL tolerance that
- * chashmap_begin_iter() and cbmap_begin_iter() have. A container field can
+ * chashmap_begin_iter() and cbstmap_begin_iter() have. A container field can
  * stay uninitialized because nothing was ever inserted into it, and the
  * caller can iterate such a field directly without a NULL guard of its own.
  *
@@ -155,7 +155,7 @@ cmap_iterator *chashmap_begin_iter(struct chashmap *chm, char **err);
  * @see ccol_iter_next
  * @see ccol_iter_destroy
  */
-cmap_iterator *cbmap_begin_iter(struct cbinarymap *cbm, char **err);
+cmap_iterator *cbstmap_begin_iter(struct cbstmap *cbm, char **err);
 
 /* ========================================================================== */
 /*                    UNIFIED ITERATOR API                                    */
@@ -359,7 +359,7 @@ static inline __attribute__((always_inline)) cmap_iterator *__ccol_chmap_begin(
 }
 static inline __attribute__((always_inline)) cmap_iterator *__ccol_cbmap_begin(
     void *v, char **err) {
-  return cbmap_begin_iter((struct cbinarymap *)v, err);
+  return cbstmap_begin_iter((struct cbstmap *)v, err);
 }
 
 /**
@@ -381,17 +381,17 @@ static inline __attribute__((always_inline)) cmap_iterator *__ccol_cbmap_begin(
 /* There's no default association on purpose: a handle of any other type is
  * a compile error, never a call into some other container's begin
  * function. */
-#define ccol_begin(container)                                              \
-  ({                                                                       \
-    char *_ccol_err = NULL;                                                \
-    cmap_iterator *_ccol_it = _Generic((container),                        \
-        struct cvector *: __ccol_cvec_begin,                               \
-        struct chashmap *: __ccol_chmap_begin,                             \
-        struct cbinarymap *: __ccol_cbmap_begin)((container), &_ccol_err); \
-    if (!_ccol_it && _ccol_err) {                                          \
-      _ccol_fatal_err("ccol_begin('%s'): %s", #container, _ccol_err);      \
-    }                                                                      \
-    _ccol_it;                                                              \
+#define ccol_begin(container)                                           \
+  ({                                                                    \
+    char *_ccol_err = NULL;                                             \
+    cmap_iterator *_ccol_it = _Generic((container),                     \
+        struct cvector *: __ccol_cvec_begin,                            \
+        struct chashmap *: __ccol_chmap_begin,                          \
+        struct cbstmap *: __ccol_cbmap_begin)((container), &_ccol_err); \
+    if (!_ccol_it && _ccol_err) {                                       \
+      _ccol_fatal_err("ccol_begin('%s'): %s", #container, _ccol_err);   \
+    }                                                                   \
+    _ccol_it;                                                           \
   })
 
 /**

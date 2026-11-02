@@ -1,0 +1,37 @@
+.TH CEVENTLOOP_DECLARE 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ceventloop_declare \- declare an uninitialised ceventloop variable
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ceventloop_declare(name);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to `ceventloop name` and leaves the variable
+uninitialised, so you must assign it with ceventloop_construct()
+or a ceventloop_create*() call before you use it.
+
+It is there so that the names match the other c_collections modules,
+in the same way as cthrpool_declare().
+.fi
+.SH PARAMETERS
+.nf
+name  Variable name to declare.
+.fi
+.SH EXAMPLES
+.nf
+ceventloop_declare(loop);
+char *err = NULL;
+loop = ceventloop_create(32, 1, 1, &err);
+if (!loop) { fprintf(stderr, "%s\en", err); exit(1); }
+/* ... register selectables ... */
+ceventloop_destroy(loop);
+.fi
+.SH "SEE ALSO"
+.BR ceventloop_declare_scoped (3),
+.BR ceventloop_construct (3),
+.BR ceventloop_create (3)

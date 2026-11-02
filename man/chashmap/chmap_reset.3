@@ -1,40 +1,30 @@
-.TH CHMAP_RESET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHMAP_RESET 3 "2026-10-31" "c_collections" "C Collections Library - Macros"
 .SH NAME
-chmap_reset \- clear all elements from the hash map
+chmap_reset \- clear all entries from a hash map (type-inferred wrapper)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/chashmap.h>
 
-ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
+chmap_reset(chm, new_bucket_array_size);
 .fi
 .SH DESCRIPTION
 .nf
-Removes every key-value pair from the hash map, destroys all internal
-data and, if asked, resizes the bucket/slot array. The map is usable
-after the reset whether the resize succeeded or not.
+Type-inferred wrapper for chashmap_reset(). It takes the same arguments
+and gives the same result; chashmap_reset(3) has the full contract.
 .fi
 .SH PARAMETERS
 .nf
 chm                      Hash map to reset
-new_bucket_array_size    New bucket count (0 = keep current size;
-                         values < 16 are raised to 16; otherwise
-                         rounded up to the next power of two)
+new_bucket_array_size    Number of buckets after the reset; see
+                         chashmap_reset(3)
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success           - Every element was cleared (and the resize, if
-                         asked for, succeeded)
-ccol_not_enough_memory - The resize failed, but the elements are cleared
-                         anyway
-.fi
-.SH NOTES
-.nf
-O(n) complexity, where n is the number of elements
-Every element is destroyed whatever the return value is
-Asserts if chm is NULL
+The code chashmap_reset(3) gives: ccol_success, or
+ccol_not_enough_memory when the resize failed and the entries are
+cleared anyway.
 .fi
 .SH "SEE ALSO"
-.BR chmap_destroy (3),
-.BR chmap_delete_elem (3)
+.BR chashmap_reset (3)

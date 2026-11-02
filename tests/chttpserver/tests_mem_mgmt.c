@@ -81,7 +81,8 @@ static void *_counting_realloc(void *ptr, size_t size) {
   return realloc(ptr, size);
 }
 
-static void _hello_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _hello_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                           void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_write_str(resp, "Hello, mem-mgmt!");
@@ -94,7 +95,7 @@ static void _teardown(void) {
     g_srv = CHTTPSVR_NULL;
   }
   /* __chttpsvr_destroy releases this server's shared-engine reference, but it
-   * hands the teardown of the shared ccol_event_loop reactor to a joinable
+   * hands the teardown of the shared ceventloop reactor to a joinable
    * reaper thread instead of joining that thread inline. chttpsvr_engine_wait()
    * blocks until something joins that reaper thread, and this file needs that
    * so no reactor thread is still running when this atexit handler returns.
@@ -160,20 +161,20 @@ __attribute__((constructor)) static void _setup(void) {
   }
 
   /* Push one real request through the engine so that its internal allocations
-   * (the ccol_event_loop registration table, the dispatch state of each
+   * (the ceventloop registration table, the dispatch state of each
    * connection and so on) have really happened before any TEST() body reads the
    * counters. */
-  chttpcli cli = chttpclient_create(NULL);
+  chttpcli cli = chttpcli_create(NULL);
   if (cli) {
     chttp_request_t *req =
         chttp_request_create(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
     if (req) {
-      chttpcli_response *resp = NULL;
-      chttpclient_do(cli, req, &resp);
+      chttpcli_response_t *resp = NULL;
+      chttpcli_do(cli, req, &resp);
       chttp_request_free(req);
-      if (resp) chttpclient_resp_free(resp);
+      if (resp) chttpcli_resp_free(resp);
     }
-    chttpclient_destroy(cli);
+    chttpcli_destroy(cli);
   }
 
   /* We register the handler after chttpsvr_start purely out of habit. Nothing
@@ -191,12 +192,12 @@ __attribute__((constructor)) static void _setup(void) {
 TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
   /* _setup() installs counting procs before the first chttpsvr_start() and then
    * pushes a real request through the running engine. The library sends the
-   * internal allocations of the shared ccol_event_loop reactor (the registry's
+   * internal allocations of the shared ceventloop reactor (the registry's
    * chmaps, the dispatch state of each connection and so on) through the procs
    * this file configured, so the malloc, calloc and free counts are all
    * above zero by the time this test body runs.
    *
-   * We deliberately assert nothing about realloc, because ccol_event_loop has
+   * We deliberately assert nothing about realloc, because ceventloop has
    * no _ccol_mem_realloc call site at all. Its fd registry picks open
    * addressing, since the key type and the value type are both integral (see
    * should_use_open_addressing in chashmap.c), and the growth path of open
@@ -213,12 +214,12 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
              (size_t)0);
 
   /* g_mm_free_count has a single source: the server notices that _setup()'s
-   * client connection went away (chttpclient_destroy closes it) and frees its
+   * client connection went away (chttpcli_destroy closes it) and frees its
    * own chttpsvr_conn_t. The server's reactor must observe that event and
    * dispatch it asynchronously first, and nothing guarantees that this has
    * happened the instant _setup()'s constructor returns. So we retry with a
    * bound instead of checking once. The dispatch goes through the
-   * hand-off from the cthreadcomm poller to a ctpool worker, whose latency is
+   * hand-off from the cthreadcomm poller to a cthrpool worker, whose latency is
    * small but real, enough to make a bare immediate assertion here measurably
    * flaky. 150 attempts of 20ms make 3s in total, the same headroom other waits
    * of this codebase use where dispatch latency matters (the bounds of
@@ -358,10 +359,10 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   g_srv = new_srv;
   new_srv = CHTTPSVR_NULL; /* ownership went to g_srv, see above */
 
-  /* The shared ccol_event_loop reactor is a plain static variable.
-   * ccol_event_loop_destroy destroys it completely when the code above releases
+  /* The shared ceventloop reactor is a plain static variable.
+   * ceventloop_destroy destroys it completely when the code above releases
    * the last reference, and chttpsvr_start below builds it again from scratch
-   * with ccol_event_loop_create_mp. No pool recycles an allocation across a
+   * with ceventloop_create_mp. No pool recycles an allocation across a
    * restart, so a fresh malloc or calloc call through the procs this test just
    * installed again is guaranteed, not just likely. */
   REQUIRE_GT(__atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
@@ -369,14 +370,13 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
              malloc_calloc_before);
   REQUIRE_EQ(_chttpsvr_engine_num_reactor_threads_for_tests(), (size_t)3);
 
-  chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      chttpclient_create(NULL);
+  chttpcli cli _ccol_destructor(___chttpcli_destroy) = chttpcli_create(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_NULL);
   chttp_request_t *req =
       chttp_request_create(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
-  chttpcli_response *resp = NULL;
-  rv = chttpclient_do(cli, req, &resp);
+  chttpcli_response_t *resp = NULL;
+  rv = chttpcli_do(cli, req, &resp);
   chttp_request_free(req);
 
   /* Each check below on the contents of resp is captured into a local first,
@@ -388,7 +388,7 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   bool body_present = resp_present && resp->body != NULL;
   bool body_matches =
       body_present && strcmp(resp->body, "Hello, mem-mgmt!") == 0;
-  if (resp_present) chttpclient_resp_free(resp);
+  if (resp_present) chttpcli_resp_free(resp);
 
   REQUIRE_EQ((int)rv, (int)ccol_success);
   REQUIRE_TRUE(resp_present);

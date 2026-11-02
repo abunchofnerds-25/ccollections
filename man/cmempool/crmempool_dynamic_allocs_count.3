@@ -1,0 +1,40 @@
+.TH CRMEMPOOL_DYNAMIC_ALLOCS_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+crmempool_dynamic_allocs_count \- get number of dynamic allocations
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+size_t crmempool_dynamic_allocs_count(crmempool *rmp, size_t size);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the number of heap entries for the given size. Which entries
+that covers depends on the fallback policy.
+.fi
+.SH PARAMETERS
+.nf
+rmp   Ranged memory pool to query
+size  Size in bytes to query
+.fi
+.SH RETURN VALUE
+.nf
+Returns the number of dynamic entries
+Returns 0 when size is invalid, and 0 when the fallback is off
+.fi
+.SH NOTES
+.nf
+Returns 0 for crmempool_fallback_disabled
+With crmempool_fallback_at_first_exhaustion the dynamic entries are tracked
+for each pool separately
+With crmempool_fallback_at_last_exhaustion every dynamic entry is tracked
+together
+Returns 0 if the size is invalid, which means 0 or above largest_size
+Asserts if rmp is NULL
+Thread-safe if the pool was created with single_threaded=false
+.fi
+.SH "SEE ALSO"
+.BR crmempool_used_count (3),
+.BR crmempool_total_capacity (3)

@@ -2,9 +2,9 @@ INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = clrucache
 # cthreadpool.c comes in through cthreadcomm.c, because the dispatch_pool of
-# ccol_event_loop is a ctpool, which exists when num_reactor_threads > 1.
+# ceventloop is a cthrpool, which exists when num_reactor_threads > 1.
 # cvector.c is needed for two reasons: cthreadcomm.c links it for the
-# generation-tagged handle slot table of ccol_event_loop, and clrucache.c uses
+# generation-tagged handle slot table of ceventloop, and clrucache.c uses
 # it directly for its own slot table of the same shape. csort.c comes in
 # through cvector.c, which sorts with it.
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c \

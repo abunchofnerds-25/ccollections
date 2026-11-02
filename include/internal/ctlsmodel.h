@@ -40,7 +40,7 @@ SOFTWARE.
  * and FreeBSD's loader on x86-64 refuses them. For a library that programs
  * link rather than dlopen(), initial-exec is clearly the better default.
  *
- * CCOL_MEMPOOL_DYNAMIC_TLS picks the general model when it is 1 and
+ * CMEMPOOL_DYNAMIC_TLS picks the general model when it is 1 and
  * initial-exec when it is 0. A build that doesn't set it gets initial-exec
  * with glibc and on FreeBSD, and the general model everywhere else. Include
  * this file after a header of the C library, since that header is what
@@ -49,11 +49,11 @@ SOFTWARE.
 #ifndef CCOL_INTERNAL_CTLSMODEL_H
 #define CCOL_INTERNAL_CTLSMODEL_H
 
-#ifndef CCOL_MEMPOOL_DYNAMIC_TLS
+#ifndef CMEMPOOL_DYNAMIC_TLS
 #if defined(__GLIBC__) || defined(__FreeBSD__)
-#define CCOL_MEMPOOL_DYNAMIC_TLS 0
+#define CMEMPOOL_DYNAMIC_TLS 0
 #else
-#define CCOL_MEMPOOL_DYNAMIC_TLS 1
+#define CMEMPOOL_DYNAMIC_TLS 1
 #endif
 #endif
 

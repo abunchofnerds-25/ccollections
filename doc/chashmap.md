@@ -32,7 +32,7 @@ int main(void) {
     chmap_insert(ages, "alice", 32);          /* same key: updates the value */
 
     printf("alice is %d\n", chmap_get(ages, "alice"));
-    printf("%zu people\n", chmap_elem_count(ages));
+    printf("%zu people\n", chashmap_elem_count(ages));
 
     int *carol = chmap_get_ptr(ages, "carol"); /* NULL when the key is absent */
     printf("carol is %s\n", carol ? "known" : "unknown");
@@ -85,7 +85,7 @@ void handle_request(void) {
 | read a value you know is there | `chmap_get(m, key)` |
 | check for a key, or change its value in place | `chmap_get_ptr(m, key)` |
 | delete a key | `chmap_remove(m, key)` |
-| count the entries | `chmap_elem_count(m)` |
+| count the entries | `chashmap_elem_count(m)` |
 
 `chmap_insert` is an "upsert": a new key is added and a key that is already
 there gets its value replaced. `chmap_get` returns the value, but it stops
@@ -135,7 +135,7 @@ first.
 Every other pointer type is stored as the pointer itself. A map of `int` to
 `struct user *` keeps the addresses you gave it and never frees the objects
 behind them. Free them yourself before you destroy the map, or use
-`chmap_destroy_with_dtor`, which calls a destructor on each value (the
+`chashmap_destroy_with_dtor`, which calls a destructor on each value (the
 inventory example below does this). The precise rules are in
 [chashmap(7)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap.7.html).
 
@@ -330,7 +330,7 @@ layer described below for those.
 
 The stock is keyed by (warehouse, sku). That key struct has padding, so the
 map gets hash and equality functions that read each member. Each value is a
-pointer to a heap record that owns a string, and `chmap_destroy_with_dtor`
+pointer to a heap record that owns a string, and `chashmap_destroy_with_dtor`
 frees all the records when the map goes away.
 
 ```c
@@ -409,7 +409,7 @@ int main(void) {
                rec->description, rec->quantity);
     });
 
-    chmap_destroy_with_dtor(stock, record_free, NULL);
+    chashmap_destroy_with_dtor(stock, record_free, NULL);
     return 0;
 }
 ```
@@ -426,10 +426,10 @@ takes only a hash function.
 The macros stop the program on a hard error such as running out of memory.
 For most code that's the right default, but library code, a server or
 anything else that has to recover should use the raw layer instead. When
-`chmap_create` and its related functions fail they return `NULL` and an
+`chashmap_create` and its related functions fail they return `NULL` and an
 error string, and every element function returns a `ccol_retval_t`. Keys
 and values go to the raw layer as a `cmap_pair` (a pointer and a size), so
-it also takes binary keys of any length. `chmap_get_elem_ref` fills a
+it also takes binary keys of any length. `chashmap_get_elem_ref` fills a
 `cmap_pair` that you own with the location and the size of the stored
 value, and you can change the value bytes through its `ptr` until the next
 insert, delete or resize of the map.
@@ -453,7 +453,7 @@ int main(void) {
     const char line[] = "red,green,red,blue,green,red";
     char *err = NULL;
 
-    chmap seen = chmap_create(16, ccol_other_types, ccol_int, &err);
+    chmap seen = chashmap_create(16, ccol_other_types, ccol_int, &err);
     if (!seen) {
         fprintf(stderr, "cannot create map: %s\n", err);
         return 1;
@@ -466,7 +466,7 @@ int main(void) {
 
         cmap_pair key = {(void *)start, len};
         cmap_pair val;
-        ccol_retval_t rc = chmap_get_elem_ref(seen, &key, &val);
+        ccol_retval_t rc = chashmap_get_elem_ref(seen, &key, &val);
         if (rc == ccol_success) {
             int count;
             memcpy(&count, val.ptr, sizeof(count));
@@ -475,7 +475,7 @@ int main(void) {
         } else if (rc == ccol_key_not_found) {
             int one = 1;
             cmap_pair v = {&one, sizeof(one)};
-            rc = chmap_insert_elem(seen, &key, &v);
+            rc = chashmap_insert_elem(seen, &key, &v);
             if (rc != ccol_success) {
                 fprintf(stderr, "insert failed: %d\n", (int)rc);
                 break;
@@ -490,10 +490,10 @@ int main(void) {
         start = end + 1;
     }
 
-    printf("%zu distinct values\n", chmap_elem_count(seen));
+    printf("%zu distinct values\n", chashmap_elem_count(seen));
     cmap_pair red = {"red", 3};
     int n = 0;
-    if (chmap_get_elem_copy(seen, &red, &n, sizeof(n)) == ccol_success)
+    if (chashmap_get_elem_copy(seen, &red, &n, sizeof(n)) == ccol_success)
         printf("red appears %d times\n", n);
 
     chmap_destroy(seen);
@@ -516,7 +516,7 @@ The exception is a custom hash function. If your function returns the same
 value for two keys, those keys collide no matter what the map does, so for
 keys you don't trust use the built-in hash or a custom one that an attacker
 can't make collide. The mechanism is described in
-[chmap_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_create_full.3.html).
+[chashmap_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_create_full.3.html).
 
 ## Good to know
 
@@ -556,20 +556,23 @@ Element access (macros):
 [chmap_insert(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_insert.3.html),
 [chmap_get(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get.3.html),
 [chmap_get_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_ptr.3.html),
-[chmap_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_remove.3.html)
+[chmap_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_remove.3.html),
+[chmap_size(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_size.3.html),
+[chmap_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_reset.3.html)
 
 Raw functions:
-[chmap_create(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_create.3.html),
-[chmap_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_create_mp.3.html),
-[chmap_create_ch(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_create_ch.3.html),
-[chmap_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_create_full.3.html),
-[chmap_insert_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_insert_elem.3.html),
-[chmap_get_elem_ref(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_elem_ref.3.html),
-[chmap_get_elem_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_elem_copy.3.html),
-[chmap_delete_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_delete_elem.3.html),
-[chmap_elem_count(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_elem_count.3.html),
-[chmap_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_reset.3.html),
-[chmap_destroy_with_dtor(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_destroy_with_dtor.3.html),
+[chashmap_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_destroy.3.html),
+[chashmap_create(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_create.3.html),
+[chashmap_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_create_mp.3.html),
+[chashmap_create_ch(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_create_ch.3.html),
+[chashmap_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_create_full.3.html),
+[chashmap_insert_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_insert_elem.3.html),
+[chashmap_get_elem_ref(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_get_elem_ref.3.html),
+[chashmap_get_elem_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_get_elem_copy.3.html),
+[chashmap_delete_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_delete_elem.3.html),
+[chashmap_elem_count(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_elem_count.3.html),
+[chashmap_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_reset.3.html),
+[chashmap_destroy_with_dtor(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_destroy_with_dtor.3.html),
 [chashmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_begin_iter.3.html)
 
 Iteration:

@@ -9,7 +9,7 @@ C Collections (libccollections, \-lccollections)
 .fi
 .SH DESCRIPTION
 .nf
-A clru_cache holds up to a fixed number of key-value entries and
+A ccache holds up to a fixed number of key-value entries and
 evicts the least recently used entry to make room for a new one. A
 hash map gives it O(1) lookup and a linked list O(1) eviction. A cache
 can sit in front of a remote store: a remote getter fills a miss, and
@@ -17,22 +17,25 @@ a remote setter writes each set through to the store before the cache
 changes.
 
 The API has two layers:
-  - The type-inferred macros clru_construct(3), clru_init(3),
-    clru_get(3), clru_set(3) and clru_destroy(3) keep the key type and
+  - The type-inferred macros ccache_construct(3), ccache_init(3),
+    ccache_get(3), ccache_set(3) and ccache_destroy(3) keep the key type and
     the value type with the handle and convert each argument to them.
   - The raw functions clrucache_create_full(3), clrucache_get_full(3)
     and clrucache_set_full(3) take each key and each value as a
     cmap_pair and return a ccol_retval_t.
+ccache_destroy(3), ccache_size(3) and ccache_capacity(3) are the typed
+names of clrucache_destroy(3), clrucache_size(3) and
+clrucache_capacity(3).
 .fi
 .SS "Handles"
 .nf
-clru_cache is an opaque value handle, not a pointer, and
-CLRU_CACHE_NULL (0) means no cache. Every handle is checked before
+ccache is an opaque value handle, not a pointer, and
+CCACHE_NULL (0) means no cache. Every handle is checked before
 the cache is touched, so a get or a set through a handle that is
 invalid or already destroyed reports ccol_invalid_args, and a destroy
-of a stale handle stops the process. clru_destroy(3) evicts every
+of a stale handle stops the process. ccache_destroy(3) evicts every
 entry, calling the eviction callback for each one, and sets the handle
-to CLRU_CACHE_NULL.
+to CCACHE_NULL.
 .fi
 .SS "Segments and eviction"
 .nf
@@ -47,10 +50,10 @@ clrucache_create_full(3) has the details.
 .SS "Ownership"
 .nf
 The cache keeps its own copy of every key and value. A get never hands
-out a pointer into the cache: clru_get(3) copies the value into the
+out a pointer into the cache: ccache_get(3) copies the value into the
 caller's variable, and clrucache_get_full(3) gives a heap copy that
 the caller frees with the cache's allocator (free(3) when the cache
-has none). A char * value that clru_get(3) delivers is such a heap
+has none). A char * value that ccache_get(3) delivers is such a heap
 copy too.
 
 A remote getter allocates the value it fetches with the cache's
@@ -104,15 +107,15 @@ or a set that starts after the destroy reports ccol_invalid_args. Two
 destroys of one handle are a programming error.
 .fi
 .SH "SEE ALSO"
-.BR clru_declare (3),
-.BR clru_declare_scoped (3),
-.BR clru_init (3),
-.BR clru_construct (3),
-.BR clru_construct_scoped (3),
-.BR clru_redeclare (3),
-.BR clru_get (3),
-.BR clru_set (3),
-.BR clru_destroy (3),
+.BR ccache_declare (3),
+.BR ccache_declare_scoped (3),
+.BR ccache_init (3),
+.BR ccache_construct (3),
+.BR ccache_construct_scoped (3),
+.BR ccache_redeclare (3),
+.BR ccache_get (3),
+.BR ccache_set (3),
+.BR ccache_destroy (3),
 .BR clrucache_create_full (3),
 .BR clrucache_get_full (3),
 .BR clrucache_set_full (3),

@@ -309,14 +309,14 @@ static void _refusing_server_stop(refusing_server *s) {
    We wait for that stop, with a bound, so nothing of the engine is left at
    process exit. */
 static bool _wait_for_engine_stop(void) {
-  for (int i = 0; i < 10000 && _chttpclient_engine_ref_count_for_tests() > 0;
+  for (int i = 0; i < 10000 && _chttpcli_engine_ref_count_for_tests() > 0;
        ++i) {
     struct timespec ms = {0, 1000000L};
     nanosleep(&ms, NULL);
   }
-  if (_chttpclient_engine_ref_count_for_tests() > 0) return false;
-  _chttpclient_engine_wait_for_quiescence_for_tests();
-  return !_chttpclient_engine_running_for_tests();
+  if (_chttpcli_engine_ref_count_for_tests() > 0) return false;
+  _chttpcli_engine_wait_for_quiescence_for_tests();
+  return !_chttpcli_engine_running_for_tests();
 }
 
 #define SIGPIPE_TEST_BODY_LEN (64u * 1024u)
@@ -340,28 +340,27 @@ TEST(chttpcli_sigpipe, a_sync_write_to_a_refusing_server_raises_no_sigpipe) {
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
   refusing_server srv;
   bool server_up = _refusing_server_start(&srv, "sync", false);
-  chttpcli cli = chttpclient_create(NULL);
+  chttpcli cli = chttpcli_create(NULL);
   /* The refusing server takes one connection and its listener stays open
      until the end of the test, so a request it never accepted would wait for
      ever; the timeout makes that a failure. */
-  if (cli != CHTTPCLI_NULL)
-    (void)chttpclient_set_request_timeout(cli, 30000000);
+  if (cli != CHTTPCLI_NULL) (void)chttpcli_set_request_timeout(cli, 30000000);
   char *body = NULL;
   chttp_request_t *req = server_up ? _large_post(srv.url, &body) : NULL;
   if (req) req->expect_continue = true;
 
   sigset_t old;
   _block_sigpipe(&old);
-  chttpcli_response *resp = NULL;
+  chttpcli_response_t *resp = NULL;
   ccol_retval_t rv = ccol_unexpected_failure;
-  if (req && cli != CHTTPCLI_NULL) rv = chttpclient_do(cli, req, &resp);
+  if (req && cli != CHTTPCLI_NULL) rv = chttpcli_do(cli, req, &resp);
   bool raised = _take_pending_sigpipe();
   pthread_sigmask(SIG_SETMASK, &old, NULL);
 
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
   chttp_request_free(req);
   free(body);
-  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpcli_destroy(cli);
   _refusing_server_stop(&srv);
 
   REQUIRE_TRUE(server_up);
@@ -382,12 +381,11 @@ TEST(chttpcli_sigpipe,
   refusing_server srv, holder;
   bool server_up = _refusing_server_start(&srv, "async", false);
   bool holder_up = _refusing_server_start(&holder, "hold", true);
-  chttpcli cli = chttpclient_create(NULL);
+  chttpcli cli = chttpcli_create(NULL);
   /* The refusing server takes one connection and its listener stays open
      until the end of the test, so a request it never accepted would wait for
      ever; the timeout makes that a failure. */
-  if (cli != CHTTPCLI_NULL)
-    (void)chttpclient_set_request_timeout(cli, 30000000);
+  if (cli != CHTTPCLI_NULL) (void)chttpcli_set_request_timeout(cli, 30000000);
   char *body = NULL;
   chttp_request_t *req =
       server_up && holder_up ? _large_post(srv.url, &body) : NULL;
@@ -399,9 +397,9 @@ TEST(chttpcli_sigpipe,
      mask. */
   sigset_t old;
   _block_sigpipe(&old);
-  ctpool_future *hold_f = NULL;
+  cthrpool_future_t *hold_f = NULL;
   if (hold_req && cli != CHTTPCLI_NULL)
-    hold_f = chttpclient_do_async(cli, hold_req);
+    hold_f = chttpcli_do_async(cli, hold_req);
   bool default_after_engine_start = _sigpipe_has_default_disposition();
   for (int i = 0; hold_f && i < 10000 && !atomic_load(&holder.accepted); ++i) {
     struct timespec ms = {0, 1000000L};
@@ -409,29 +407,29 @@ TEST(chttpcli_sigpipe,
   }
   bool held = atomic_load(&holder.accepted) != 0;
 
-  ctpool_future *f = NULL;
-  if (held) f = chttpclient_do_async(cli, req);
+  cthrpool_future_t *f = NULL;
+  if (held) f = chttpcli_do_async(cli, req);
   ccol_retval_t rv = ccol_unexpected_failure;
   if (f) {
-    chttpcli_async_result_t *r = chttpclient_async_result_get(f);
+    chttpcli_async_result_t *r = chttpcli_async_result_get(f);
     if (r) {
       rv = r->rv;
-      chttpclient_resp_free(r->resp);
-      chttpclient_async_result_free(r);
+      chttpcli_resp_free(r->resp);
+      chttpcli_async_result_free(r);
     }
-    ctpool_future_free(f);
+    cthrpool_future_free(f);
   }
   int threads_seen = 0;
   bool raised = _any_thread_has_sigpipe_pending(&threads_seen);
 
   atomic_store(&holder.release, 1);
   if (hold_f) {
-    chttpcli_async_result_t *r = chttpclient_async_result_get(hold_f);
+    chttpcli_async_result_t *r = chttpcli_async_result_get(hold_f);
     if (r) {
-      chttpclient_resp_free(r->resp);
-      chttpclient_async_result_free(r);
+      chttpcli_resp_free(r->resp);
+      chttpcli_async_result_free(r);
     }
-    ctpool_future_free(hold_f);
+    cthrpool_future_free(hold_f);
   }
   bool main_raised = _take_pending_sigpipe();
   pthread_sigmask(SIG_SETMASK, &old, NULL);
@@ -439,7 +437,7 @@ TEST(chttpcli_sigpipe,
   chttp_request_free(hold_req);
   chttp_request_free(req);
   free(body);
-  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpcli_destroy(cli);
   _refusing_server_stop(&holder);
   _refusing_server_stop(&srv);
   bool engine_stopped = _wait_for_engine_stop();

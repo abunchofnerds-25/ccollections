@@ -207,7 +207,7 @@ TEST_F_TEARDOWN(engine_stop_fixture) {
 /*   chttpsvr_engine_wait();  // returns once a signal calls engine_stop()    */
 /*   chttpsvr_destroy(srv);                                                   */
 /* That state belongs to the whole process and the stop is forced: it tears   */
-/* down the one shared ccol_event_loop reactor that every chttpsvr instance   */
+/* down the one shared ceventloop reactor that every chttpsvr instance   */
 /* of the process depends on. So it can't share the long-lived g_srv, g_srv2  */
 /* and other handles of tests.c, whose servers stay started for that suite's  */
 /* whole run, and a force-stop of the shared engine in the middle of that     */
@@ -217,26 +217,27 @@ TEST_F_TEARDOWN(engine_stop_fixture) {
 /* a process to itself.                                                       */
 /* ========================================================================== */
 
-static void _hello_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _hello_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                           void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_write_str(resp, "Hello, engine-stop!");
 }
 
 static ccol_retval_t _get(const char *url, int *status_out) {
-  chttpcli cli = chttpclient_create(NULL);
+  chttpcli cli = chttpcli_create(NULL);
   if (!cli) return ccol_not_enough_memory;
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   if (!req) {
-    chttpclient_destroy(cli);
+    chttpcli_destroy(cli);
     return ccol_not_enough_memory;
   }
-  chttpcli_response *resp = NULL;
-  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttpcli_response_t *resp = NULL;
+  ccol_retval_t rv = chttpcli_do(cli, req, &resp);
   if (rv == ccol_success && resp) *status_out = resp->status_code;
-  if (resp) chttpclient_resp_free(resp);
+  if (resp) chttpcli_resp_free(resp);
   chttp_request_free(req);
-  chttpclient_destroy(cli);
+  chttpcli_destroy(cli);
   return rv;
 }
 
@@ -356,7 +357,8 @@ static pthread_cond_t g_slow_cv = PTHREAD_COND_INITIALIZER;
 static bool g_slow_go = false;
 static bool g_slow_entered = false;
 
-static void _slow_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _slow_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                          void *ctx) {
   (void)req;
   (void)ctx;
   pthread_mutex_lock(&g_slow_mtx);
@@ -711,10 +713,10 @@ TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
 /* registration, and there it can't see the server at all. Its quiesce pass   */
 /* then skips the server completely, and the reactor can be torn down while   */
 /* chttpsvr_start() is still using it a few lines further on, for example     */
-/* when it's about to call ccol_event_loop_add for the listener. That quiesce */
+/* when it's about to call ceventloop_add for the listener. That quiesce */
 /* pass also never touches the started, listen_reg and contributed_to_engine  */
 /* bookkeeping of such a server, so a later chttpsvr_stop() or                */
-/* chttpsvr_destroy() on it hands a stale reg to ccol_event_loop_remove(),    */
+/* chttpsvr_destroy() on it hands a stale reg to ceventloop_remove(),    */
 /* against a reactor that may already be torn down or gone.                   */
 /* _quiesce_server_once() therefore waits for every in-flight call on this    */
 /* exact server that _chttpsvr_resolve protects (this test's chttpsvr_start() */
@@ -842,7 +844,7 @@ TEST_F(engine_stop_fixture, force_stop_racing_a_concurrent_start_is_safe) {
   /* The real assertion is that neither of these crashes or hangs, which the
    * early registration and the wait in the quiesce pass above guarantee.
    * Without them the listen_reg of g_race_srv could point into a
-   * ccol_event_loop that was already destroyed by now, and chttpsvr_destroy()
+   * ceventloop that was already destroyed by now, and chttpsvr_destroy()
    * would be a use-after-free. */
   chttpsvr_destroy(g_race_srv);
 
@@ -1909,7 +1911,7 @@ TEST_F(engine_stop_fixture,
 /* chttpsvr_stop() RACING A CONCURRENT chttpsvr_start() ON THE SAME HANDLE    */
 /*                                                                            */
 /* A plain chttpsvr_stop() call takes raw->lifecycle off CHTTPSVR_LC_RUNNING  */
-/* BEFORE its own blocking ccol_event_loop_remove() and close() calls for the */
+/* BEFORE its own blocking ceventloop_remove() and close() calls for the */
 /* OLD listener registration return, not after them. chttpsvr_destroy() and   */
 /* chttpsvr_engine_stop() are different, because both go through              */
 /* _quiesce_server_once and its quiesce_state interlock, which the wait loop  */
@@ -1937,7 +1939,7 @@ static _Atomic bool g_stop_race_start_returned = false;
    chttpsvr_stop() itself has really returned, and the test below polls it, with
    a bound, before it ever calls chttpsvr_destroy() or chttpsvr_engine_wait() on
    g_stop_race_srv. If a hypothetical regression hangs chttpsvr_stop() itself,
-   for example inside its own ccol_event_loop_remove() or close() call, the flag
+   for example inside its own ceventloop_remove() or close() call, the flag
    reports that as a clean, bounded test failure, whereas without it those two
    later calls would risk a hang of their own. The whole file follows the same
    discipline (make sure the racing thread really returned before touching
@@ -1991,7 +1993,7 @@ TEST_F(engine_stop_fixture,
 
   /* Deterministic once stop_th_created is true: it returns only after
      _chttpsvr_stop_internal() has entered CHTTPSVR_LC_STOPPING and paused right
-     there, strictly before its own ccol_event_loop_remove() and close() calls,
+     there, strictly before its own ceventloop_remove() and close() calls,
      so the OLD listener's fd is still fully open and bound and no lucky timing
      is needed. _start_server() fails fast, with exit(1), when a chttpsvr_start
      call fails, so raw->lifecycle was already CHTTPSVR_LC_RUNNING by the time
@@ -2034,7 +2036,7 @@ TEST_F(engine_stop_fixture,
      reach it), then join every thread that was really created, no matter what,
      before any REQUIRE_* below runs; the opening comment of this test explains
      why that order is load-bearing. The release lets chttpsvr_stop() finish:
-     its ccol_event_loop_remove() and close() calls for the OLD listener really
+     its ceventloop_remove() and close() calls for the OLD listener really
      run and lifecycle leaves CHTTPSVR_LC_STOPPING, which lets the waiting
      chttpsvr_start() call, if there is one, go on. */
   _chttpsvr_release_stop_race_hook_for_tests();
@@ -2211,7 +2213,7 @@ TEST_F(
 
   /* Deterministic: it returns only after the reaper thread's
      _chttpsvr_stop_internal() call has entered CHTTPSVR_LC_STOPPING and paused
-     right there, strictly before its own ccol_event_loop_remove() and close()
+     right there, strictly before its own ceventloop_remove() and close()
      calls, so the OLD listener's fd is still fully open and bound.
      quiesce_state is already CHTTPSVR_QS_QUIESCING at that point, because
      _quiesce_server_once() sets it before it ever calls
@@ -2243,7 +2245,7 @@ TEST_F(
   }
 
   /* Release the hook so the reaper's _chttpsvr_stop_internal() call can finish:
-     its ccol_event_loop_remove() and close() calls for the OLD listener really
+     its ceventloop_remove() and close() calls for the OLD listener really
      run and lifecycle leaves CHTTPSVR_LC_STOPPING, which lets the waiting
      chttpsvr_start() call, if there is one, go on. That call then falls
      through, sees quiesce_state == CHTTPSVR_QS_QUIESCING and waits there
@@ -2420,7 +2422,7 @@ TEST_F(engine_stop_fixture,
 /*                                                                            */
 /* _engine_reaper_fn sets srv_engine_bundler.reactor to NULL only near its    */
 /* very end, well after _engine_force_stop_quiesce_all,                       */
-/* _idle_sweep_stop_if_running and ccol_event_loop_destroy have all run, and  */
+/* _idle_sweep_stop_if_running and ceventloop_destroy have all run, and  */
 /* those can take real wall-clock time. srv_engine_bundler.stopping, on the   */
 /* other hand, it sets to true at once, long before any of that finishes. So  */
 /* _engine_force_stop_now, the function that the signal-safe watcher thread   */
@@ -2433,7 +2435,7 @@ TEST_F(engine_stop_fixture,
 /* documented use from a signal handler: two SIGTERMs moments apart do it,    */
 /* and so does a defensive double call in an application's shutdown code. It  */
 /* then starts a SECOND reaper thread that grabs the very same, still live    */
-/* ccol_event_loop handle, and both reapers call ccol_event_loop_destroy() on */
+/* ceventloop handle, and both reapers call ceventloop_destroy() on */
 /* that handle independently. The documented contract of cthreadcomm.h makes  */
 /* that unconditionally fatal, with _ccol_fatal_err() and SIGABRT, both for a */
 /* double destroy where one call has already finished and for one where the   */
@@ -2468,7 +2470,7 @@ TEST_F(engine_stop_fixture,
 
   /* The second call, which lands right inside that window. Without the guard it
      would start a second reaper thread that goes on to call
-     ccol_event_loop_destroy() on the very handle the first reaper is still
+     ceventloop_destroy() on the very handle the first reaper is still
      going to use, and that's fatal. The !srv_engine_bundler.stopping guard of
      _engine_force_stop_now makes this call silently do nothing instead, as the
      documentation says: it dispatches nothing on the watcher thread and starts
@@ -2477,7 +2479,7 @@ TEST_F(engine_stop_fixture,
 
   /* Before the first reaper is released, give a second reaper thread, if
      anything ever started one, a moment to get to its own
-     ccol_event_loop_destroy() call. It's the same 150ms this binary uses
+     ceventloop_destroy() call. It's the same 150ms this binary uses
      elsewhere to let the other side get to the point where it blocks or
      crashes. */
   struct timespec settle = {0, 150000000L};
@@ -2490,7 +2492,7 @@ TEST_F(engine_stop_fixture,
 
   /* A regression here would take the whole process down well before this point,
      either synchronously above or through a second reaper's delayed
-     ccol_event_loop_destroy() call racing the first one's, so getting to this
+     ceventloop_destroy() call racing the first one's, so getting to this
      line at all is a meaningful part of the assertion. Then show that the
      engine came back up really clean, with no corrupt global state and no
      dangling, still registered server, by starting a fresh server on the same
@@ -3180,7 +3182,8 @@ TEST_F(engine_stop_fixture,
 /*          ENGINE STOP WITH CONNECTIONS THAT WAIT WITH NO THREAD             */
 /* ========================================================================== */
 
-static void _es_len_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _es_len_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                            void *ctx) {
   (void)ctx;
   size_t n = 0;
   chttpsvr_req_body(req, &n);
@@ -3188,7 +3191,7 @@ static void _es_len_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 }
 
 /* Reads the body until it fails or ends. */
-static void _es_drain_stream_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _es_drain_stream_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                      void *ctx) {
   (void)ctx;
   char buf[256];
@@ -3529,7 +3532,7 @@ TEST(engine_teardown, the_last_destroy_and_engine_wait_return_quickly) {
 static _Atomic bool g_s300_entered = false;
 static _Atomic bool g_s300_done = false;
 
-static void _slow_300ms_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _slow_300ms_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;

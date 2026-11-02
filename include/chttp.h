@@ -199,7 +199,7 @@ static inline const char *chttp_method_str(chttp_method_t m) {
  * chain that can't be checked. A bundle without a CRL checks no revocation.
  * The bundle is read when the configuration is applied, so a renewed CRL
  * takes effect at a server's next chttpsvr_start(), or a client's next
- * chttpclient_set_tls().
+ * chttpcli_set_tls().
  */
 typedef struct chttp_tls_config {
   const char *cert_path; /* server cert / client cert for mTLS (NULL = none) */
@@ -221,7 +221,7 @@ typedef struct chttp_tls_config {
    * combination looks like a partial measure and gives no protection at all.
    *
    * Setting this true together with ca_bundle_path contradicts itself, since
-   * the bundle is there to be verified against. chttpclient_set_tls()
+   * the bundle is there to be verified against. chttpcli_set_tls()
    * refuses that combination with ccol_invalid_args instead of quietly
    * picking one of the two. */
   bool insecure_skip_verify;

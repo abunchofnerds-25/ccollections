@@ -1,0 +1,53 @@
+.TH CHTTPCLI_DO_STREAMING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpcli_do_streaming \- do an HTTP request and stream the response body
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpclient.h>
+
+ccol_retval_t chttpcli_do_streaming(chttpcli cli,
+                                    const chttp_request_t *req,
+                                    chttpcli_write_fn_t write_fn,
+                                    void *write_ctx,
+                                    int *status_code_out);
+.fi
+.SH DESCRIPTION
+.nf
+This function works like chttpcli_do, but instead of buffering the
+response body it hands the body to write_fn in chunks as the data
+arrives. It allocates no chttpcli_response_t struct, and you get no
+access to the response headers this way.
+
+write_fn must return the number of bytes it consumed; any value other
+than len aborts the transfer with a failure. Calling
+chttpcli_destroy on cli from inside write_fn is a fatal error,
+because the destroy would wait for the very request that runs the
+callback; see chttpcli_destroy(3).
+.fi
+.SH PARAMETERS
+.nf
+cli             The client handle. It must not be CHTTPCLI_NULL.
+req             The request to run. It must not be NULL.
+write_fn        The callback that the client calls with each chunk of
+                the body. It must not be NULL.
+write_ctx       An opaque context pointer that the client passes to
+                write_fn unchanged.
+status_code_out Receives the HTTP status code when the call
+                succeeds. It can be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+The same codes as chttpcli_do, with two differences. This function
+never returns ccol_msg_too_large, because
+chttpcli_set_max_response_body_size has no effect on a streaming
+request: the caller's write_fn decides how much memory it uses. It also
+returns ccol_http_transfer_aborted when write_fn returns anything other
+than len, since any such value, above len or below it, aborts the
+transfer.
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_do (3),
+.BR chttpcli_do_async_streaming (3),
+.BR chttpcli_do_pooled_streaming (3)

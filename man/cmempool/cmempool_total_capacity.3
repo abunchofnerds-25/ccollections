@@ -1,0 +1,70 @@
+.TH CMEMPOOL_TOTAL_CAPACITY 3 "2026-09-17" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cmempool_total_capacity \- report the number of elements a pool holds
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+size_t cmempool_total_capacity(cmempool *mp);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the total number of pool-owned elements that mp holds, the ones
+in use and the free ones together. A dynamic fallback entry is not
+counted; cmempool_dynamic_allocs_count(3) reports those.
+.fi
+.SH PARAMETERS
+.nf
+mp                        Memory pool to query (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+Returns the number of elements that the pool holds
+.fi
+.SH NOTES
+.nf
+This is the elem_count that you gave to cmempool_create_mp(), or for a
+pool from cmempool_create_from_preallocated_buffer_mp() the element
+count that the library worked out from the buffer. It stays the same
+for the whole lifetime of the pool.
+
+A thread-safe pool that is large enough to keep a cache for each
+thread allocates extra elements above this count as a reserve, so that
+the advertised count stays available to any thread however many
+entries other threads keep in their caches. This call doesn't report
+the reserve, and the reserve doesn't change the pool's memory use at
+run time: cmempool_allocated_bytes(3) reports the whole block,
+reserve included, and that block is allocated once, when the pool is
+created.
+
+For such a pool the two ends of the count are not equally exact. A
+thread takes an entry from its own cache with no lock held, so there is
+no count to consult at that moment, and entries go into a cache before
+anybody knows whether they will be needed. That choice keeps the
+guarantee above: the pool never refuses a caller while another thread's
+cache holds entries that the first caller was entitled to. The price is
+that concurrent callers can hold a few entries more than this count for
+a short time, but never more than the physical slot count. A pool with
+no cache is exact in both directions. Every pool created with
+single_threaded = true is one, and so is every pool built by
+cmempool_create_from_preallocated_buffer_mp(3); in those an allocation
+past this count fails, or falls back to the system allocator.
+
+cmempool_create_mp(3) explains how the pool size affects performance.
+
+A NULL mp is a fatal error: the call prints a message and ends the
+process with abort(), in every build.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Thread-safe when the pool was created with single_threaded = false.
+The call takes the pool's lock, so it belongs on a cold path; don't
+use it inside a hot loop.
+.fi
+.SH "SEE ALSO"
+.BR cmempool_used_count (3),
+.BR cmempool_dynamic_allocs_count (3),
+.BR cmempool_allocated_bytes (3),
+.BR cmempool_create_mp (3)

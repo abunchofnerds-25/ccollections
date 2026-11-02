@@ -61,12 +61,12 @@ which end of the result carries the entropy.
 .SH NOTES
 .nf
 Stops the program through _ccol_fatal_err() if the creation fails
-Uses the default allocator and CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
+Uses the default allocator and CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
 buckets
 A float or double key is canonicalized before the procedure sees it, so
 a custom procedure never gets a raw -0.0
 A long double key is the one case where a custom procedure changes how
-keys are handled; chmap_create_full(3) says what such a procedure has to
+keys are handled; chashmap_create_full(3) says what such a procedure has to
 do
 The procedure must stay callable for the whole life of the map
 .fi
@@ -86,5 +86,5 @@ chmap_destroy(scores);
 .BR chmap_init_full (3),
 .BR chmap_declare (3),
 .BR chmap_construct_ch (3),
-.BR chmap_create_full (3),
+.BR chashmap_create_full (3),
 .BR chmap_destroy (3)

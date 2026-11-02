@@ -1,0 +1,50 @@
+.TH CRMEMPOOL_ALLOC_ENTRY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+crmempool_alloc_entry \- allocate an entry from the ranged pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+
+void *crmempool_alloc_entry(crmempool *rmp, size_t size);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates memory of the requested size from the best sub-pool. The size
+is rounded up to the nearest power-of-2 pool, and when that pool is
+empty the larger pools are tried, except under
+crmempool_fallback_at_first_exhaustion, where that pool takes the memory
+from the heap instead. What happens on exhaustion depends on the
+policy; see crmempool_create_mp(3).
+.fi
+.SH PARAMETERS
+.nf
+rmp   Ranged memory pool to allocate from
+size  Size in bytes to allocate. It must be > 0 and <= largest_size
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to the allocated entry on success
+Returns NULL on failure, which includes a size of 0 or above
+largest_size
+.fi
+.SH NOTES
+.nf
+O(1) in the common case, O(number_of_pools) in the worst case
+The memory that comes back is uninitialized; use
+crmempool_calloc_entry() for zeroed memory
+The pointer that comes back is aligned for any object type, as with
+malloc(), so any object that you can keep in heap memory can go into a
+pool entry
+The size is rounded up to the next power-of-2 pool size
+When the best pool is empty, larger and larger pools are tried, unless
+the policy is crmempool_fallback_at_first_exhaustion
+Thread-safe if the pool was created with single_threaded=false
+The caller must free the entry with crmempool_free_entry()
+It asserts if rmp is NULL
+.fi
+.SH "SEE ALSO"
+.BR crmempool_calloc_entry (3),
+.BR crmempool_realloc_entry (3),
+.BR crmempool_free_entry (3)

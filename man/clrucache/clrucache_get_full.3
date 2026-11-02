@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clrucache.h>
 
-ccol_retval_t clrucache_get_full(clru_cache cache,
+ccol_retval_t clrucache_get_full(ccache cache,
                                  const cmap_pair *key_pair,
                                  cmap_pair *val_out);
 .fi
@@ -36,7 +36,7 @@ fetched value is cached and a heap copy of it is written into val_out
 for every waiter. When the getter fails in an ordinary way, every
 waiter gets ccol_key_not_found. The fetched value can also be rejected
 because its size is wrong for the fixed-size buffer of a concurrent,
-coalesced clru_get() caller. Every waiter then gets
+coalesced ccache_get() caller. Every waiter then gets
 ccol_unexpected_failure, and so does this call when it is one of those
 waiters.
 
@@ -65,7 +65,7 @@ ccol_success           The function filled val_out. The caller owns
                        val_out->ptr.
 ccol_key_not_found     The key is absent and there is no getter, or
                        the getter failed.
-ccol_invalid_args      cache is CLRU_CACHE_NULL, or cache is a
+ccol_invalid_args      cache is CCACHE_NULL, or cache is a
                        stale handle that a call already destroyed, or
                        key_pair is NULL, or val_out is NULL, or
                        key_pair->size does not agree with the width of
@@ -90,7 +90,7 @@ cache is an opaque VALUE handle, which the library resolves through a
 slot table of its own before it touches the cache object behind it.
 The resolve takes a pin, and the call holds it for its whole duration,
 including any time spent blocked inside a remote getter callback, so
-a concurrent clru_destroy() on the same handle waits for this call to
+a concurrent ccache_destroy() on the same handle waits for this call to
 finish instead of freeing the cache under it.
 The val_out->ptr that comes back is allocated with the cache's custom
 allocator if the caller gave one at construction, and with the
@@ -103,6 +103,6 @@ such a pointer would dangle after an eviction.
 The average-case complexity of the hash map lookup is O(1).
 .fi
 .SH "SEE ALSO"
-.BR clru_get (3),
+.BR ccache_get (3),
 .BR clrucache_set_full (3),
 .BR clrucache_create_full (3)

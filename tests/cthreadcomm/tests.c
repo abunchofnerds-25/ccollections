@@ -127,15 +127,15 @@ TEST(ccol_deadline_remaining_ms_ceil, rounds_up_and_saturates) {
 TEST(circular_queues, create_fails) {
   char *err_str = NULL;
 
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(0, NULL, &err_str);
+  ccircq *cq = ccircq_create_mp(0, NULL, &err_str);
   REQUIRE_EQ((void *)cq, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 
-  cq = ccol_circular_queue_create_mp(-1, NULL, &err_str);
+  cq = ccircq_create_mp(-1, NULL, &err_str);
   REQUIRE_EQ((void *)cq, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 
-  cq = ccol_circular_queue_create_mp(
+  cq = ccircq_create_mp(
       (size_t)INT32_MAX,
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = free, .malloc = malloc, .realloc = NULL},
@@ -145,10 +145,10 @@ TEST(circular_queues, create_fails) {
 }
 
 /* verify_circular_queue_create_inputs guards against
- * max_size > SIZE_MAX / sizeof(c_message_t). Without that guard a max_size
+ * max_size > SIZE_MAX / sizeof(cmessage_t). Without that guard a max_size
  * in about [ccol_max_elem_count / 16, ccol_max_elem_count], the top part of
  * the documented valid range "1 to ccol_max_elem_count", is dangerous: for
- * such a max_size, max_size * sizeof(c_message_t) wraps around size_t, so
+ * such a max_size, max_size * sizeof(cmessage_t) wraps around size_t, so
  * the queue thinks it has room for max_size messages while the real
  * allocation of msg_array is tiny (for max_size == 2^60 it's exactly 0
  * bytes). The first send then corrupts the heap, which AddressSanitizer
@@ -161,14 +161,13 @@ TEST(circular_queues,
      create_rejects_max_size_that_would_overflow_the_backing_array_size) {
   char *err_str = NULL;
 
-  size_t smallest_overflowing = SIZE_MAX / sizeof(c_message_t) + 1;
+  size_t smallest_overflowing = SIZE_MAX / sizeof(cmessage_t) + 1;
   REQUIRE_LT(smallest_overflowing, ccol_max_elem_count);
-  ccol_circular_queue *cq =
-      ccol_circular_queue_create_mp(smallest_overflowing, NULL, &err_str);
+  ccircq *cq = ccircq_create_mp(smallest_overflowing, NULL, &err_str);
   REQUIRE_EQ((void *)cq, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 
-  /* The exact value that wraps max_size * sizeof(c_message_t) to exactly 0,
+  /* The exact value that wraps max_size * sizeof(cmessage_t) to exactly 0,
    * and without the guard the first send then corrupts the heap. It's well
    * inside ccol_max_elem_count, but it can only be built where size_t is
    * wider than 32 bits. With a 32-bit size_t (i386, for example)
@@ -184,42 +183,41 @@ TEST(circular_queues,
   size_t known_bad = (size_t)1 << 60;
   REQUIRE_LT(known_bad, ccol_max_elem_count);
   err_str = NULL;
-  cq = ccol_circular_queue_create_mp(known_bad, NULL, &err_str);
+  cq = ccircq_create_mp(known_bad, NULL, &err_str);
   REQUIRE_EQ((void *)cq, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 #endif
 }
 
 /* The create call should accept a large max_size when
- * max_size * sizeof(c_message_t) is a big allocation but nowhere near an
+ * max_size * sizeof(cmessage_t) is a big allocation but nowhere near an
  * overflow, so the overflow guard isn't too strict.
  * create_succeeds_with_large_elem_size in tests/cvector/tests.c is the
  * precedent for the same class of guard. */
 TEST(circular_queues, create_succeeds_with_large_non_overflowing_max_size) {
   char *err_str = NULL;
-  size_t large_max_size = 1024 * 1024; /* 16 MiB of c_message_t slots */
-  ccol_circular_queue *cq =
-      ccol_circular_queue_create_mp(large_max_size, NULL, &err_str);
+  size_t large_max_size = 1024 * 1024; /* 16 MiB of cmessage_t slots */
+  ccircq *cq = ccircq_create_mp(large_max_size, NULL, &err_str);
   REQUIRE_NE((void *)cq, NULL);
   REQUIRE_EQ((void *)err_str, NULL);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, create_and_destroy_no_mem_procs) {
   char *err_str = "";
 
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, &err_str);
+  ccircq *cq = ccircq_create_mp(1, NULL, &err_str);
   REQUIRE_NE((void *)cq, NULL);
   REQUIRE_EQ((void *)err_str, NULL);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
   REQUIRE_EQ((void *)cq, NULL);
 }
 
 TEST(circular_queues, create_and_destroy_with_mem_procs) {
   char *err_str = "";
 
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(
+  ccircq *cq = ccircq_create_mp(
       1,
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
@@ -227,22 +225,22 @@ TEST(circular_queues, create_and_destroy_with_mem_procs) {
   REQUIRE_NE((void *)cq, NULL);
   REQUIRE_EQ((void *)err_str, NULL);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
   REQUIRE_EQ((void *)cq, NULL);
 }
 
 TEST(circular_queues, basic_send_and_receive_no_mem_procs) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(1, NULL, NULL);
 
-  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m1.data))[0] = 'A';
   ((char *)(m1.data))[1] = '\0';
 
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m1), ccol_success);
+  REQUIRE_EQ(ccircq_send(cq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);  // The ownership of the message is lost.
 
-  c_message_t m2;
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &m2), ccol_success);
+  cmessage_t m2;
+  REQUIRE_EQ(ccircq_recv(cq, &m2), ccol_success);
 
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
@@ -250,25 +248,25 @@ TEST(circular_queues, basic_send_and_receive_no_mem_procs) {
   REQUIRE_EQ(m2.size, 16);
 
   free(m2.data);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, basic_send_and_receive_with_mem_procs) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(
+  ccircq *cq = ccircq_create_mp(
       1,
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
       NULL);
 
-  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m1.data))[0] = 'A';
   ((char *)(m1.data))[1] = '\0';
 
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m1), ccol_success);
+  REQUIRE_EQ(ccircq_send(cq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);  // The ownership of the message is lost.
 
-  c_message_t m2;
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &m2), ccol_success);
+  cmessage_t m2;
+  REQUIRE_EQ(ccircq_recv(cq, &m2), ccol_success);
 
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
@@ -276,78 +274,78 @@ TEST(circular_queues, basic_send_and_receive_with_mem_procs) {
   REQUIRE_EQ(m2.size, 16);
 
   free(m2.data);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, msg_count) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(3, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(3, NULL, NULL);
 
-  c_message_t m1 = {.data = NULL, .size = 0};
+  cmessage_t m1 = {.data = NULL, .size = 0};
 
   for (size_t i = 0; i < 3; ++i) {
-    REQUIRE_EQ(ccol_circq_msg_count(cq), i);
-    ccol_circq_send_zc(cq, &m1);
-    REQUIRE_EQ(ccol_circq_msg_count(cq), i + 1);
+    REQUIRE_EQ(ccircq_msg_count(cq), i);
+    ccircq_send(cq, &m1);
+    REQUIRE_EQ(ccircq_msg_count(cq), i + 1);
   }
 
   for (size_t i = 3; i > 0; --i) {
-    REQUIRE_EQ(ccol_circq_msg_count(cq), i);
-    ccol_circq_recv_zc(cq, &m1);
-    REQUIRE_EQ(ccol_circq_msg_count(cq), i - 1);
+    REQUIRE_EQ(ccircq_msg_count(cq), i);
+    ccircq_recv(cq, &m1);
+    REQUIRE_EQ(ccircq_msg_count(cq), i - 1);
   }
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, basic_send_and_receive_NULL_msg) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(3, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(3, NULL, NULL);
 
-  c_message_t m1 = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m1), ccol_success);
+  cmessage_t m1 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_send(cq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
   m1.data = malloc(sizeof(char));
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m1), ccol_invalid_args);
+  REQUIRE_EQ(ccircq_send(cq, &m1), ccol_invalid_args);
   REQUIRE_NE(m1.data, NULL);
   free(m1.data);
   m1.data = NULL;
 
-  c_message_t m2 = {.data = (void *)0xabcdef01, .size = 0x35};
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &m2), ccol_success);
+  cmessage_t m2 = {.data = (void *)0xabcdef01, .size = 0x35};
+  REQUIRE_EQ(ccircq_recv(cq, &m2), ccol_success);
   REQUIRE_EQ(m2.data, NULL);
   REQUIRE_EQ(m2.size, 0);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, try_send_and_try_receive) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(1, NULL, NULL);
 
-  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m1.data))[0] = 'A';
   ((char *)(m1.data))[1] = '\0';
 
-  REQUIRE_EQ(ccol_circq_try_send_zc(cq, &m1), ccol_success);
+  REQUIRE_EQ(ccircq_try_send(cq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
   m1.data = malloc(sizeof(char));
   m1.size = 1;
-  REQUIRE_EQ(ccol_circq_try_send_zc(cq, &m1), ccol_container_full);
+  REQUIRE_EQ(ccircq_try_send(cq, &m1), ccol_container_full);
   REQUIRE_NE(m1.data, NULL);
   free(m1.data);
   m1.data = NULL;
 
-  c_message_t m2 = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(cq, &m2), ccol_success);
+  cmessage_t m2 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(cq, &m2), ccol_success);
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
-  REQUIRE_EQ(ccol_circq_try_recv_zc(cq, &m1), ccol_container_empty);
+  REQUIRE_EQ(ccircq_try_recv(cq, &m1), ccol_container_empty);
   REQUIRE_EQ(m1.data, NULL);
 
   free(m2.data);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 /* Elapsed times come from CLOCK_MONOTONIC, the clock every timed call of
@@ -382,9 +380,9 @@ static void mono_poll_pause(void) {
 #define EVL_WAIT_MS 10000
 
 TEST(circular_queues, timed_send_and_timed_receive) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(1, NULL, NULL);
 
-  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m1.data))[0] = 'A';
   ((char *)(m1.data))[1] = '\0';
 
@@ -394,7 +392,7 @@ TEST(circular_queues, timed_send_and_timed_receive) {
   struct timespec after;
 
   getMonoTime(before);
-  REQUIRE_EQ(ccol_circq_timed_send_zc(cq, &m1, timeout), ccol_success);
+  REQUIRE_EQ(ccircq_timed_send(cq, &m1, timeout), ccol_success);
   getMonoTime(after);
   /* The call doesn't wait. The bound is loose for a loaded or emulated
    * machine, and a call that waits for the timeout fails the result check. */
@@ -404,17 +402,17 @@ TEST(circular_queues, timed_send_and_timed_receive) {
   m1.data = malloc(sizeof(char));
   m1.size = 1;
   getMonoTime(before);
-  REQUIRE_EQ(ccol_circq_timed_send_zc(cq, &m1, timeout), ccol_timed_out);
+  REQUIRE_EQ(ccircq_timed_send(cq, &m1, timeout), ccol_timed_out);
   getMonoTime(after);
   REQUIRE_GE(diffTimeUSec(before, after), 100000);
   REQUIRE_NE(m1.data, NULL);
   free(m1.data);
   m1.data = NULL;
 
-  c_message_t m2 = {.data = NULL, .size = 0};
+  cmessage_t m2 = {.data = NULL, .size = 0};
 
   getMonoTime(before);
-  REQUIRE_EQ(ccol_circq_timed_recv_zc(cq, &m2, timeout), ccol_success);
+  REQUIRE_EQ(ccircq_timed_recv(cq, &m2, timeout), ccol_success);
   getMonoTime(after);
   /* The call doesn't wait. The bound is loose for a loaded or emulated
    * machine, and a call that waits for the timeout fails the result check. */
@@ -424,72 +422,72 @@ TEST(circular_queues, timed_send_and_timed_receive) {
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
   getMonoTime(before);
-  REQUIRE_EQ(ccol_circq_timed_recv_zc(cq, &m1, timeout), ccol_timed_out);
+  REQUIRE_EQ(ccircq_timed_recv(cq, &m1, timeout), ccol_timed_out);
   getMonoTime(after);
   REQUIRE_GE(diffTimeUSec(before, after), 100000);
   REQUIRE_EQ(m1.data, NULL);
 
   free(m2.data);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, enable_disable_sending) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(1, NULL, NULL);
 
-  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m1.data))[0] = 'A';
   ((char *)(m1.data))[1] = '\0';
 
-  ccol_circq_disable_sending(cq);
+  ccircq_disable_sending(cq);
 
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m1), ccol_not_permitted);
+  REQUIRE_EQ(ccircq_send(cq, &m1), ccol_not_permitted);
   REQUIRE_NE(m1.data, NULL);
 
-  REQUIRE_EQ(ccol_circq_try_send_zc(cq, &m1), ccol_not_permitted);
+  REQUIRE_EQ(ccircq_try_send(cq, &m1), ccol_not_permitted);
   REQUIRE_NE(m1.data, NULL);
 
-  REQUIRE_EQ(ccol_circq_timed_send_zc(cq, &m1, 1000000), ccol_not_permitted);
+  REQUIRE_EQ(ccircq_timed_send(cq, &m1, 1000000), ccol_not_permitted);
   REQUIRE_NE(m1.data, NULL);
 
   /* A timeout of 0 is the try variant and reports the same refusal. */
-  REQUIRE_EQ(ccol_circq_timed_send_zc(cq, &m1, 0), ccol_not_permitted);
+  REQUIRE_EQ(ccircq_timed_send(cq, &m1, 0), ccol_not_permitted);
   REQUIRE_NE(m1.data, NULL);
 
-  ccol_circq_enable_sending(cq);
+  ccircq_enable_sending(cq);
 
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m1), ccol_success);
+  REQUIRE_EQ(ccircq_send(cq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
-  c_message_t m2 = {.data = NULL, .size = 0};
+  cmessage_t m2 = {.data = NULL, .size = 0};
 
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &m2), ccol_success);
+  REQUIRE_EQ(ccircq_recv(cq, &m2), ccol_success);
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
   free(m2.data);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, ring_wrap_around) {
   // The capacity is 2, so five sends and five receives make the head and
   // tail indices wrap around the ring boundary more than once.
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(2, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(2, NULL, NULL);
 
   for (int i = 0; i < 5; ++i) {
     char *buf = malloc(sizeof(char));
     *buf = 'A' + i;
-    c_message_t out = {.data = buf, .size = 1};
-    REQUIRE_EQ(ccol_circq_send_zc(cq, &out), ccol_success);
+    cmessage_t out = {.data = buf, .size = 1};
+    REQUIRE_EQ(ccircq_send(cq, &out), ccol_success);
     REQUIRE_EQ(out.data, NULL);
 
-    c_message_t in = {.data = NULL, .size = 0};
-    REQUIRE_EQ(ccol_circq_recv_zc(cq, &in), ccol_success);
+    cmessage_t in = {.data = NULL, .size = 0};
+    REQUIRE_EQ(ccircq_recv(cq, &in), ccol_success);
     REQUIRE_EQ(*(char *)in.data, 'A' + i);
     free(in.data);
   }
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 /* A timeout of 0 doesn't wait, so each timed call answers exactly what its
@@ -497,26 +495,26 @@ TEST(circular_queues, ring_wrap_around) {
  * ccol_timed_out. A timed call that builds a deadline of "now" for a 0 and
  * waits on it returns ccol_timed_out, so it fails here. */
 TEST(circular_queues, timed_calls_with_a_zero_timeout_are_the_try_variants) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(1, NULL, NULL);
 
   struct timespec before, after;
   getMonoTime(before);
-  c_message_t recv_m = {.data = NULL, .size = 0};
-  ccol_retval_t empty_rv = ccol_circq_timed_recv_zc(cq, &recv_m, 0);
+  cmessage_t recv_m = {.data = NULL, .size = 0};
+  ccol_retval_t empty_rv = ccircq_timed_recv(cq, &recv_m, 0);
 
-  c_message_t m = {.data = malloc(sizeof(char)), .size = 1};
-  ccol_retval_t first_rv = ccol_circq_timed_send_zc(cq, &m, 0);
-  c_message_t m2 = {.data = malloc(sizeof(char)), .size = 1};
-  ccol_retval_t full_rv = ccol_circq_timed_send_zc(cq, &m2, 0);
+  cmessage_t m = {.data = malloc(sizeof(char)), .size = 1};
+  ccol_retval_t first_rv = ccircq_timed_send(cq, &m, 0);
+  cmessage_t m2 = {.data = malloc(sizeof(char)), .size = 1};
+  ccol_retval_t full_rv = ccircq_timed_send(cq, &m2, 0);
   void *kept = m2.data;
   getMonoTime(after);
 
-  c_message_t got = {.data = NULL, .size = 0};
-  ccol_retval_t got_rv = ccol_circq_timed_recv_zc(cq, &got, 0);
+  cmessage_t got = {.data = NULL, .size = 0};
+  ccol_retval_t got_rv = ccircq_timed_recv(cq, &got, 0);
   free(got.data);
   free(m2.data);
-  ccol_retval_t null_rv = ccol_circq_timed_recv_zc(NULL, &got, 0);
-  ccol_circular_queue_destroy(cq);
+  ccol_retval_t null_rv = ccircq_timed_recv(NULL, &got, 0);
+  ccircq_destroy(cq);
 
   REQUIRE_EQ(empty_rv, ccol_container_empty);
   REQUIRE_EQ(first_rv, ccol_success);
@@ -530,7 +528,7 @@ TEST(circular_queues, timed_calls_with_a_zero_timeout_are_the_try_variants) {
 
 TEST(circular_queues, timed_send_reports_unexpected_failure_on_condvar_error) {
   /* Regression test. When _ccol_cond_var_timedwait returns something other
-   * than ETIMEDOUT, the wait loop of ccol_circq_timed_send_zc must not
+   * than ETIMEDOUT, the wait loop of ccircq_timed_send must not
    * always report ccol_unexpected_failure, it has to check first whether
    * space became free. The racing test below covers that second check and
    * this one covers the ordinary case where the queue is still full. A
@@ -538,18 +536,18 @@ TEST(circular_queues, timed_send_reports_unexpected_failure_on_condvar_error) {
    * because the loop must neither hide the error nor retry for ever. The test
    * sets a large timeout and a tight bound on the elapsed time, which proves
    * the call returns quickly on the forced error. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
-  c_message_t filler = {.data = malloc(1), .size = 1};
-  REQUIRE_EQ(ccol_circq_try_send_zc(cq, &filler), ccol_success);
+  ccircq *cq = ccircq_create(1, NULL);
+  cmessage_t filler = {.data = malloc(1), .size = 1};
+  REQUIRE_EQ(ccircq_try_send(cq, &filler), ccol_success);
 
-  _ccol_circq_test_force_next_send_condvar_wait_error();
+  _ccircq_test_force_next_send_condvar_wait_error();
 
-  c_message_t m = {.data = malloc(1), .size = 1};
+  cmessage_t m = {.data = malloc(1), .size = 1};
   uint64_t timeout = 5000000;
   struct timespec before, after;
   getMonoTime(before);
   errno = 0;
-  ccol_retval_t send_rv = ccol_circq_timed_send_zc(cq, &m, timeout);
+  ccol_retval_t send_rv = ccircq_timed_send(cq, &m, timeout);
   int send_errno = errno;
   getMonoTime(after);
   REQUIRE_EQ(send_rv, ccol_unexpected_failure);
@@ -559,16 +557,16 @@ TEST(circular_queues, timed_send_reports_unexpected_failure_on_condvar_error) {
   REQUIRE_NE(m.data, NULL);  // the caller keeps ownership on a failure
   free(m.data);
 
-  c_message_t drained = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(cq, &drained), ccol_success);
+  cmessage_t drained = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(cq, &drained), ccol_success);
   free(drained.data);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, timed_send_condvar_error_racing_freed_slot_still_sends) {
-  /* The same class of failure as _sel_wait_condvar of ccol_select (see
-   * ccol_select.timed_wait_ready_racing_condvar_error_still_succeeds): the
-   * FAILURE branch of ccol_circq_timed_send_zc must not always report
+  /* The same class of failure as _sel_wait_condvar of cselect (see
+   * cselect.timed_wait_ready_racing_condvar_error_still_succeeds): the
+   * FAILURE branch of ccircq_timed_send must not always report
    * ccol_unexpected_failure, because a consumer on another thread can free a
    * slot at the same instant. _ccol_cond_var_timedwait always locks
    * cq->mutex again before returning, on success and on failure, so this
@@ -577,28 +575,28 @@ TEST(circular_queues, timed_send_condvar_error_racing_freed_slot_still_sends) {
    * exact window on demand while the hook replaces _ccol_cond_var_timedwait
    * without unlocking cq->mutex. Without that handling the test fails with
    * ccol_unexpected_failure and the message is never sent. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
-  c_message_t filler = {.data = malloc(sizeof(int)), .size = sizeof(int)};
+  ccircq *cq = ccircq_create(1, NULL);
+  cmessage_t filler = {.data = malloc(sizeof(int)), .size = sizeof(int)};
   *(int *)filler.data = 42;
-  REQUIRE_EQ(ccol_circq_try_send_zc(cq, &filler), ccol_success);
+  REQUIRE_EQ(ccircq_try_send(cq, &filler), ccol_success);
 
-  _ccol_circq_test_force_next_send_condvar_wait_error_racing_ready();
+  _ccircq_test_force_next_send_condvar_wait_error_racing_ready();
 
-  c_message_t m = {.data = malloc(1), .size = 1};
+  cmessage_t m = {.data = malloc(1), .size = 1};
   uint64_t timeout = 5000000;
-  REQUIRE_EQ(ccol_circq_timed_send_zc(cq, &m, timeout), ccol_success);
+  REQUIRE_EQ(ccircq_timed_send(cq, &m, timeout), ccol_success);
   REQUIRE_EQ(m.data, NULL);  // the queue takes ownership on success
 
-  c_message_t raced_out = _ccol_circq_test_take_race_freed_msg();
+  cmessage_t raced_out = _ccircq_test_take_race_freed_msg();
   REQUIRE_NE(raced_out.data, NULL);
   REQUIRE_EQ(*(int *)raced_out.data, 42);
   free(raced_out.data);
 
-  REQUIRE_EQ(ccol_circq_msg_count(cq), (size_t)1);
-  c_message_t recv_m = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(cq, &recv_m), ccol_success);
+  REQUIRE_EQ(ccircq_msg_count(cq), (size_t)1);
+  cmessage_t recv_m = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(cq, &recv_m), ccol_success);
   free(recv_m.data);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, timed_recv_reports_unexpected_failure_on_condvar_error) {
@@ -606,16 +604,16 @@ TEST(circular_queues, timed_recv_reports_unexpected_failure_on_condvar_error) {
    * timed_send_reports_unexpected_failure_on_condvar_error: a forced error
    * on an empty queue with no race gives ccol_unexpected_failure, and
    * quickly. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+  ccircq *cq = ccircq_create(1, NULL);
 
-  _ccol_circq_test_force_next_recv_condvar_wait_error();
+  _ccircq_test_force_next_recv_condvar_wait_error();
 
-  c_message_t m = {.data = NULL, .size = 0};
+  cmessage_t m = {.data = NULL, .size = 0};
   uint64_t timeout = 5000000;
   struct timespec before, after;
   getMonoTime(before);
   errno = 0;
-  ccol_retval_t recv_rv = ccol_circq_timed_recv_zc(cq, &m, timeout);
+  ccol_retval_t recv_rv = ccircq_timed_recv(cq, &m, timeout);
   int recv_errno = errno;
   getMonoTime(after);
   REQUIRE_EQ(recv_rv, ccol_unexpected_failure);
@@ -623,7 +621,7 @@ TEST(circular_queues, timed_recv_reports_unexpected_failure_on_condvar_error) {
   REQUIRE_EQ(recv_errno, EINVAL);
   REQUIRE_LT(diffTimeUSec(before, after), 500000);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, timed_recv_condvar_error_racing_message_still_receives) {
@@ -636,18 +634,18 @@ TEST(circular_queues, timed_recv_condvar_error_racing_message_still_receives) {
    * ccol_unexpected_failure and the sentinel message the hook put into the
    * queue is stuck there for ever: msg_count stays at 1 and nothing can
    * receive the message, because the caller has already given up. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
 
-  _ccol_circq_test_force_next_recv_condvar_wait_error_racing_ready();
+  _ccircq_test_force_next_recv_condvar_wait_error_racing_ready();
 
-  c_message_t m = {.data = (void *)1, .size = 1};  // overwritten on success
+  cmessage_t m = {.data = (void *)1, .size = 1};  // overwritten on success
   uint64_t timeout = 5000000;
-  REQUIRE_EQ(ccol_circq_timed_recv_zc(cq, &m, timeout), ccol_success);
+  REQUIRE_EQ(ccircq_timed_recv(cq, &m, timeout), ccol_success);
   REQUIRE_EQ(m.data, NULL);  // the {NULL, 0} sentinel from the hook
   REQUIRE_EQ(m.size, (size_t)0);
-  REQUIRE_EQ(ccol_circq_msg_count(cq), (size_t)0);
+  REQUIRE_EQ(ccircq_msg_count(cq), (size_t)0);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 /* ------------------------------------------------------------------ */
@@ -674,9 +672,9 @@ TEST(circular_queues, timed_recv_condvar_error_racing_message_still_receives) {
 #define CCOL_WAKE_WAKE_BOUND_US 3000000L /* to observe it released again */
 
 typedef struct {
-  ccol_circular_queue *cq;
-  ccol_dynamic_queue *dq;
-  c_message_t msg;
+  ccircq *cq;
+  cdynmq *dq;
+  cmessage_t msg;
   ccol_retval_t retval;
   atomic_bool finished;
 } ccol_wake_args;
@@ -684,7 +682,7 @@ typedef struct {
 static void *_wake_circq_timed_recv(void *arg) {
   ccol_wake_args *a = (ccol_wake_args *)arg;
   uint64_t t = (uint64_t)CCOL_WAKE_WAIT_TIMEOUT_SEC * 1000000u;
-  a->retval = ccol_circq_timed_recv_zc(a->cq, &a->msg, t);
+  a->retval = ccircq_timed_recv(a->cq, &a->msg, t);
   atomic_store(&a->finished, true);
   return NULL;
 }
@@ -692,7 +690,7 @@ static void *_wake_circq_timed_recv(void *arg) {
 static void *_wake_circq_timed_send(void *arg) {
   ccol_wake_args *a = (ccol_wake_args *)arg;
   uint64_t t = (uint64_t)CCOL_WAKE_WAIT_TIMEOUT_SEC * 1000000u;
-  a->retval = ccol_circq_timed_send_zc(a->cq, &a->msg, t);
+  a->retval = ccircq_timed_send(a->cq, &a->msg, t);
   atomic_store(&a->finished, true);
   return NULL;
 }
@@ -700,7 +698,7 @@ static void *_wake_circq_timed_send(void *arg) {
 static void *_wake_dynmq_timed_recv(void *arg) {
   ccol_wake_args *a = (ccol_wake_args *)arg;
   uint64_t t = (uint64_t)CCOL_WAKE_WAIT_TIMEOUT_SEC * 1000000u;
-  a->retval = ccol_dynmq_timed_recv_zc(a->dq, &a->msg, t);
+  a->retval = cdynmq_timed_recv(a->dq, &a->msg, t);
   atomic_store(&a->finished, true);
   return NULL;
 }
@@ -712,33 +710,33 @@ static void _wake_poll_pause(void) {
   nanosleep(&s, NULL);
 }
 
-static bool _wake_await_circq_readers(ccol_circular_queue *cq) {
+static bool _wake_await_circq_readers(ccircq *cq) {
   struct timespec start, now;
   getMonoTime(start);
   for (;;) {
-    if (_ccol_circq_waiting_readers_for_tests(cq) >= 1) return true;
+    if (_ccircq_waiting_readers_for_tests(cq) >= 1) return true;
     getMonoTime(now);
     if (diffTimeUSec(start, now) > CCOL_WAKE_PARK_BOUND_US) return false;
     _wake_poll_pause();
   }
 }
 
-static bool _wake_await_circq_writers(ccol_circular_queue *cq) {
+static bool _wake_await_circq_writers(ccircq *cq) {
   struct timespec start, now;
   getMonoTime(start);
   for (;;) {
-    if (_ccol_circq_waiting_writers_for_tests(cq) >= 1) return true;
+    if (_ccircq_waiting_writers_for_tests(cq) >= 1) return true;
     getMonoTime(now);
     if (diffTimeUSec(start, now) > CCOL_WAKE_PARK_BOUND_US) return false;
     _wake_poll_pause();
   }
 }
 
-static bool _wake_await_dynmq_readers(ccol_dynamic_queue *dq) {
+static bool _wake_await_dynmq_readers(cdynmq *dq) {
   struct timespec start, now;
   getMonoTime(start);
   for (;;) {
-    if (_ccol_dynmq_waiting_readers_for_tests(dq) >= 1) return true;
+    if (_cdynmq_waiting_readers_for_tests(dq) >= 1) return true;
     getMonoTime(now);
     if (diffTimeUSec(start, now) > CCOL_WAKE_PARK_BOUND_US) return false;
     _wake_poll_pause();
@@ -757,7 +755,7 @@ static bool _wake_await_finished(ccol_wake_args *a) {
 }
 
 TEST(circular_queues, blocked_timed_recv_is_released_by_a_send) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
   REQUIRE_NE((void *)cq, NULL);
 
   void *payload = malloc(4);
@@ -774,8 +772,8 @@ TEST(circular_queues, blocked_timed_recv_is_released_by_a_send) {
 
   if (started) {
     parked = _wake_await_circq_readers(cq);
-    c_message_t m = {.data = payload, .size = 4};
-    sent = ccol_circq_send_zc(cq, &m);
+    cmessage_t m = {.data = payload, .size = 4};
+    sent = ccircq_send(cq, &m);
     if (sent != ccol_success) free(payload);
     released = _wake_await_finished(&a);
     pthread_join(tid, NULL);
@@ -790,15 +788,15 @@ TEST(circular_queues, blocked_timed_recv_is_released_by_a_send) {
      queue, and destroying a queue that still holds messages is a caller error
      the library aborts on, which would stop the whole binary instead of
      failing the assertions below. */
-  c_message_t leftover = {.data = NULL, .size = 0};
-  while (ccol_circq_try_recv_zc(cq, &leftover) == ccol_success) {
+  cmessage_t leftover = {.data = NULL, .size = 0};
+  while (ccircq_try_recv(cq, &leftover) == ccol_success) {
     free(leftover.data);
   }
 
   /* Every waiter has returned, so the queue gives the counter back. */
-  size_t residual = _ccol_circq_waiting_readers_for_tests(cq);
+  size_t residual = _ccircq_waiting_readers_for_tests(cq);
   ccol_retval_t got = a.retval;
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 
   REQUIRE_TRUE(started);
   REQUIRE_TRUE(parked);
@@ -810,12 +808,12 @@ TEST(circular_queues, blocked_timed_recv_is_released_by_a_send) {
 }
 
 TEST(circular_queues, blocked_timed_send_is_released_by_a_receive) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+  ccircq *cq = ccircq_create(1, NULL);
   REQUIRE_NE((void *)cq, NULL);
 
   void *first = malloc(4);
-  c_message_t filler = {.data = first, .size = 4};
-  ccol_retval_t filled = ccol_circq_send_zc(cq, &filler);
+  cmessage_t filler = {.data = first, .size = 4};
+  ccol_retval_t filled = ccircq_send(cq, &filler);
   if (filled != ccol_success) free(first);
 
   void *payload = malloc(4);
@@ -828,18 +826,18 @@ TEST(circular_queues, blocked_timed_send_is_released_by_a_receive) {
   pthread_t tid;
   bool started = (pthread_create(&tid, NULL, _wake_circq_timed_send, &a) == 0);
   bool parked = false, released = false, drained = false, matched = false;
-  c_message_t out = {.data = NULL, .size = 0};
+  cmessage_t out = {.data = NULL, .size = 0};
   ccol_retval_t recvd = ccol_unexpected_failure;
 
   if (started) {
     parked = _wake_await_circq_writers(cq);
-    recvd = ccol_circq_recv_zc(cq, &out);
+    recvd = ccircq_recv(cq, &out);
     if (recvd == ccol_success) free(out.data);
     released = _wake_await_finished(&a);
     pthread_join(tid, NULL);
     /* The message in the queue is the released sender's. */
-    c_message_t tail = {.data = NULL, .size = 0};
-    drained = (ccol_circq_try_recv_zc(cq, &tail) == ccol_success);
+    cmessage_t tail = {.data = NULL, .size = 0};
+    drained = (ccircq_try_recv(cq, &tail) == ccol_success);
     matched = (tail.data == payload);
     free(tail.data);
   } else {
@@ -853,14 +851,14 @@ TEST(circular_queues, blocked_timed_send_is_released_by_a_receive) {
      Destroying a queue that still holds messages is a caller error the
      library aborts on, which would stop the whole binary instead of failing
      the assertions below. */
-  c_message_t leftover = {.data = NULL, .size = 0};
-  while (ccol_circq_try_recv_zc(cq, &leftover) == ccol_success) {
+  cmessage_t leftover = {.data = NULL, .size = 0};
+  while (ccircq_try_recv(cq, &leftover) == ccol_success) {
     free(leftover.data);
   }
 
-  size_t residual = _ccol_circq_waiting_writers_for_tests(cq);
+  size_t residual = _ccircq_waiting_writers_for_tests(cq);
   ccol_retval_t got = a.retval;
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 
   REQUIRE_EQ(filled, ccol_success);
   REQUIRE_TRUE(started);
@@ -874,7 +872,7 @@ TEST(circular_queues, blocked_timed_send_is_released_by_a_receive) {
 }
 
 TEST(dynamic_queues, blocked_timed_recv_is_released_by_a_send) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+  cdynmq *dq = cdynmq_create(NULL);
   REQUIRE_NE((void *)dq, NULL);
 
   void *payload = malloc(4);
@@ -891,8 +889,8 @@ TEST(dynamic_queues, blocked_timed_recv_is_released_by_a_send) {
 
   if (started) {
     parked = _wake_await_dynmq_readers(dq);
-    c_message_t m = {.data = payload, .size = 4};
-    sent = ccol_dynmq_send_zc(dq, &m);
+    cmessage_t m = {.data = payload, .size = 4};
+    sent = cdynmq_send(dq, &m);
     if (sent != ccol_success) free(payload);
     released = _wake_await_finished(&a);
     pthread_join(tid, NULL);
@@ -903,14 +901,14 @@ TEST(dynamic_queues, blocked_timed_recv_is_released_by_a_send) {
   }
 
   /* blocked_timed_recv_is_released_by_a_send explains why we drain first. */
-  c_message_t leftover = {.data = NULL, .size = 0};
-  while (ccol_dynmq_try_recv_zc(dq, &leftover) == ccol_success) {
+  cmessage_t leftover = {.data = NULL, .size = 0};
+  while (cdynmq_try_recv(dq, &leftover) == ccol_success) {
     free(leftover.data);
   }
 
-  size_t residual = _ccol_dynmq_waiting_readers_for_tests(dq);
+  size_t residual = _cdynmq_waiting_readers_for_tests(dq);
   ccol_retval_t got = a.retval;
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 
   REQUIRE_TRUE(started);
   REQUIRE_TRUE(parked);
@@ -926,96 +924,96 @@ TEST(circular_queues, recv_drains_successfully_after_disable) {
   // turns sending off. Once the queue is empty a timed recv should time out
   // and not return ccol_not_permitted, because the off state only affects
   // senders.
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(2, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(2, NULL, NULL);
 
-  c_message_t m = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m), ccol_success);
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m), ccol_success);
+  cmessage_t m = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_send(cq, &m), ccol_success);
+  REQUIRE_EQ(ccircq_send(cq, &m), ccol_success);
 
-  ccol_circq_disable_sending(cq);
+  ccircq_disable_sending(cq);
 
   // The messages already there must drain successfully.
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &m), ccol_success);
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &m), ccol_success);
+  REQUIRE_EQ(ccircq_recv(cq, &m), ccol_success);
+  REQUIRE_EQ(ccircq_recv(cq, &m), ccol_success);
 
   // The queue is empty and sending is off, so a timed recv times out
   // and not return ccol_not_permitted.
   uint64_t timeout = 50000;  // 50 ms
-  REQUIRE_EQ(ccol_circq_timed_recv_zc(cq, &m, timeout), ccol_timed_out);
+  REQUIRE_EQ(ccircq_timed_recv(cq, &m, timeout), ccol_timed_out);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   ccol_retval_t result;
 } cq_disable_recv_args;
 
 void *cq_blocking_recv_thread(void *raw) {
   cq_disable_recv_args *a = (cq_disable_recv_args *)raw;
-  c_message_t m = {.data = NULL, .size = 0};
-  a->result = ccol_circq_recv_zc(a->cq, &m);
+  cmessage_t m = {.data = NULL, .size = 0};
+  a->result = ccircq_recv(a->cq, &m);
   return NULL;
 }
 
 TEST(circular_queues, disable_sending_does_not_unblock_recv) {
-  // ccol_circq_disable_sending must NOT wake a thread blocked in
-  // ccol_circq_recv_zc. That thread stays blocked and returns only after the
+  // ccircq_disable_sending must NOT wake a thread blocked in
+  // ccircq_recv. That thread stays blocked and returns only after the
   // test turns sending back on and a message arrives.
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(1, NULL, NULL);
 
   cq_disable_recv_args args = {.cq = cq, .result = ccol_unexpected_failure};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, cq_blocking_recv_thread, &args), 0);
 
   usleep(20000);  // let the receiver block on the empty queue
-  ccol_circq_disable_sending(cq);
+  ccircq_disable_sending(cq);
   usleep(20000);  // receiver must still be blocked at this point
 
   // Turn sending back on and send a message, which releases the receiver.
-  ccol_circq_enable_sending(cq);
-  c_message_t m = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m), ccol_success);
+  ccircq_enable_sending(cq);
+  cmessage_t m = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_send(cq, &m), ccol_success);
   pthread_join(tid, NULL);
 
   REQUIRE_EQ(args.result, ccol_success);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 TEST(circular_queues, timed_recv_times_out_when_disabled) {
-  // ccol_circq_timed_recv_zc is expected to return ccol_timed_out, not
+  // ccircq_timed_recv is expected to return ccol_timed_out, not
   // ccol_not_permitted, when the queue is empty and sending is off, since the
   // off state must not make the call return before the deadline.
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(1, NULL, NULL);
 
-  ccol_circq_disable_sending(cq);
+  ccircq_disable_sending(cq);
 
   uint64_t timeout = 100000;  // 100 ms
   struct timespec before, after;
-  c_message_t m = {.data = NULL, .size = 0};
+  cmessage_t m = {.data = NULL, .size = 0};
 
   getMonoTime(before);
-  REQUIRE_EQ(ccol_circq_timed_recv_zc(cq, &m, timeout), ccol_timed_out);
+  REQUIRE_EQ(ccircq_timed_recv(cq, &m, timeout), ccol_timed_out);
   getMonoTime(after);
   REQUIRE_GE(diffTimeUSec(before, after), 100000);  // must wait out the timeout
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 void *cq_helper_thread(void *args) {
-  ccol_circular_queue *cq = (ccol_circular_queue *)args;
+  ccircq *cq = (ccircq *)args;
   // Makes the sender block on the second message.
   usleep(50000);
 
-  c_message_t m = {.data = NULL, .size = 0};
-  assert(ccol_circq_recv_zc(cq, &m) == ccol_success);
+  cmessage_t m = {.data = NULL, .size = 0};
+  assert(ccircq_recv(cq, &m) == ccol_success);
   assert(((char *)(m.data))[0] == 'A');
   assert(((char *)(m.data))[1] == '\0');
   free(m.data);
   m.data = NULL;
 
-  assert(ccol_circq_recv_zc(cq, &m) == ccol_success);
+  assert(ccircq_recv(cq, &m) == ccol_success);
   assert(((char *)(m.data))[0] == 'B');
   assert(((char *)(m.data))[1] == '\0');
   free(m.data);
@@ -1025,28 +1023,28 @@ void *cq_helper_thread(void *args) {
 }
 
 TEST(circular_queues, send_and_receive_thread) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(1, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(1, NULL, NULL);
 
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, cq_helper_thread, cq), 0);
 
-  c_message_t m = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m.data))[0] = 'A';
   ((char *)(m.data))[1] = '\0';
 
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m), ccol_success);
+  REQUIRE_EQ(ccircq_send(cq, &m), ccol_success);
   REQUIRE_EQ(m.data, NULL);  // The ownership of the message is lost.
 
-  m = (c_message_t){.data = malloc(16 * sizeof(char)), .size = 16};
+  m = (cmessage_t){.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m.data))[0] = 'B';
   ((char *)(m.data))[1] = '\0';
 
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m), ccol_success);
+  REQUIRE_EQ(ccircq_send(cq, &m), ccol_success);
   REQUIRE_EQ(m.data, NULL);  // The ownership of the message is lost.
 
   pthread_join(tid, NULL);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 /* Reads /proc/<pid>/<name>, a short pseudo-file, into buf, NUL-terminated,
@@ -1228,12 +1226,12 @@ static ssize_t _read_result_byte_bounded(int fd, char *out_byte,
 }
 #endif /* CCOL_FORK_SAFETY_REQUIRED */
 
-/* Destroying a queue that still has a linked ccol_select() or
- * ccol_event_loop waiter is an error, because that waiter's node then holds
+/* Destroying a queue that still has a linked cselect() or
+ * ceventloop waiter is an error, because that waiter's node then holds
  * a dangling pointer into the queue's mutex, which the destroy frees. The
  * msg_count > 0 check can't catch this since it only sees the messages left
- * in the queue, so both __ccol_circular_queue_destroy and
- * __ccol_dynamic_queue_destroy assert when sel_read_waiters_head or
+ * in the queue, so both __ccircq_destroy and
+ * __cdynmq_destroy assert when sel_read_waiters_head or
  * sel_write_waiters_head isn't NULL. It runs in a forked child because the
  * _ccol_assert() and the abort() after it stop the whole process. */
 TEST(circular_queues, destroy_with_live_event_loop_registration_is_fatal) {
@@ -1253,19 +1251,18 @@ TEST(circular_queues, destroy_with_live_event_loop_registration_is_fatal) {
      * SIGALRM instead of SIGABRT. This bound is separate from the parent's
      * bound below. */
     alarm(10);
-    ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+    ccircq *cq = ccircq_create(4, NULL);
     if (!cq) test_child_exit(2);
-    ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
-    ccol_event_handlers_t handlers = {0};
+    ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+    if (loop == CEVENTLOOP_NULL) test_child_exit(2);
+    ceventloop_handlers_t handlers = {0};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, NULL,
-        &err);
-    if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
+    ceventloop_reg reg = ceventloop_add(
+        loop, ccircq_selectable(cq, cselect_read), handlers, NULL, &err);
+    if (reg == CEVENTLOOP_REG_NULL) test_child_exit(2);
     /* The misuse under test: nothing removes the registration above and
      * nothing destroys the loop before this call. */
-    ccol_circular_queue_destroy(cq);
+    ccircq_destroy(cq);
     test_child_exit(0); /* not reachable when the assert fires, as it must */
   }
   REQUIRE_NE(pid, -1);
@@ -1292,8 +1289,7 @@ TEST(circular_queues, destroy_with_live_event_loop_registration_is_fatal) {
  * A destroy that looks only at the waiter lists, which the shutdown emptied,
  * lets the child exit 0 instead of with SIGABRT.
  */
-TEST(ccol_event_loop,
-     queue_destroy_after_shutdown_with_a_registration_is_fatal) {
+TEST(ceventloop, queue_destroy_after_shutdown_with_a_registration_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   int signals[2] = {0, 0};
   bool reaped_all = true;
@@ -1308,26 +1304,25 @@ TEST(ccol_event_loop,
         close(dn);
       }
       alarm(10);
-      ccol_circular_queue *cq = NULL;
-      ccol_dynamic_queue *dq = NULL;
+      ccircq *cq = NULL;
+      cdynmq *dq = NULL;
       if (kind == 0)
-        cq = ccol_circular_queue_create(4, NULL);
+        cq = ccircq_create(4, NULL);
       else
-        dq = ccol_dynamic_queue_create(NULL);
+        dq = cdynmq_create(NULL);
       if (!cq && !dq) test_child_exit(2);
-      ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-      if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
-      ccol_event_handlers_t handlers = {0};
-      ccol_selectable sel =
-          cq ? ccol_selectable_from_circq(cq, ccol_select_read)
-             : ccol_selectable_from_dynq(dq, ccol_select_read);
-      ccol_event_reg reg = ccol_event_loop_add(loop, sel, handlers, NULL, NULL);
-      if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
-      if (ccol_event_loop_shutdown(loop) != ccol_success) test_child_exit(2);
+      ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+      if (loop == CEVENTLOOP_NULL) test_child_exit(2);
+      ceventloop_handlers_t handlers = {0};
+      cselectable_t sel = cq ? ccircq_selectable(cq, cselect_read)
+                             : cdynmq_selectable(dq, cselect_read);
+      ceventloop_reg reg = ceventloop_add(loop, sel, handlers, NULL, NULL);
+      if (reg == CEVENTLOOP_REG_NULL) test_child_exit(2);
+      if (ceventloop_shutdown(loop) != ccol_success) test_child_exit(2);
       if (cq)
-        ccol_circular_queue_destroy(cq);
+        ccircq_destroy(cq);
       else
-        ccol_dynamic_queue_destroy(dq);
+        cdynmq_destroy(dq);
       test_child_exit(0); /* not reachable when the assert fires, as it must */
     }
     if (pid == -1) {
@@ -1348,7 +1343,7 @@ TEST(ccol_event_loop,
 }
 
 typedef struct cq_select_waiter_args {
-  ccol_circular_queue *cq;
+  ccircq *cq;
 } cq_select_waiter_args;
 
 static void *cq_select_waiter_thread(void *arg) {
@@ -1357,12 +1352,11 @@ static void *cq_select_waiter_thread(void *arg) {
   /* This timeout is long enough that the destroy call on the main thread,
    * which races this call, always ends the process first, so this call
    * never gets to return. */
-  ccol_select_timed_va(&idx, 5000000,
-                       ccol_selectable_from_circq(a->cq, ccol_select_read));
+  cselect_timed_va(&idx, 5000000, ccircq_selectable(a->cq, cselect_read));
   return NULL;
 }
 
-TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
+TEST(circular_queues, destroy_while_cselect_is_watching_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
@@ -1374,7 +1368,7 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
      * _wait_for_forked_child_bounded explains why the parent below has its
      * own independent bound. */
     alarm(10);
-    ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+    ccircq *cq = ccircq_create(4, NULL);
     if (!cq) test_child_exit(2);
 
     cq_select_waiter_args wargs = {.cq = cq};
@@ -1401,7 +1395,7 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
      * test needs instead of a fixed sleep that guesses at it. A return from
      * pthread_create() promises neither that the scheduler has run the new
      * thread at all nor that the thread got to its first _ccol_mutex_lock
-     * and link step inside Phase 1 of ccol_select_timed. A fixed-sleep
+     * and link step inside Phase 1 of cselect_timed. A fixed-sleep
      * hand-off here loses this race under qemu-user emulation, where thread
      * start latency is much higher and much more variable. The destroy()
      * then runs first, correctly sees no linked waiters, has nothing to
@@ -1415,7 +1409,7 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
      * same race, and the parent's check that it died by SIGABRT fails. */
     bool linked = false;
     for (int i = 0; i < 800 && !linked; i++) {
-      linked = _ccol_circq_test_has_sel_read_waiter_for_tests(cq);
+      linked = _ccircq_test_has_sel_read_waiter_for_tests(cq);
       if (!linked) {
         struct timespec ts = {0, 10000000}; /* 10ms */
         nanosleep(&ts, NULL);
@@ -1426,7 +1420,7 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
 
     /* The misuse under test: the waiter thread above is confirmed to be
      * linked into cq's waiter list when this destroys cq. */
-    ccol_circular_queue_destroy(cq);
+    ccircq_destroy(cq);
     test_child_exit(0); /* not reachable when the assert fires, as it must */
   }
   REQUIRE_NE(pid, -1);
@@ -1445,190 +1439,190 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
 TEST(dynamic_queues, create_fails) {
   char *err_str = "";
 
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(
+  cdynmq *dq = cdynmq_create_mp(
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = free, .malloc = malloc, .realloc = NULL},
       &err_str);
   REQUIRE_EQ((void *)dq, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
   REQUIRE_EQ((void *)dq, NULL);
 }
 
 TEST(dynamic_queues, create_and_destroy_no_mprocs) {
   char *err_str = "";
 
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, &err_str);
+  cdynmq *dq = cdynmq_create_mp(NULL, &err_str);
   REQUIRE_NE((void *)dq, NULL);
   REQUIRE_EQ((void *)err_str, NULL);
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
   REQUIRE_EQ((void *)dq, NULL);
 }
 
 TEST(dynamic_queues, create_and_destroy_with_mp) {
   char *err_str = "";
 
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(
+  cdynmq *dq = cdynmq_create_mp(
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
       &err_str);
   REQUIRE_NE((void *)dq, NULL);
   REQUIRE_EQ((void *)err_str, NULL);
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
   REQUIRE_EQ((void *)dq, NULL);
 }
 
 TEST(dynamic_queues, basic_send_and_receive_no_mprocs) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
-  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m1.data))[0] = 'A';
   ((char *)(m1.data))[1] = '\0';
 
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m1), ccol_success);
+  REQUIRE_EQ(cdynmq_send(dq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);  // The ownership of the message is lost.
 
-  c_message_t m2 = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_dynmq_recv_zc(dq, &m2), ccol_success);
+  cmessage_t m2 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cdynmq_recv(dq, &m2), ccol_success);
 
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
   free(m2.data);
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 TEST(dynamic_queues, basic_send_and_receive_with_mp) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(
+  cdynmq *dq = cdynmq_create_mp(
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
       NULL);
 
-  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m1.data))[0] = 'A';
   ((char *)(m1.data))[1] = '\0';
 
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m1), ccol_success);
+  REQUIRE_EQ(cdynmq_send(dq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);  // The ownership of the message is lost.
 
-  c_message_t m2 = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_dynmq_recv_zc(dq, &m2), ccol_success);
+  cmessage_t m2 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cdynmq_recv(dq, &m2), ccol_success);
 
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
   free(m2.data);
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 TEST(dynamic_queues, msg_count) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
-  c_message_t m1 = {.data = NULL, .size = 0};
+  cmessage_t m1 = {.data = NULL, .size = 0};
 
   for (size_t i = 0; i < 3; ++i) {
-    REQUIRE_EQ(ccol_dynmq_msg_count(dq), i);
-    ccol_dynmq_send_zc(dq, &m1);
-    REQUIRE_EQ(ccol_dynmq_msg_count(dq), i + 1);
+    REQUIRE_EQ(cdynmq_msg_count(dq), i);
+    cdynmq_send(dq, &m1);
+    REQUIRE_EQ(cdynmq_msg_count(dq), i + 1);
   }
 
   for (size_t i = 3; i > 0; --i) {
-    REQUIRE_EQ(ccol_dynmq_msg_count(dq), i);
-    ccol_dynmq_recv_zc(dq, &m1);
-    REQUIRE_EQ(ccol_dynmq_msg_count(dq), i - 1);
+    REQUIRE_EQ(cdynmq_msg_count(dq), i);
+    cdynmq_recv(dq, &m1);
+    REQUIRE_EQ(cdynmq_msg_count(dq), i - 1);
   }
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 TEST(dynamic_queues, basic_send_and_receive_NULL_msg) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
-  c_message_t m1 = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m1), ccol_success);
+  cmessage_t m1 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cdynmq_send(dq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m1), ccol_success);
+  REQUIRE_EQ(cdynmq_send(dq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
   m1.data = malloc(sizeof(char));
   m1.size = 0;
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m1), ccol_invalid_args);
+  REQUIRE_EQ(cdynmq_send(dq, &m1), ccol_invalid_args);
   REQUIRE_NE(m1.data, NULL);
   free(m1.data);
   m1.data = NULL;
 
-  c_message_t m2 = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_dynmq_recv_zc(dq, &m2), ccol_success);
+  cmessage_t m2 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cdynmq_recv(dq, &m2), ccol_success);
   REQUIRE_EQ(m2.data, NULL);
 
-  REQUIRE_EQ(ccol_dynmq_recv_zc(dq, &m2), ccol_success);
+  REQUIRE_EQ(cdynmq_recv(dq, &m2), ccol_success);
   REQUIRE_EQ(m2.data, NULL);
 
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m1), ccol_success);
+  REQUIRE_EQ(cdynmq_send(dq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
-  REQUIRE_EQ(ccol_dynmq_recv_zc(dq, &m2), ccol_success);
+  REQUIRE_EQ(cdynmq_recv(dq, &m2), ccol_success);
   REQUIRE_EQ(m2.data, NULL);
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 TEST(dynamic_queues, fifo_ordering) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
   const char labels[] = {'A', 'B', 'C'};
   for (int i = 0; i < 3; ++i) {
     char *buf = malloc(sizeof(char));
     *buf = labels[i];
-    c_message_t m = {.data = buf, .size = 1};
-    REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m), ccol_success);
+    cmessage_t m = {.data = buf, .size = 1};
+    REQUIRE_EQ(cdynmq_send(dq, &m), ccol_success);
     REQUIRE_EQ(m.data, NULL);
   }
-  REQUIRE_EQ(ccol_dynmq_msg_count(dq), 3);
+  REQUIRE_EQ(cdynmq_msg_count(dq), 3);
 
   for (int i = 0; i < 3; ++i) {
-    c_message_t m = {.data = NULL, .size = 0};
-    REQUIRE_EQ(ccol_dynmq_recv_zc(dq, &m), ccol_success);
+    cmessage_t m = {.data = NULL, .size = 0};
+    REQUIRE_EQ(cdynmq_recv(dq, &m), ccol_success);
     REQUIRE_EQ(*(char *)m.data, labels[i]);
     free(m.data);
   }
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 TEST(dynamic_queues, send_and_try_receive) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
-  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m1.data))[0] = 'A';
   ((char *)(m1.data))[1] = '\0';
 
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m1), ccol_success);
+  REQUIRE_EQ(cdynmq_send(dq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
-  c_message_t m2 = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_dynmq_try_recv_zc(dq, &m2), ccol_success);
+  cmessage_t m2 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cdynmq_try_recv(dq, &m2), ccol_success);
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
-  REQUIRE_EQ(ccol_dynmq_try_recv_zc(dq, &m1), ccol_container_empty);
+  REQUIRE_EQ(cdynmq_try_recv(dq, &m1), ccol_container_empty);
   REQUIRE_EQ(m1.data, NULL);
 
   free(m2.data);
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 TEST(dynamic_queues, send_and_timed_receive) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
-  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m1.data))[0] = 'A';
   ((char *)(m1.data))[1] = '\0';
 
@@ -1637,12 +1631,12 @@ TEST(dynamic_queues, send_and_timed_receive) {
   struct timespec before;
   struct timespec after;
 
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m1), ccol_success);
+  REQUIRE_EQ(cdynmq_send(dq, &m1), ccol_success);
 
-  c_message_t m2 = {.data = NULL, .size = 0};
+  cmessage_t m2 = {.data = NULL, .size = 0};
 
   getMonoTime(before);
-  REQUIRE_EQ(ccol_dynmq_timed_recv_zc(dq, &m2, timeout), ccol_success);
+  REQUIRE_EQ(cdynmq_timed_recv(dq, &m2, timeout), ccol_success);
   getMonoTime(after);
   /* The call doesn't wait. The bound is loose for a loaded or emulated
    * machine, and a call that waits for the timeout fails the result check. */
@@ -1652,29 +1646,29 @@ TEST(dynamic_queues, send_and_timed_receive) {
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
   getMonoTime(before);
-  REQUIRE_EQ(ccol_dynmq_timed_recv_zc(dq, &m1, timeout), ccol_timed_out);
+  REQUIRE_EQ(cdynmq_timed_recv(dq, &m1, timeout), ccol_timed_out);
   getMonoTime(after);
   REQUIRE_GE(diffTimeUSec(before, after), 100000);
   REQUIRE_EQ(m1.data, NULL);
 
   free(m2.data);
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 TEST(dynamic_queues, timed_recv_reports_unexpected_failure_on_condvar_error) {
   /* Mirrors circular_queues.timed_recv_reports_unexpected_failure_on_
    * condvar_error: a forced error on an empty queue with no race still has
    * to give ccol_unexpected_failure quickly. */
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+  cdynmq *dq = cdynmq_create(NULL);
 
-  _ccol_dynmq_test_force_next_recv_condvar_wait_error();
+  _cdynmq_test_force_next_recv_condvar_wait_error();
 
-  c_message_t m = {.data = NULL, .size = 0};
+  cmessage_t m = {.data = NULL, .size = 0};
   uint64_t timeout = 5000000;
   struct timespec before, after;
   getMonoTime(before);
   errno = 0;
-  ccol_retval_t recv_rv = ccol_dynmq_timed_recv_zc(dq, &m, timeout);
+  ccol_retval_t recv_rv = cdynmq_timed_recv(dq, &m, timeout);
   int recv_errno = errno;
   getMonoTime(after);
   REQUIRE_EQ(recv_rv, ccol_unexpected_failure);
@@ -1682,12 +1676,12 @@ TEST(dynamic_queues, timed_recv_reports_unexpected_failure_on_condvar_error) {
   REQUIRE_EQ(recv_errno, EINVAL);
   REQUIRE_LT(diffTimeUSec(before, after), 500000);
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 TEST(dynamic_queues, timed_recv_condvar_error_racing_message_still_receives) {
-  /* The same class of failure as _sel_wait_condvar of ccol_select: the
-   * FAILURE branch of ccol_dynmq_timed_recv_zc must not always report
+  /* The same class of failure as _sel_wait_condvar of cselect: the
+   * FAILURE branch of cdynmq_timed_recv must not always report
    * ccol_unexpected_failure, because a producer on another thread can put a
    * message into the queue at the same instant. _ccol_cond_var_timedwait
    * always locks dq->mutex again before returning, on success and on
@@ -1696,63 +1690,63 @@ TEST(dynamic_queues, timed_recv_condvar_error_racing_message_still_receives) {
    * into this exact window on demand. Without that handling the test fails
    * with ccol_unexpected_failure and the sentinel message the hook put into
    * the queue is stuck there for ever. */
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+  cdynmq *dq = cdynmq_create(NULL);
 
-  _ccol_dynmq_test_force_next_recv_condvar_wait_error_racing_ready();
+  _cdynmq_test_force_next_recv_condvar_wait_error_racing_ready();
 
-  c_message_t m = {.data = (void *)1, .size = 1};  // overwritten on success
+  cmessage_t m = {.data = (void *)1, .size = 1};  // overwritten on success
   uint64_t timeout = 5000000;
-  REQUIRE_EQ(ccol_dynmq_timed_recv_zc(dq, &m, timeout), ccol_success);
+  REQUIRE_EQ(cdynmq_timed_recv(dq, &m, timeout), ccol_success);
   REQUIRE_EQ(m.data, NULL);  // the {NULL, 0} sentinel from the hook
   REQUIRE_EQ(m.size, (size_t)0);
-  REQUIRE_EQ(ccol_dynmq_msg_count(dq), (size_t)0);
+  REQUIRE_EQ(cdynmq_msg_count(dq), (size_t)0);
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 TEST(dynamic_queues, enable_disable_sending) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
-  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m1.data))[0] = 'A';
   ((char *)(m1.data))[1] = '\0';
 
-  ccol_dynmq_disable_sending(dq);
+  cdynmq_disable_sending(dq);
 
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m1), ccol_not_permitted);
+  REQUIRE_EQ(cdynmq_send(dq, &m1), ccol_not_permitted);
   REQUIRE_NE(m1.data, NULL);
 
-  ccol_dynmq_enable_sending(dq);
+  cdynmq_enable_sending(dq);
 
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m1), ccol_success);
+  REQUIRE_EQ(cdynmq_send(dq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
-  c_message_t m2 = {.data = NULL, .size = 0};
+  cmessage_t m2 = {.data = NULL, .size = 0};
 
-  REQUIRE_EQ(ccol_dynmq_recv_zc(dq, &m2), ccol_success);
+  REQUIRE_EQ(cdynmq_recv(dq, &m2), ccol_success);
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
   free(m2.data);
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
-/* A timeout of 0 is ccol_dynmq_try_recv_zc, so an empty queue answers
+/* A timeout of 0 is cdynmq_try_recv, so an empty queue answers
  * ccol_container_empty immediately and not ccol_timed_out. */
 TEST(dynamic_queues, timed_recv_with_a_zero_timeout_is_the_try_variant) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
   struct timespec before, after;
   getMonoTime(before);
-  c_message_t m = {.data = NULL, .size = 0};
-  ccol_retval_t empty_rv = ccol_dynmq_timed_recv_zc(dq, &m, 0);
+  cmessage_t m = {.data = NULL, .size = 0};
+  ccol_retval_t empty_rv = cdynmq_timed_recv(dq, &m, 0);
   getMonoTime(after);
-  c_message_t sent = {.data = NULL, .size = 0};
-  ccol_retval_t send_rv = ccol_dynmq_send_zc(dq, &sent);
-  ccol_retval_t got_rv = ccol_dynmq_timed_recv_zc(dq, &m, 0);
-  ccol_retval_t null_rv = ccol_dynmq_timed_recv_zc(NULL, &m, 0);
-  ccol_dynamic_queue_destroy(dq);
+  cmessage_t sent = {.data = NULL, .size = 0};
+  ccol_retval_t send_rv = cdynmq_send(dq, &sent);
+  ccol_retval_t got_rv = cdynmq_timed_recv(dq, &m, 0);
+  ccol_retval_t null_rv = cdynmq_timed_recv(NULL, &m, 0);
+  cdynmq_destroy(dq);
 
   REQUIRE_EQ(empty_rv, ccol_container_empty);
   REQUIRE_EQ(send_rv, ccol_success);
@@ -1766,88 +1760,88 @@ TEST(dynamic_queues, recv_drains_successfully_after_disable) {
   // turns sending off. Once the queue is empty a timed recv has to time out
   // and not return ccol_not_permitted, because the off state only affects
   // senders.
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
-  c_message_t m = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m), ccol_success);
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m), ccol_success);
+  cmessage_t m = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cdynmq_send(dq, &m), ccol_success);
+  REQUIRE_EQ(cdynmq_send(dq, &m), ccol_success);
 
-  ccol_dynmq_disable_sending(dq);
+  cdynmq_disable_sending(dq);
 
   // The messages already there must drain successfully.
-  REQUIRE_EQ(ccol_dynmq_recv_zc(dq, &m), ccol_success);
-  REQUIRE_EQ(ccol_dynmq_recv_zc(dq, &m), ccol_success);
+  REQUIRE_EQ(cdynmq_recv(dq, &m), ccol_success);
+  REQUIRE_EQ(cdynmq_recv(dq, &m), ccol_success);
 
   // The queue is empty and sending is off, so expect a timed recv to time out
   // and not return ccol_not_permitted.
   uint64_t timeout = 50000;  // 50 ms
-  REQUIRE_EQ(ccol_dynmq_timed_recv_zc(dq, &m, timeout), ccol_timed_out);
+  REQUIRE_EQ(cdynmq_timed_recv(dq, &m, timeout), ccol_timed_out);
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 typedef struct {
-  ccol_dynamic_queue *dq;
+  cdynmq *dq;
   ccol_retval_t result;
 } dq_disable_recv_args;
 
 void *dq_blocking_recv_thread(void *raw) {
   dq_disable_recv_args *a = (dq_disable_recv_args *)raw;
-  c_message_t m = {.data = NULL, .size = 0};
-  a->result = ccol_dynmq_recv_zc(a->dq, &m);
+  cmessage_t m = {.data = NULL, .size = 0};
+  a->result = cdynmq_recv(a->dq, &m);
   return NULL;
 }
 
 TEST(dynamic_queues, disable_sending_does_not_unblock_recv) {
-  // ccol_dynmq_disable_sending must NOT wake a thread blocked in
-  // ccol_dynmq_recv_zc. That thread stays blocked and returns only after the
+  // cdynmq_disable_sending must NOT wake a thread blocked in
+  // cdynmq_recv. That thread stays blocked and returns only after the
   // test turns sending back on and a message arrives.
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
   dq_disable_recv_args args = {.dq = dq, .result = ccol_unexpected_failure};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, dq_blocking_recv_thread, &args), 0);
 
   usleep(20000);  // let the receiver block on the empty queue
-  ccol_dynmq_disable_sending(dq);
+  cdynmq_disable_sending(dq);
   usleep(20000);  // receiver must still be blocked at this point
 
   // Turn sending back on and send a message, which releases the receiver.
-  ccol_dynmq_enable_sending(dq);
-  c_message_t m = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m), ccol_success);
+  cdynmq_enable_sending(dq);
+  cmessage_t m = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cdynmq_send(dq, &m), ccol_success);
   pthread_join(tid, NULL);
 
   REQUIRE_EQ(args.result, ccol_success);
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 TEST(dynamic_queues, timed_recv_times_out_when_disabled) {
-  // ccol_dynmq_timed_recv_zc returns ccol_timed_out, not
+  // cdynmq_timed_recv returns ccol_timed_out, not
   // ccol_not_permitted, when the queue is empty and sending is off, since the
   // off state must not make the call return before the deadline.
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
-  ccol_dynmq_disable_sending(dq);
+  cdynmq_disable_sending(dq);
 
   uint64_t timeout = 100000;  // 100 ms
   struct timespec before, after;
-  c_message_t m = {.data = NULL, .size = 0};
+  cmessage_t m = {.data = NULL, .size = 0};
 
   getMonoTime(before);
-  REQUIRE_EQ(ccol_dynmq_timed_recv_zc(dq, &m, timeout), ccol_timed_out);
+  REQUIRE_EQ(cdynmq_timed_recv(dq, &m, timeout), ccol_timed_out);
   getMonoTime(after);
   REQUIRE_GE(diffTimeUSec(before, after), 100000);  // must wait out the timeout
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 void *dq_helper_thread(void *args) {
-  ccol_dynamic_queue *dq = (ccol_dynamic_queue *)args;
+  cdynmq *dq = (cdynmq *)args;
 
-  c_message_t m = {.data = NULL, .size = 0};
-  assert(ccol_dynmq_recv_zc(dq, &m) == ccol_success);
+  cmessage_t m = {.data = NULL, .size = 0};
+  assert(cdynmq_recv(dq, &m) == ccol_success);
   assert(((char *)(m.data))[0] == 'A');
   assert(((char *)(m.data))[1] == '\0');
   free(m.data);
@@ -1857,26 +1851,26 @@ void *dq_helper_thread(void *args) {
 }
 
 TEST(dynamic_queues, send_and_receive_thread) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  cdynmq *dq = cdynmq_create_mp(NULL, NULL);
 
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, dq_helper_thread, dq), 0);
 
   usleep(50000);  // This makes the receiver wait
 
-  c_message_t m = {.data = malloc(16 * sizeof(char)), .size = 16};
+  cmessage_t m = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m.data))[0] = 'A';
   ((char *)(m.data))[1] = '\0';
 
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m), ccol_success);
+  REQUIRE_EQ(cdynmq_send(dq, &m), ccol_success);
   REQUIRE_EQ(m.data, NULL);  // The ownership of the message is lost.
 
   pthread_join(tid, NULL);
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
-/* The ccol_dynamic_queue version of
+/* The cdynmq version of
  * circular_queues.destroy_with_live_event_loop_registration_is_fatal above;
  * see that test's comment. */
 TEST(dynamic_queues, destroy_with_live_event_loop_registration_is_fatal) {
@@ -1890,19 +1884,18 @@ TEST(dynamic_queues, destroy_with_live_event_loop_registration_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+    cdynmq *dq = cdynmq_create(NULL);
     if (!dq) test_child_exit(2);
-    ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
-    ccol_event_handlers_t handlers = {0};
+    ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+    if (loop == CEVENTLOOP_NULL) test_child_exit(2);
+    ceventloop_handlers_t handlers = {0};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_dynq(dq, ccol_select_read), handlers, NULL,
-        &err);
-    if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cdynmq_selectable(dq, cselect_read), handlers, NULL, &err);
+    if (reg == CEVENTLOOP_REG_NULL) test_child_exit(2);
     /* The misuse under test: nothing removes the registration above and
      * nothing destroys the loop before this call. */
-    ccol_dynamic_queue_destroy(dq);
+    cdynmq_destroy(dq);
     test_child_exit(0); /* not reachable when the assert fires, as it must */
   }
   REQUIRE_NE(pid, -1);
@@ -1919,15 +1912,15 @@ TEST(dynamic_queues, destroy_with_live_event_loop_registration_is_fatal) {
 TEST(channels, create_fails) {
   char *err_str = NULL;
 
-  ccol_channel *ch = ccol_channel_create_mp(0, NULL, &err_str);
+  cchan *ch = cchan_create_mp(0, NULL, &err_str);
   REQUIRE_EQ((void *)ch, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 
-  ch = ccol_channel_create_mp(-1, NULL, &err_str);
+  ch = cchan_create_mp(-1, NULL, &err_str);
   REQUIRE_EQ((void *)ch, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 
-  ch = ccol_channel_create_mp(
+  ch = cchan_create_mp(
       (size_t)INT32_MAX,
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = NULL, .malloc = malloc, .realloc = realloc},
@@ -1939,18 +1932,18 @@ TEST(channels, create_fails) {
 TEST(channels, create_and_destroy_no_mprocs) {
   char *err_str = "";
 
-  ccol_channel *ch = ccol_channel_create_mp(1, NULL, &err_str);
+  cchan *ch = cchan_create_mp(1, NULL, &err_str);
   REQUIRE_NE((void *)ch, NULL);
   REQUIRE_EQ((void *)err_str, NULL);
 
-  ccol_channel_destroy(ch);
+  cchan_destroy(ch);
   REQUIRE_EQ((void *)ch, NULL);
 }
 
 TEST(channels, create_and_destroy_with_mp) {
   char *err_str = "";
 
-  ccol_channel *ch = ccol_channel_create_mp(
+  cchan *ch = cchan_create_mp(
       1,
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
@@ -1958,23 +1951,23 @@ TEST(channels, create_and_destroy_with_mp) {
   REQUIRE_NE((void *)ch, NULL);
   REQUIRE_EQ((void *)err_str, NULL);
 
-  ccol_channel_destroy(ch);
+  cchan_destroy(ch);
   REQUIRE_EQ((void *)ch, NULL);
 }
 
 void *thr_for_channels_basic_send_and_receive(void *args) {
   // Helper threads use direct assertions.
-  ccol_channel *ch = (ccol_channel *)args;
+  cchan *ch = (cchan *)args;
 
-  c_message_t msg = {.data = NULL, .size = 0};
+  cmessage_t msg = {.data = NULL, .size = 0};
 
-  assert(ccol_chan_recv_zc(ch, &msg) == ccol_success);
+  assert(cchan_recv(ch, &msg) == ccol_success);
 
   assert(*((char *)msg.data) == 'A');
 
   *((char *)msg.data) = 'B';
 
-  assert(ccol_chan_send_zc(ch, &msg) == ccol_success);
+  assert(cchan_send(ch, &msg) == ccol_success);
 
   assert(msg.data == NULL);
 
@@ -1982,30 +1975,30 @@ void *thr_for_channels_basic_send_and_receive(void *args) {
 }
 
 TEST(channels, basic_send_and_receive_no_mprocs) {
-  ccol_channel *ch = ccol_channel_create_mp(1, NULL, NULL);
+  cchan *ch = cchan_create_mp(1, NULL, NULL);
 
   pthread_t tid;
   REQUIRE_EQ(
       pthread_create(&tid, NULL, thr_for_channels_basic_send_and_receive, ch),
       0);
 
-  c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
+  cmessage_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   *((char *)m1.data) = 'A';
-  REQUIRE_EQ(ccol_chan_send_zc(ch, &m1), ccol_success);
+  REQUIRE_EQ(cchan_send(ch, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
-  c_message_t m2 = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_chan_recv_zc(ch, &m2), ccol_success);
+  cmessage_t m2 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cchan_recv(ch, &m2), ccol_success);
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(*((char *)m2.data), 'B');
 
   free(m2.data);
   pthread_join(tid, NULL);
-  ccol_channel_destroy(ch);
+  cchan_destroy(ch);
 }
 
 TEST(channels, basic_send_and_receive_with_mp) {
-  ccol_channel *ch = ccol_channel_create_mp(
+  cchan *ch = cchan_create_mp(
       1,
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
@@ -2016,51 +2009,51 @@ TEST(channels, basic_send_and_receive_with_mp) {
       pthread_create(&tid, NULL, thr_for_channels_basic_send_and_receive, ch),
       0);
 
-  c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
+  cmessage_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   *((char *)m1.data) = 'A';
-  REQUIRE_EQ(ccol_chan_send_zc(ch, &m1), ccol_success);
+  REQUIRE_EQ(cchan_send(ch, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
-  c_message_t m2 = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_chan_recv_zc(ch, &m2), ccol_success);
+  cmessage_t m2 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cchan_recv(ch, &m2), ccol_success);
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(*((char *)m2.data), 'B');
 
   free(m2.data);
   pthread_join(tid, NULL);
-  ccol_channel_destroy(ch);
+  cchan_destroy(ch);
 }
 
 void *thr_for_channels_msg_count(void *args) {
   // Helper threads use direct assertions.
-  ccol_channel *ch = (ccol_channel *)args;
+  cchan *ch = (cchan *)args;
 
-  c_message_t msg = {.data = NULL, .size = 0};
+  cmessage_t msg = {.data = NULL, .size = 0};
 
   for (size_t i = 3; i > 0; --i) {
-    assert(ccol_chan_msg_count(ch, ccol_owner_to_workers) == i);
-    ccol_chan_recv_zc(ch, &msg);
-    assert(ccol_chan_msg_count(ch, ccol_owner_to_workers) == i - 1);
+    assert(cchan_msg_count(ch, cchan_owner_to_workers) == i);
+    cchan_recv(ch, &msg);
+    assert(cchan_msg_count(ch, cchan_owner_to_workers) == i - 1);
   }
 
   for (size_t i = 0; i < 3; ++i) {
-    assert(ccol_chan_msg_count(ch, ccol_workers_to_owner) == i);
-    ccol_chan_send_zc(ch, &msg);
-    assert(ccol_chan_msg_count(ch, ccol_workers_to_owner) == i + 1);
+    assert(cchan_msg_count(ch, cchan_workers_to_owner) == i);
+    cchan_send(ch, &msg);
+    assert(cchan_msg_count(ch, cchan_workers_to_owner) == i + 1);
   }
 
   return NULL;
 }
 
 TEST(channels, msg_count) {
-  ccol_channel *ch = ccol_channel_create_mp(3, NULL, NULL);
+  cchan *ch = cchan_create_mp(3, NULL, NULL);
 
-  c_message_t m1 = {.data = NULL, .size = 0};
+  cmessage_t m1 = {.data = NULL, .size = 0};
 
   for (size_t i = 0; i < 3; ++i) {
-    REQUIRE_EQ(ccol_chan_msg_count(ch, ccol_owner_to_workers), i);
-    ccol_chan_send_zc(ch, &m1);
-    REQUIRE_EQ(ccol_chan_msg_count(ch, ccol_owner_to_workers), i + 1);
+    REQUIRE_EQ(cchan_msg_count(ch, cchan_owner_to_workers), i);
+    cchan_send(ch, &m1);
+    REQUIRE_EQ(cchan_msg_count(ch, cchan_owner_to_workers), i + 1);
   }
 
   pthread_t tid;
@@ -2072,12 +2065,12 @@ TEST(channels, msg_count) {
   pthread_join(tid, NULL);
 
   for (size_t i = 3; i > 0; --i) {
-    REQUIRE_EQ(ccol_chan_msg_count(ch, ccol_workers_to_owner), i);
-    ccol_chan_recv_zc(ch, &m1);
-    REQUIRE_EQ(ccol_chan_msg_count(ch, ccol_workers_to_owner), i - 1);
+    REQUIRE_EQ(cchan_msg_count(ch, cchan_workers_to_owner), i);
+    cchan_recv(ch, &m1);
+    REQUIRE_EQ(cchan_msg_count(ch, cchan_workers_to_owner), i - 1);
   }
 
-  ccol_channel_destroy(ch);
+  cchan_destroy(ch);
 }
 
 /* The two channel tests below take turns through phase, never through a
@@ -2086,7 +2079,7 @@ TEST(channels, msg_count) {
  * its first failed check in failed_line and the main thread asserts it after
  * the join, so a failure never ends the whole binary. */
 typedef struct {
-  ccol_channel *ch;
+  cchan *ch;
   atomic_int phase;
   atomic_int failed_line;
 } chan_turns_t;
@@ -2117,23 +2110,23 @@ void *thr_for_channels_try_send_and_try_receive(void *args) {
     return NULL;
   }
 
-  c_message_t msg = {.data = NULL, .size = 0};
-  CHAN_CHECK(t, ccol_chan_try_recv_zc(t->ch, &msg) == ccol_success);
+  cmessage_t msg = {.data = NULL, .size = 0};
+  CHAN_CHECK(t, cchan_try_recv(t->ch, &msg) == ccol_success);
   CHAN_CHECK(t, msg.data != NULL && *((char *)msg.data) == 'A');
   if (msg.data) *((char *)msg.data) = 'B';
 
-  c_message_t m2 = {.data = NULL, .size = 0};
-  CHAN_CHECK(t, ccol_chan_try_recv_zc(t->ch, &m2) == ccol_container_empty);
+  cmessage_t m2 = {.data = NULL, .size = 0};
+  CHAN_CHECK(t, cchan_try_recv(t->ch, &m2) == ccol_container_empty);
   CHAN_CHECK(t, m2.data == NULL);
 
   if (msg.data) {
-    CHAN_CHECK(t, ccol_chan_try_send_zc(t->ch, &msg) == ccol_success);
+    CHAN_CHECK(t, cchan_try_send(t->ch, &msg) == ccol_success);
     CHAN_CHECK(t, msg.data == NULL);
     free(msg.data);
   }
 
-  m2 = (c_message_t){.data = malloc(sizeof(char)), .size = 1};
-  CHAN_CHECK(t, ccol_chan_try_send_zc(t->ch, &m2) == ccol_container_full);
+  m2 = (cmessage_t){.data = malloc(sizeof(char)), .size = 1};
+  CHAN_CHECK(t, cchan_try_send(t->ch, &m2) == ccol_container_full);
   CHAN_CHECK(t, m2.data != NULL);
   free(m2.data);
 
@@ -2142,7 +2135,7 @@ void *thr_for_channels_try_send_and_try_receive(void *args) {
 }
 
 TEST(channels, try_send_and_try_receive) {
-  chan_turns_t t = {.ch = ccol_channel_create_mp(1, NULL, NULL)};
+  chan_turns_t t = {.ch = cchan_create_mp(1, NULL, NULL)};
   REQUIRE_NE((void *)t.ch, NULL);
 
   pthread_t tid;
@@ -2150,14 +2143,14 @@ TEST(channels, try_send_and_try_receive) {
       pthread_create(&tid, NULL, thr_for_channels_try_send_and_try_receive, &t),
       0);
 
-  c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
+  cmessage_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   *(char *)m1.data = 'A';
-  ccol_retval_t first_send = ccol_chan_try_send_zc(t.ch, &m1);
+  ccol_retval_t first_send = cchan_try_send(t.ch, &m1);
   bool first_taken = m1.data == NULL;
   free(m1.data);
 
-  m1 = (c_message_t){.data = malloc(sizeof(char)), .size = 1};
-  ccol_retval_t full_send = ccol_chan_try_send_zc(t.ch, &m1);
+  m1 = (cmessage_t){.data = malloc(sizeof(char)), .size = 1};
+  ccol_retval_t full_send = cchan_try_send(t.ch, &m1);
   bool full_kept = m1.data != NULL;
   free(m1.data);
   m1.data = NULL;
@@ -2165,16 +2158,16 @@ TEST(channels, try_send_and_try_receive) {
   atomic_store(&t.phase, 1);
   bool worker_done = chan_wait_phase(&t, 2);
 
-  c_message_t m2 = {.data = NULL, .size = 0};
-  ccol_retval_t got = ccol_chan_try_recv_zc(t.ch, &m2);
+  cmessage_t m2 = {.data = NULL, .size = 0};
+  ccol_retval_t got = cchan_try_recv(t.ch, &m2);
   char got_char = m2.data ? *(char *)m2.data : 0;
-  ccol_retval_t empty = ccol_chan_try_recv_zc(t.ch, &m1);
+  ccol_retval_t empty = cchan_try_recv(t.ch, &m1);
   bool empty_left_null = m1.data == NULL;
 
   free(m2.data);
   free(m1.data);
   pthread_join(tid, NULL);
-  ccol_channel_destroy(t.ch);
+  cchan_destroy(t.ch);
 
   REQUIRE_EQ(first_send, ccol_success);
   REQUIRE_TRUE(first_taken);
@@ -2207,37 +2200,33 @@ void *thr_for_channels_timed_send_and_timed_receive(void *args) {
   struct timespec before;
   struct timespec after;
 
-  c_message_t msg = {.data = NULL, .size = 0};
+  cmessage_t msg = {.data = NULL, .size = 0};
   getMonoTime(before);
-  CHAN_CHECK(
-      t, ccol_chan_timed_recv_zc(t->ch, &msg, CHAN_LONG_US) == ccol_success);
+  CHAN_CHECK(t, cchan_timed_recv(t->ch, &msg, CHAN_LONG_US) == ccol_success);
   getMonoTime(after);
   CHAN_CHECK(t, diffTimeUSec(before, after) < CHAN_AT_ONCE_US);
   CHAN_CHECK(t, msg.data != NULL && *((char *)msg.data) == 'A');
   if (msg.data) *((char *)msg.data) = 'B';
 
-  c_message_t m2 = {.data = NULL, .size = 0};
+  cmessage_t m2 = {.data = NULL, .size = 0};
   getMonoTime(before);
-  CHAN_CHECK(
-      t, ccol_chan_timed_recv_zc(t->ch, &m2, CHAN_SHORT_US) == ccol_timed_out);
+  CHAN_CHECK(t, cchan_timed_recv(t->ch, &m2, CHAN_SHORT_US) == ccol_timed_out);
   getMonoTime(after);
   CHAN_CHECK(t, diffTimeUSec(before, after) >= CHAN_SHORT_US);
   CHAN_CHECK(t, m2.data == NULL);
 
   if (msg.data) {
     getMonoTime(before);
-    CHAN_CHECK(
-        t, ccol_chan_timed_send_zc(t->ch, &msg, CHAN_LONG_US) == ccol_success);
+    CHAN_CHECK(t, cchan_timed_send(t->ch, &msg, CHAN_LONG_US) == ccol_success);
     getMonoTime(after);
     CHAN_CHECK(t, diffTimeUSec(before, after) < CHAN_AT_ONCE_US);
     CHAN_CHECK(t, msg.data == NULL);
     free(msg.data);
   }
 
-  m2 = (c_message_t){.data = malloc(sizeof(char)), .size = 1};
+  m2 = (cmessage_t){.data = malloc(sizeof(char)), .size = 1};
   getMonoTime(before);
-  CHAN_CHECK(
-      t, ccol_chan_timed_send_zc(t->ch, &m2, CHAN_SHORT_US) == ccol_timed_out);
+  CHAN_CHECK(t, cchan_timed_send(t->ch, &m2, CHAN_SHORT_US) == ccol_timed_out);
   getMonoTime(after);
   CHAN_CHECK(t, diffTimeUSec(before, after) >= CHAN_SHORT_US);
   CHAN_CHECK(t, m2.data != NULL);
@@ -2248,7 +2237,7 @@ void *thr_for_channels_timed_send_and_timed_receive(void *args) {
 }
 
 TEST(channels, timed_send_and_timed_receive) {
-  chan_turns_t t = {.ch = ccol_channel_create_mp(1, NULL, NULL)};
+  chan_turns_t t = {.ch = cchan_create_mp(1, NULL, NULL)};
   REQUIRE_NE((void *)t.ch, NULL);
 
   pthread_t tid;
@@ -2259,18 +2248,18 @@ TEST(channels, timed_send_and_timed_receive) {
   struct timespec before;
   struct timespec after;
 
-  c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
+  cmessage_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   *(char *)m1.data = 'A';
   getMonoTime(before);
-  ccol_retval_t first_send = ccol_chan_timed_send_zc(t.ch, &m1, CHAN_LONG_US);
+  ccol_retval_t first_send = cchan_timed_send(t.ch, &m1, CHAN_LONG_US);
   getMonoTime(after);
   long first_us = diffTimeUSec(before, after);
   bool first_taken = m1.data == NULL;
   free(m1.data);
 
-  m1 = (c_message_t){.data = malloc(sizeof(char)), .size = 1};
+  m1 = (cmessage_t){.data = malloc(sizeof(char)), .size = 1};
   getMonoTime(before);
-  ccol_retval_t full_send = ccol_chan_timed_send_zc(t.ch, &m1, CHAN_SHORT_US);
+  ccol_retval_t full_send = cchan_timed_send(t.ch, &m1, CHAN_SHORT_US);
   getMonoTime(after);
   long full_us = diffTimeUSec(before, after);
   bool full_kept = m1.data != NULL;
@@ -2280,15 +2269,15 @@ TEST(channels, timed_send_and_timed_receive) {
   atomic_store(&t.phase, 1);
   bool worker_done = chan_wait_phase(&t, 2);
 
-  c_message_t m2 = {.data = NULL, .size = 0};
+  cmessage_t m2 = {.data = NULL, .size = 0};
   getMonoTime(before);
-  ccol_retval_t got = ccol_chan_timed_recv_zc(t.ch, &m2, CHAN_LONG_US);
+  ccol_retval_t got = cchan_timed_recv(t.ch, &m2, CHAN_LONG_US);
   getMonoTime(after);
   long got_us = diffTimeUSec(before, after);
   char got_char = m2.data ? *(char *)m2.data : 0;
 
   getMonoTime(before);
-  ccol_retval_t empty = ccol_chan_timed_recv_zc(t.ch, &m1, CHAN_SHORT_US);
+  ccol_retval_t empty = cchan_timed_recv(t.ch, &m1, CHAN_SHORT_US);
   getMonoTime(after);
   long empty_us = diffTimeUSec(before, after);
   bool empty_left_null = m1.data == NULL;
@@ -2296,7 +2285,7 @@ TEST(channels, timed_send_and_timed_receive) {
   free(m2.data);
   free(m1.data);
   pthread_join(tid, NULL);
-  ccol_channel_destroy(t.ch);
+  cchan_destroy(t.ch);
 
   REQUIRE_EQ(first_send, ccol_success);
   REQUIRE_LT(first_us, (long)CHAN_AT_ONCE_US);
@@ -2315,61 +2304,61 @@ TEST(channels, timed_send_and_timed_receive) {
 }
 
 void *thr_for_enable_disable_sending(void *args) {
-  ccol_channel *ch = (ccol_channel *)args;
+  cchan *ch = (cchan *)args;
 
-  c_message_t msg = {.data = NULL, .size = 0};
-  assert(ccol_chan_recv_zc(ch, &msg) == ccol_success);
+  cmessage_t msg = {.data = NULL, .size = 0};
+  assert(cchan_recv(ch, &msg) == ccol_success);
   assert(msg.data != NULL);
   assert(*((char *)msg.data) == 'A');
   *((char *)msg.data) = 'B';
 
-  ccol_chan_disable_sending(ch, ccol_workers_to_owner);
-  assert(ccol_chan_send_zc(ch, &msg) == ccol_not_permitted);
+  cchan_disable_sending(ch, cchan_workers_to_owner);
+  assert(cchan_send(ch, &msg) == ccol_not_permitted);
   assert(msg.data != NULL);
 
-  ccol_chan_enable_sending(ch, ccol_workers_to_owner);
-  assert(ccol_chan_send_zc(ch, &msg) == ccol_success);
+  cchan_enable_sending(ch, cchan_workers_to_owner);
+  assert(cchan_send(ch, &msg) == ccol_success);
   assert(msg.data == NULL);
 
   return NULL;
 }
 
 TEST(channels, enable_disable_sending) {
-  ccol_channel *ch = ccol_channel_create_mp(1, NULL, NULL);
+  cchan *ch = cchan_create_mp(1, NULL, NULL);
 
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_for_enable_disable_sending, ch), 0);
 
-  c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
+  cmessage_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   m1.size = 1;
   ((char *)(m1.data))[0] = 'A';
 
-  ccol_chan_disable_sending(ch, ccol_owner_to_workers);
+  cchan_disable_sending(ch, cchan_owner_to_workers);
 
-  REQUIRE_EQ(ccol_chan_send_zc(ch, &m1), ccol_not_permitted);
+  REQUIRE_EQ(cchan_send(ch, &m1), ccol_not_permitted);
   REQUIRE_NE(m1.data, NULL);
 
-  ccol_chan_enable_sending(ch, ccol_owner_to_workers);
+  cchan_enable_sending(ch, cchan_owner_to_workers);
 
-  REQUIRE_EQ(ccol_chan_send_zc(ch, &m1), ccol_success);
+  REQUIRE_EQ(cchan_send(ch, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
-  c_message_t m2 = {.data = NULL, .size = 0};
+  cmessage_t m2 = {.data = NULL, .size = 0};
 
-  REQUIRE_EQ(ccol_chan_recv_zc(ch, &m2), ccol_success);
+  REQUIRE_EQ(cchan_recv(ch, &m2), ccol_success);
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(*(char *)m2.data, 'B');
 
   free(m2.data);
   pthread_join(tid, NULL);
-  ccol_channel_destroy(ch);
+  cchan_destroy(ch);
 }
 
-/* The ccol_channel version of
+/* The cchan version of
  * circular_queues.destroy_with_live_event_loop_registration_is_fatal above.
- * __ccol_channel_destroy destroys both circular queues under the channel, so
+ * __cchan_destroy destroys both circular queues under the channel, so
  * it gets the same assert from whichever direction still has a live
- * ccol_event_loop registration watching it. */
+ * ceventloop registration watching it. */
 TEST(channels, destroy_with_live_event_loop_registration_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
@@ -2381,22 +2370,21 @@ TEST(channels, destroy_with_live_event_loop_registration_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    ccol_channel *ch = ccol_channel_create(4, NULL);
+    cchan *ch = cchan_create(4, NULL);
     if (!ch) test_child_exit(2);
-    ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
-    ccol_event_handlers_t handlers = {0};
+    ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+    if (loop == CEVENTLOOP_NULL) test_child_exit(2);
+    ceventloop_handlers_t handlers = {0};
     char *err = NULL;
-    /* This thread owns the ccol_channel, so ccol_select_read here resolves
-     * to workers_to_owner_cq; the doc comment of ccol_selectable_from_chan
+    /* This thread owns the cchan, so cselect_read here resolves
+     * to workers_to_owner_cq; the doc comment of cchan_selectable
      * has the details. */
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_chan(ch, ccol_select_read), handlers, NULL,
-        &err);
-    if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cchan_selectable(ch, cselect_read), handlers, NULL, &err);
+    if (reg == CEVENTLOOP_REG_NULL) test_child_exit(2);
     /* The misuse under test: nothing removes the registration above and
      * nothing destroys the loop before this call. */
-    ccol_channel_destroy(ch);
+    cchan_destroy(ch);
     test_child_exit(0); /* not reachable when the assert fires, as it must */
   }
   REQUIRE_NE(pid, -1);
@@ -2408,30 +2396,30 @@ TEST(channels, destroy_with_live_event_loop_registration_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// CCOL_SELECT TESTS
+// CSELECT TESTS
 
 // helpers
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   int delay_us;
   int value;
 } sel_circq_args;
 
 typedef struct {
-  ccol_dynamic_queue *dq;
+  cdynmq *dq;
   int delay_us;
   int value;
 } sel_dynq_args;
 
 typedef struct {
-  ccol_circular_queue *cq0;
-  ccol_circular_queue *cq1;
+  ccircq *cq0;
+  ccircq *cq1;
   int delay_us;
   int value;
 } sel_disable_reenable_args;
 
 typedef struct {
-  ccol_channel *ch;
+  cchan *ch;
   int delay_us;
   int value;
 } sel_chan_args;
@@ -2442,8 +2430,8 @@ static void *thr_send_to_circq(void *arg) {
   int *data = malloc(sizeof(int));
   assert(data);
   *data = a->value;
-  c_message_t msg = {.data = data, .size = sizeof(int)};
-  assert(ccol_circq_send_zc(a->cq, &msg) == ccol_success);
+  cmessage_t msg = {.data = data, .size = sizeof(int)};
+  assert(ccircq_send(a->cq, &msg) == ccol_success);
   return NULL;
 }
 
@@ -2453,27 +2441,27 @@ static void *thr_send_to_dynq(void *arg) {
   int *data = malloc(sizeof(int));
   assert(data);
   *data = a->value;
-  c_message_t msg = {.data = data, .size = sizeof(int)};
-  assert(ccol_dynmq_send_zc(a->dq, &msg) == ccol_success);
+  cmessage_t msg = {.data = data, .size = sizeof(int)};
+  assert(cdynmq_send(a->dq, &msg) == ccol_success);
   return NULL;
 }
 
 /* Turns sending off on both queues and waits for another delay, then turns
  * sending back on for cq0 and sends one message to it. It checks that
- * ccol_select stays blocked through the off phase and wakes only on the
+ * cselect stays blocked through the off phase and wakes only on the
  * message that comes after it. */
 static void *thr_disable_then_reenable_and_send(void *arg) {
   sel_disable_reenable_args *a = (sel_disable_reenable_args *)arg;
   usleep((useconds_t)a->delay_us);
-  ccol_circq_disable_sending(a->cq0);
-  ccol_circq_disable_sending(a->cq1);
+  ccircq_disable_sending(a->cq0);
+  ccircq_disable_sending(a->cq1);
   usleep((useconds_t)a->delay_us);
-  ccol_circq_enable_sending(a->cq0);
+  ccircq_enable_sending(a->cq0);
   int *data = malloc(sizeof(int));
   assert(data);
   *data = a->value;
-  c_message_t msg = {.data = data, .size = sizeof(int)};
-  assert(ccol_circq_send_zc(a->cq0, &msg) == ccol_success);
+  cmessage_t msg = {.data = data, .size = sizeof(int)};
+  assert(ccircq_send(a->cq0, &msg) == ccol_success);
   return NULL;
 }
 
@@ -2483,32 +2471,31 @@ static void *thr_send_via_channel(void *arg) {
   int *data = malloc(sizeof(int));
   assert(data);
   *data = a->value;
-  c_message_t msg = {.data = data, .size = sizeof(int)};
-  assert(ccol_chan_send_zc(a->ch, &msg) == ccol_success);
+  cmessage_t msg = {.data = data, .size = sizeof(int)};
+  assert(cchan_send(a->ch, &msg) == ccol_success);
   return NULL;
 }
 
 // tests
-TEST(ccol_select, returns_invalid_args_on_bad_inputs) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+TEST(cselect, returns_invalid_args_on_bad_inputs) {
+  ccircq *cq = ccircq_create(4, NULL);
 
   size_t idx = 0;
-  ccol_selectable sel = ccol_selectable_from_circq(cq, ccol_select_read);
+  cselectable_t sel = ccircq_selectable(cq, cselect_read);
 
-  REQUIRE_EQ(ccol_select(NULL, 1, &sel), ccol_invalid_args);
-  REQUIRE_EQ(ccol_select(&idx, 0, &sel), ccol_invalid_args);
-  REQUIRE_EQ(ccol_select(&idx, 1, NULL), ccol_invalid_args);
+  REQUIRE_EQ(cselect(NULL, 1, &sel), ccol_invalid_args);
+  REQUIRE_EQ(cselect(&idx, 0, &sel), ccol_invalid_args);
+  REQUIRE_EQ(cselect(&idx, 1, NULL), ccol_invalid_args);
 
-  ccol_selectable null_sel = ccol_selectable_from_circq(NULL, ccol_select_read);
-  REQUIRE_EQ(ccol_select(&idx, 1, &null_sel), ccol_invalid_args);
+  cselectable_t null_sel = ccircq_selectable(NULL, cselect_read);
+  REQUIRE_EQ(cselect(&idx, 1, &null_sel), ccol_invalid_args);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_select,
-     timed_n_too_large_rejected_before_any_allocation_or_oob_read) {
+TEST(cselect, timed_n_too_large_rejected_before_any_allocation_or_oob_read) {
   /* Regression test for the size_t overflow guard in _sel_validate_args.
-   * ccol_select_timed() keeps one waiter node per selectable in an array it
+   * cselect_timed() keeps one waiter node per selectable in an array it
    * allocates with a single plain malloc(n * sizeof(internal waiter node))
    * call, which has no calloc-style overflow check of its own. The waiter
    * node struct has several pointer-sized fields, so n == SIZE_MAX is always
@@ -2519,23 +2506,23 @@ TEST(ccol_select,
    * purpose while n claims far more, so a regression that checks n only
    * after it starts scanning the array reads out of bounds here instead of
    * just getting an allocation size wrong. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
-  ccol_selectable sel = ccol_selectable_from_circq(cq, ccol_select_read);
+  ccircq *cq = ccircq_create(4, NULL);
+  cselectable_t sel = ccircq_selectable(cq, cselect_read);
 
   size_t idx = 99;
-  REQUIRE_EQ(ccol_select_timed(&idx, SIZE_MAX, &sel, 0), ccol_invalid_args);
+  REQUIRE_EQ(cselect_timed(&idx, SIZE_MAX, &sel, 0), ccol_invalid_args);
   REQUIRE_EQ(idx, (size_t)99);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_select,
+TEST(cselect,
      timed_n_exceeding_int_max_rejected_before_any_allocation_or_oob_read) {
   /* Regression test for the n > INT_MAX guard in _sel_validate_args.
    * _sel_phase1_scan_register narrows the index of a matched selectable, a
    * size_t in the range 0..n-1, into a plain `int`, its `found` local, which
    * also carries the sentinels -1 for "nothing found yet" and -2 for "system
-   * error", and ccol_select_timed then widens it back with `(size_t)found`.
+   * error", and cselect_timed then widens it back with `(size_t)found`.
    * With an n large enough for a match beyond INT_MAX that narrowing gives a
    * negative or wrapped value, which then corrupts *ready_index. This n is
    * far below the SIZE_MAX / sizeof(internal waiter node) guard the test
@@ -2546,117 +2533,113 @@ TEST(ccol_select,
    * exactly one element on purpose while n claims far more, so a regression
    * that checks n only after it starts scanning the array reads out of
    * bounds here instead of just getting an allocation size wrong. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
-  ccol_selectable sel = ccol_selectable_from_circq(cq, ccol_select_read);
+  ccircq *cq = ccircq_create(4, NULL);
+  cselectable_t sel = ccircq_selectable(cq, cselect_read);
 
   size_t idx = 99;
-  REQUIRE_EQ(ccol_select_timed(&idx, (size_t)INT_MAX + 1, &sel, 0),
+  REQUIRE_EQ(cselect_timed(&idx, (size_t)INT_MAX + 1, &sel, 0),
              ccol_invalid_args);
   REQUIRE_EQ(idx, (size_t)99);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_select, receives_from_first_queue_when_message_already_present) {
-  ccol_circular_queue *q0 = ccol_circular_queue_create(4, NULL);
-  ccol_circular_queue *q1 = ccol_circular_queue_create(4, NULL);
+TEST(cselect, receives_from_first_queue_when_message_already_present) {
+  ccircq *q0 = ccircq_create(4, NULL);
+  ccircq *q1 = ccircq_create(4, NULL);
 
   int *data = malloc(sizeof(int));
   *data = 7;
-  c_message_t send_msg = {.data = data, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(q0, &send_msg), ccol_success);
+  cmessage_t send_msg = {.data = data, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(q0, &send_msg), ccol_success);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_circq(q0, ccol_select_read),
-                     ccol_selectable_from_circq(q1, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, ccircq_selectable(q0, cselect_read),
+                        ccircq_selectable(q1, cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, 0);
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(q0, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(q0, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 7);
 
   free(recv_msg.data);
-  ccol_circular_queue_destroy(q0);
-  ccol_circular_queue_destroy(q1);
+  ccircq_destroy(q0);
+  ccircq_destroy(q1);
 }
 
-TEST(ccol_select, receives_from_second_queue_when_message_already_present) {
-  ccol_circular_queue *q0 = ccol_circular_queue_create(4, NULL);
-  ccol_circular_queue *q1 = ccol_circular_queue_create(4, NULL);
+TEST(cselect, receives_from_second_queue_when_message_already_present) {
+  ccircq *q0 = ccircq_create(4, NULL);
+  ccircq *q1 = ccircq_create(4, NULL);
 
   int *data = malloc(sizeof(int));
   *data = 42;
-  c_message_t send_msg = {.data = data, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(q1, &send_msg), ccol_success);
+  cmessage_t send_msg = {.data = data, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(q1, &send_msg), ccol_success);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_circq(q0, ccol_select_read),
-                     ccol_selectable_from_circq(q1, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, ccircq_selectable(q0, cselect_read),
+                        ccircq_selectable(q1, cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, 1);
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(q1, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(q1, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 42);
 
   free(recv_msg.data);
-  ccol_circular_queue_destroy(q0);
-  ccol_circular_queue_destroy(q1);
+  ccircq_destroy(q0);
+  ccircq_destroy(q1);
 }
 
-TEST(ccol_select, blocks_until_message_arrives_on_circq) {
-  ccol_circular_queue *q0 = ccol_circular_queue_create(4, NULL);
-  ccol_circular_queue *q1 = ccol_circular_queue_create(4, NULL);
+TEST(cselect, blocks_until_message_arrives_on_circq) {
+  ccircq *q0 = ccircq_create(4, NULL);
+  ccircq *q1 = ccircq_create(4, NULL);
 
   sel_circq_args args = {.cq = q1, .delay_us = 15000, .value = 99};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_circq, &args), 0);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_circq(q0, ccol_select_read),
-                     ccol_selectable_from_circq(q1, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, ccircq_selectable(q0, cselect_read),
+                        ccircq_selectable(q1, cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, 1);
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(q1, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(q1, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 99);
 
   free(recv_msg.data);
   pthread_join(tid, NULL);
-  ccol_circular_queue_destroy(q0);
-  ccol_circular_queue_destroy(q1);
+  ccircq_destroy(q0);
+  ccircq_destroy(q1);
 }
 
-TEST(ccol_select, timed_returns_timed_out_when_all_queues_disabled) {
+TEST(cselect, timed_returns_timed_out_when_all_queues_disabled) {
   // Sending being off must not affect waiters in the read direction, so
-  // ccol_select_timed should wait out the full timeout and not return
+  // cselect_timed should wait out the full timeout and not return
   // ccol_not_permitted.
-  ccol_circular_queue *q0 = ccol_circular_queue_create(4, NULL);
-  ccol_circular_queue *q1 = ccol_circular_queue_create(4, NULL);
+  ccircq *q0 = ccircq_create(4, NULL);
+  ccircq *q1 = ccircq_create(4, NULL);
 
-  ccol_circq_disable_sending(q0);
-  ccol_circq_disable_sending(q1);
+  ccircq_disable_sending(q0);
+  ccircq_disable_sending(q1);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&idx, 50000 /* us */,
-                           ccol_selectable_from_circq(q0, ccol_select_read),
-                           ccol_selectable_from_circq(q1, ccol_select_read)),
-      ccol_timed_out);
+  REQUIRE_EQ(cselect_timed_va(&idx, 50000 /* us */,
+                              ccircq_selectable(q0, cselect_read),
+                              ccircq_selectable(q1, cselect_read)),
+             ccol_timed_out);
 
-  ccol_circular_queue_destroy(q0);
-  ccol_circular_queue_destroy(q1);
+  ccircq_destroy(q0);
+  ccircq_destroy(q1);
 }
 
-TEST(ccol_select,
+TEST(cselect,
      stays_blocked_through_disable_then_wakes_after_reenable_and_send) {
-  // ccol_select must stay blocked while sending is off on all queues, and
+  // cselect must stay blocked while sending is off on all queues, and
   // once the test turns sending back on and a message arrives it should
   // return success.
-  ccol_circular_queue *q0 = ccol_circular_queue_create(4, NULL);
-  ccol_circular_queue *q1 = ccol_circular_queue_create(4, NULL);
+  ccircq *q0 = ccircq_create(4, NULL);
+  ccircq *q1 = ccircq_create(4, NULL);
 
   sel_disable_reenable_args args = {
       .cq0 = q0, .cq1 = q1, .delay_us = 15000, .value = 42};
@@ -2665,95 +2648,92 @@ TEST(ccol_select,
       pthread_create(&tid, NULL, thr_disable_then_reenable_and_send, &args), 0);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_circq(q0, ccol_select_read),
-                     ccol_selectable_from_circq(q1, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, ccircq_selectable(q0, cselect_read),
+                        ccircq_selectable(q1, cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, 0);
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(q0, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(q0, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 42);
   free(recv_msg.data);
 
   pthread_join(tid, NULL);
-  ccol_circular_queue_destroy(q0);
-  ccol_circular_queue_destroy(q1);
+  ccircq_destroy(q0);
+  ccircq_destroy(q1);
 }
 
-TEST(ccol_select, blocks_until_message_arrives_on_dynq) {
-  ccol_circular_queue *q0 = ccol_circular_queue_create(4, NULL);
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+TEST(cselect, blocks_until_message_arrives_on_dynq) {
+  ccircq *q0 = ccircq_create(4, NULL);
+  cdynmq *dq = cdynmq_create(NULL);
 
   sel_dynq_args args = {.dq = dq, .delay_us = 15000, .value = 55};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_dynq, &args), 0);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_circq(q0, ccol_select_read),
-                     ccol_selectable_from_dynq(dq, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, ccircq_selectable(q0, cselect_read),
+                        cdynmq_selectable(dq, cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, 1);
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_dynmq_try_recv_zc(dq, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cdynmq_try_recv(dq, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 55);
 
   free(recv_msg.data);
   pthread_join(tid, NULL);
-  ccol_circular_queue_destroy(q0);
-  ccol_dynamic_queue_destroy(dq);
+  ccircq_destroy(q0);
+  cdynmq_destroy(dq);
 }
 
-TEST(ccol_select, ccol_channel_direction_resolved_correctly_for_owner_thread) {
-  ccol_channel *ch = ccol_channel_create_mp(4, NULL, NULL);
+TEST(cselect, cchan_direction_resolved_correctly_for_owner_thread) {
+  cchan *ch = cchan_create_mp(4, NULL, NULL);
 
-  /* The worker thread sends with ccol_chan_send_zc, which goes to
+  /* The worker thread sends with cchan_send, which goes to
    * workers_to_owner_cq, and the owner thread calls
-   * ccol_selectable_from_chan() here, which resolves to workers_to_owner_cq
-   * as well, so ccol_select watches the right queue.
+   * cchan_selectable() here, which resolves to workers_to_owner_cq
+   * as well, so cselect watches the right queue.
    */
   sel_chan_args args = {.ch = ch, .delay_us = 15000, .value = 77};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_via_channel, &args), 0);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_chan(ch, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, cchan_selectable(ch, cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, 0);
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_chan_try_recv_zc(ch, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cchan_try_recv(ch, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 77);
 
   free(recv_msg.data);
   pthread_join(tid, NULL);
-  ccol_channel_destroy(ch);
+  cchan_destroy(ch);
 }
 
 // write-wait helpers
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   int delay_us;
 } sel_recv_circq_args;
 
 static void *thr_recv_from_circq(void *arg) {
   sel_recv_circq_args *a = (sel_recv_circq_args *)arg;
   usleep((useconds_t)a->delay_us);
-  c_message_t msg = {.data = NULL, .size = 0};
-  assert(ccol_circq_recv_zc(a->cq, &msg) == ccol_success);
+  cmessage_t msg = {.data = NULL, .size = 0};
+  assert(ccircq_recv(a->cq, &msg) == ccol_success);
   free(msg.data);
   return NULL;
 }
 
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   int delay_us;
 } sel_disable_circq_args;
 
 static void *thr_disable_circq_sending(void *arg) {
   sel_disable_circq_args *a = (sel_disable_circq_args *)arg;
   usleep((useconds_t)a->delay_us);
-  ccol_circq_disable_sending(a->cq);
+  ccircq_disable_sending(a->cq);
   return NULL;
 }
 
@@ -2761,26 +2741,25 @@ static void *thr_disable_circq_sending(void *arg) {
  * own (a static byte), so a test can drain it without a free. */
 static char sel_full_token;
 
-static ccol_retval_t sel_fill_one(ccol_circular_queue *cq) {
-  c_message_t m = {.data = &sel_full_token, .size = 1};
-  return ccol_circq_try_send_zc(cq, &m);
+static ccol_retval_t sel_fill_one(ccircq *cq) {
+  cmessage_t m = {.data = &sel_full_token, .size = 1};
+  return ccircq_try_send(cq, &m);
 }
 
 // write-wait tests
-TEST(ccol_select, write_circq_writable_immediately) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+TEST(cselect, write_circq_writable_immediately) {
+  ccircq *cq = ccircq_create(4, NULL);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_circq(cq, ccol_select_write)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, ccircq_selectable(cq, cselect_write)),
+             ccol_success);
   REQUIRE_EQ(idx, 0);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_select, write_circq_blocks_until_reader_frees_space) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(2, NULL);
+TEST(cselect, write_circq_blocks_until_reader_frees_space) {
+  ccircq *cq = ccircq_create(2, NULL);
 
   /* Fill the queue to capacity */
   int *d0 = malloc(sizeof(int));
@@ -2789,29 +2768,28 @@ TEST(ccol_select, write_circq_blocks_until_reader_frees_space) {
   int *d1 = malloc(sizeof(int));
   assert(d1);
   *d1 = 20;
-  c_message_t m0 = {.data = d0, .size = sizeof(int)};
-  c_message_t m1 = {.data = d1, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m0), ccol_success);
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m1), ccol_success);
+  cmessage_t m0 = {.data = d0, .size = sizeof(int)};
+  cmessage_t m1 = {.data = d1, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(cq, &m0), ccol_success);
+  REQUIRE_EQ(ccircq_send(cq, &m1), ccol_success);
 
   sel_recv_circq_args args = {.cq = cq, .delay_us = 15000};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_recv_from_circq, &args), 0);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_circq(cq, ccol_select_write)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, ccircq_selectable(cq, cselect_write)),
+             ccol_success);
   REQUIRE_EQ(idx, 0);
 
   pthread_join(tid, NULL);
 
   /* Drain the message that's left so the assert in destroy passes */
-  c_message_t drain = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &drain), ccol_success);
+  cmessage_t drain = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_recv(cq, &drain), ccol_success);
   free(drain.data);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 /* A queue whose sends are turned off is ready for the write direction, the
@@ -2820,8 +2798,8 @@ TEST(ccol_select, write_circq_blocks_until_reader_frees_space) {
  * and the try_send after it reports ccol_not_permitted. If a queue with
  * sends off didn't count as ready, the select would keep waiting after the
  * wake and end with ccol_timed_out. */
-TEST(ccol_select, write_full_circq_wakes_when_sending_is_disabled) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+TEST(cselect, write_full_circq_wakes_when_sending_is_disabled) {
+  ccircq *cq = ccircq_create(1, NULL);
   REQUIRE_NE((void *)cq, NULL);
   ccol_retval_t filled = sel_fill_one(cq);
 
@@ -2833,17 +2811,16 @@ TEST(ccol_select, write_full_circq_wakes_when_sending_is_disabled) {
   ccol_retval_t sel_rv = ccol_timed_out;
   ccol_retval_t send_rv = ccol_success;
   if (created == 0) {
-    sel_rv =
-        ccol_select_timed_va(&idx, 10000000 /* us */,
-                             ccol_selectable_from_circq(cq, ccol_select_write));
-    c_message_t m = {.data = &sel_full_token, .size = 1};
-    send_rv = ccol_circq_try_send_zc(cq, &m);
+    sel_rv = cselect_timed_va(&idx, 10000000 /* us */,
+                              ccircq_selectable(cq, cselect_write));
+    cmessage_t m = {.data = &sel_full_token, .size = 1};
+    send_rv = ccircq_try_send(cq, &m);
     pthread_join(tid, NULL);
   }
-  c_message_t drain;
-  while (ccol_circq_try_recv_zc(cq, &drain) == ccol_success) {
+  cmessage_t drain;
+  while (ccircq_try_recv(cq, &drain) == ccol_success) {
   }
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 
   REQUIRE_EQ(filled, ccol_success);
   REQUIRE_EQ(created, 0);
@@ -2854,89 +2831,86 @@ TEST(ccol_select, write_full_circq_wakes_when_sending_is_disabled) {
 
 /* Turning sends back on ends that state, and a full circular queue with
  * sends on isn't ready for the write direction. */
-TEST(ccol_select, write_full_circq_is_not_ready_after_sending_is_enabled) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+TEST(cselect, write_full_circq_is_not_ready_after_sending_is_enabled) {
+  ccircq *cq = ccircq_create(1, NULL);
   REQUIRE_NE((void *)cq, NULL);
   ccol_retval_t filled = sel_fill_one(cq);
-  ccol_circq_disable_sending(cq);
-  ccol_circq_enable_sending(cq);
+  ccircq_disable_sending(cq);
+  ccircq_enable_sending(cq);
 
   size_t idx = 99;
-  ccol_retval_t sel_rv = ccol_select_timed_va(
-      &idx, 0, ccol_selectable_from_circq(cq, ccol_select_write));
-  c_message_t drain;
-  while (ccol_circq_try_recv_zc(cq, &drain) == ccol_success) {
+  ccol_retval_t sel_rv =
+      cselect_timed_va(&idx, 0, ccircq_selectable(cq, cselect_write));
+  cmessage_t drain;
+  while (ccircq_try_recv(cq, &drain) == ccol_success) {
   }
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 
   REQUIRE_EQ(filled, ccol_success);
   REQUIRE_EQ(sel_rv, ccol_timed_out);
   REQUIRE_EQ(idx, (size_t)99);
 }
 
-TEST(ccol_select, write_dynq_writable_immediately) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+TEST(cselect, write_dynq_writable_immediately) {
+  cdynmq *dq = cdynmq_create(NULL);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_dynq(dq, ccol_select_write)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, cdynmq_selectable(dq, cselect_write)),
+             ccol_success);
   REQUIRE_EQ(idx, 0);
 
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
-TEST(ccol_select, write_mixed_full_circq_and_readable_circq) {
-  /* q_write is full and q_read is empty and gets a message, so ccol_select
+TEST(cselect, write_mixed_full_circq_and_readable_circq) {
+  /* q_write is full and q_read is empty and gets a message, so cselect
    * picks q_read, in the read direction, first. */
-  ccol_circular_queue *q_write = ccol_circular_queue_create(1, NULL);
-  ccol_circular_queue *q_read = ccol_circular_queue_create(4, NULL);
+  ccircq *q_write = ccircq_create(1, NULL);
+  ccircq *q_read = ccircq_create(4, NULL);
 
   int *fill = malloc(sizeof(int));
   assert(fill);
   *fill = 42;
-  c_message_t fill_msg = {.data = fill, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(q_write, &fill_msg), ccol_success);
+  cmessage_t fill_msg = {.data = fill, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(q_write, &fill_msg), ccol_success);
 
   sel_circq_args args = {.cq = q_read, .delay_us = 15000, .value = 88};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_circq, &args), 0);
 
   size_t idx = 99;
-  REQUIRE_EQ(ccol_select_va(
-                 &idx, ccol_selectable_from_circq(q_write, ccol_select_write),
-                 ccol_selectable_from_circq(q_read, ccol_select_read)),
+  REQUIRE_EQ(cselect_va(&idx, ccircq_selectable(q_write, cselect_write),
+                        ccircq_selectable(q_read, cselect_read)),
              ccol_success);
   REQUIRE_EQ(idx, 1);
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(q_read, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(q_read, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 88);
 
   free(recv_msg.data);
   pthread_join(tid, NULL);
 
   /* Drain q_write's fill message */
-  c_message_t drain = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_recv_zc(q_write, &drain), ccol_success);
+  cmessage_t drain = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_recv(q_write, &drain), ccol_success);
   free(drain.data);
 
-  ccol_circular_queue_destroy(q_write);
-  ccol_circular_queue_destroy(q_read);
+  ccircq_destroy(q_write);
+  ccircq_destroy(q_read);
 }
 
-TEST(ccol_select, write_channel_owner_resolves_send_direction) {
-  ccol_channel *ch = ccol_channel_create_mp(4, NULL, NULL);
+TEST(cselect, write_channel_owner_resolves_send_direction) {
+  cchan *ch = cchan_create_mp(4, NULL, NULL);
 
-  /* The owner calls ccol_selectable_from_chan with ccol_select_write, which
+  /* The owner calls cchan_selectable with cselect_write, which
    * resolves to owner_to_workers_cq. That queue is empty and writable, so
-   * ccol_select returns immediately. */
+   * cselect returns immediately. */
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_chan(ch, ccol_select_write)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, cchan_selectable(ch, cselect_write)),
+             ccol_success);
   REQUIRE_EQ(idx, 0);
 
-  ccol_channel_destroy(ch);
+  cchan_destroy(ch);
 }
 
 // fd selectable helpers
@@ -2955,8 +2929,8 @@ static void *thr_write_to_fd(void *arg) {
 }
 
 // fd selectable tests
-TEST(ccol_select, fd_readable_immediately) {
-  /* Writes data to the pipe before calling ccol_select, so the call returns
+TEST(cselect, fd_readable_immediately) {
+  /* Writes data to the pipe before calling cselect, so the call returns
    * at once and reports the right index, and the caller then reads the
    * fd itself. */
   int pfd[2];
@@ -2966,9 +2940,8 @@ TEST(ccol_select, fd_readable_immediately) {
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_fd(pfd[0], ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, cselectable_fd(pfd[0], cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, 0);
   int got = 0;
   REQUIRE_EQ((ssize_t)sizeof(got), read(pfd[0], &got, sizeof(got)));
@@ -2994,8 +2967,8 @@ static void *sel_capped_writer_thread(void *arg) {
   struct timespec start, now;
   clock_gettime(CLOCK_MONOTONIC, &start);
   for (;;) {
-    if (_ccol_select_test_poll_sets_created() > a->sets_before &&
-        _ccol_select_test_short_capped_waits_left() == 0) {
+    if (_cselect_test_poll_sets_created() > a->sets_before &&
+        _cselect_test_short_capped_waits_left() == 0) {
       a->saw_waits = true;
       break;
     }
@@ -3010,7 +2983,7 @@ static void *sel_capped_writer_thread(void *arg) {
   return NULL;
 }
 
-TEST(ccol_select, fd_wait_capped_below_a_long_timeout_waits_again) {
+TEST(cselect, fd_wait_capped_below_a_long_timeout_waits_again) {
   /* A timeout of 30 days is longer than the INT_MAX milliseconds one kernel
    * wait can take. The hook ends the first three such capped waits at once
    * with no event, as the real wait does when the capped time runs out, and
@@ -3020,25 +2993,24 @@ TEST(ccol_select, fd_wait_capped_below_a_long_timeout_waits_again) {
    * took a capped wait with no event for a timeout returns ccol_timed_out. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  sel_capped_writer_arg arg = {
-      .write_fd = pfd[1],
-      .sets_before = _ccol_select_test_poll_sets_created(),
-      .saw_waits = false};
+  sel_capped_writer_arg arg = {.write_fd = pfd[1],
+                               .sets_before = _cselect_test_poll_sets_created(),
+                               .saw_waits = false};
   /* Armed before the writer starts, so the writer can't see the counts at 0
    * before the call has run. */
-  _ccol_select_test_short_next_capped_waits(3);
+  _cselect_test_short_next_capped_waits(3);
   pthread_t tid;
   bool created =
       pthread_create(&tid, NULL, sel_capped_writer_thread, &arg) == 0;
 
-  ccol_selectable sels[1] = {ccol_selectable_from_fd(pfd[0], ccol_select_read)};
+  cselectable_t sels[1] = {cselectable_fd(pfd[0], cselect_read)};
   size_t idx = 99;
   ccol_retval_t rv = ccol_unexpected_failure;
   if (created) {
-    rv = ccol_select_timed(&idx, 1, sels, 30ULL * 86400ULL * 1000000ULL);
+    rv = cselect_timed(&idx, 1, sels, 30ULL * 86400ULL * 1000000ULL);
     pthread_join(tid, NULL);
   }
-  _ccol_select_test_short_next_capped_waits(0);
+  _cselect_test_short_next_capped_waits(0);
   close(pfd[0]);
   close(pfd[1]);
 
@@ -3048,8 +3020,8 @@ TEST(ccol_select, fd_wait_capped_below_a_long_timeout_waits_again) {
   REQUIRE_EQ(idx, (size_t)0);
 }
 
-TEST(ccol_select, fd_blocks_until_data_arrives) {
-  /* The thread writes to the pipe after a delay, so ccol_select blocks
+TEST(cselect, fd_blocks_until_data_arrives) {
+  /* The thread writes to the pipe after a delay, so cselect blocks
    * and then wakes when the data arrives, and the caller then reads the fd
    * itself. */
   int pfd[2];
@@ -3067,8 +3039,7 @@ TEST(ccol_select, fd_blocks_until_data_arrives) {
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_write_to_fd, &args), 0);
 
   size_t idx = 99;
-  ccol_retval_t sel_rv =
-      ccol_select_va(&idx, ccol_selectable_from_fd(pfd[0], ccol_select_read));
+  ccol_retval_t sel_rv = cselect_va(&idx, cselectable_fd(pfd[0], cselect_read));
   getMonoTime(after);
   /* The writer only sleeps and writes once, so this join can't hang. */
   pthread_join(tid, NULL);
@@ -3084,23 +3055,22 @@ TEST(ccol_select, fd_blocks_until_data_arrives) {
   close(pfd[1]);
 }
 
-TEST(ccol_select, fd_writable_immediately) {
+TEST(cselect, fd_writable_immediately) {
   /* A new pipe write end is always writable, so the call returns
    * immediately. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_fd(pfd[1], ccol_select_write)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, cselectable_fd(pfd[1], cselect_write)),
+             ccol_success);
   REQUIRE_EQ(idx, 0);
 
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_select, fd_and_queue_fd_wins) {
+TEST(cselect, fd_and_queue_fd_wins) {
   /* The pipe already has data and the circular queue is empty, so the fd
    * wins at index 0. */
   int pfd[2];
@@ -3109,13 +3079,12 @@ TEST(ccol_select, fd_and_queue_fd_wins) {
   int val = 55;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
 
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_fd(pfd[0], ccol_select_read),
-                     ccol_selectable_from_circq(cq, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, cselectable_fd(pfd[0], cselect_read),
+                        ccircq_selectable(cq, cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, 0);
   int got = 0;
   REQUIRE_EQ((ssize_t)sizeof(got), read(pfd[0], &got, sizeof(got)));
@@ -3123,135 +3092,130 @@ TEST(ccol_select, fd_and_queue_fd_wins) {
 
   close(pfd[0]);
   close(pfd[1]);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_select, fd_and_queue_queue_wins) {
+TEST(cselect, fd_and_queue_queue_wins) {
   /* The pipe has no data and a thread sends to the queue after a delay, so
    * the queue should win. That shows the eventfd bridge wakes epoll_wait for
    * a queue event in a selectable array that mixes fds and queues. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
 
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
 
   sel_circq_args args = {.cq = cq, .delay_us = 15000, .value = 33};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_circq, &args), 0);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_fd(pfd[0], ccol_select_read),
-                     ccol_selectable_from_circq(cq, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, cselectable_fd(pfd[0], cselect_read),
+                        ccircq_selectable(cq, cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, 1);
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(cq, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(cq, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 33);
 
   free(recv_msg.data);
   pthread_join(tid, NULL);
   close(pfd[0]);
   close(pfd[1]);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_select, fd_and_dynq_dynq_wins) {
-  /* The same as the test above but with a ccol_dynamic_queue, to check that
+TEST(cselect, fd_and_dynq_dynq_wins) {
+  /* The same as the test above but with a cdynmq, to check that
    * the eventfd bridge works for dynq selectables in epoll mode. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
 
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+  cdynmq *dq = cdynmq_create(NULL);
 
   sel_dynq_args args = {.dq = dq, .delay_us = 15000, .value = 99};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_dynq, &args), 0);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_fd(pfd[0], ccol_select_read),
-                     ccol_selectable_from_dynq(dq, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_va(&idx, cselectable_fd(pfd[0], cselect_read),
+                        cdynmq_selectable(dq, cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, 1);
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_dynmq_try_recv_zc(dq, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(cdynmq_try_recv(dq, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 99);
 
   free(recv_msg.data);
   pthread_join(tid, NULL);
   close(pfd[0]);
   close(pfd[1]);
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
-TEST(ccol_select, fd_invalid_fd_returns_invalid_args) {
+TEST(cselect, fd_invalid_fd_returns_invalid_args) {
   size_t idx = 99;
-  ccol_selectable bad = ccol_selectable_from_fd(-1, ccol_select_read);
-  REQUIRE_EQ(ccol_select(&idx, 1, &bad), ccol_invalid_args);
+  cselectable_t bad = cselectable_fd(-1, cselect_read);
+  REQUIRE_EQ(cselect(&idx, 1, &bad), ccol_invalid_args);
 }
 
-TEST(ccol_select, timed_circq_returns_timed_out) {
-  /* The queue is empty and sending is on, so ccol_select_timed must return
+TEST(cselect, timed_circq_returns_timed_out) {
+  /* The queue is empty and sending is on, so cselect_timed must return
    * ccol_timed_out after the deadline instead of blocking for ever. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&idx, 50000 /* us */,
-                           ccol_selectable_from_circq(cq, ccol_select_read)),
-      ccol_timed_out);
+  REQUIRE_EQ(cselect_timed_va(&idx, 50000 /* us */,
+                              ccircq_selectable(cq, cselect_read)),
+             ccol_timed_out);
   /* the call must not touch idx on a timeout */
   REQUIRE_EQ(idx, (size_t)99);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_select, timed_fd_returns_timed_out) {
+TEST(cselect, timed_fd_returns_timed_out) {
   /* The read end of a pipe with no data in it, so the call must time
    * out. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&idx, 50000 /* us */,
-                           ccol_selectable_from_fd(pfd[0], ccol_select_read)),
-      ccol_timed_out);
+  REQUIRE_EQ(cselect_timed_va(&idx, 50000 /* us */,
+                              cselectable_fd(pfd[0], cselect_read)),
+             ccol_timed_out);
   REQUIRE_EQ(idx, (size_t)99);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_select, timed_poll_zero_ms_circq_empty) {
+TEST(cselect, timed_poll_zero_ms_circq_empty) {
   /* A timeout of 0 is a poll that doesn't block, and the queue is empty, so
    * the call gives timed_out right away. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
   size_t idx = 99;
-  REQUIRE_EQ(ccol_select_timed_va(
-                 &idx, 0, ccol_selectable_from_circq(cq, ccol_select_read)),
+  REQUIRE_EQ(cselect_timed_va(&idx, 0, ccircq_selectable(cq, cselect_read)),
              ccol_timed_out);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 typedef struct helper_thread_args {
-  ccol_circular_queue *cq;
-  c_message_t msg;
+  ccircq *cq;
+  cmessage_t msg;
 } helper_thread_args;
 
 void *helper_thread_main(void *arg) {
   helper_thread_args *a = arg;
   struct timespec ts = {.tv_sec = 0, .tv_nsec = 20 * 1000000L};
   nanosleep(&ts, NULL);
-  ccol_circq_send_zc(a->cq, &a->msg);
+  ccircq_send(a->cq, &a->msg);
   return NULL;
 }
 
-TEST(ccol_select, timed_succeeds_before_deadline) {
+TEST(cselect, timed_succeeds_before_deadline) {
   /* The producer sends after 20 ms, well before the 5 s deadline, so select
    * returns success. The deadline is wide so a loaded or emulated
    * machine can't delay the send past it. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
 
   pthread_t tid;
-  c_message_t send_msg = {.data = malloc(4), .size = 4};
+  cmessage_t send_msg = {.data = malloc(4), .size = 4};
   *(int *)send_msg.data = 1234;
 
   /* A helper thread that sleeps for 20 ms and then sends. */
@@ -3260,80 +3224,78 @@ TEST(ccol_select, timed_succeeds_before_deadline) {
   REQUIRE_EQ(pthread_create(&tid, NULL, helper_thread_main, &args), 0);
 
   size_t idx = 99;
-  ccol_retval_t sel_rv = ccol_select_timed_va(
-      &idx, 5000000, ccol_selectable_from_circq(cq, ccol_select_read));
+  ccol_retval_t sel_rv =
+      cselect_timed_va(&idx, 5000000, ccircq_selectable(cq, cselect_read));
   /* The helper only sleeps and sends once, so this join can't hang. */
   pthread_join(tid, NULL);
   REQUIRE_EQ(sel_rv, ccol_success);
   REQUIRE_EQ(idx, (size_t)0);
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(cq, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(cq, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 1234);
   free(recv_msg.data);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_select, timed_out_deregisters_waiter_node) {
-  /* After ccol_select_timed times out it has to remove the waiter node from
+TEST(cselect, timed_out_deregisters_waiter_node) {
+  /* After cselect_timed times out it has to remove the waiter node from
    * the queue's waiter list before freeing the node, otherwise a later send
    * dereferences freed memory, which valgrind and AddressSanitizer report. A
    * clean run here confirms the removal happens on the timeout path. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&idx, 30000 /* us */,
-                           ccol_selectable_from_circq(cq, ccol_select_read)),
-      ccol_timed_out);
+  REQUIRE_EQ(cselect_timed_va(&idx, 30000 /* us */,
+                              ccircq_selectable(cq, cselect_read)),
+             ccol_timed_out);
 
   /* Sends to the queue AFTER the select that timed out has returned. If the
-   * select left the waiter node registered, ccol_circq_send_zc ->
+   * select left the waiter node registered, ccircq_send ->
    * notify_one_sel_waiter dereferences the freed node right here. */
-  c_message_t msg = {.data = malloc(4), .size = 4};
+  cmessage_t msg = {.data = malloc(4), .size = 4};
   *(int *)msg.data = 42;
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &msg), ccol_success);
+  REQUIRE_EQ(ccircq_send(cq, &msg), ccol_success);
 
   /* Drain so the queue is empty before destroy. */
-  c_message_t drain = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &drain), ccol_success);
+  cmessage_t drain = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_recv(cq, &drain), ccol_success);
   free(drain.data);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_select, timed_wait_reports_unexpected_failure_on_condvar_error) {
-  /* Regression test. ccol_select_timed has a wait path for the case with no
+TEST(cselect, timed_wait_reports_unexpected_failure_on_condvar_error) {
+  /* Regression test. cselect_timed has a wait path for the case with no
    * fd selectables, and there the deadline branch of _sel_wait_condvar must
    * not spin for ever retrying the same call when _ccol_cond_var_timedwait
    * returns an error that's neither 0 nor ETIMEDOUT. It reports
-   * ccol_unexpected_failure instead, as ccol_circq_timed_send_zc,
-   * ccol_circq_timed_recv_zc and ccol_dynmq_timed_recv_zc do for the same
+   * ccol_unexpected_failure instead, as ccircq_timed_send,
+   * ccircq_timed_recv and cdynmq_timed_recv do for the same
    * class of failure. The test uses a test-only hook to force exactly one
    * such error, since no correct deadline this library computes can produce
    * a real EINVAL from _ccol_cond_var_timedwait. It sets a large 5s timeout
    * and a tight bound on the elapsed time, which proves the call returns
    * quickly on the forced error instead of waiting out the whole deadline or
    * hanging for ever. A hang here keeps this test from ever returning. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
 
-  _ccol_select_test_force_next_condvar_wait_error();
+  _cselect_test_force_next_condvar_wait_error();
 
   size_t idx = 99;
   struct timespec before, after;
   getMonoTime(before);
-  REQUIRE_EQ(
-      ccol_select_timed_va(&idx, 5000000 /* us */,
-                           ccol_selectable_from_circq(cq, ccol_select_read)),
-      ccol_unexpected_failure);
+  REQUIRE_EQ(cselect_timed_va(&idx, 5000000 /* us */,
+                              ccircq_selectable(cq, cselect_read)),
+             ccol_unexpected_failure);
   getMonoTime(after);
   REQUIRE_LT(diffTimeUSec(before, after), 500000);
   REQUIRE_EQ(idx, (size_t)99);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_select, timed_wait_ready_racing_condvar_error_still_succeeds) {
+TEST(cselect, timed_wait_ready_racing_condvar_error_still_succeeds) {
   /* For a return from _ccol_cond_var_timedwait that's neither 0 nor
    * ETIMEDOUT, the deadline branch of _sel_wait_condvar must not always report
    * its FAILURE outcome. It checks *ready again before declaring a real
@@ -3342,7 +3304,7 @@ TEST(ccol_select, timed_wait_ready_racing_condvar_error_still_succeeds) {
    * on success and on failure, so a producer's notify can complete and set
    * *ready = true just before an unrelated, spurious wait error arrives too.
    * Without that second check in the FAILURE branch the code drops a wake-up
-   * that has already arrived, and ccol_select_timed reports
+   * that has already arrived, and cselect_timed reports
    * ccol_unexpected_failure instead of resuming successfully.
    *
    * The test uses the dedicated hook for exactly that order of events: it
@@ -3356,49 +3318,48 @@ TEST(ccol_select, timed_wait_ready_racing_condvar_error_still_succeeds) {
    * ordinary real wait for it, which other tests cover well. Without that
    * handling the test always fails with ccol_unexpected_failure and never
    * gets ccol_success. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
 
   sel_circq_args args = {.cq = cq, .delay_us = 50000, .value = 77};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_circq, &args), 0);
 
-  _ccol_select_test_force_next_condvar_wait_error_racing_ready();
+  _cselect_test_force_next_condvar_wait_error_racing_ready();
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&idx, 2000000 /* us */,
-                           ccol_selectable_from_circq(cq, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(cselect_timed_va(&idx, 2000000 /* us */,
+                              ccircq_selectable(cq, cselect_read)),
+             ccol_success);
   REQUIRE_EQ(idx, (size_t)0);
 
-  c_message_t recv_msg = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_try_recv_zc(cq, &recv_msg), ccol_success);
+  cmessage_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(ccircq_try_recv(cq, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 77);
   free(recv_msg.data);
 
   pthread_join(tid, NULL);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 /* A write select on a full circular queue whose sends are already off is
  * ready at once, with a timeout of 0 too, and the send that follows reports
  * ccol_not_permitted. A queue with sends off that doesn't count as ready
  * makes the poll report ccol_timed_out. */
-TEST(ccol_select, write_full_circq_is_ready_at_once_when_sending_disabled) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+TEST(cselect, write_full_circq_is_ready_at_once_when_sending_disabled) {
+  ccircq *cq = ccircq_create(1, NULL);
   REQUIRE_NE((void *)cq, NULL);
   ccol_retval_t filled = sel_fill_one(cq);
-  ccol_circq_disable_sending(cq);
+  ccircq_disable_sending(cq);
 
   size_t idx = 99;
-  ccol_retval_t sel_rv = ccol_select_timed_va(
-      &idx, 0, ccol_selectable_from_circq(cq, ccol_select_write));
-  c_message_t m = {.data = &sel_full_token, .size = 1};
-  ccol_retval_t send_rv = ccol_circq_try_send_zc(cq, &m);
-  c_message_t drain;
-  while (ccol_circq_try_recv_zc(cq, &drain) == ccol_success) {
+  ccol_retval_t sel_rv =
+      cselect_timed_va(&idx, 0, ccircq_selectable(cq, cselect_write));
+  cmessage_t m = {.data = &sel_full_token, .size = 1};
+  ccol_retval_t send_rv = ccircq_try_send(cq, &m);
+  cmessage_t drain;
+  while (ccircq_try_recv(cq, &drain) == ccol_success) {
   }
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 
   REQUIRE_EQ(filled, ccol_success);
   REQUIRE_EQ(sel_rv, ccol_success);
@@ -3411,26 +3372,25 @@ TEST(ccol_select, write_full_circq_is_ready_at_once_when_sending_disabled) {
  * the send that follows reports ccol_not_permitted. If a queue with sends
  * off doesn't count as ready, the poll reports ccol_timed_out (and the
  * untimed select is never reached, so it can't hang the binary). */
-TEST(ccol_select, write_dynq_is_ready_at_once_when_sending_disabled) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+TEST(cselect, write_dynq_is_ready_at_once_when_sending_disabled) {
+  cdynmq *dq = cdynmq_create(NULL);
   REQUIRE_NE((void *)dq, NULL);
-  ccol_dynmq_disable_sending(dq);
+  cdynmq_disable_sending(dq);
 
   size_t idx = 99;
-  ccol_retval_t poll_rv = ccol_select_timed_va(
-      &idx, 0, ccol_selectable_from_dynq(dq, ccol_select_write));
+  ccol_retval_t poll_rv =
+      cselect_timed_va(&idx, 0, cdynmq_selectable(dq, cselect_write));
   size_t untimed_idx = 99;
   ccol_retval_t untimed_rv = ccol_timed_out;
   if (poll_rv == ccol_success)
-    untimed_rv = ccol_select_va(
-        &untimed_idx, ccol_selectable_from_dynq(dq, ccol_select_write));
+    untimed_rv = cselect_va(&untimed_idx, cdynmq_selectable(dq, cselect_write));
   int *data = malloc(sizeof(int));
-  c_message_t m = {.data = data, .size = sizeof(int)};
-  ccol_retval_t send_rv = ccol_dynmq_send_zc(dq, &m);
+  cmessage_t m = {.data = data, .size = sizeof(int)};
+  ccol_retval_t send_rv = cdynmq_send(dq, &m);
   if (send_rv != ccol_success) free(data);
-  c_message_t drain;
-  while (ccol_dynmq_try_recv_zc(dq, &drain) == ccol_success) free(drain.data);
-  ccol_dynamic_queue_destroy(dq);
+  cmessage_t drain;
+  while (cdynmq_try_recv(dq, &drain) == ccol_success) free(drain.data);
+  cdynmq_destroy(dq);
 
   REQUIRE_NE((void *)data, NULL);
   REQUIRE_EQ(poll_rv, ccol_success);
@@ -3442,7 +3402,7 @@ TEST(ccol_select, write_dynq_is_ready_at_once_when_sending_disabled) {
 
 // concurrent write-waiters helpers
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   ccol_retval_t result;
 } sel_write_wait_result;
 
@@ -3451,24 +3411,23 @@ static void *thr_circq_write_wait(void *arg) {
   size_t idx = 0;
   /* The 5 s bound is wide so a loaded or emulated machine can't end the
    * wait before the main thread frees the slot. */
-  a->result = ccol_select_timed_va(
-      &idx, 5000000 /* us */,
-      ccol_selectable_from_circq(a->cq, ccol_select_write));
+  a->result = cselect_timed_va(&idx, 5000000 /* us */,
+                               ccircq_selectable(a->cq, cselect_write));
   return NULL;
 }
 
-TEST(ccol_select, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
+TEST(cselect, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
   /* Two threads wait at the same time for write readiness on a full queue
    * of capacity 1. One dequeue has to cascade through the waiter list and
    * wake BOTH threads, not only the head waiter, and without that cascade
    * the second waiter times out. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+  ccircq *cq = ccircq_create(1, NULL);
 
   int *fill = malloc(sizeof(int));
   assert(fill);
   *fill = 0;
-  c_message_t fill_msg = {.data = fill, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &fill_msg), ccol_success);
+  cmessage_t fill_msg = {.data = fill, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(cq, &fill_msg), ccol_success);
 
   sel_write_wait_result a1 = {.cq = cq, .result = ccol_unexpected_failure};
   sel_write_wait_result a2 = {.cq = cq, .result = ccol_unexpected_failure};
@@ -3481,8 +3440,8 @@ TEST(ccol_select, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
    * late finds a free slot and succeeds at once. */
   usleep(30000);
 
-  c_message_t drain = {.data = NULL, .size = 0};
-  ccol_retval_t drain_rv = ccol_circq_recv_zc(cq, &drain);
+  cmessage_t drain = {.data = NULL, .size = 0};
+  ccol_retval_t drain_rv = ccircq_recv(cq, &drain);
   free(drain.data);
 
   if (started_t1) pthread_join(t1, NULL);
@@ -3494,12 +3453,12 @@ TEST(ccol_select, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
   REQUIRE_EQ(a1.result, ccol_success);
   REQUIRE_EQ(a2.result, ccol_success);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 // concurrent read-waiters helper
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   ccol_retval_t result;
 } sel_read_wait_result;
 
@@ -3507,27 +3466,26 @@ static void *thr_circq_read_wait(void *arg) {
   sel_read_wait_result *a = (sel_read_wait_result *)arg;
   size_t idx = 0;
   /* See thr_circq_write_wait for the 5 s bound. */
-  a->result =
-      ccol_select_timed_va(&idx, 5000000 /* us */,
-                           ccol_selectable_from_circq(a->cq, ccol_select_read));
+  a->result = cselect_timed_va(&idx, 5000000 /* us */,
+                               ccircq_selectable(a->cq, cselect_read));
   if (a->result == ccol_success) {
-    c_message_t msg = {.data = NULL, .size = 0};
-    ccol_retval_t rv = ccol_circq_try_recv_zc(a->cq, &msg);
+    cmessage_t msg = {.data = NULL, .size = 0};
+    ccol_retval_t rv = ccircq_try_recv(a->cq, &msg);
     a->result = rv;
     if (rv == ccol_success) free(msg.data);
   }
   return NULL;
 }
 
-TEST(ccol_select,
+TEST(cselect,
      read_circq_two_concurrent_waiters_both_wake_on_message_available) {
-  /* The cascade in the read direction. ccol_select() never consumes a
+  /* The cascade in the read direction. cselect() never consumes a
    * message itself, it only peeks, the same shape as the peek and
    * forward-notify of the write-direction branch, so a thread that finds
    * itself ready has to forward the notify to the next waiter. Otherwise two
    * threads waiting at the same time to read from one empty queue misbehave:
    * only the first one wakes although two messages are available. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
 
   sel_read_wait_result a1 = {.cq = cq, .result = ccol_unexpected_failure};
   sel_read_wait_result a2 = {.cq = cq, .result = ccol_unexpected_failure};
@@ -3539,11 +3497,11 @@ TEST(ccol_select,
    * waiter, so the sends below reach two waiters and test the cascade. The
    * bound only stops a hang. */
   size_t want_waiters = (size_t)started_t1 + (size_t)started_t2;
-  for (int i = 0; i < 10000 && _ccol_circq_test_sel_read_waiter_count_for_tests(
+  for (int i = 0; i < 10000 && _ccircq_test_sel_read_waiter_count_for_tests(
                                    cq) < want_waiters;
        i++)
     usleep(1000);
-  size_t seen_waiters = _ccol_circq_test_sel_read_waiter_count_for_tests(cq);
+  size_t seen_waiters = _ccircq_test_sel_read_waiter_count_for_tests(cq);
 
   int *d0 = malloc(sizeof(int));
   assert(d0);
@@ -3551,10 +3509,10 @@ TEST(ccol_select,
   int *d1 = malloc(sizeof(int));
   assert(d1);
   *d1 = 2;
-  c_message_t m0 = {.data = d0, .size = sizeof(int)};
-  c_message_t m1 = {.data = d1, .size = sizeof(int)};
-  ccol_retval_t send0_rv = ccol_circq_send_zc(cq, &m0);
-  ccol_retval_t send1_rv = ccol_circq_send_zc(cq, &m1);
+  cmessage_t m0 = {.data = d0, .size = sizeof(int)};
+  cmessage_t m1 = {.data = d1, .size = sizeof(int)};
+  ccol_retval_t send0_rv = ccircq_send(cq, &m0);
+  ccol_retval_t send1_rv = ccircq_send(cq, &m1);
 
   if (started_t1) pthread_join(t1, NULL);
   if (started_t2) pthread_join(t2, NULL);
@@ -3567,14 +3525,14 @@ TEST(ccol_select,
   REQUIRE_EQ(a1.result, ccol_success);
   REQUIRE_EQ(a2.result, ccol_success);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 /* _sel_setup_epoll must not call epoll_ctl(EPOLL_CTL_ADD) once per fd
  * selectable without removing duplicates. Two selectables can share one real
  * fd in any mix of directions, and one can be an exact duplicate, so the
- * second EPOLL_CTL_ADD fails with EEXIST and the whole ccol_select or
- * ccol_select_timed call fails with ccol_unexpected_failure. That even
+ * second EPOLL_CTL_ADD fails with EEXIST and the whole cselect or
+ * cselect_timed call fails with ccol_unexpected_failure. That even
  * happens for the common pattern of one connected socket the caller watches
  * for readability and writability at the same time. So _sel_setup_epoll
  * groups the fd selectables by fd, with a sort rather than a linear scan so
@@ -3582,19 +3540,19 @@ TEST(ccol_select,
  * common case of many different fds. It registers one combined epoll_ctl
  * call per unique fd, and when a combined event fires it maps that event
  * back to the member selectable whose own direction the event satisfies. */
-TEST(ccol_select, fd_same_fd_two_directions_writable_wins) {
+TEST(cselect, fd_same_fd_two_directions_writable_wins) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
 
   size_t idx = 999;
-  ccol_selectable sels[2] = {
-      ccol_selectable_from_fd(sv[0], ccol_select_read),
-      ccol_selectable_from_fd(sv[0], ccol_select_write),
+  cselectable_t sels[2] = {
+      cselectable_fd(sv[0], cselect_read),
+      cselectable_fd(sv[0], cselect_write),
   };
   /* A socket the test just connected is writable immediately and has nothing
    * to read yet, so this call should resolve to the write-direction
    * selectable, beyond merely succeeding. */
-  ccol_retval_t rv = ccol_select_timed(&idx, 2, sels, 500000);
+  ccol_retval_t rv = cselect_timed(&idx, 2, sels, 500000);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_EQ(idx, (size_t)1);
 
@@ -3602,22 +3560,22 @@ TEST(ccol_select, fd_same_fd_two_directions_writable_wins) {
   close(sv[1]);
 }
 
-TEST(ccol_select, fd_same_fd_two_directions_both_ready_resolves_to_a_member) {
+TEST(cselect, fd_same_fd_two_directions_both_ready_resolves_to_a_member) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
   char byte = 'x';
   REQUIRE_EQ(write(sv[1], &byte, 1), (ssize_t)1);
 
   size_t idx = 999;
-  ccol_selectable sels[2] = {
-      ccol_selectable_from_fd(sv[0], ccol_select_read),
-      ccol_selectable_from_fd(sv[0], ccol_select_write),
+  cselectable_t sels[2] = {
+      cselectable_fd(sv[0], cselect_read),
+      cselectable_fd(sv[0], cselect_write),
   };
   /* Both directions are ready now: one byte is waiting to be read and the
    * send buffer has room. Either member may win, but the call itself must
    * succeed and pick one of the two real members instead of giving the
    * EEXIST failure the fd grouping prevents. */
-  ccol_retval_t rv = ccol_select_timed(&idx, 2, sels, 500000);
+  ccol_retval_t rv = cselect_timed(&idx, 2, sels, 500000);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(idx == 0 || idx == 1);
 
@@ -3627,16 +3585,16 @@ TEST(ccol_select, fd_same_fd_two_directions_both_ready_resolves_to_a_member) {
   close(sv[1]);
 }
 
-TEST(ccol_select, fd_duplicate_selectable_same_direction_still_succeeds) {
+TEST(cselect, fd_duplicate_selectable_same_direction_still_succeeds) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
 
   size_t idx = 999;
-  ccol_selectable sels[2] = {
-      ccol_selectable_from_fd(pfd[1], ccol_select_write),
-      ccol_selectable_from_fd(pfd[1], ccol_select_write),
+  cselectable_t sels[2] = {
+      cselectable_fd(pfd[1], cselect_write),
+      cselectable_fd(pfd[1], cselect_write),
   };
-  ccol_retval_t rv = ccol_select_timed(&idx, 2, sels, 500000);
+  ccol_retval_t rv = cselect_timed(&idx, 2, sels, 500000);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(idx == 0 || idx == 1);
 
@@ -3644,7 +3602,7 @@ TEST(ccol_select, fd_duplicate_selectable_same_direction_still_succeeds) {
   close(pfd[1]);
 }
 
-TEST(ccol_select, fd_duplicate_selectable_neither_ready_times_out) {
+TEST(cselect, fd_duplicate_selectable_neither_ready_times_out) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
 
@@ -3652,60 +3610,60 @@ TEST(ccol_select, fd_duplicate_selectable_neither_ready_times_out) {
   /* Nothing writes to this pipe, so two read watches on the read end are
    * expected to behave like one ordinary registration and time out, neither
    * succeeding by accident nor failing with an unrelated error. */
-  ccol_selectable sels[2] = {
-      ccol_selectable_from_fd(pfd[0], ccol_select_read),
-      ccol_selectable_from_fd(pfd[0], ccol_select_read),
+  cselectable_t sels[2] = {
+      cselectable_fd(pfd[0], cselect_read),
+      cselectable_fd(pfd[0], cselect_read),
   };
-  ccol_retval_t rv = ccol_select_timed(&idx, 2, sels, 100000);
+  ccol_retval_t rv = cselect_timed(&idx, 2, sels, 100000);
   REQUIRE_EQ(rv, ccol_timed_out);
 
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_select, fd_grouped_registration_coexists_with_ready_queue) {
+TEST(cselect, fd_grouped_registration_coexists_with_ready_queue) {
   /* This call has an fd that isn't ready, registered twice so both share one
    * epoll_ctl group, and a queue selectable that is really ready, which
-   * confirms that the fd grouping doesn't disturb how ccol_select handles
+   * confirms that the fd grouping doesn't disturb how cselect handles
    * queue selectables. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
 
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
   REQUIRE_NE((void *)cq, NULL);
   int *data = malloc(sizeof(int));
   REQUIRE_NE((void *)data, NULL);
   *data = 42;
-  c_message_t msg = {.data = data, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &msg), ccol_success);
+  cmessage_t msg = {.data = data, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(cq, &msg), ccol_success);
 
   size_t idx = 999;
-  ccol_selectable sels[3] = {
-      ccol_selectable_from_fd(pfd[0], ccol_select_read),
-      ccol_selectable_from_fd(pfd[0], ccol_select_read),
-      ccol_selectable_from_circq(cq, ccol_select_read),
+  cselectable_t sels[3] = {
+      cselectable_fd(pfd[0], cselect_read),
+      cselectable_fd(pfd[0], cselect_read),
+      ccircq_selectable(cq, cselect_read),
   };
-  ccol_retval_t rv = ccol_select_timed(&idx, 3, sels, 500000);
+  ccol_retval_t rv = cselect_timed(&idx, 3, sels, 500000);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_EQ(idx, (size_t)2);
 
-  c_message_t out;
-  REQUIRE_EQ(ccol_circq_try_recv_zc(cq, &out), ccol_success);
+  cmessage_t out;
+  REQUIRE_EQ(ccircq_try_recv(cq, &out), ccol_success);
   free(out.data);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
   close(pfd[0]);
   close(pfd[1]);
 }
 
 /* Each of these three queues holds what makes it ready for the whole test,
- * and ccol_select() never consumes anything, so every call finds all three
+ * and cselect() never consumes anything, so every call finds all three
  * ready, and the scan's rotation should give each about a third of the
  * calls anyway. A scan that always starts at index 0 would hand all 3000
  * calls to index 0. */
-TEST(ccol_select, three_always_ready_queues_share_the_calls) {
-  ccol_circular_queue *cq_r = ccol_circular_queue_create(4, NULL);
-  ccol_dynamic_queue *dq_r = ccol_dynamic_queue_create(NULL);
-  ccol_circular_queue *cq_w = ccol_circular_queue_create(4, NULL);
+TEST(cselect, three_always_ready_queues_share_the_calls) {
+  ccircq *cq_r = ccircq_create(4, NULL);
+  cdynmq *dq_r = cdynmq_create(NULL);
+  ccircq *cq_w = ccircq_create(4, NULL);
   REQUIRE_NE((void *)cq_r, NULL);
   REQUIRE_NE((void *)dq_r, NULL);
   REQUIRE_NE((void *)cq_w, NULL);
@@ -3715,34 +3673,34 @@ TEST(ccol_select, three_always_ready_queues_share_the_calls) {
   REQUIRE_NE((void *)b, NULL);
   *a = 1;
   *b = 2;
-  c_message_t ma = {.data = a, .size = sizeof(int)};
-  c_message_t mb = {.data = b, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq_r, &ma), ccol_success);
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq_r, &mb), ccol_success);
+  cmessage_t ma = {.data = a, .size = sizeof(int)};
+  cmessage_t mb = {.data = b, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(cq_r, &ma), ccol_success);
+  REQUIRE_EQ(cdynmq_send(dq_r, &mb), ccol_success);
 
-  ccol_selectable sels[3] = {
-      ccol_selectable_from_circq(cq_r, ccol_select_read),
-      ccol_selectable_from_dynq(dq_r, ccol_select_read),
-      ccol_selectable_from_circq(cq_w, ccol_select_write),
+  cselectable_t sels[3] = {
+      ccircq_selectable(cq_r, cselect_read),
+      cdynmq_selectable(dq_r, cselect_read),
+      ccircq_selectable(cq_w, cselect_write),
   };
   size_t wins[3] = {0, 0, 0};
   size_t failures = 0;
   for (int i = 0; i < 3000; i++) {
     size_t idx = 99;
-    if (ccol_select(&idx, 3, sels) != ccol_success || idx >= 3)
+    if (cselect(&idx, 3, sels) != ccol_success || idx >= 3)
       failures++;
     else
       wins[idx]++;
   }
 
-  c_message_t out;
-  REQUIRE_EQ(ccol_circq_try_recv_zc(cq_r, &out), ccol_success);
+  cmessage_t out;
+  REQUIRE_EQ(ccircq_try_recv(cq_r, &out), ccol_success);
   free(out.data);
-  REQUIRE_EQ(ccol_dynmq_try_recv_zc(dq_r, &out), ccol_success);
+  REQUIRE_EQ(cdynmq_try_recv(dq_r, &out), ccol_success);
   free(out.data);
-  ccol_circular_queue_destroy(cq_r);
-  ccol_dynamic_queue_destroy(dq_r);
-  ccol_circular_queue_destroy(cq_w);
+  ccircq_destroy(cq_r);
+  cdynmq_destroy(dq_r);
+  ccircq_destroy(cq_w);
 
   REQUIRE_EQ(failures, (size_t)0);
   for (int k = 0; k < 3; k++) {
@@ -3756,30 +3714,30 @@ TEST(ccol_select, three_always_ready_queues_share_the_calls) {
  * stays ready wins within a few calls, and over many calls it wins about
  * half of them. A scan that looks at the fds only when no queue is ready
  * never reports index 0 here. */
-TEST(ccol_select, a_readable_fd_beside_an_always_ready_queue_wins) {
+TEST(cselect, a_readable_fd_beside_an_always_ready_queue_wins) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   char stop = 's';
   REQUIRE_EQ(write(pfd[1], &stop, 1), (ssize_t)1);
 
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+  cdynmq *dq = cdynmq_create(NULL);
   REQUIRE_NE((void *)dq, NULL);
   int *v = malloc(sizeof(int));
   REQUIRE_NE((void *)v, NULL);
   *v = 7;
-  c_message_t m = {.data = v, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &m), ccol_success);
+  cmessage_t m = {.data = v, .size = sizeof(int)};
+  REQUIRE_EQ(cdynmq_send(dq, &m), ccol_success);
 
-  ccol_selectable sels[2] = {
-      ccol_selectable_from_fd(pfd[0], ccol_select_read),
-      ccol_selectable_from_dynq(dq, ccol_select_read),
+  cselectable_t sels[2] = {
+      cselectable_fd(pfd[0], cselect_read),
+      cdynmq_selectable(dq, cselect_read),
   };
   /* The fd's first win comes within 8 calls. */
   int first_fd_win = -1;
   size_t failures = 0;
   for (int i = 0; i < 8 && first_fd_win < 0; i++) {
     size_t idx = 99;
-    if (ccol_select_timed(&idx, 2, sels, 1000000) != ccol_success)
+    if (cselect_timed(&idx, 2, sels, 1000000) != ccol_success)
       failures++;
     else if (idx == 0)
       first_fd_win = i;
@@ -3787,16 +3745,16 @@ TEST(ccol_select, a_readable_fd_beside_an_always_ready_queue_wins) {
   size_t fd_wins = 0;
   for (int i = 0; i < 2000; i++) {
     size_t idx = 99;
-    if (ccol_select(&idx, 2, sels) != ccol_success || idx > 1)
+    if (cselect(&idx, 2, sels) != ccol_success || idx > 1)
       failures++;
     else if (idx == 0)
       fd_wins++;
   }
 
-  c_message_t out;
-  REQUIRE_EQ(ccol_dynmq_try_recv_zc(dq, &out), ccol_success);
+  cmessage_t out;
+  REQUIRE_EQ(cdynmq_try_recv(dq, &out), ccol_success);
   free(out.data);
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
   close(pfd[0]);
   close(pfd[1]);
 
@@ -3810,7 +3768,7 @@ TEST(ccol_select, a_readable_fd_beside_an_always_ready_queue_wins) {
  * own wait reports both fds, and each should win about half of the calls.
  * Choosing in array order among the fds one wait reports would hand every
  * call to index 0. */
-TEST(ccol_select, two_always_readable_fds_share_the_calls) {
+TEST(cselect, two_always_readable_fds_share_the_calls) {
   int p0[2];
   int p1[2];
   REQUIRE_EQ(pipe(p0), 0);
@@ -3819,15 +3777,15 @@ TEST(ccol_select, two_always_readable_fds_share_the_calls) {
   REQUIRE_EQ(write(p0[1], &byte, 1), (ssize_t)1);
   REQUIRE_EQ(write(p1[1], &byte, 1), (ssize_t)1);
 
-  ccol_selectable sels[2] = {
-      ccol_selectable_from_fd(p0[0], ccol_select_read),
-      ccol_selectable_from_fd(p1[0], ccol_select_read),
+  cselectable_t sels[2] = {
+      cselectable_fd(p0[0], cselect_read),
+      cselectable_fd(p1[0], cselect_read),
   };
   size_t wins[2] = {0, 0};
   size_t failures = 0;
   for (int i = 0; i < 1000; i++) {
     size_t idx = 99;
-    if (ccol_select(&idx, 2, sels) != ccol_success || idx > 1)
+    if (cselect(&idx, 2, sels) != ccol_success || idx > 1)
       failures++;
     else
       wins[idx]++;
@@ -3843,7 +3801,7 @@ TEST(ccol_select, two_always_readable_fds_share_the_calls) {
 }
 
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   uint64_t sets_before;
 } sel_set_waker_arg;
 
@@ -3856,11 +3814,11 @@ static char sel_set_waker_token;
 static void *sel_set_waker_thread(void *arg) {
   sel_set_waker_arg *a = (sel_set_waker_arg *)arg;
   long long end = mono_now_us() + 10000000LL;
-  while (_ccol_select_test_poll_sets_created() <= a->sets_before &&
+  while (_cselect_test_poll_sets_created() <= a->sets_before &&
          mono_now_us() < end)
     mono_poll_pause();
-  c_message_t m = {.data = &sel_set_waker_token, .size = 1};
-  (void)ccol_circq_try_send_zc(a->cq, &m);
+  cmessage_t m = {.data = &sel_set_waker_token, .size = 1};
+  (void)ccircq_try_send(a->cq, &m);
   return NULL;
 }
 
@@ -3869,15 +3827,15 @@ static void *sel_set_waker_thread(void *arg) {
  * a timeout of 0 ends; only a call that has to wait builds one. A call that
  * builds its epoll set before looking at its selectables counts one set per
  * call, and the count shows it. */
-TEST(ccol_select, a_call_that_returns_at_once_creates_no_poll_set) {
+TEST(cselect, a_call_that_returns_at_once_creates_no_poll_set) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+  cdynmq *dq = cdynmq_create(NULL);
+  ccircq *cq = ccircq_create(1, NULL);
   int *v = malloc(sizeof(int));
   bool setup = dq != NULL && cq != NULL && v != NULL;
-  c_message_t m = {.data = v, .size = sizeof(int)};
-  if (setup) setup = ccol_dynmq_send_zc(dq, &m) == ccol_success;
+  cmessage_t m = {.data = v, .size = sizeof(int)};
+  if (setup) setup = cdynmq_send(dq, &m) == ccol_success;
   if (!setup) free(v);
 
   uint64_t ready_queue_sets = UINT64_MAX, ready_fd_sets = UINT64_MAX;
@@ -3887,54 +3845,53 @@ TEST(ccol_select, a_call_that_returns_at_once_creates_no_poll_set) {
   size_t wait_idx = 99;
   bool waker_started = false;
   if (setup) {
-    ccol_selectable mixed[2] = {
-        ccol_selectable_from_fd(pfd[0], ccol_select_read),
-        ccol_selectable_from_dynq(dq, ccol_select_read),
+    cselectable_t mixed[2] = {
+        cselectable_fd(pfd[0], cselect_read),
+        cdynmq_selectable(dq, cselect_read),
     };
-    uint64_t before = _ccol_select_test_poll_sets_created();
+    uint64_t before = _cselect_test_poll_sets_created();
     for (int i = 0; i < 100; i++) {
       size_t idx = 99;
-      if (ccol_select(&idx, 2, mixed) != ccol_success || idx != 1) failures++;
+      if (cselect(&idx, 2, mixed) != ccol_success || idx != 1) failures++;
     }
-    ready_queue_sets = _ccol_select_test_poll_sets_created() - before;
+    ready_queue_sets = _cselect_test_poll_sets_created() - before;
 
     char byte = 'x';
     if (write(pfd[1], &byte, 1) != 1) failures++;
-    ccol_selectable fd_only = ccol_selectable_from_fd(pfd[0], ccol_select_read);
-    before = _ccol_select_test_poll_sets_created();
+    cselectable_t fd_only = cselectable_fd(pfd[0], cselect_read);
+    before = _cselect_test_poll_sets_created();
     for (int i = 0; i < 100; i++) {
       size_t idx = 99;
-      if (ccol_select(&idx, 1, &fd_only) != ccol_success || idx != 0)
-        failures++;
+      if (cselect(&idx, 1, &fd_only) != ccol_success || idx != 0) failures++;
     }
-    ready_fd_sets = _ccol_select_test_poll_sets_created() - before;
+    ready_fd_sets = _cselect_test_poll_sets_created() - before;
     if (read(pfd[0], &byte, 1) != 1) failures++;
 
-    ccol_selectable idle[2] = {
-        ccol_selectable_from_fd(pfd[0], ccol_select_read),
-        ccol_selectable_from_circq(cq, ccol_select_read),
+    cselectable_t idle[2] = {
+        cselectable_fd(pfd[0], cselect_read),
+        ccircq_selectable(cq, cselect_read),
     };
     size_t idx = 99;
-    before = _ccol_select_test_poll_sets_created();
-    rv_zero = ccol_select_timed(&idx, 2, idle, 0);
-    zero_timeout_sets = _ccol_select_test_poll_sets_created() - before;
-    before = _ccol_select_test_poll_sets_created();
+    before = _cselect_test_poll_sets_created();
+    rv_zero = cselect_timed(&idx, 2, idle, 0);
+    zero_timeout_sets = _cselect_test_poll_sets_created() - before;
+    before = _cselect_test_poll_sets_created();
     sel_set_waker_arg wa = {.cq = cq, .sets_before = before};
     pthread_t waker;
     waker_started =
         pthread_create(&waker, NULL, sel_set_waker_thread, &wa) == 0;
     if (waker_started) {
-      rv_wait = ccol_select_timed(&wait_idx, 2, idle, 10000000);
-      waiting_sets = _ccol_select_test_poll_sets_created() - before;
+      rv_wait = cselect_timed(&wait_idx, 2, idle, 10000000);
+      waiting_sets = _cselect_test_poll_sets_created() - before;
       pthread_join(waker, NULL);
     }
 
-    c_message_t out;
-    if (ccol_dynmq_try_recv_zc(dq, &out) == ccol_success) free(out.data);
-    (void)ccol_circq_try_recv_zc(cq, &out);
+    cmessage_t out;
+    if (cdynmq_try_recv(dq, &out) == ccol_success) free(out.data);
+    (void)ccircq_try_recv(cq, &out);
   }
-  if (dq) ccol_dynamic_queue_destroy(dq);
-  if (cq) ccol_circular_queue_destroy(cq);
+  if (dq) cdynmq_destroy(dq);
+  if (cq) ccircq_destroy(cq);
   close(pfd[0]);
   close(pfd[1]);
 
@@ -3954,7 +3911,7 @@ TEST(ccol_select, a_call_that_returns_at_once_creates_no_poll_set) {
  * idle fd wakes the call through the eventfd the call made when it got
  * ready to wait. */
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   int value;
 } sel_late_send_arg;
 
@@ -3962,15 +3919,15 @@ static void *sel_late_send_thread(void *arg) {
   sel_late_send_arg *a = (sel_late_send_arg *)arg;
   struct timespec ts = {.tv_sec = 0, .tv_nsec = 30000000L};
   nanosleep(&ts, NULL);
-  c_message_t m = {.data = &a->value, .size = sizeof(int)};
-  (void)ccol_circq_send_zc(a->cq, &m);
+  cmessage_t m = {.data = &a->value, .size = sizeof(int)};
+  (void)ccircq_send(a->cq, &m);
   return NULL;
 }
 
-TEST(ccol_select, a_queue_beside_an_idle_fd_wakes_a_waiting_call) {
+TEST(cselect, a_queue_beside_an_idle_fd_wakes_a_waiting_call) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+  ccircq *cq = ccircq_create(1, NULL);
   ccol_retval_t rv = ccol_unexpected_failure;
   size_t idx = 99;
   bool started = false;
@@ -3979,16 +3936,16 @@ TEST(ccol_select, a_queue_beside_an_idle_fd_wakes_a_waiting_call) {
   if (cq) {
     started = pthread_create(&t, NULL, sel_late_send_thread, &arg) == 0;
     if (started) {
-      ccol_selectable sels[2] = {
-          ccol_selectable_from_fd(pfd[0], ccol_select_read),
-          ccol_selectable_from_circq(cq, ccol_select_read),
+      cselectable_t sels[2] = {
+          cselectable_fd(pfd[0], cselect_read),
+          ccircq_selectable(cq, cselect_read),
       };
-      rv = ccol_select_timed(&idx, 2, sels, 5000000);
+      rv = cselect_timed(&idx, 2, sels, 5000000);
       pthread_join(t, NULL);
-      c_message_t out;
-      (void)ccol_circq_try_recv_zc(cq, &out);
+      cmessage_t out;
+      (void)ccircq_try_recv(cq, &out);
     }
-    ccol_circular_queue_destroy(cq);
+    ccircq_destroy(cq);
   }
   close(pfd[0]);
   close(pfd[1]);
@@ -3997,24 +3954,24 @@ TEST(ccol_select, a_queue_beside_an_idle_fd_wakes_a_waiting_call) {
   REQUIRE_EQ(idx, (size_t)1);
 }
 
-/* Every allocation ccol_select_timed() makes (the waiter nodes, the fds'
+/* Every allocation cselect_timed() makes (the waiter nodes, the fds'
  * state and the wait's event buffer) reports ccol_not_enough_memory when it
  * fails and leaves no waiter linked. Treat the fds' state or the event
  * buffer as a failed system call and the call reports
  * ccol_unexpected_failure instead. */
-TEST(ccol_select, a_failed_allocation_reports_not_enough_memory) {
+TEST(cselect, a_failed_allocation_reports_not_enough_memory) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+  ccircq *cq = ccircq_create(1, NULL);
   ccol_retval_t rv[4] = {ccol_success, ccol_success, ccol_success,
                          ccol_success};
   ccol_retval_t rv_queues_only = ccol_success;
   size_t waiters_left = SIZE_MAX;
   bool created = cq != NULL;
   if (cq) {
-    ccol_selectable sels[2] = {
-        ccol_selectable_from_fd(pfd[0], ccol_select_read),
-        ccol_selectable_from_circq(cq, ccol_select_read),
+    cselectable_t sels[2] = {
+        cselectable_fd(pfd[0], cselect_read),
+        ccircq_selectable(cq, cselect_read),
     };
     /* The event buffer is allocated only by a call that gets ready to wait,
      * and a call whose deadline has passed by then never does. So the calls
@@ -4023,16 +3980,16 @@ TEST(ccol_select, a_failed_allocation_reports_not_enough_memory) {
      * nothing fails, waits out its 10 ms. */
     for (uint32_t k = 0; k < 4; k++) {
       size_t idx = 99;
-      _ccol_select_test_fail_alloc(k + 1);
-      rv[k] = ccol_select_timed(&idx, 2, sels, k < 3 ? 10000000 : 10000);
-      _ccol_select_test_fail_alloc(0);
+      _cselect_test_fail_alloc(k + 1);
+      rv[k] = cselect_timed(&idx, 2, sels, k < 3 ? 10000000 : 10000);
+      _cselect_test_fail_alloc(0);
     }
-    waiters_left = _ccol_circq_test_sel_read_waiter_count_for_tests(cq);
+    waiters_left = _ccircq_test_sel_read_waiter_count_for_tests(cq);
     size_t idx = 99;
-    _ccol_select_test_fail_alloc(1);
-    rv_queues_only = ccol_select_timed(&idx, 1, &sels[1], 10000);
-    _ccol_select_test_fail_alloc(0);
-    ccol_circular_queue_destroy(cq);
+    _cselect_test_fail_alloc(1);
+    rv_queues_only = cselect_timed(&idx, 1, &sels[1], 10000);
+    _cselect_test_fail_alloc(0);
+    ccircq_destroy(cq);
   }
   close(pfd[0]);
   close(pfd[1]);
@@ -4048,19 +4005,19 @@ TEST(ccol_select, a_failed_allocation_reports_not_enough_memory) {
 /* An fd's stripe comes from the high bits of its hash, so fds that share
  * their low bits still spread over every stripe. Reducing modulo the stripe
  * count would put even fds on 2 of 4 stripes and fds 4 apart on 1. */
-TEST(ccol_event_loop, fds_that_share_low_bits_spread_over_every_stripe) {
+TEST(ceventloop, fds_that_share_low_bits_spread_over_every_stripe) {
   size_t even[4] = {0, 0, 0, 0};
   size_t step4[4] = {0, 0, 0, 0};
   bool in_range = true;
   for (int fd = 0; fd < 1000; fd += 2) {
-    size_t s = _ccol_event_loop_test_stripe_index(4, fd);
+    size_t s = _ceventloop_test_stripe_index(4, fd);
     if (s >= 4)
       in_range = false;
     else
       even[s]++;
   }
   for (int fd = 0; fd < 1000; fd += 4) {
-    size_t s = _ccol_event_loop_test_stripe_index(4, fd);
+    size_t s = _ceventloop_test_stripe_index(4, fd);
     if (s >= 4)
       in_range = false;
     else
@@ -4068,8 +4025,8 @@ TEST(ccol_event_loop, fds_that_share_low_bits_spread_over_every_stripe) {
   }
   bool odd_range = true;
   for (int fd = 0; fd < 100; fd++) {
-    if (_ccol_event_loop_test_stripe_index(7, fd) >= 7) odd_range = false;
-    if (_ccol_event_loop_test_stripe_index(1, fd) != 0) odd_range = false;
+    if (_ceventloop_test_stripe_index(7, fd) >= 7) odd_range = false;
+    if (_ceventloop_test_stripe_index(1, fd) != 0) odd_range = false;
   }
   REQUIRE_TRUE(in_range);
   REQUIRE_TRUE(odd_range);
@@ -4081,18 +4038,18 @@ TEST(ccol_event_loop, fds_that_share_low_bits_spread_over_every_stripe) {
   }
 }
 
-// ccol_event_loop test helpers
+// ceventloop test helpers
 typedef struct evl_sync_ctx {
   pthread_mutex_t mtx;
   pthread_cond_t cond;
   int readable_count;
   int writable_count;
   int error_count;
-  c_message_t last_msg;
+  cmessage_t last_msg;
   bool last_msg_valid;
-  ccol_select_dir last_dir_seen;
-  ccol_event_reg self_reg; /* for self-removal tests */
-  ccol_event_loop self_loop;
+  cselect_dir_t last_dir_seen;
+  ceventloop_reg self_reg; /* for self-removal tests */
+  ceventloop self_loop;
 } evl_sync_ctx;
 
 static void evl_sync_ctx_init(evl_sync_ctx *c) {
@@ -4109,10 +4066,10 @@ static void evl_sync_ctx_init(evl_sync_ctx *c) {
   c->readable_count = 0;
   c->writable_count = 0;
   c->error_count = 0;
-  c->last_msg = (c_message_t){.data = NULL, .size = 0};
+  c->last_msg = (cmessage_t){.data = NULL, .size = 0};
   c->last_msg_valid = false;
-  c->self_reg = CCOL_EVENT_REG_NULL;
-  c->self_loop = CCOL_EVENT_LOOP_NULL;
+  c->self_reg = CEVENTLOOP_REG_NULL;
+  c->self_loop = CEVENTLOOP_NULL;
 }
 
 static void evl_sync_ctx_destroy(evl_sync_ctx *c) {
@@ -4121,25 +4078,25 @@ static void evl_sync_ctx_destroy(evl_sync_ctx *c) {
   pthread_cond_destroy(&c->cond);
 }
 
-/* ccol_event_loop never does the receive itself, for any type of
- * selectable, which matches the contract of _ccol_event_loop_run_callback.
- * So a queue-backed registration needs to call ccol_circq_try_recv_zc or
- * ccol_dynmq_try_recv_zc here itself, exactly as a real caller does. A
+/* ceventloop never does the receive itself, for any type of
+ * selectable, which matches the contract of _ceventloop_run_callback.
+ * So a queue-backed registration needs to call ccircq_try_recv or
+ * cdynmq_try_recv here itself, exactly as a real caller does. A
  * result other than success leaves last_msg_valid false and this function
  * doesn't assert, because it means a consumer on another thread already took
  * the message, the same time-of-check to time-of-use gap that a win in the
  * write direction always has. */
-static void evl_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                            ccol_selectable *sel, void *arg) {
+static void evl_on_readable(ceventloop loop, ceventloop_reg reg,
+                            cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_sync_ctx *c = (evl_sync_ctx *)arg;
-  c_message_t msg = {.data = NULL, .size = 0};
+  cmessage_t msg = {.data = NULL, .size = 0};
   bool got_msg = false;
-  if (sel->type == ccol_selectable_circq) {
-    got_msg = (ccol_circq_try_recv_zc(sel->cq, &msg) == ccol_success);
-  } else if (sel->type == ccol_selectable_dynq) {
-    got_msg = (ccol_dynmq_try_recv_zc(sel->dq, &msg) == ccol_success);
+  if (sel->type == cselectable_type_ccircq) {
+    got_msg = (ccircq_try_recv(sel->cq, &msg) == ccol_success);
+  } else if (sel->type == cselectable_type_cdynmq) {
+    got_msg = (cdynmq_try_recv(sel->dq, &msg) == ccol_success);
   }
   pthread_mutex_lock(&c->mtx);
   c->readable_count++;
@@ -4149,15 +4106,15 @@ static void evl_on_readable(ccol_event_loop loop, ccol_event_reg reg,
     c->last_msg = msg;
     c->last_msg_valid = true;
   } else {
-    c->last_msg = (c_message_t){.data = NULL, .size = 0};
+    c->last_msg = (cmessage_t){.data = NULL, .size = 0};
     c->last_msg_valid = false;
   }
   pthread_cond_broadcast(&c->cond);
   pthread_mutex_unlock(&c->mtx);
 }
 
-static void evl_on_writable(ccol_event_loop loop, ccol_event_reg reg,
-                            ccol_selectable *sel, void *arg) {
+static void evl_on_writable(ceventloop loop, ceventloop_reg reg,
+                            cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_sync_ctx *c = (evl_sync_ctx *)arg;
@@ -4168,8 +4125,8 @@ static void evl_on_writable(ccol_event_loop loop, ccol_event_reg reg,
   pthread_mutex_unlock(&c->mtx);
 }
 
-static void evl_on_error(ccol_event_loop loop, ccol_event_reg reg,
-                         ccol_selectable *sel, void *arg) {
+static void evl_on_error(ceventloop loop, ceventloop_reg reg,
+                         cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)sel;
@@ -4182,12 +4139,11 @@ static void evl_on_error(ccol_event_loop loop, ccol_event_reg reg,
 
 /* An on_readable handler that removes its own registration from inside the
  * callback and then behaves exactly like evl_on_readable. */
-static void evl_on_readable_self_remove(ccol_event_loop loop,
-                                        ccol_event_reg reg,
-                                        ccol_selectable *sel, void *arg) {
+static void evl_on_readable_self_remove(ceventloop loop, ceventloop_reg reg,
+                                        cselectable_t *sel, void *arg) {
   evl_sync_ctx *c = (evl_sync_ctx *)arg;
   /* assert() instead of REQUIRE_EQ, because this callback runs on the
-   * reactor thread or the dispatch thread of ccol_event_loop at the same
+   * reactor thread or the dispatch thread of ceventloop at the same
    * time as the main test thread's REQUIRE_EQ calls. Tau's assertion
    * machinery uses plain globals with no lock and no thread-local storage
    * (see tau.h), so calling it from here is a real data race the moment this
@@ -4197,7 +4153,7 @@ static void evl_on_readable_self_remove(ccol_event_loop loop,
    * Every other background-thread helper in this file sticks to assert()
    * for the same reason. */
   assert(reg == c->self_reg);
-  assert(ccol_event_loop_remove(c->self_loop, reg) == ccol_success);
+  assert(ceventloop_remove(c->self_loop, reg) == ccol_success);
   evl_on_readable(loop, reg, sel, arg);
 }
 
@@ -4221,13 +4177,13 @@ static bool evl_wait_for(evl_sync_ctx *c, int *counter_field, int target,
  * test driver, which is what the fd-selectable path of evl_on_readable
  * documents for the same reason. That's how a real production callback
  * behaves under really concurrent dispatch, and it makes a *blocking* read
- * unsafe. The ccol_event_loop documentation warns that a callback's receive
+ * unsafe. The ceventloop documentation warns that a callback's receive
  * call "may find nothing, and must handle that gracefully", and a plain
  * blocking read() isn't graceful on an fd with nothing left to read and no
  * writer left to produce more. That state happens, for example, once every
  * feeder thread and driver thread in a test has finished: read() then hangs
  * the reactor thread that called it for ever, which in turn hangs the join
- * of ccol_event_loop_shutdown on that thread. It's a real deadlock, and
+ * of ceventloop_shutdown on that thread. It's a real deadlock, and
  * thread-apply-all-bt in gdb on the stuck test process shows exactly that
  * pair of stacks. With O_NONBLOCK "nothing available" returns -1 with EAGAIN
  * at once instead. */
@@ -4236,27 +4192,27 @@ static void evl_set_nonblocking(int fd) {
   fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-// ccol_event_loop tests
-TEST(ccol_event_loop, create_destroy) {
+// ceventloop tests
+TEST(ceventloop, create_destroy) {
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
-  REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
-  ccol_event_loop_destroy(loop);
-  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(8, 1, 1, &err);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
+  REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)0);
+  ceventloop_destroy(loop);
+  REQUIRE_EQ(loop, CEVENTLOOP_NULL);
 }
 
-TEST(ccol_event_loop, create_destroy_scoped) {
+TEST(ceventloop, create_destroy_scoped) {
   {
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-    REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
+    REQUIRE_NE(loop, CEVENTLOOP_NULL);
   }
   /* The scope exit destroyed loop. There's nothing more to assert than "no
    * crash, and a clean run under valgrind", which the memtest target
    * checks. */
 }
 
-TEST(ccol_event_loop, fd_on_readable_fires) {
+TEST(ceventloop, fd_on_readable_fires) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
 
@@ -4274,16 +4230,15 @@ TEST(ccol_event_loop, fd_on_readable_fires) {
      * registration goes away. The test must not destroy ctx, and this
      * function must not return, until that has surely stopped, and only the
      * join at the end of this block makes sure of it. */
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+    REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
+    REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)1);
 
     int val = 42;
     REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
@@ -4301,7 +4256,7 @@ TEST(ccol_event_loop, fd_on_readable_fires) {
     REQUIRE_EQ(n, (ssize_t)sizeof(val));
     REQUIRE_EQ(*(int *)rbuf, 42);
 
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
 
     /* Leaving the block shuts loop down and joins its one reactor thread, so
      * ctx is quiet from here on. */
@@ -4315,7 +4270,7 @@ TEST(ccol_event_loop, fd_on_readable_fires) {
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, fd_on_writable_fires) {
+TEST(ceventloop, fd_on_writable_fires) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
 
@@ -4327,20 +4282,19 @@ TEST(ccol_event_loop, fd_on_writable_fires) {
      * fd_on_readable_fires. A new pipe write end stays writable for ever,
      * since nothing fills its buffer, so the reactor thread keeps
      * dispatching it until the registration goes away. */
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[1], ccol_select_write), handlers,
-        &ctx, &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[1], cselect_write), handlers, &ctx, &err);
+    REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
     /* A new pipe write end is always writable from the start. */
     REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, EVL_WAIT_MS));
 
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
   }
 
   evl_sync_ctx_destroy(&ctx);
@@ -4348,7 +4302,7 @@ TEST(ccol_event_loop, fd_on_writable_fires) {
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, fd_both_directions_combine_and_recombine) {
+TEST(ceventloop, fd_both_directions_combine_and_recombine) {
   /* A socketpair gives an fd that works in both directions, which a pipe
    * doesn't, and the test needs that to register read and write interest on
    * the SAME fd. This covers adding with EPOLL_CTL_ADD and then combining
@@ -4366,23 +4320,21 @@ TEST(ccol_event_loop, fd_both_directions_combine_and_recombine) {
      * level-triggered reactor, because evl_on_readable never drains the read
      * side of sv[0] and the write side never fills up. So both ctx structs
      * must outlive every reactor thread, outliving their own
-     * ccol_event_loop_remove call isn't enough. */
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+     * ceventloop_remove call isn't enough. */
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t rh = {
+    ceventloop_handlers_t rh = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-    ccol_event_handlers_t wh = {
+    ceventloop_handlers_t wh = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg rreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
-        &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
-    ccol_event_reg wreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
-        &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)2);
+    ceventloop_reg rreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), rh, &read_ctx, &err);
+    REQUIRE_NE(rreg, CEVENTLOOP_REG_NULL);
+    ceventloop_reg wreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), wh, &write_ctx, &err);
+    REQUIRE_NE(wreg, CEVENTLOOP_REG_NULL);
+    REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)2);
 
     /* sv[0] is writable right away because its send buffer is empty. */
     REQUIRE_TRUE(
@@ -4390,15 +4342,15 @@ TEST(ccol_event_loop, fd_both_directions_combine_and_recombine) {
 
     /* Removes the write direction, which is the MOD back down path, and the
      * read direction keeps working after it. */
-    REQUIRE_EQ(ccol_event_loop_remove(loop, wreg), ccol_success);
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
+    REQUIRE_EQ(ceventloop_remove(loop, wreg), ccol_success);
+    REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)1);
 
     int val = 7;
     REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
     REQUIRE_TRUE(
         evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, EVL_WAIT_MS));
 
-    ccol_event_loop_remove(loop, rreg);
+    ceventloop_remove(loop, rreg);
   }
 
   evl_sync_ctx_destroy(&read_ctx);
@@ -4407,12 +4359,12 @@ TEST(ccol_event_loop, fd_both_directions_combine_and_recombine) {
   close(sv[1]);
 }
 
-TEST(ccol_event_loop, fd_simultaneous_readable_and_writable) {
+TEST(ceventloop, fd_simultaneous_readable_and_writable) {
   /* The test registers both directions on the same fd and then the peer
    * writes, so sv[0] becomes readable while it's writable, and both
    * callbacks should fire for the SAME epoll_wait batch. That's why
    * ev.data.ptr carries the shared event_entry instead of a bare
-   * ccol_event_reg*, which would deliver only one of the two. */
+   * ceventloop_reg*, which would deliver only one of the two. */
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
 
@@ -4423,21 +4375,19 @@ TEST(ccol_event_loop, fd_simultaneous_readable_and_writable) {
   {
     /* A nested block, with the same pattern and comment as
      * fd_on_readable_fires. */
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t rh = {
+    ceventloop_handlers_t rh = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-    ccol_event_handlers_t wh = {
+    ceventloop_handlers_t wh = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg rreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
-        &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
-    ccol_event_reg wreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
-        &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg rreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), rh, &read_ctx, &err);
+    REQUIRE_NE(rreg, CEVENTLOOP_REG_NULL);
+    ceventloop_reg wreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), wh, &write_ctx, &err);
+    REQUIRE_NE(wreg, CEVENTLOOP_REG_NULL);
 
     /* Drains the initial "already writable" dispatch before the test writes
      * data, so the later wait sees the combined batch without any doubt. */
@@ -4454,8 +4404,8 @@ TEST(ccol_event_loop, fd_simultaneous_readable_and_writable) {
     REQUIRE_TRUE(
         evl_wait_for(&write_ctx, &write_ctx.writable_count, 2, EVL_WAIT_MS));
 
-    ccol_event_loop_remove(loop, rreg);
-    ccol_event_loop_remove(loop, wreg);
+    ceventloop_remove(loop, rreg);
+    ceventloop_remove(loop, wreg);
   }
 
   evl_sync_ctx_destroy(&read_ctx);
@@ -4464,7 +4414,7 @@ TEST(ccol_event_loop, fd_simultaneous_readable_and_writable) {
   close(sv[1]);
 }
 
-TEST(ccol_event_loop, fd_on_error_fires_for_both_directions) {
+TEST(ceventloop, fd_on_error_fires_for_both_directions) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
 
@@ -4478,21 +4428,19 @@ TEST(ccol_event_loop, fd_on_error_fires_for_both_directions) {
      * that hung up stays until the fd goes away with a level-triggered
      * reactor, just like a readable or writable fd nobody drains, so the
      * reactor thread keeps dispatching on_error until then. */
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t rh = {
+    ceventloop_handlers_t rh = {
         .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
-    ccol_event_handlers_t wh = {
+    ceventloop_handlers_t wh = {
         .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
     char *err = NULL;
-    ccol_event_reg rreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
-        &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
-    ccol_event_reg wreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
-        &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg rreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), rh, &read_ctx, &err);
+    REQUIRE_NE(rreg, CEVENTLOOP_REG_NULL);
+    ceventloop_reg wreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), wh, &write_ctx, &err);
+    REQUIRE_NE(wreg, CEVENTLOOP_REG_NULL);
 
     close(sv[1]); /* peer hangs up */
 
@@ -4501,8 +4449,8 @@ TEST(ccol_event_loop, fd_on_error_fires_for_both_directions) {
     REQUIRE_TRUE(
         evl_wait_for(&write_ctx, &write_ctx.error_count, 1, EVL_WAIT_MS));
 
-    ccol_event_loop_remove(loop, rreg);
-    ccol_event_loop_remove(loop, wreg);
+    ceventloop_remove(loop, rreg);
+    ceventloop_remove(loop, wreg);
   }
 
   evl_sync_ctx_destroy(&read_ctx);
@@ -4511,7 +4459,7 @@ TEST(ccol_event_loop, fd_on_error_fires_for_both_directions) {
 }
 
 /* This guards against an asymmetric dispatch priority; the has_writer
- * comment in _ccol_event_loop_handle_event in src/cthreadcomm.c describes
+ * comment in _ceventloop_handle_event in src/cthreadcomm.c describes
  * the mechanism. EPOLLOUT and EPOLLERR or EPOLLHUP aren't mutually exclusive,
  * and neither are EPOLLIN and EPOLLERR or EPOLLHUP, as the setup of
  * fd_on_error_fires_for_both_directions just above shows, and this test
@@ -4521,14 +4469,14 @@ TEST(ccol_event_loop, fd_on_error_fires_for_both_directions) {
  * standalone epoll probe against this exact socketpair shape reports both
  * directly. A write-only registration sets on_writable and leaves on_error
  * == NULL, which is a documented, supported pattern, since the doc comment
- * of ccol_event_handlers_t says "a write-only producer that never expects
+ * of ceventloop_handlers_t says "a write-only producer that never expects
  * on_error may pass NULL there". Such a registration has to see on_writable
  * fire for such an event instead of being starved of it for ever with
  * nothing to report the error that comes with it either.
  * num_reactor_threads == 1 here covers the copy of this handling in
- * _ccol_event_loop_handle_event, and the _multi_thread sibling test below
- * covers the copy in _ccol_event_loop_poller_collect. */
-TEST(ccol_event_loop,
+ * _ceventloop_handle_event, and the _multi_thread sibling test below
+ * covers the copy in _ceventloop_poller_collect. */
+TEST(ceventloop,
      fd_write_only_registration_still_fires_on_writable_when_peer_hangs_up) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
@@ -4542,15 +4490,14 @@ TEST(ccol_event_loop,
      * fd_on_readable_fires. The EPOLLHUP condition from a peer that hung up
      * stays until the fd goes away with a level-triggered reactor, so the
      * reactor thread keeps dispatching on_writable until then. */
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t wh = {
+    ceventloop_handlers_t wh = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg wreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &ctx,
-        &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg wreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), wh, &ctx, &err);
+    REQUIRE_NE(wreg, CEVENTLOOP_REG_NULL);
 
     close(sv[1]); /* peer hangs up: sv[0] becomes both EPOLLOUT and EPOLLHUP */
 
@@ -4560,7 +4507,7 @@ TEST(ccol_event_loop,
     error_count_seen = ctx.error_count;
     pthread_mutex_unlock(&ctx.mtx);
 
-    ccol_event_loop_remove(loop, wreg);
+    ceventloop_remove(loop, wreg);
   }
 
   /* on_error is NULL on this registration, so nothing would consume the
@@ -4573,8 +4520,8 @@ TEST(ccol_event_loop,
 }
 
 /* The same as the test just above but with num_reactor_threads == 3, which
- * routes the dispatch through _ccol_event_loop_poller_collect and
- * _ccol_event_loop_dispatch_job_fn instead of _ccol_event_loop_handle_event.
+ * routes the dispatch through _ceventloop_poller_collect and
+ * _ceventloop_dispatch_job_fn instead of _ceventloop_handle_event.
  * That path has its own separate copy of the same has_writer handling. The
  * two copies are almost identical on purpose and aren't shared, so the
  * num_reactor_threads == 1 path stays byte for byte the same, and this
@@ -4582,7 +4529,7 @@ TEST(ccol_event_loop,
  * needs regression coverage of its own because being correct doesn't carry
  * over from the first. */
 TEST(
-    ccol_event_loop,
+    ceventloop,
     fd_write_only_registration_still_fires_on_writable_when_peer_hangs_up_multi_thread) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
@@ -4592,15 +4539,14 @@ TEST(
   int error_count_seen;
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 1, 3);
+    ceventloop_construct_scoped(loop, 8, 1, 3);
 
-    ccol_event_handlers_t wh = {
+    ceventloop_handlers_t wh = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg wreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &ctx,
-        &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg wreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), wh, &ctx, &err);
+    REQUIRE_NE(wreg, CEVENTLOOP_REG_NULL);
 
     close(sv[1]);
 
@@ -4610,7 +4556,7 @@ TEST(
     error_count_seen = ctx.error_count;
     pthread_mutex_unlock(&ctx.mtx);
 
-    ccol_event_loop_remove(loop, wreg);
+    ceventloop_remove(loop, wreg);
   }
 
   REQUIRE_EQ(error_count_seen, 0);
@@ -4640,8 +4586,8 @@ static atomic_bool evl_readd_in_callback;
 /* Drains the fd and counts one readable dispatch. The drain doesn't block,
  * since a dispatch may find nothing left to read, and the wait on the gate
  * is bounded, so a callback can never hold the reactor for ever. */
-static void evl_readd_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                  ccol_selectable *sel, void *arg) {
+static void evl_readd_on_readable(ceventloop loop, ceventloop_reg reg,
+                                  cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   atomic_store(&evl_readd_in_callback, true);
@@ -4661,14 +4607,14 @@ static void evl_readd_on_readable(ccol_event_loop loop, ccol_event_reg reg,
 
 /* Waits, bounded by timeout_ms, until loop has reclaimed more than base
  * event entries. */
-static bool evl_readd_wait_reclaimed(ccol_event_loop loop, uint64_t base,
+static bool evl_readd_wait_reclaimed(ceventloop loop, uint64_t base,
                                      int timeout_ms) {
   for (int i = 0; i < timeout_ms; i++) {
-    if (_ccol_event_loop_entries_reclaimed_for_tests(loop) > base) return true;
+    if (_ceventloop_entries_reclaimed_for_tests(loop) > base) return true;
     struct timespec ts = {0, 1000000L};
     nanosleep(&ts, NULL);
   }
-  return _ccol_event_loop_entries_reclaimed_for_tests(loop) > base;
+  return _ceventloop_entries_reclaimed_for_tests(loop) > base;
 }
 
 static int evl_readd_count(evl_sync_ctx *c) {
@@ -4699,20 +4645,19 @@ static int evl_readd_run(size_t num_threads, evl_readd_mode mode) {
   atomic_store(&evl_readd_gate_closed, false);
 
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, num_threads, &err);
-  if (loop == CCOL_EVENT_LOOP_NULL) {
+  ceventloop loop = ceventloop_create(8, 1, num_threads, &err);
+  if (loop == CEVENTLOOP_NULL) {
     fail |= 1 << 1;
   } else {
-    ccol_event_handlers_t h = {.on_readable = evl_readd_on_readable};
+    ceventloop_handlers_t h = {.on_readable = evl_readd_on_readable};
     int fd = sv[0];
-    ccol_event_reg r1 = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(fd, ccol_select_read), h, &old_ctx, &err);
-    if (r1 == CCOL_EVENT_REG_NULL) fail |= 1 << 2;
-    if (mode == EVL_READD_PAUSED &&
-        ccol_event_loop_pause(loop, r1) != ccol_success)
+    ceventloop_reg r1 = ceventloop_add(loop, cselectable_fd(fd, cselect_read),
+                                       h, &old_ctx, &err);
+    if (r1 == CEVENTLOOP_REG_NULL) fail |= 1 << 2;
+    if (mode == EVL_READD_PAUSED && ceventloop_pause(loop, r1) != ccol_success)
       fail |= 1 << 3;
-    uint64_t base = _ccol_event_loop_entries_reclaimed_for_tests(loop);
-    if (ccol_event_loop_remove(loop, r1) != ccol_success) fail |= 1 << 4;
+    uint64_t base = _ceventloop_entries_reclaimed_for_tests(loop);
+    if (ceventloop_remove(loop, r1) != ccol_success) fail |= 1 << 4;
 
     if (mode == EVL_READD_NUMBER_REUSE) {
       /* The documented order, removal before close. The new socket takes the
@@ -4738,17 +4683,16 @@ static int evl_readd_run(size_t num_threads, evl_readd_mode mode) {
       }
     }
 
-    ccol_event_reg r2 = CCOL_EVENT_REG_NULL;
+    ceventloop_reg r2 = CEVENTLOOP_REG_NULL;
     if (sv[0] >= 0) {
-      r2 = ccol_event_loop_add(loop,
-                               ccol_selectable_from_fd(sv[0], ccol_select_read),
-                               h, &new_ctx, &err);
+      r2 = ceventloop_add(loop, cselectable_fd(sv[0], cselect_read), h,
+                          &new_ctx, &err);
     }
-    if (r2 == CCOL_EVENT_REG_NULL) fail |= 1 << 6;
+    if (r2 == CEVENTLOOP_REG_NULL) fail |= 1 << 6;
     /* r1's entry is freed only here, after r2 owns the fd. */
     if (!evl_readd_wait_reclaimed(loop, base, 5000)) fail |= 1 << 7;
 
-    if (r2 != CCOL_EVENT_REG_NULL && sv[1] >= 0) {
+    if (r2 != CEVENTLOOP_REG_NULL && sv[1] >= 0) {
       test_write_retry_eintr(sv[1], "x", 1);
       if (!evl_wait_for(&new_ctx, &new_ctx.readable_count, 1, 5000))
         fail |= 1 << 8;
@@ -4758,8 +4702,8 @@ static int evl_readd_run(size_t num_threads, evl_readd_mode mode) {
       if (!evl_wait_for(&new_ctx, &new_ctx.readable_count, 2, 5000))
         fail |= 1 << 9;
     }
-    if (r2 != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r2);
-    ccol_event_loop_destroy(loop);
+    if (r2 != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r2);
+    ceventloop_destroy(loop);
   }
   if (evl_readd_count(&old_ctx) != 0) fail |= 1 << 10;
 
@@ -4770,7 +4714,7 @@ static int evl_readd_run(size_t num_threads, evl_readd_mode mode) {
   return fail;
 }
 
-TEST(ccol_event_loop, fd_readded_after_remove_fires_after_old_entry_reclaim) {
+TEST(ceventloop, fd_readded_after_remove_fires_after_old_entry_reclaim) {
   int fails[6];
   int k = 0;
   const size_t threads[2] = {1, 3};
@@ -4800,15 +4744,14 @@ static int evl_readd_inflight_run(size_t num_threads) {
   atomic_store(&evl_readd_gate_closed, true);
 
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, num_threads, &err);
-  if (loop == CCOL_EVENT_LOOP_NULL) {
+  ceventloop loop = ceventloop_create(8, 1, num_threads, &err);
+  if (loop == CEVENTLOOP_NULL) {
     fail |= 1 << 1;
   } else {
-    ccol_event_handlers_t h = {.on_readable = evl_readd_on_readable};
-    ccol_event_reg r1 = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), h, &old_ctx,
-        &err);
-    if (r1 == CCOL_EVENT_REG_NULL) fail |= 1 << 2;
+    ceventloop_handlers_t h = {.on_readable = evl_readd_on_readable};
+    ceventloop_reg r1 = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), h, &old_ctx, &err);
+    if (r1 == CEVENTLOOP_REG_NULL) fail |= 1 << 2;
     test_write_retry_eintr(sv[1], "a", 1);
     bool entered = false;
     for (int i = 0; i < 5000 && !entered; i++) {
@@ -4820,12 +4763,11 @@ static int evl_readd_inflight_run(size_t num_threads) {
     }
     if (!entered) fail |= 1 << 3;
 
-    uint64_t base = _ccol_event_loop_entries_reclaimed_for_tests(loop);
-    if (ccol_event_loop_remove(loop, r1) != ccol_success) fail |= 1 << 4;
-    ccol_event_reg r2 = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), h, &new_ctx,
-        &err);
-    if (r2 == CCOL_EVENT_REG_NULL) fail |= 1 << 5;
+    uint64_t base = _ceventloop_entries_reclaimed_for_tests(loop);
+    if (ceventloop_remove(loop, r1) != ccol_success) fail |= 1 << 4;
+    ceventloop_reg r2 = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), h, &new_ctx, &err);
+    if (r2 == CEVENTLOOP_REG_NULL) fail |= 1 << 5;
 
     /* r1's callback drains the byte "a" at this point and returns. */
     atomic_store(&evl_readd_gate_closed, false);
@@ -4833,14 +4775,14 @@ static int evl_readd_inflight_run(size_t num_threads) {
       fail |= 1 << 6;
     if (!evl_readd_wait_reclaimed(loop, base, 5000)) fail |= 1 << 7;
 
-    if (r2 != CCOL_EVENT_REG_NULL) {
+    if (r2 != CEVENTLOOP_REG_NULL) {
       int before = evl_readd_count(&new_ctx);
       test_write_retry_eintr(sv[1], "b", 1);
       if (!evl_wait_for(&new_ctx, &new_ctx.readable_count, before + 1, 5000))
         fail |= 1 << 8;
-      ccol_event_loop_remove(loop, r2);
+      ceventloop_remove(loop, r2);
     }
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   atomic_store(&evl_readd_gate_closed, false);
 
@@ -4851,72 +4793,67 @@ static int evl_readd_inflight_run(size_t num_threads) {
   return fail;
 }
 
-TEST(ccol_event_loop, fd_readded_while_removed_dispatch_in_flight_fires) {
+TEST(ceventloop, fd_readded_while_removed_dispatch_in_flight_fires) {
   int fail_single = evl_readd_inflight_run(1);
   int fail_pool = evl_readd_inflight_run(3);
   REQUIRE_EQ(fail_single, 0);
   REQUIRE_EQ(fail_pool, 0);
 }
 
-TEST(ccol_event_loop, fd_duplicate_direction_rejected) {
+TEST(ceventloop, fd_duplicate_direction_rejected) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+  ceventloop_construct_scoped(loop, 8, 1, 1);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg1 = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg1, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg1 = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg1, CEVENTLOOP_REG_NULL);
 
   err = NULL;
-  ccol_event_reg reg2 = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_EQ(reg2, CCOL_EVENT_REG_NULL);
-  REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
+  ceventloop_reg reg2 = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_EQ(reg2, CEVENTLOOP_REG_NULL);
+  REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)1);
 
-  ccol_event_loop_remove(loop, reg1);
+  ceventloop_remove(loop, reg1);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, fd_modify_rejects_occupied_direction) {
+TEST(ceventloop, fd_modify_rejects_occupied_direction) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+  ceventloop_construct_scoped(loop, 8, 1, 1);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg rreg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(sv[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
-  ccol_event_reg wreg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(sv[0], ccol_select_write), handlers, NULL,
-      &err);
-  REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg rreg = ceventloop_add(
+      loop, cselectable_fd(sv[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(rreg, CEVENTLOOP_REG_NULL);
+  ceventloop_reg wreg = ceventloop_add(
+      loop, cselectable_fd(sv[0], cselect_write), handlers, NULL, &err);
+  REQUIRE_NE(wreg, CEVENTLOOP_REG_NULL);
 
   /* Flipping rreg to the write direction collides with wreg. */
-  REQUIRE_EQ(ccol_event_loop_modify(loop, rreg, ccol_select_write),
-             ccol_not_permitted);
+  REQUIRE_EQ(ceventloop_modify(loop, rreg, cselect_write), ccol_not_permitted);
 
-  ccol_event_loop_remove(loop, rreg);
-  ccol_event_loop_remove(loop, wreg);
+  ceventloop_remove(loop, rreg);
+  ceventloop_remove(loop, wreg);
   close(sv[0]);
   close(sv[1]);
 }
 
-TEST(ccol_event_loop, fd_modify_flips_direction_and_updates_sel) {
+TEST(ceventloop, fd_modify_flips_direction_and_updates_sel) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_select_dir last_dir_seen;
+  cselect_dir_t last_dir_seen;
 
   {
     /* A nested block, the same pattern as in the other multi-thread tests.
@@ -4927,20 +4864,18 @@ TEST(ccol_event_loop, fd_modify_flips_direction_and_updates_sel) {
      * destroy ctx, and this function must not return and free ctx's stack
      * slot, until that has surely stopped, and only the join at the end of
      * this block makes sure of it. */
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t handlers = {.on_readable = evl_on_readable,
+    ceventloop_handlers_t handlers = {.on_readable = evl_on_readable,
                                       .on_writable = evl_on_writable,
                                       .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), handlers, &ctx,
-        &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), handlers, &ctx, &err);
+    REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
     REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, EVL_WAIT_MS));
 
-    REQUIRE_EQ(ccol_event_loop_modify(loop, reg, ccol_select_read),
-               ccol_success);
+    REQUIRE_EQ(ceventloop_modify(loop, reg, cselect_read), ccol_success);
 
     int val = 5;
     REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
@@ -4959,116 +4894,110 @@ TEST(ccol_event_loop, fd_modify_flips_direction_and_updates_sel) {
     last_dir_seen = ctx.last_dir_seen;
     pthread_mutex_unlock(&ctx.mtx);
 
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
 
     /* Leaving the block shuts loop down and joins its one reactor thread, so
      * ctx is quiet from here on. */
   }
 
-  REQUIRE_EQ((int)last_dir_seen, (int)ccol_select_read);
+  REQUIRE_EQ((int)last_dir_seen, (int)cselect_read);
 
   evl_sync_ctx_destroy(&ctx);
   close(sv[0]);
   close(sv[1]);
 }
 
-TEST(ccol_event_loop, fd_modify_after_remove_returns_invalid_args) {
+TEST(ceventloop, fd_modify_after_remove_returns_invalid_args) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+  ceventloop_construct_scoped(loop, 8, 1, 1);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
-  REQUIRE_EQ(ccol_event_loop_modify(loop, reg, ccol_select_write),
-             ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_modify(loop, reg, cselect_write), ccol_invalid_args);
 
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, fd_modify_rejects_queue_selectable) {
-  /* ccol_event_loop_modify only works for an fd, and ccol_event_loop_pause
-   * and ccol_event_loop_resume have the same restriction (see
+TEST(ceventloop, fd_modify_rejects_queue_selectable) {
+  /* ceventloop_modify only works for an fd, and ceventloop_pause
+   * and ceventloop_resume have the same restriction (see
    * pause_and_resume_reject_queue_selectable). The direction of a queue or a
-   * ccol_channel registration is part of its identity, so to change it the
+   * cchan registration is part of its identity, so to change it the
    * caller removes the registration and adds it again rather than flipping
    * the direction in place. So the call has to fail with ccol_invalid_args,
    * neither quietly doing nothing nor corrupting the registration. The type
    * check always runs first, before the "already in the requested
-   * direction" check inside ccol_event_loop_modify, so a call for the same
+   * direction" check inside ceventloop_modify, so a call for the same
    * direction fails the same way instead of counting as a success that does
    * nothing. */
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ceventloop_construct_scoped(loop, 8, 1, 1);
+  ccircq *cq = ccircq_create(4, NULL);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(loop, ccircq_selectable(cq, cselect_read),
+                                      handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_modify(loop, reg, ccol_select_write),
-             ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_modify(loop, reg, cselect_write), ccol_invalid_args);
   /* Asking for the direction the registration already has must fail the
    * same way instead of counting as a call that does nothing. */
-  REQUIRE_EQ(ccol_event_loop_modify(loop, reg, ccol_select_read),
-             ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_modify(loop, reg, cselect_read), ccol_invalid_args);
 
-  ccol_event_loop_remove(loop, reg);
-  ccol_circular_queue_destroy(cq);
+  ceventloop_remove(loop, reg);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_event_loop, queue_circq_readable_delivers_message) {
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+TEST(ceventloop, queue_circq_readable_delivers_message) {
+  ceventloop_construct_scoped(loop, 8, 1, 1);
+  ccircq *cq = ccircq_create(4, NULL);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(loop, ccircq_selectable(cq, cselect_read),
+                                      handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   int *payload = malloc(sizeof(int));
   *payload = 123;
-  c_message_t msg = {.data = payload, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &msg), ccol_success);
+  cmessage_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(cq, &msg), ccol_success);
 
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
   REQUIRE_TRUE(ctx.last_msg_valid);
   REQUIRE_EQ(ctx.last_msg.size, sizeof(int));
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 123);
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_event_loop, queue_circq_writable_fires_without_consuming) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+TEST(ceventloop, queue_circq_writable_fires_without_consuming) {
+  ccircq *cq = ccircq_create(1, NULL);
 
   /* Fill the queue so the write direction isn't ready from the start. */
   int *filler = malloc(sizeof(int));
   *filler = 1;
-  c_message_t fmsg = {.data = filler, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &fmsg), ccol_success);
+  cmessage_t fmsg = {.data = filler, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(cq, &fmsg), ccol_success);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
@@ -5077,96 +5006,94 @@ TEST(ccol_event_loop, queue_circq_writable_fires_without_consuming) {
     /* A nested block, with the same pattern and comment as
      * fd_on_readable_fires. By design evl_on_writable never consumes or
      * produces anything on cq, to prove the reactor never does it for the
-     * callback. The test itself then does a ccol_circq_try_send_zc and
-     * ccol_circq_recv_zc round trip after the first wait has succeeded, and
+     * callback. The test itself then does a ccircq_try_send and
+     * ccircq_recv round trip after the first wait has succeeded, and
      * that round trip makes cq ready for a write again. So a second
      * on_writable dispatch can still be in flight on the reactor thread at
      * the exact moment this function would go on to remove the registration
-     * and destroy ctx and cq. ccol_event_loop_remove only stops a FUTURE
+     * and destroy ctx and cq. ceventloop_remove only stops a FUTURE
      * dispatch from starting and doesn't wait for one already in flight (see
-     * the comment of _ccol_event_loop_run_callback). The test must not
+     * the comment of _ceventloop_run_callback). The test must not
      * destroy ctx or cq, and this function must not return, until that has
      * surely stopped, and only the join at the end of this block, which comes
-     * from the scope-exit destructor of ccol_event_loop_construct_scoped,
+     * from the scope-exit destructor of ceventloop_construct_scoped,
      * makes sure of it. The race is real and not theoretical: without this
      * nested block ThreadSanitizer reports, in about 1 of every 4 to 9 runs,
      * that the main thread destroys ctx.mtx and ctx.cond while
      * evl_on_writable is still using them on the reactor thread. */
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(cq, ccol_select_write), handlers, &ctx,
-        &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, ccircq_selectable(cq, cselect_write), handlers, &ctx, &err);
+    REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
     /* Frees the slot, so on_writable fires and must NOT consume
      * anything: the queue has room and holds no message, and the callback
      * does the real send itself. */
-    c_message_t recvd;
-    REQUIRE_EQ(ccol_circq_recv_zc(cq, &recvd), ccol_success);
+    cmessage_t recvd;
+    REQUIRE_EQ(ccircq_recv(cq, &recvd), ccol_success);
     free(recvd.data);
 
     REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, EVL_WAIT_MS));
 
     int *payload = malloc(sizeof(int));
     *payload = 55;
-    c_message_t msg = {.data = payload, .size = sizeof(int)};
-    REQUIRE_EQ(ccol_circq_try_send_zc(cq, &msg), ccol_success);
-    REQUIRE_EQ(ccol_circq_msg_count(cq), (size_t)1);
+    cmessage_t msg = {.data = payload, .size = sizeof(int)};
+    REQUIRE_EQ(ccircq_try_send(cq, &msg), ccol_success);
+    REQUIRE_EQ(ccircq_msg_count(cq), (size_t)1);
 
-    c_message_t out;
-    REQUIRE_EQ(ccol_circq_recv_zc(cq, &out), ccol_success);
+    cmessage_t out;
+    REQUIRE_EQ(ccircq_recv(cq, &out), ccol_success);
     REQUIRE_EQ(*(int *)out.data, 55);
     free(out.data);
 
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
 
     /* Leaving the block shuts loop down and joins its one reactor thread, so
      * ctx and cq are quiet from here on. */
   }
 
   evl_sync_ctx_destroy(&ctx);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_event_loop, queue_dynq_readable_delivers_message) {
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+TEST(ceventloop, queue_dynq_readable_delivers_message) {
+  ceventloop_construct_scoped(loop, 8, 1, 1);
+  cdynmq *dq = cdynmq_create(NULL);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg =
-      ccol_event_loop_add(loop, ccol_selectable_from_dynq(dq, ccol_select_read),
-                          handlers, &ctx, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(loop, cdynmq_selectable(dq, cselect_read),
+                                      handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   int *payload = malloc(sizeof(int));
   *payload = 321;
-  c_message_t msg = {.data = payload, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_dynmq_send_zc(dq, &msg), ccol_success);
+  cmessage_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(cdynmq_send(dq, &msg), ccol_success);
 
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
   REQUIRE_TRUE(ctx.last_msg_valid);
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 321);
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
 typedef struct evl_chan_sender_args {
-  ccol_channel *ch;
+  cchan *ch;
   int value;
 } evl_chan_sender_args;
 
@@ -5174,31 +5101,30 @@ static void *evl_chan_sender_thread(void *arg) {
   evl_chan_sender_args *a = (evl_chan_sender_args *)arg;
   int *payload = malloc(sizeof(int));
   *payload = a->value;
-  c_message_t msg = {.data = payload, .size = sizeof(int)};
+  cmessage_t msg = {.data = payload, .size = sizeof(int)};
   /* A new thread calls this, so _ccol_get_thread_id() differs from the
-   * ccol_channel's owner (the test thread that called ccol_channel_create)
+   * cchan's owner (the test thread that called cchan_create)
    * and the send goes to workers_to_owner_cq, which is exactly what the
-   * owner-side ccol_select_read registration below watches. */
-  ccol_chan_send_zc(a->ch, &msg);
+   * owner-side cselect_read registration below watches. */
+  cchan_send(a->ch, &msg);
   return NULL;
 }
 
-TEST(ccol_event_loop, queue_channel_selectable) {
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-  ccol_channel *ch = ccol_channel_create(4, NULL);
+TEST(ceventloop, queue_channel_selectable) {
+  ceventloop_construct_scoped(loop, 8, 1, 1);
+  cchan *ch = cchan_create(4, NULL);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  /* This thread owns the ccol_channel and the owner reads from
-   * ccol_workers_to_owner, so a worker on another thread needs to send for
+  /* This thread owns the cchan and the owner reads from
+   * cchan_workers_to_owner, so a worker on another thread needs to send for
    * the owner-side read registration to fire. */
-  ccol_event_reg reg =
-      ccol_event_loop_add(loop, ccol_selectable_from_chan(ch, ccol_select_read),
-                          handlers, &ctx, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(loop, cchan_selectable(ch, cselect_read),
+                                      handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   evl_chan_sender_args sargs = {.ch = ch, .value = 88};
   pthread_t tid;
@@ -5209,86 +5135,84 @@ TEST(ccol_event_loop, queue_channel_selectable) {
   REQUIRE_TRUE(ctx.last_msg_valid);
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 88);
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
-  ccol_channel_destroy(ch);
+  cchan_destroy(ch);
 }
 
-TEST(ccol_event_loop, queue_persistent_across_multiple_cycles) {
+TEST(ceventloop, queue_persistent_across_multiple_cycles) {
   /* The core property: a registration is persistent rather than one-shot,
    * so one registration keeps firing across many separate send and recv
    * cycles and the test never adds it again. */
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ceventloop_construct_scoped(loop, 8, 1, 1);
+  ccircq *cq = ccircq_create(4, NULL);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(loop, ccircq_selectable(cq, cselect_read),
+                                      handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   for (int i = 0; i < 5; i++) {
     int *payload = malloc(sizeof(int));
     *payload = i;
-    c_message_t msg = {.data = payload, .size = sizeof(int)};
-    REQUIRE_EQ(ccol_circq_send_zc(cq, &msg), ccol_success);
+    cmessage_t msg = {.data = payload, .size = sizeof(int)};
+    REQUIRE_EQ(ccircq_send(cq, &msg), ccol_success);
     REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, i + 1, EVL_WAIT_MS));
     REQUIRE_EQ(*(int *)ctx.last_msg.data, i);
   }
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_event_loop, queue_already_pending_message_at_registration_time) {
+TEST(ceventloop, queue_already_pending_message_at_registration_time) {
   /* The loop has to deliver a message the test sent BEFORE calling
-   * ccol_event_loop_add. The bridge eventfd has no earlier notify to use, so
-   * ccol_event_loop_add has to trigger itself when the queue is already in
+   * ceventloop_add. The bridge eventfd has no earlier notify to use, so
+   * ceventloop_add has to trigger itself when the queue is already in
    * the target state at registration time. */
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ceventloop_construct_scoped(loop, 8, 1, 1);
+  ccircq *cq = ccircq_create(4, NULL);
 
   int *payload = malloc(sizeof(int));
   *payload = 999;
-  c_message_t msg = {.data = payload, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &msg), ccol_success);
+  cmessage_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(cq, &msg), ccol_success);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(loop, ccircq_selectable(cq, cselect_read),
+                                      handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 999);
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 typedef struct evl_two_readers_ctx {
@@ -5299,99 +5223,97 @@ typedef struct evl_two_readers_ctx {
  * queue, the same shape as evl_bounded_hot_queue_on_readable further below.
  * So a real backlog of 2 or more messages is waiting behind this
  * registration by the time it dispatches, which gives
- * _ccol_event_loop_queue_cascade_notify_next something real to forward to
+ * _ceventloop_queue_cascade_notify_next something real to forward to
  * whichever registration is linked behind this one. */
-static void evl_two_readers_slow_on_readable(ccol_event_loop loop,
-                                             ccol_event_reg reg,
-                                             ccol_selectable *sel, void *arg) {
+static void evl_two_readers_slow_on_readable(ceventloop loop,
+                                             ceventloop_reg reg,
+                                             cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_two_readers_ctx *c = (evl_two_readers_ctx *)arg;
-  c_message_t msg = {.data = NULL, .size = 0};
-  (void)ccol_circq_try_recv_zc(sel->cq, &msg);
+  cmessage_t msg = {.data = NULL, .size = 0};
+  (void)ccircq_try_recv(sel->cq, &msg);
   struct timespec ts = {0, 500000}; /* 0.5ms */
   nanosleep(&ts, NULL);
   atomic_fetch_add(&c->calls, 1);
 }
 
-static void evl_two_readers_fast_on_readable(ccol_event_loop loop,
-                                             ccol_event_reg reg,
-                                             ccol_selectable *sel, void *arg) {
+static void evl_two_readers_fast_on_readable(ceventloop loop,
+                                             ceventloop_reg reg,
+                                             cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_two_readers_ctx *c = (evl_two_readers_ctx *)arg;
-  c_message_t msg = {.data = NULL, .size = 0};
-  (void)ccol_circq_try_recv_zc(sel->cq, &msg);
+  cmessage_t msg = {.data = NULL, .size = 0};
+  (void)ccircq_try_recv(sel->cq, &msg);
   atomic_fetch_add(&c->calls, 1);
 }
 
 typedef struct evl_two_readers_feeder_args {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   int iterations;
 } evl_two_readers_feeder_args;
 
 static void *evl_two_readers_feeder_thread(void *arg) {
   evl_two_readers_feeder_args *a = (evl_two_readers_feeder_args *)arg;
   for (int i = 0; i < a->iterations; i++) {
-    c_message_t msg = {.data = NULL, .size = 0};
+    cmessage_t msg = {.data = NULL, .size = 0};
     /* This send blocks. The queue's finite capacity is what stops this
      * feeder from racing far ahead of both registrations, while it still
      * builds a real backlog against the slow registration. */
-    (void)ccol_circq_send_zc(a->cq, &msg);
+    (void)ccircq_send(a->cq, &msg);
   }
   return NULL;
 }
 
-TEST(ccol_event_loop, queue_second_registration_on_same_queue_is_not_starved) {
+TEST(ceventloop, queue_second_registration_on_same_queue_is_not_starved) {
   /* This guards against a silent starvation. notify_one_sel_waiter() wakes
-   * only the CURRENT head of a queue's waiter list. A ccol_select() waiter
+   * only the CURRENT head of a queue's waiter list. A cselect() waiter
    * cascades that wake onward correctly, because it always unlinks itself
-   * before checking readiness again, but a ccol_event_loop registration's
+   * before checking readiness again, but a ceventloop registration's
    * waiter_node stays linked into the list for good, until
-   * ccol_event_loop_remove. Without
-   * _ccol_event_loop_queue_cascade_notify_next, a second live registration
+   * ceventloop_remove. Without
+   * _ceventloop_queue_cascade_notify_next, a second live registration
    * on the same queue and direction that sits BEHIND another one that never
    * unlinks gets ZERO notifications for ever, however much traffic the queue
    * sees.
    *
    * The test registers r1 FIRST so that r1 ends up linked behind r2, since
    * the registration the test adds last always becomes the new list head
-   * (see the "prepend to head" linking in ccol_event_loop_add). Remove the
+   * (see the "prepend to head" linking in ceventloop_add). Remove the
    * cascade forward and ctx1.calls stays at 0 in this exact scenario every
    * time. That isn't a flaky result either, because nothing else can reach
    * a registration sitting behind a head that never unlinks, so the bounded
    * wait below runs to its full timeout with ctx1.calls at 0 instead of
    * passing now and then. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(64, NULL);
+  ccircq *cq = ccircq_create(64, NULL);
 
   evl_two_readers_ctx ctx1, ctx2;
   atomic_init(&ctx1.calls, (size_t)0);
   atomic_init(&ctx2.calls, (size_t)0);
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t handlers1 = {
+    ceventloop_handlers_t handlers1 = {
         .on_readable = evl_two_readers_fast_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg r1 = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers1,
-        &ctx1, &err);
-    REQUIRE_NE(r1, CCOL_EVENT_REG_NULL);
+    ceventloop_reg r1 = ceventloop_add(
+        loop, ccircq_selectable(cq, cselect_read), handlers1, &ctx1, &err);
+    REQUIRE_NE(r1, CEVENTLOOP_REG_NULL);
 
     /* The test adds r2 second, so r2 becomes the new head of the list. Its
      * callback is slow on purpose, which lets a backlog build up that r2
      * then cascades forward toward r1. */
-    ccol_event_handlers_t handlers2 = {
+    ceventloop_handlers_t handlers2 = {
         .on_readable = evl_two_readers_slow_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
-    ccol_event_reg r2 = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers2,
-        &ctx2, &err);
-    REQUIRE_NE(r2, CCOL_EVENT_REG_NULL);
+    ceventloop_reg r2 = ceventloop_add(
+        loop, ccircq_selectable(cq, cselect_read), handlers2, &ctx2, &err);
+    REQUIRE_NE(r2, CEVENTLOOP_REG_NULL);
 
     evl_two_readers_feeder_args feeder_args = {.cq = cq, .iterations = 300};
     pthread_t feeder;
@@ -5413,8 +5335,8 @@ TEST(ccol_event_loop, queue_second_registration_on_same_queue_is_not_starved) {
     REQUIRE_GT(atomic_load(&ctx1.calls), (size_t)0);
     REQUIRE_GT(atomic_load(&ctx2.calls), (size_t)0);
 
-    ccol_event_loop_remove(loop, r1);
-    ccol_event_loop_remove(loop, r2);
+    ceventloop_remove(loop, r1);
+    ceventloop_remove(loop, r2);
 
     /* Leaving the block shuts loop down and joins its one reactor thread,
      * and only after that is it safe to touch or destroy cq. Before it, a
@@ -5428,12 +5350,12 @@ TEST(ccol_event_loop, queue_second_registration_on_same_queue_is_not_starved) {
    * correct, since it matches the documented coalescing behaviour, a
    * separate topic (see the comment of
    * multi_thread_hot_queue_dispatch_pool_pending_stays_bounded), and
-   * ccol_circular_queue_destroy asserts on any message that's left. */
-  c_message_t leftover = {.data = NULL, .size = 0};
-  while (ccol_circq_try_recv_zc(cq, &leftover) == ccol_success) {
+   * ccircq_destroy asserts on any message that's left. */
+  cmessage_t leftover = {.data = NULL, .size = 0};
+  while (ccircq_try_recv(cq, &leftover) == ccol_success) {
     /* nothing to free: every sent message here has data == NULL */
   }
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 /* Feeds one message at a time and sleeps between the sends, so the queue
@@ -5442,36 +5364,36 @@ TEST(ccol_event_loop, queue_second_registration_on_same_queue_is_not_starved) {
  * evl_two_readers_feeder_thread above, which floods the queue as fast as it
  * can to build a backlog. When no backlog ever exists the cascade has
  * nothing to forward, because the cascade
- * (_ccol_event_loop_queue_cascade_notify_next) depends on readiness, so this
+ * (_ceventloop_queue_cascade_notify_next) depends on readiness, so this
  * feeder tests the round-robin rotor in notify_one_sel_waiter and not the
  * cascade. */
 static void *evl_two_readers_no_backlog_feeder_thread(void *arg) {
   evl_two_readers_feeder_args *a = (evl_two_readers_feeder_args *)arg;
   for (int i = 0; i < a->iterations; i++) {
-    c_message_t msg = {.data = NULL, .size = 0};
-    (void)ccol_circq_send_zc(a->cq, &msg);
+    cmessage_t msg = {.data = NULL, .size = 0};
+    (void)ccircq_send(a->cq, &msg);
     struct timespec ts = {0, 200000}; /* 0.2ms */
     nanosleep(&ts, NULL);
   }
   return NULL;
 }
 
-TEST(ccol_event_loop, queue_multiple_registrations_share_traffic_fairly) {
+TEST(ceventloop, queue_multiple_registrations_share_traffic_fairly) {
   /* This guards against a silent starvation no ordinary test finds:
    * notify_one_sel_waiter() must not always wake the CURRENT HEAD of a
-   * queue's waiter list. Unlike the transient node of a ccol_select() caller,
-   * the waiter_node of a ccol_event_loop registration stays linked for good
+   * queue's waiter list. Unlike the transient node of a cselect() caller,
+   * the waiter_node of a ceventloop registration stays linked for good
    * and never links again, so the registration the caller adds LAST becomes
    * the head and stays the head, and would be the ONLY one that ever gets a
    * direct notify for as long as it stays registered. The cascade forwards a
    * wake only when the queue is STILL ready right after the notified
    * registration's callback returns, and a callback that keeps up with the
    * traffic routinely leaves nothing to forward. That includes a plain
-   * callback with a single ccol_circq_try_recv_zc() per call and no loop,
+   * callback with a single ccircq_try_recv() per call and no loop,
    * which is a documented, ordinary pattern and exactly what both
    * registrations below do. Every OTHER live registration would then get
    * ZERO callbacks for as long as traffic flows, which flatly contradicts the
-   * documented guarantee of ccol_event_loop_add, "no live listener is ever
+   * documented guarantee of ceventloop_add, "no live listener is ever
    * passed over indefinitely". The failure is total rather than occasional:
    * with head-only notification two registrations that get 2000 messages one
    * at a time end up with calls1=0 and calls2=2000 on every run. So each
@@ -5479,14 +5401,14 @@ TEST(ccol_event_loop, queue_multiple_registrations_share_traffic_fairly) {
    * the doc comment of notify_one_sel_waiter), and every live registration
    * gets a turn once per full rotation instead of the same one winning for
    * ever. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(64, NULL);
+  ccircq *cq = ccircq_create(64, NULL);
 
   evl_two_readers_ctx ctx1, ctx2;
   atomic_init(&ctx1.calls, (size_t)0);
   atomic_init(&ctx2.calls, (size_t)0);
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
     /* Both registrations use the same "fast" callback on purpose, one recv
      * and no loop, because that's the exact pairing where head-only
@@ -5494,24 +5416,22 @@ TEST(ccol_event_loop, queue_multiple_registrations_share_traffic_fairly) {
      * the sibling test above uses, builds a backlog by hand that the cascade
      * can ride to reach r1, while two equally fast callbacks build no such
      * backlog at all. */
-    ccol_event_handlers_t handlers1 = {
+    ceventloop_handlers_t handlers1 = {
         .on_readable = evl_two_readers_fast_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg r1 = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers1,
-        &ctx1, &err);
-    REQUIRE_NE(r1, CCOL_EVENT_REG_NULL);
+    ceventloop_reg r1 = ceventloop_add(
+        loop, ccircq_selectable(cq, cselect_read), handlers1, &ctx1, &err);
+    REQUIRE_NE(r1, CEVENTLOOP_REG_NULL);
 
-    ccol_event_handlers_t handlers2 = {
+    ceventloop_handlers_t handlers2 = {
         .on_readable = evl_two_readers_fast_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
-    ccol_event_reg r2 = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers2,
-        &ctx2, &err);
-    REQUIRE_NE(r2, CCOL_EVENT_REG_NULL);
+    ceventloop_reg r2 = ceventloop_add(
+        loop, ccircq_selectable(cq, cselect_read), handlers2, &ctx2, &err);
+    REQUIRE_NE(r2, CEVENTLOOP_REG_NULL);
 
     evl_two_readers_feeder_args feeder_args = {.cq = cq, .iterations = 400};
     pthread_t feeder;
@@ -5545,82 +5465,80 @@ TEST(ccol_event_loop, queue_multiple_registrations_share_traffic_fairly) {
     REQUIRE_GT(c1, (size_t)(feeder_args.iterations / 8));
     REQUIRE_GT(c2, (size_t)(feeder_args.iterations / 8));
 
-    ccol_event_loop_remove(loop, r1);
-    ccol_event_loop_remove(loop, r2);
+    ceventloop_remove(loop, r1);
+    ceventloop_remove(loop, r2);
   }
 
-  c_message_t leftover = {.data = NULL, .size = 0};
-  while (ccol_circq_try_recv_zc(cq, &leftover) == ccol_success) {
+  cmessage_t leftover = {.data = NULL, .size = 0};
+  while (ccircq_try_recv(cq, &leftover) == ccol_success) {
     /* nothing to free: every sent message here has data == NULL */
   }
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-/* The ccol_dynamic_queue version of the ccol_circular_queue test above. The
- * rotor works the same way for ccol_dynamic_queue's sel_read_rotor and
+/* The cdynmq version of the ccircq test above. The
+ * rotor works the same way for cdynmq's sel_read_rotor and
  * sel_write_rotor fields, through the same notify_one_sel_waiter() and
  * _sel_unlink_waiter() code paths, so this test covers that half directly
- * instead of relying on the ccol_circular_queue coverage alone. */
+ * instead of relying on the ccircq coverage alone. */
 typedef struct evl_dynq_two_readers_ctx {
   _Atomic size_t calls;
 } evl_dynq_two_readers_ctx;
 
-static void evl_dynq_two_readers_on_readable(ccol_event_loop loop,
-                                             ccol_event_reg reg,
-                                             ccol_selectable *sel, void *arg) {
+static void evl_dynq_two_readers_on_readable(ceventloop loop,
+                                             ceventloop_reg reg,
+                                             cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_dynq_two_readers_ctx *c = (evl_dynq_two_readers_ctx *)arg;
-  c_message_t msg = {.data = NULL, .size = 0};
-  if (ccol_dynmq_try_recv_zc(sel->dq, &msg) == ccol_success) {
+  cmessage_t msg = {.data = NULL, .size = 0};
+  if (cdynmq_try_recv(sel->dq, &msg) == ccol_success) {
     atomic_fetch_add(&c->calls, 1);
   }
 }
 
 typedef struct evl_dynq_feeder_args {
-  ccol_dynamic_queue *dq;
+  cdynmq *dq;
   int iterations;
 } evl_dynq_feeder_args;
 
 static void *evl_dynq_no_backlog_feeder_thread(void *arg) {
   evl_dynq_feeder_args *a = (evl_dynq_feeder_args *)arg;
   for (int i = 0; i < a->iterations; i++) {
-    c_message_t msg = {.data = NULL, .size = 0};
-    (void)ccol_dynmq_send_zc(a->dq, &msg);
+    cmessage_t msg = {.data = NULL, .size = 0};
+    (void)cdynmq_send(a->dq, &msg);
     struct timespec ts = {0, 200000}; /* 0.2ms */
     nanosleep(&ts, NULL);
   }
   return NULL;
 }
 
-TEST(ccol_event_loop, dynq_multiple_registrations_share_traffic_fairly) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+TEST(ceventloop, dynq_multiple_registrations_share_traffic_fairly) {
+  cdynmq *dq = cdynmq_create(NULL);
 
   evl_dynq_two_readers_ctx ctx1, ctx2;
   atomic_init(&ctx1.calls, (size_t)0);
   atomic_init(&ctx2.calls, (size_t)0);
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t handlers1 = {
+    ceventloop_handlers_t handlers1 = {
         .on_readable = evl_dynq_two_readers_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg r1 = ccol_event_loop_add(
-        loop, ccol_selectable_from_dynq(dq, ccol_select_read), handlers1, &ctx1,
-        &err);
-    REQUIRE_NE(r1, CCOL_EVENT_REG_NULL);
+    ceventloop_reg r1 = ceventloop_add(
+        loop, cdynmq_selectable(dq, cselect_read), handlers1, &ctx1, &err);
+    REQUIRE_NE(r1, CEVENTLOOP_REG_NULL);
 
-    ccol_event_handlers_t handlers2 = {
+    ceventloop_handlers_t handlers2 = {
         .on_readable = evl_dynq_two_readers_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
-    ccol_event_reg r2 = ccol_event_loop_add(
-        loop, ccol_selectable_from_dynq(dq, ccol_select_read), handlers2, &ctx2,
-        &err);
-    REQUIRE_NE(r2, CCOL_EVENT_REG_NULL);
+    ceventloop_reg r2 = ceventloop_add(
+        loop, cdynmq_selectable(dq, cselect_read), handlers2, &ctx2, &err);
+    REQUIRE_NE(r2, CEVENTLOOP_REG_NULL);
 
     evl_dynq_feeder_args feeder_args = {.dq = dq, .iterations = 400};
     pthread_t feeder;
@@ -5630,7 +5548,7 @@ TEST(ccol_event_loop, dynq_multiple_registrations_share_traffic_fairly) {
     pthread_join(feeder, NULL);
 
     /* A bounded wait for the share the test requires, as in the
-     * ccol_circular_queue version above. */
+     * ccircq version above. */
     for (int i = 0;
          i < 10000 &&
          atomic_load(&ctx1.calls) + atomic_load(&ctx2.calls) < (size_t)350;
@@ -5645,92 +5563,91 @@ TEST(ccol_event_loop, dynq_multiple_registrations_share_traffic_fairly) {
     REQUIRE_GT(c1, (size_t)(feeder_args.iterations / 8));
     REQUIRE_GT(c2, (size_t)(feeder_args.iterations / 8));
 
-    ccol_event_loop_remove(loop, r1);
-    ccol_event_loop_remove(loop, r2);
+    ceventloop_remove(loop, r1);
+    ceventloop_remove(loop, r2);
   }
 
-  c_message_t leftover = {.data = NULL, .size = 0};
-  while (ccol_dynmq_try_recv_zc(dq, &leftover) == ccol_success) {
+  cmessage_t leftover = {.data = NULL, .size = 0};
+  while (cdynmq_try_recv(dq, &leftover) == ccol_success) {
     /* nothing to free: every sent message here has data == NULL */
   }
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
 }
 
-TEST(ccol_event_loop, remove_from_within_callback) {
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+TEST(ceventloop, remove_from_within_callback) {
+  ceventloop_construct_scoped(loop, 8, 1, 1);
+  ccircq *cq = ccircq_create(4, NULL);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
   ctx.self_loop = loop;
-  ccol_event_handlers_t handlers = {.on_readable = evl_on_readable_self_remove,
+  ceventloop_handlers_t handlers = {.on_readable = evl_on_readable_self_remove,
                                     .on_writable = NULL,
                                     .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(loop, ccircq_selectable(cq, cselect_read),
+                                      handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
   ctx.self_reg = reg;
 
   int *payload = malloc(sizeof(int));
   *payload = 1;
-  c_message_t msg = {.data = payload, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &msg), ccol_success);
+  cmessage_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(cq, &msg), ccol_success);
 
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
-  REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
+  REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)0);
 
   /* The loop must NOT deliver a second message, since the registration
    * removed itself. */
   int *payload2 = malloc(sizeof(int));
   *payload2 = 2;
-  c_message_t msg2 = {.data = payload2, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &msg2), ccol_success);
+  cmessage_t msg2 = {.data = payload2, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(cq, &msg2), ccol_success);
   usleep(50000);
   REQUIRE_EQ(ctx.readable_count, 1);
 
-  c_message_t drained;
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &drained), ccol_success);
+  cmessage_t drained;
+  REQUIRE_EQ(ccircq_recv(cq, &drained), ccol_success);
   free(drained.data);
 
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 typedef struct evl_remover_args {
-  ccol_event_loop loop;
-  ccol_event_reg reg;
+  ceventloop loop;
+  ceventloop_reg reg;
   int delay_us;
 } evl_remover_args;
 
 static void *evl_remover_thread(void *arg) {
   evl_remover_args *a = (evl_remover_args *)arg;
   usleep((useconds_t)a->delay_us);
-  ccol_event_loop_remove(a->loop, a->reg);
+  ceventloop_remove(a->loop, a->reg);
   return NULL;
 }
 
-TEST(ccol_event_loop, remove_from_different_thread_concurrent_with_dispatch) {
+TEST(ceventloop, remove_from_different_thread_concurrent_with_dispatch) {
   /* Repeats a cycle of add, notify and a concurrent remove from another
    * thread, a targeted stress test for the refcount design, which must never
    * crash and never leak (the memtest target checks that separately under
    * valgrind).
    *
    * Each iteration's ctx is allocated on the heap and logged instead of
-   * destroyed inline. ccol_event_loop_remove is documented to return while a
+   * destroyed inline. ceventloop_remove is documented to return while a
    * dispatch for the removed reg may still be running, since it defers only
    * the library's own memory reclamation and not however long the callback
    * takes. So joining the remover thread doesn't prove that evl_on_readable
    * has stopped touching ctx, and destroying ctx.mtx, or reusing its stack
    * slot on the next iteration, would race that in-flight callback.
    * ThreadSanitizer reports that even at num_reactor_threads == 1, because
-   * the hazard comes from the documented contract of ccol_event_loop_remove
+   * the hazard comes from the documented contract of ceventloop_remove
    * and has nothing to do with dispatch on many threads. The test frees
    * every logged ctx only after joining the whole loop, which also covers
    * the one reactor thread that may still be inside a callback, and the
@@ -5738,28 +5655,27 @@ TEST(ccol_event_loop, remove_from_different_thread_concurrent_with_dispatch) {
    * loop's automatic destructor runs at the closing brace of this function
    * and joins the reactor thread, and destroying cq before that join would
    * let a stale dispatch, already collected for the reg the last iteration
-   * removed, call ccol_circq_try_recv_zc(sel->cq, ...) on a queue that's
+   * removed, call ccircq_try_recv(sel->cq, ...) on a queue that's
    * already freed. So cq is destroyed only after that same join, exactly
    * like every logged ctx. */
   evl_sync_ctx *ctx_log[50];
   int ctx_log_count = 0;
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
     for (int iter = 0; iter < 50; iter++) {
       evl_sync_ctx *ctx = malloc(sizeof(*ctx));
       evl_sync_ctx_init(ctx);
       ctx_log[ctx_log_count++] = ctx;
-      ccol_event_handlers_t handlers = {.on_readable = evl_on_readable,
+      ceventloop_handlers_t handlers = {.on_readable = evl_on_readable,
                                         .on_writable = NULL,
                                         .on_error = NULL};
       char *err = NULL;
-      ccol_event_reg reg = ccol_event_loop_add(
-          loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, ctx,
-          &err);
-      REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+      ceventloop_reg reg = ceventloop_add(
+          loop, ccircq_selectable(cq, cselect_read), handlers, ctx, &err);
+      REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
       evl_remover_args rargs = {.loop = loop, .reg = reg, .delay_us = 0};
       pthread_t rtid;
@@ -5767,27 +5683,27 @@ TEST(ccol_event_loop, remove_from_different_thread_concurrent_with_dispatch) {
 
       int *payload = malloc(sizeof(int));
       *payload = iter;
-      c_message_t msg = {.data = payload, .size = sizeof(int)};
-      ccol_circq_send_zc(cq, &msg); /* delivery is optional here, and correct */
+      cmessage_t msg = {.data = payload, .size = sizeof(int)};
+      ccircq_send(cq, &msg); /* delivery is optional here, and correct */
 
       pthread_join(rtid, NULL);
 
       /* Drains what's left so the queue doesn't grow without bound across
        * the iterations, since nothing consumes the message when the removal
        * wins the race against the dispatch. */
-      c_message_t leftover;
-      while (ccol_circq_try_recv_zc(cq, &leftover) == ccol_success) {
+      cmessage_t leftover;
+      while (ccircq_try_recv(cq, &leftover) == ccol_success) {
         free(leftover.data);
       }
     }
 
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
+    REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)0);
 
     /* Leaving the block shuts loop down and joins its one reactor thread,
      * so cq and every logged ctx are quiet from here on. */
   }
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
   for (int i = 0; i < ctx_log_count; i++) {
     evl_sync_ctx_destroy(ctx_log[i]);
     free(ctx_log[i]);
@@ -5852,17 +5768,17 @@ static bool evl_wait_bool(pthread_mutex_t *mtx, pthread_cond_t *cond,
 /* An on_readable handler that blocks on the reactor thread until the test's
  * main thread releases it. That lets the test force the exact order of
  * events it checks, deterministically rather than racing incidental
- * timing: ccol_event_loop_remove() returning while this dispatch is really
+ * timing: ceventloop_remove() returning while this dispatch is really
  * in flight. The deadline below bounds the block even if nobody releases it,
  * so a bug that skips the release can never hang the test binary, it can
  * only fail the assertion that depends on a release in time. */
-static void evl_on_readable_slow(ccol_event_loop loop, ccol_event_reg reg,
-                                 ccol_selectable *sel, void *arg) {
+static void evl_on_readable_slow(ceventloop loop, ceventloop_reg reg,
+                                 cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_slow_cb_ctx *c = (evl_slow_cb_ctx *)arg;
   char buf[64];
-  if (sel->type == ccol_selectable_fd) {
+  if (sel->type == cselectable_type_fd) {
     ssize_t n = read(sel->fd, buf, sizeof(buf));
     (void)n; /* this test only needs the drain, and not the content */
   }
@@ -5892,28 +5808,27 @@ static void evl_on_removed_slow(void *arg) {
   pthread_mutex_unlock(&c->mtx);
 }
 
-TEST(ccol_event_loop, on_removed_fires_only_after_in_flight_callback_finishes) {
+TEST(ceventloop, on_removed_fires_only_after_in_flight_callback_finishes) {
   /* Reproduces the documented hazard of
    * remove_from_different_thread_concurrent_with_dispatch above, on purpose
    * and deterministically, and proves that on_removed closes it. Without
    * on_removed a caller has no way to know that an in-flight dispatch is
-   * still touching arg at the moment ccol_event_loop_remove() returns, as
+   * still touching arg at the moment ceventloop_remove() returns, as
    * the comment of that other test explains. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
 
   evl_slow_cb_ctx ctx;
   evl_slow_cb_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {.on_readable = evl_on_readable_slow,
+  ceventloop_handlers_t handlers = {.on_readable = evl_on_readable_slow,
                                     .on_writable = NULL,
                                     .on_error = NULL,
                                     .on_removed = evl_on_removed_slow};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   char b = 1;
   REQUIRE_EQ(write(pfd[1], &b, 1), (ssize_t)1);
@@ -5924,9 +5839,9 @@ TEST(ccol_event_loop, on_removed_fires_only_after_in_flight_callback_finishes) {
    * evl_on_readable_slow, holding this registration's entry->dispatch_lock,
    * and this thread removes the registration at the same time, while that
    * dispatch is really in flight. */
-  REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_remove(loop, reg), ccol_success);
 
-  /* ccol_event_loop_remove() must return without waiting for the callback;
+  /* ceventloop_remove() must return without waiting for the callback;
    * the doc comment of that function says why. This gives on_removed a wide
    * window, to prove it does NOT fire while the callback is blocked. */
   usleep(100000);
@@ -5952,26 +5867,25 @@ TEST(ccol_event_loop, on_removed_fires_only_after_in_flight_callback_finishes) {
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, on_removed_fires_for_an_ordinary_removal) {
+TEST(ceventloop, on_removed_fires_for_an_ordinary_removal) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
 
   evl_slow_cb_ctx ctx;
   evl_slow_cb_ctx_init(&ctx);
   /* on_readable stays NULL. This test never writes to pfd[1], so nothing
    * dispatches it and only on_removed is under test here. */
-  ccol_event_handlers_t handlers = {.on_readable = NULL,
+  ceventloop_handlers_t handlers = {.on_readable = NULL,
                                     .on_writable = NULL,
                                     .on_error = NULL,
                                     .on_removed = evl_on_removed_slow};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_remove(loop, reg), ccol_success);
   REQUIRE_TRUE(
       evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, EVL_WAIT_MS));
   pthread_mutex_lock(&ctx.mtx);
@@ -5983,51 +5897,49 @@ TEST(ccol_event_loop, on_removed_fires_for_an_ordinary_removal) {
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, on_removed_null_is_harmless) {
+TEST(ceventloop, on_removed_null_is_harmless) {
   /* Most registrations in this codebase leave on_removed at NULL, and this
    * test pins that as a fully supported case that does nothing. It must not
    * crash, and a caller with no use for the notification shouldn't need a
    * special case for it. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_remove(loop, reg), ccol_success);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, on_removed_fires_on_destroy_for_a_still_registered_reg) {
+TEST(ceventloop, on_removed_fires_on_destroy_for_a_still_registered_reg) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   evl_slow_cb_ctx ctx;
   evl_slow_cb_ctx_init(&ctx);
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 4, 1);
+    ceventloop_construct_scoped(loop, 8, 4, 1);
     /* on_readable stays NULL. This test never writes to pfd[1], so nothing
      * dispatches it before the block below destroys the loop with the
      * registration in place; only on_removed is under test here. */
-    ccol_event_handlers_t handlers = {.on_readable = NULL,
+    ceventloop_handlers_t handlers = {.on_readable = NULL,
                                       .on_writable = NULL,
                                       .on_error = NULL,
                                       .on_removed = evl_on_removed_slow};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+    REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
     /* Nothing removes this registration. The scoped loop's destructor, at
      * the closing brace of this block, tears it down while it's registered,
-     * which covers the direct walk in _ccol_event_loop_teardown_raw rather
+     * which covers the direct walk in _ceventloop_teardown_raw rather
      * than the ordinary removal and reclaim path the tests above cover. */
   }
 
@@ -6042,83 +5954,81 @@ TEST(ccol_event_loop, on_removed_fires_on_destroy_for_a_still_registered_reg) {
 }
 
 /* Arguments and result for the background thread below, which makes one
- * ccol_event_loop_reg_generation call. The test slows that call down on
- * purpose with _ccol_event_loop_test_delay_next_reg_resolve_unpin_ms, and
+ * ceventloop_reg_generation call. The test slows that call down on
+ * purpose with _ceventloop_test_delay_next_reg_resolve_unpin_ms, and
  * the delay lands exactly where the call releases its resolve pin on reg. */
 typedef struct evl_delayed_reg_generation_ctx {
-  ccol_event_loop loop;
-  ccol_event_reg reg;
+  ceventloop loop;
+  ceventloop_reg reg;
   uint64_t gen;
 } evl_delayed_reg_generation_ctx;
 
 static void *evl_delayed_reg_generation_thread(void *arg) {
   evl_delayed_reg_generation_ctx *c = (evl_delayed_reg_generation_ctx *)arg;
-  c->gen = ccol_event_loop_reg_generation(c->loop, c->reg);
+  c->gen = ceventloop_reg_generation(c->loop, c->reg);
   return NULL;
 }
 
-TEST(ccol_event_loop,
+TEST(ceventloop,
      on_removed_fires_via_bounded_retry_when_resolve_unpin_races_remove) {
   /* Reproduces one exact order of events, deterministically: a resolve pin
-   * is still held at the exact moment ccol_event_loop_remove marks reg
+   * is still held at the exact moment ceventloop_remove marks reg
    * removed and defers its reclaim. The pin comes from
-   * ccol_event_loop_reg_generation here, standing in for
-   * ccol_event_loop_modify, ccol_event_loop_pause and
-   * ccol_event_loop_resume, all of which are documented as callable at the
-   * same time as ccol_event_loop_remove against the same reg. The
-   * maybe_needs_wake copy inside _ccol_event_reg_resolve_unpin is taken
+   * ceventloop_reg_generation here, standing in for
+   * ceventloop_modify, ceventloop_pause and
+   * ceventloop_resume, all of which are documented as callable at the
+   * same time as ceventloop_remove against the same reg. The
+   * maybe_needs_wake copy inside _ceventloop_reg_resolve_unpin is taken
    * before remove() runs, so it's stale by the time the delayed unpin below
    * drops pending_resolve_count to 0, and in this exact order of events the
    * ping of that unpin is a documented, deliberate no-op (see its comment).
    * This loop is otherwise idle, so the only thing left to reclaim reg and
    * fire on_removed is the bounded epoll_wait retry of
-   * EVENT_LOOP_RECLAIM_RETRY_MS (see _ccol_event_loop_reclaim_pending_frees),
+   * EVENT_LOOP_RECLAIM_RETRY_MS (see _ceventloop_reclaim_pending_frees),
    * and the bounded wait below proves that this retry is what delivers it. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
 
   evl_slow_cb_ctx ctx;
   evl_slow_cb_ctx_init(&ctx);
   /* on_readable stays NULL. This test never writes to pfd[1], so nothing
    * dispatches it at all and only on_removed is under test here. */
-  ccol_event_handlers_t handlers = {.on_readable = NULL,
+  ceventloop_handlers_t handlers = {.on_readable = NULL,
                                     .on_writable = NULL,
                                     .on_error = NULL,
                                     .on_removed = evl_on_removed_slow};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   /* Arms a one-shot delay for the next resolve-unpin in the whole process
    * (see the doc comment of that function), which the background thread
    * started below consumes. */
-  _ccol_event_loop_test_delay_next_reg_resolve_unpin_ms(300);
+  _ceventloop_test_delay_next_reg_resolve_unpin_ms(300);
 
   evl_delayed_reg_generation_ctx gen_ctx = {.loop = loop, .reg = reg, .gen = 0};
   pthread_t th;
   int create_rv =
       pthread_create(&th, NULL, evl_delayed_reg_generation_thread, &gen_ctx);
-  if (create_rv != 0) _ccol_event_loop_test_delay_next_reg_resolve_unpin_ms(0);
+  if (create_rv != 0) _ceventloop_test_delay_next_reg_resolve_unpin_ms(0);
   REQUIRE_EQ(create_rv, 0);
 
   /* The remove below must run while the background thread holds its pin
    * on reg and sleeps in the armed delay, because that's what makes
-   * ccol_event_loop_remove see pending_resolve_count > 0 for reg and defer
+   * ceventloop_remove see pending_resolve_count > 0 for reg and defer
    * the reclaim instead of freeing reg at once. The thread takes the delay
    * only after it has resolved reg and read its removed flag, so the wait
    * below ends inside that window however late the thread starts. The bound
    * of about 10 s only stops a hang, and the checks of gen_ctx.gen and
    * on_removed below fail anyway if the thread never got there. */
   for (int i = 0;
-       i < 10000 &&
-       !_ccol_event_loop_test_reg_resolve_unpin_delay_taken_for_tests();
+       i < 10000 && !_ceventloop_test_reg_resolve_unpin_delay_taken_for_tests();
        i++)
     usleep(1000);
 
-  ccol_retval_t remove_rv = ccol_event_loop_remove(loop, reg);
+  ccol_retval_t remove_rv = ceventloop_remove(loop, reg);
 
   int join_rv = pthread_join(th, NULL);
   /* This call runs every time, so an unconsumed delay can't leak into a
@@ -6128,7 +6038,7 @@ TEST(ccol_event_loop,
    * assertion fails first, because Tau's REQUIRE_* macros return from the
    * test function at once on a failure and skip every later line, so
    * cleanup can't come after an assertion that can fail. */
-  _ccol_event_loop_test_delay_next_reg_resolve_unpin_ms(0);
+  _ceventloop_test_delay_next_reg_resolve_unpin_ms(0);
 
   bool on_removed_fired =
       evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, EVL_WAIT_MS);
@@ -6142,7 +6052,7 @@ TEST(ccol_event_loop,
 
   REQUIRE_EQ(join_rv, 0);
   /* 0 is the documented "resolve failed" sentinel of
-   * ccol_event_loop_reg_generation, so a result other than 0 proves that the
+   * ceventloop_reg_generation, so a result other than 0 proves that the
    * background thread's resolve really succeeded and really held a pin on
    * reg. Without this check the race could go the other way and exercise
    * nothing. */
@@ -6152,25 +6062,24 @@ TEST(ccol_event_loop,
   REQUIRE_EQ(on_removed_arg_seen, (void *)&ctx);
 }
 
-TEST(ccol_event_loop, shutdown_with_pending_registrations) {
+TEST(ceventloop, shutdown_with_pending_registrations) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(8, 1, 1, &err);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_shutdown(loop), ccol_success);
+  REQUIRE_EQ(ceventloop_shutdown(loop), ccol_success);
   /* Idempotent, so calling again must not hang or join twice. */
-  REQUIRE_EQ(ccol_event_loop_shutdown(loop), ccol_success);
+  REQUIRE_EQ(ceventloop_shutdown(loop), ccol_success);
 
-  ccol_event_loop_destroy(loop);
+  ceventloop_destroy(loop);
   close(pfd[0]);
   close(pfd[1]);
 }
@@ -6178,13 +6087,13 @@ TEST(ccol_event_loop, shutdown_with_pending_registrations) {
 /* A read handler that takes one message from its selectable's circular
  * queue and counts it. */
 static _Atomic long evl_shutdown_peer_got;
-static void evl_shutdown_peer_on_read(ccol_event_loop l, ccol_event_reg r,
-                                      ccol_selectable *s, void *a) {
+static void evl_shutdown_peer_on_read(ceventloop l, ceventloop_reg r,
+                                      cselectable_t *s, void *a) {
   (void)l;
   (void)r;
   (void)a;
-  c_message_t m;
-  if (ccol_circq_try_recv_zc(s->cq, &m) == ccol_success) {
+  cmessage_t m;
+  if (ccircq_try_recv(s->cq, &m) == ccol_success) {
     free(m.data);
     atomic_fetch_add(&evl_shutdown_peer_got, 1);
   }
@@ -6201,33 +6110,28 @@ static void evl_shutdown_peer_on_read(ccol_event_loop l, ccol_event_reg r,
  * the wakes the queue gives to it would never be acted on and about every
  * second message would sit in the queue until the next send.
  */
-TEST(ccol_event_loop, a_shut_down_loop_takes_no_wake_from_its_peers) {
+TEST(ceventloop, a_shut_down_loop_takes_no_wake_from_its_peers) {
   int stuck[2] = {0, 0};
   int setup_failed = 0;
   for (int pass = 0; pass < 2; pass++) {
     atomic_store(&evl_shutdown_peer_got, 0);
-    ccol_circular_queue *q = ccol_circular_queue_create(16, NULL);
-    ccol_event_loop a = ccol_event_loop_create(8, pass == 0 ? 1 : 3, 1, NULL);
-    ccol_event_loop b = ccol_event_loop_create(8, 1, 1, NULL);
-    ccol_event_handlers_t h = {.on_readable = evl_shutdown_peer_on_read};
-    ccol_event_reg ra =
-        a ? ccol_event_loop_add(a,
-                                ccol_selectable_from_circq(q, ccol_select_read),
-                                h, NULL, NULL)
-          : CCOL_EVENT_REG_NULL;
-    ccol_event_reg rb =
-        b ? ccol_event_loop_add(b,
-                                ccol_selectable_from_circq(q, ccol_select_read),
-                                h, NULL, NULL)
-          : CCOL_EVENT_REG_NULL;
-    if (!q || !a || !b || ra == CCOL_EVENT_REG_NULL ||
-        rb == CCOL_EVENT_REG_NULL ||
-        ccol_event_loop_shutdown(a) != ccol_success) {
+    ccircq *q = ccircq_create(16, NULL);
+    ceventloop a = ceventloop_create(8, pass == 0 ? 1 : 3, 1, NULL);
+    ceventloop b = ceventloop_create(8, 1, 1, NULL);
+    ceventloop_handlers_t h = {.on_readable = evl_shutdown_peer_on_read};
+    ceventloop_reg ra =
+        a ? ceventloop_add(a, ccircq_selectable(q, cselect_read), h, NULL, NULL)
+          : CEVENTLOOP_REG_NULL;
+    ceventloop_reg rb =
+        b ? ceventloop_add(b, ccircq_selectable(q, cselect_read), h, NULL, NULL)
+          : CEVENTLOOP_REG_NULL;
+    if (!q || !a || !b || ra == CEVENTLOOP_REG_NULL ||
+        rb == CEVENTLOOP_REG_NULL || ceventloop_shutdown(a) != ccol_success) {
       setup_failed++;
     } else {
       for (long i = 0; i < 20; i++) {
-        c_message_t m = {.data = malloc(1), .size = 1};
-        if (!m.data || ccol_circq_send_zc(q, &m) != ccol_success) {
+        cmessage_t m = {.data = malloc(1), .size = 1};
+        if (!m.data || ccircq_send(q, &m) != ccol_success) {
           free(m.data);
           setup_failed++;
           break;
@@ -6243,14 +6147,14 @@ TEST(ccol_event_loop, a_shut_down_loop_takes_no_wake_from_its_peers) {
         if (waited_ms >= EVL_WAIT_MS) stuck[pass]++;
       }
     }
-    if (ra != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(a, ra);
-    if (rb != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(b, rb);
-    if (a) ccol_event_loop_destroy(a);
-    if (b) ccol_event_loop_destroy(b);
+    if (ra != CEVENTLOOP_REG_NULL) ceventloop_remove(a, ra);
+    if (rb != CEVENTLOOP_REG_NULL) ceventloop_remove(b, rb);
+    if (a) ceventloop_destroy(a);
+    if (b) ceventloop_destroy(b);
     if (q) {
-      c_message_t m;
-      while (ccol_circq_try_recv_zc(q, &m) == ccol_success) free(m.data);
-      ccol_circular_queue_destroy(q);
+      cmessage_t m;
+      while (ccircq_try_recv(q, &m) == ccol_success) free(m.data);
+      ccircq_destroy(q);
     }
   }
   REQUIRE_EQ(setup_failed, 0);
@@ -6265,105 +6169,101 @@ TEST(ccol_event_loop, a_shut_down_loop_takes_no_wake_from_its_peers) {
  * Without the check both adds succeed and the queue registration takes
  * wakes that nothing acts on.
  */
-TEST(ccol_event_loop, add_to_a_shut_down_loop_is_refused) {
+TEST(ceventloop, add_to_a_shut_down_loop_is_refused) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_circular_queue *q = ccol_circular_queue_create(4, NULL);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  ccol_retval_t shut = ccol_event_loop_shutdown(loop);
-  ccol_event_handlers_t h = {.on_readable = evl_on_readable};
+  ccircq *q = ccircq_create(4, NULL);
+  ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+  ccol_retval_t shut = ceventloop_shutdown(loop);
+  ceventloop_handlers_t h = {.on_readable = evl_on_readable};
   char *err_q = NULL, *err_fd = NULL;
-  ccol_event_reg rq = ccol_event_loop_add(
-      loop, ccol_selectable_from_circq(q, ccol_select_read), h, NULL, &err_q);
-  ccol_event_reg rf = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h, NULL,
-      &err_fd);
+  ceventloop_reg rq =
+      ceventloop_add(loop, ccircq_selectable(q, cselect_read), h, NULL, &err_q);
+  ceventloop_reg rf = ceventloop_add(loop, cselectable_fd(pfd[0], cselect_read),
+                                     h, NULL, &err_fd);
   bool named_q = err_q && strstr(err_q, "shut down") != NULL;
   bool named_fd = err_fd && strstr(err_fd, "shut down") != NULL;
-  if (rq != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, rq);
-  if (rf != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, rf);
-  ccol_event_loop_destroy(loop);
-  ccol_circular_queue_destroy(q);
+  if (rq != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, rq);
+  if (rf != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, rf);
+  ceventloop_destroy(loop);
+  ccircq_destroy(q);
   close(pfd[0]);
   close(pfd[1]);
   REQUIRE_EQ(shut, ccol_success);
-  REQUIRE_EQ(rq, CCOL_EVENT_REG_NULL);
-  REQUIRE_EQ(rf, CCOL_EVENT_REG_NULL);
+  REQUIRE_EQ(rq, CEVENTLOOP_REG_NULL);
+  REQUIRE_EQ(rf, CEVENTLOOP_REG_NULL);
   REQUIRE_TRUE(named_q);
   REQUIRE_TRUE(named_fd);
 }
 
-TEST(ccol_event_loop,
-     destroy_while_queue_registration_pending_queue_outlives_loop) {
-  /* The library has to unlink a queue-backed ccol_event_reg's waiter_node
+TEST(ceventloop, destroy_while_queue_registration_pending_queue_outlives_loop) {
+  /* The library has to unlink a queue-backed ceventloop_reg's waiter_node
    * from the queue's waiter list before it frees that reg. Without that the
    * queue holds a dangling pointer and the next send or receive on it is a
    * use-after-free, which is even more dangerous here because this test
    * destroys the queue on purpose only after destroying the
-   * ccol_event_loop. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+   * ceventloop. */
+  ccircq *cq = ccircq_create(4, NULL);
 
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(8, 1, 1, &err);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(loop, ccircq_selectable(cq, cselect_read),
+                                      handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   /* Destroys the loop while the registration is pending, so the library has
    * to unlink from cq's waiter list before it frees, not after. */
-  ccol_event_loop_destroy(loop);
+  ceventloop_destroy(loop);
 
   /* The queue must be perfectly usable afterward. */
   int *payload = malloc(sizeof(int));
   *payload = 42;
-  c_message_t msg = {.data = payload, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &msg), ccol_success);
-  c_message_t out;
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &out), ccol_success);
+  cmessage_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(ccircq_send(cq, &msg), ccol_success);
+  cmessage_t out;
+  REQUIRE_EQ(ccircq_recv(cq, &out), ccol_success);
   REQUIRE_EQ(*(int *)out.data, 42);
   free(out.data);
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_event_loop, reg_count_tracks_add_remove) {
+TEST(ceventloop, reg_count_tracks_add_remove) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+  ceventloop_construct_scoped(loop, 8, 1, 1);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
-  REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
-  REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
-  REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
+  REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)0);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
+  REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)1);
+  REQUIRE_EQ(ceventloop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)0);
 
   close(pfd[0]);
   close(pfd[1]);
 }
 
-/* A regression test for an ordering hazard in ccol_event_loop_add that only
+/* A regression test for an ordering hazard in ceventloop_add that only
  * reasoning about the order shows, not a crash reproduction.
- * ccol_event_loop_add must NOT wire reg into the fd registry or the queue
+ * ceventloop_add must NOT wire reg into the fd registry or the queue
  * registry before it mints reg's public handle, because wiring it makes reg
- * fully live and dispatchable through the raw ccol_event_reg_s* the
- * registry stores. _ccol_event_reg_slot_acquire mints the handle, and its
+ * fully live and dispatchable through the raw ceventloop_reg_s* the
+ * registry stores. _ceventloop_reg_slot_acquire mints the handle, and its
  * only failure mode is a failed allocation that grows loop->reg_slots. On
- * that failure ccol_event_loop_add reports CCOL_EVENT_REG_NULL to the
+ * that failure ceventloop_add reports CEVENTLOOP_REG_NULL to the
  * caller, who then believes the library never created a registration and
  * has no reason to think a callback could already be running against the
  * arg pointer it passed (with num_reactor_threads > 1 that callback can also
- * be sitting queued on a ctpool worker). So the caller may free arg
+ * be sitting queued on a cthrpool worker). So the caller may free arg
  * immediately, a real use-after-free that needs nothing more than an ordinary
  * allocation failure while the target fd is already ready. That's why the
  * library acquires the slot BEFORE wiring reg into the registry, so a failed
@@ -6372,19 +6272,19 @@ TEST(ccol_event_loop, reg_count_tracks_add_remove) {
  * The primary assertion below is last_forced_..._reg_count == 0, which
  * proves the ORDER directly and deterministically without depending on a
  * real race between threads.
- * _ccol_event_loop_test_last_forced_slot_acquire_failure_reg_count() reports
- * the value of ccol_event_loop_reg_count() at one exact moment, inside
- * _ccol_event_reg_slot_acquire when the forced failure fires and before any
+ * _ceventloop_test_last_forced_slot_acquire_failure_reg_count() reports
+ * the value of ceventloop_reg_count() at one exact moment, inside
+ * _ceventloop_reg_slot_acquire when the forced failure fires and before any
  * rollback can run. The opposite order, "wire first, acquire the slot last",
  * would already have incremented reg_count for this registration at that
  * point, so the snapshot would read 1 and not 0. Checking
- * ccol_event_loop_reg_count() after the return can't tell the two orders
+ * ceventloop_reg_count() after the return can't tell the two orders
  * apart, because rolling back a failure after the wire step brings the
- * count back to 0 before ccol_event_loop_add returns.
+ * count back to 0 before ceventloop_add returns.
  *
  * That's why a simple live-dispatch race, arming the hook next to a really
  * ready fd and checking whether a callback fires, isn't a reliable
- * regression guard. Build ccol_event_loop_add in the "wire, then
+ * regression guard. Build ceventloop_add in the "wire, then
  * acquire" shape with this same hook, and the window between releasing the
  * stripe lock and the slot-acquire call right after it is too narrow in
  * practice: even a poller thread on another core, already running and
@@ -6392,13 +6292,12 @@ TEST(ccol_event_loop, reg_count_tracks_add_remove) {
  * consecutive full runs with num_reactor_threads = 3 and pfd[0] already
  * holding data before the call. The reg_count snapshot below doesn't depend
  * on timing at all, since it reads the order straight off the work
- * ccol_event_loop_add has already done at the moment the hook fires instead
+ * ceventloop_add has already done at the moment the hook fires instead
  * of racing two threads. The live-dispatch checks further down are a
  * secondary, best-effort corroboration that also exercises the module's real
  * end-to-end behavior, but the test's correctness rests on the reg_count
  * snapshot. */
-TEST(ccol_event_loop,
-     add_slot_acquire_failure_leaves_nothing_wired_or_dispatched) {
+TEST(ceventloop, add_slot_acquire_failure_leaves_nothing_wired_or_dispatched) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   int one = 1;
@@ -6409,28 +6308,26 @@ TEST(ccol_event_loop,
 
   {
     /* num_reactor_threads = 3 exercises the async dispatch-pool path, the
-     * more dangerous one, because a ctpool worker can run the callback long
-     * after the caller of ccol_event_loop_add has moved on. So this value
+     * more dangerous one, because a cthrpool worker can run the callback long
+     * after the caller of ceventloop_add has moved on. So this value
      * covers more than the inline num_reactor_threads == 1 path. */
-    ccol_event_loop_construct_scoped(loop, 8, 1, 3);
+    ceventloop_construct_scoped(loop, 8, 1, 3);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
 
-    _ccol_event_loop_test_force_next_reg_slot_acquire_failure();
+    _ceventloop_test_force_next_reg_slot_acquire_failure();
 
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
-    REQUIRE_EQ(reg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+    REQUIRE_EQ(reg, CEVENTLOOP_REG_NULL);
     REQUIRE_NE((void *)err, NULL);
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
+    REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)0);
 
     /* The deterministic proof; see this test's leading comment. */
-    REQUIRE_EQ(
-        _ccol_event_loop_test_last_forced_slot_acquire_failure_reg_count(),
-        (size_t)0);
+    REQUIRE_EQ(_ceventloop_test_last_forced_slot_acquire_failure_reg_count(),
+               (size_t)0);
 
     /* A best-effort corroboration. pfd[0] is already readable and stays
      * readable, so if the failed registration left anything wired, the poller
@@ -6448,14 +6345,13 @@ TEST(ccol_event_loop,
     /* The hook is one-shot, so an ordinary call right after it succeeds,
      * which confirms the hook only affected the single call above. */
     err = NULL;
-    ccol_event_reg reg2 = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
-    REQUIRE_NE(reg2, CCOL_EVENT_REG_NULL);
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
+    ceventloop_reg reg2 = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+    REQUIRE_NE(reg2, CEVENTLOOP_REG_NULL);
+    REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)1);
     REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
-    ccol_event_loop_remove(loop, reg2);
+    ceventloop_remove(loop, reg2);
 
     /* Leaving the block shuts loop down and joins all of its threads, so
      * ctx is quiet from here on. */
@@ -6481,7 +6377,7 @@ static bool evl_raise_nofile(rlim_t want, struct rlimit *saved) {
   return true;
 }
 
-TEST(ccol_event_loop, high_add_remove_churn_stress) {
+TEST(ceventloop, high_add_remove_churn_stress) {
   const int n = 200;
   /* Two descriptors per pipe, the ones the process already holds, and room
    * for the loop's own epoll and wake descriptors. */
@@ -6491,11 +6387,11 @@ TEST(ccol_event_loop, high_add_remove_churn_stress) {
     fprintf(stderr, "SKIP: the hard descriptor limit can't hold %d pipes\n", n);
     return;
   }
-  ccol_event_loop_construct_scoped(loop, 32, 1, 1);
+  ceventloop_construct_scoped(loop, 32, 1, 1);
   int pfds[200][2];
-  ccol_event_reg regs[200];
+  ceventloop_reg regs[200];
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
 
   /* Every pipe that was opened is closed before an assertion can return, so
@@ -6505,24 +6401,24 @@ TEST(ccol_event_loop, high_add_remove_churn_stress) {
   for (; opened < n; opened++) {
     if (pipe(pfds[opened]) != 0) break;
     char *err = NULL;
-    regs[opened] = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfds[opened][0], ccol_select_read),
-        handlers, NULL, &err);
-    if (regs[opened] == CCOL_EVENT_REG_NULL) {
+    regs[opened] =
+        ceventloop_add(loop, cselectable_fd(pfds[opened][0], cselect_read),
+                       handlers, NULL, &err);
+    if (regs[opened] == CEVENTLOOP_REG_NULL) {
       added = false;
       close(pfds[opened][0]);
       close(pfds[opened][1]);
       break;
     }
   }
-  size_t count_full = ccol_event_loop_reg_count(loop);
+  size_t count_full = ceventloop_reg_count(loop);
   int removed = 0;
   for (int i = 0; i < opened; i++) {
-    if (ccol_event_loop_remove(loop, regs[i]) == ccol_success) removed++;
+    if (ceventloop_remove(loop, regs[i]) == ccol_success) removed++;
     close(pfds[i][0]);
     close(pfds[i][1]);
   }
-  size_t count_empty = ccol_event_loop_reg_count(loop);
+  size_t count_empty = ceventloop_reg_count(loop);
   bool restored = setrlimit(RLIMIT_NOFILE, &saved_nofile) == 0;
 
   REQUIRE_TRUE(restored);
@@ -6533,8 +6429,8 @@ TEST(ccol_event_loop, high_add_remove_churn_stress) {
   REQUIRE_EQ(count_empty, (size_t)0);
 }
 
-TEST(ccol_event_loop, multiple_independent_instances) {
-  /* Two separate ccol_event_loop instances share no global state, their
+TEST(ceventloop, multiple_independent_instances) {
+  /* Two separate ceventloop instances share no global state, their
    * lock-stripe arrays included. loop_a uses 1 stripe, which is the same as
    * a single lock, and loop_b uses 8, the counts differing on purpose. This
    * confirms num_lock_stripes is a per-instance setting and that one
@@ -6553,20 +6449,18 @@ TEST(ccol_event_loop, multiple_independent_instances) {
      * level-triggered and evl_on_readable never drains an fd selectable, so
      * the test has to join both loops' reactor threads before it destroys
      * either ctx. */
-    ccol_event_loop_construct_scoped(loop_a, 8, 1, 1);
-    ccol_event_loop_construct_scoped(loop_b, 8, 8, 1);
+    ceventloop_construct_scoped(loop_a, 8, 1, 1);
+    ceventloop_construct_scoped(loop_b, 8, 8, 1);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg reg_a = ccol_event_loop_add(
-        loop_a, ccol_selectable_from_fd(pfd_a[0], ccol_select_read), handlers,
-        &ctx_a, &err);
-    REQUIRE_NE(reg_a, CCOL_EVENT_REG_NULL);
-    ccol_event_reg reg_b = ccol_event_loop_add(
-        loop_b, ccol_selectable_from_fd(pfd_b[0], ccol_select_read), handlers,
-        &ctx_b, &err);
-    REQUIRE_NE(reg_b, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg_a = ceventloop_add(
+        loop_a, cselectable_fd(pfd_a[0], cselect_read), handlers, &ctx_a, &err);
+    REQUIRE_NE(reg_a, CEVENTLOOP_REG_NULL);
+    ceventloop_reg reg_b = ceventloop_add(
+        loop_b, cselectable_fd(pfd_b[0], cselect_read), handlers, &ctx_b, &err);
+    REQUIRE_NE(reg_b, CEVENTLOOP_REG_NULL);
 
     int val_a = 1, val_b = 2;
     REQUIRE_EQ((ssize_t)sizeof(val_a), write(pfd_a[1], &val_a, sizeof(val_a)));
@@ -6585,8 +6479,8 @@ TEST(ccol_event_loop, multiple_independent_instances) {
     REQUIRE_EQ((ssize_t)sizeof(val_b), write(pfd_b[1], &val_b, sizeof(val_b)));
     REQUIRE_TRUE(evl_wait_for(&ctx_b, &ctx_b.readable_count, 1, EVL_WAIT_MS));
 
-    ccol_event_loop_remove(loop_a, reg_a);
-    ccol_event_loop_remove(loop_b, reg_b);
+    ceventloop_remove(loop_a, reg_a);
+    ceventloop_remove(loop_b, reg_b);
 
     /* Leaving the block shuts both loops down and joins their reactor
      * threads, so ctx_a and ctx_b are quiet from here on. */
@@ -6601,13 +6495,13 @@ TEST(ccol_event_loop, multiple_independent_instances) {
 }
 
 // lock-striping tests
-TEST(ccol_event_loop, num_lock_stripes_zero_returns_null) {
+TEST(ceventloop, num_lock_stripes_zero_returns_null) {
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create(8, 0, 1, &err);
-  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(8, 0, 1, &err);
+  REQUIRE_EQ(loop, CEVENTLOOP_NULL);
 }
 
-/* _ccol_event_loop_thread_fn narrows max_events_per_wait to a plain `int`
+/* _ceventloop_thread_fn narrows max_events_per_wait to a plain `int`
  * for epoll_wait(2)'s maxevents parameter, and also sizes the poller
  * thread's events buffer from it as max_events_per_wait *
  * sizeof(ccol_poll_event). The value needs an upper bound, because without
@@ -6617,65 +6511,61 @@ TEST(ccol_event_loop, num_lock_stripes_zero_returns_null) {
  * buffer fail instead. The poller thread's error handling treats both as an
  * ordinary, silent, permanent thread exit that nothing tells apart from any
  * other unexpected epoll_wait or allocation failure. The constructor still
- * returns a ccol_event_loop handle that looks valid and live and
- * ccol_event_loop_add keeps succeeding, but no callback ever fires again and
+ * returns a ceventloop handle that looks valid and live and
+ * ceventloop_add keeps succeeding, but no callback ever fires again and
  * the caller sees nothing. So creation refuses any max_events_per_wait above
  * INT_MAX, and also any value that overflows size_t when multiplied by
  * sizeof(ccol_poll_event). That second guard is the one that binds on an
  * ILP32 platform, where INT_MAX alone doesn't stop the multiplication from
  * overflowing a 32-bit size_t. */
-TEST(ccol_event_loop, create_rejects_max_events_per_wait_exceeding_int_max) {
+TEST(ceventloop, create_rejects_max_events_per_wait_exceeding_int_max) {
   char *err = NULL;
-  ccol_event_loop loop =
-      ccol_event_loop_create((size_t)INT_MAX + 1, 1, 1, &err);
-  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create((size_t)INT_MAX + 1, 1, 1, &err);
+  REQUIRE_EQ(loop, CEVENTLOOP_NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
 TEST(
-    ccol_event_loop,
+    ceventloop,
     create_rejects_max_events_per_wait_that_would_overflow_events_buffer_size) {
   char *err = NULL;
   size_t smallest_overflowing = SIZE_MAX / sizeof(ccol_poll_event) + 1;
-  ccol_event_loop loop =
-      ccol_event_loop_create(smallest_overflowing, 1, 1, &err);
-  REQUIRE_EQ(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(smallest_overflowing, 1, 1, &err);
+  REQUIRE_EQ(loop, CEVENTLOOP_NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
 /* A max_events_per_wait well inside both guards should be accepted and the
  * resulting loop should really dispatch, which confirms the validation
  * above isn't too strict. */
-TEST(ccol_event_loop,
-     create_succeeds_with_a_large_but_valid_max_events_per_wait) {
+TEST(ceventloop, create_succeeds_with_a_large_but_valid_max_events_per_wait) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
 
-  ccol_event_loop loop = ccol_event_loop_create(4096, 1, 1, NULL);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(4096, 1, 1, NULL);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   int val = 1;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
-  ccol_event_loop_remove(loop, reg);
-  ccol_event_loop_destroy(loop);
+  ceventloop_remove(loop, reg);
+  ceventloop_destroy(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, fd_both_directions_combine_and_recombine_multi_stripe) {
+TEST(ceventloop, fd_both_directions_combine_and_recombine_multi_stripe) {
   /* The same scenario as fd_both_directions_combine_and_recombine, but with
    * num_lock_stripes > 1. The read and the write direction on the SAME fd
    * hash to the SAME stripe, since _stripe_index_for_fd is a pure function of
@@ -6692,35 +6582,33 @@ TEST(ccol_event_loop, fd_both_directions_combine_and_recombine_multi_stripe) {
   {
     /* A nested block, with the same pattern and comment as
      * fd_on_readable_fires. */
-    ccol_event_loop_construct_scoped(loop, 8, 8, 1);
+    ceventloop_construct_scoped(loop, 8, 8, 1);
 
-    ccol_event_handlers_t rh = {
+    ceventloop_handlers_t rh = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-    ccol_event_handlers_t wh = {
+    ceventloop_handlers_t wh = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg rreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
-        &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
-    ccol_event_reg wreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
-        &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)2);
+    ceventloop_reg rreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), rh, &read_ctx, &err);
+    REQUIRE_NE(rreg, CEVENTLOOP_REG_NULL);
+    ceventloop_reg wreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), wh, &write_ctx, &err);
+    REQUIRE_NE(wreg, CEVENTLOOP_REG_NULL);
+    REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)2);
 
     REQUIRE_TRUE(
         evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, EVL_WAIT_MS));
 
-    REQUIRE_EQ(ccol_event_loop_remove(loop, wreg), ccol_success);
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)1);
+    REQUIRE_EQ(ceventloop_remove(loop, wreg), ccol_success);
+    REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)1);
 
     int val = 7;
     REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
     REQUIRE_TRUE(
         evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, EVL_WAIT_MS));
 
-    ccol_event_loop_remove(loop, rreg);
+    ceventloop_remove(loop, rreg);
   }
 
   evl_sync_ctx_destroy(&read_ctx);
@@ -6729,10 +6617,9 @@ TEST(ccol_event_loop, fd_both_directions_combine_and_recombine_multi_stripe) {
   close(sv[1]);
 }
 
-TEST(ccol_event_loop,
-     fd_modify_after_remove_returns_invalid_args_multi_stripe) {
+TEST(ceventloop, fd_modify_after_remove_returns_invalid_args_multi_stripe) {
   /* The same scenario as fd_modify_after_remove_returns_invalid_args, but
-   * with num_lock_stripes > 1. ccol_event_loop_modify must key its stripe
+   * with num_lock_stripes > 1. ceventloop_modify must key its stripe
    * lookup off reg->stripe_idx, a read that needs no lock and is always safe
    * for any reg* the caller legitimately holds, and it must return
    * ccol_invalid_args cleanly when reg is already removed, without crashing
@@ -6742,63 +6629,60 @@ TEST(ccol_event_loop,
    * freed before it calls modify, for example by letting several reactor
    * drain cycles pass first. reg stays valid, stale memory only across the
    * *short* window before the next drain claims it (see the doc comment of
-   * _ccol_event_loop_defer_reg_free). Extra drain cycles here would close
+   * _ceventloop_defer_reg_free). Extra drain cycles here would close
    * that window and really free reg, and the call would then not be on
    * a stale reg* that the library handles cleanly but a real use-after-free
    * outside the contract, which valgrind rightly reports against the test's
-   * premise and not against ccol_event_loop_modify or
-   * ccol_event_loop_remove. */
+   * premise and not against ceventloop_modify or
+   * ceventloop_remove. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 8, 1);
+  ceventloop_construct_scoped(loop, 8, 8, 1);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
-  REQUIRE_EQ(ccol_event_loop_modify(loop, reg, ccol_select_write),
-             ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_modify(loop, reg, cselect_write), ccol_invalid_args);
 
   close(pfd[0]);
   close(pfd[1]);
 }
 
 /* ========================================================================== */
-/*                    ccol_event_loop_pause / ccol_event_loop_resume */
+/*                    ceventloop_pause / ceventloop_resume */
 /* ========================================================================== */
 
-TEST(ccol_event_loop, pause_stops_delivery_then_resume_restores_it) {
+TEST(ceventloop, pause_stops_delivery_then_resume_restores_it) {
   /* This test pauses BEFORE anything makes the fd ready, on purpose. The
    * other order waits for one delivery and then races a pause call against
    * it. A plain pipe read end stays ready once it's ready until something
    * drains it, and with num_reactor_threads > 1 EPOLLONESHOT is in play, so
    * the re-arm the dispatch job runs after the callback happens on a
    * completely different thread from the one calling
-   * ccol_event_loop_pause. Nothing synchronizes "the test saw the callback
+   * ceventloop_pause. Nothing synchronizes "the test saw the callback
    * run once" with "the pause takes effect before the next re-arm", so an
    * assertion in that order is a real race that fails now and then. Pausing
    * first avoids the race completely, since no delivery can happen before
    * the pause takes effect when none has happened yet. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 2);
+  ceventloop_construct_scoped(loop, 8, 4, 2);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_pause(loop, reg), ccol_success);
 
   /* Makes the fd really ready while it's paused, and no on_readable callback
    * may fire however long the test waits. The bounded wait below stands in
@@ -6807,21 +6691,21 @@ TEST(ccol_event_loop, pause_stops_delivery_then_resume_restores_it) {
   REQUIRE_EQ(write(pfd[1], &val, sizeof(val)), (ssize_t)sizeof(val));
   REQUIRE_FALSE(evl_wait_for(&ctx, &ctx.readable_count, 1, 300));
 
-  REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_resume(loop, reg), ccol_success);
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, pause_write_direction) {
+TEST(ceventloop, pause_write_direction) {
   /* The same "pause before anything can fire" shape as
    * pause_stops_delivery_then_resume_restores_it above, for the same reason,
    * and it matters even more here: a pipe's write end never stops being
@@ -6830,8 +6714,8 @@ TEST(ccol_event_loop, pause_write_direction) {
    * a one-shot event.
    *
    * A pipe's write end is writable from the moment it exists, including the
-   * short window between ccol_event_loop_add returning and the very next
-   * line of this test, which calls ccol_event_loop_pause. Unlike the read
+   * short window between ceventloop_add returning and the very next
+   * line of this test, which calls ceventloop_pause. Unlike the read
    * side above, which really isn't ready until the test's later write()
    * call, a dispatch that races ahead of the pause here is a real
    * possibility, beyond a theoretical one. So the assertions below are
@@ -6840,264 +6724,251 @@ TEST(ccol_event_loop, pause_write_direction) {
    * either path without assuming the count is exactly 0 at that point. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 2);
+  ceventloop_construct_scoped(loop, 8, 4, 2);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
   char *err = NULL;
   /* A pipe's write end is writable as soon as it has room, and it has room
    * right away, so this test needs no priming step, unlike the
-   * ccol_circq_writable test above, which fills the queue first so that write
+   * ccircq_writable test above, which fills the queue first so that write
    * readiness means something there. */
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[1], ccol_select_write), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[1], cselect_write), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_pause(loop, reg), ccol_success);
 
   pthread_mutex_lock(&ctx.mtx);
   int baseline = ctx.writable_count;
   pthread_mutex_unlock(&ctx.mtx);
   REQUIRE_FALSE(evl_wait_for(&ctx, &ctx.writable_count, baseline + 1, 300));
 
-  REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_resume(loop, reg), ccol_success);
   REQUIRE_TRUE(
       evl_wait_for(&ctx, &ctx.writable_count, baseline + 1, EVL_WAIT_MS));
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, pause_is_idempotent) {
+TEST(ceventloop, pause_is_idempotent) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
-  REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_pause(loop, reg), ccol_success);
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, resume_never_paused_is_idempotent_and_harmless) {
+TEST(ceventloop, resume_never_paused_is_idempotent_and_harmless) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   /* Nothing paused this registration, so the call succeeds, does
    * nothing and leaves delivery alone. */
-  REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_resume(loop, reg), ccol_success);
 
   int val = 1;
   REQUIRE_EQ(write(pfd[1], &val, sizeof(val)), (ssize_t)sizeof(val));
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, pause_and_resume_reject_queue_selectable) {
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+TEST(ceventloop, pause_and_resume_reject_queue_selectable) {
+  ceventloop_construct_scoped(loop, 8, 1, 1);
+  ccircq *cq = ccircq_create(4, NULL);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(loop, ccircq_selectable(cq, cselect_read),
+                                      handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  /* The same fd-only restriction ccol_event_loop_modify has. The bridge
-   * eventfd of a queue registration or a ccol_channel registration has no use
+  /* The same fd-only restriction ceventloop_modify has. The bridge
+   * eventfd of a queue registration or a cchan registration has no use
    * case worth it, since such a case would stop caring for a while and keep
    * the registration anyway. */
-  REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_invalid_args);
-  REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_pause(loop, reg), ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_resume(loop, reg), ccol_invalid_args);
 
-  ccol_event_loop_remove(loop, reg);
-  ccol_circular_queue_destroy(cq);
+  ceventloop_remove(loop, reg);
+  ccircq_destroy(cq);
 }
 
-TEST(ccol_event_loop, pause_and_resume_null_args_rejected) {
+TEST(ceventloop, pause_and_resume_null_args_rejected) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+  ceventloop_construct_scoped(loop, 8, 1, 1);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_pause(CCOL_EVENT_LOOP_NULL, reg),
-             ccol_invalid_args);
-  REQUIRE_EQ(ccol_event_loop_pause(loop, CCOL_EVENT_REG_NULL),
-             ccol_invalid_args);
-  REQUIRE_EQ(ccol_event_loop_resume(CCOL_EVENT_LOOP_NULL, reg),
-             ccol_invalid_args);
-  REQUIRE_EQ(ccol_event_loop_resume(loop, CCOL_EVENT_REG_NULL),
-             ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_pause(CEVENTLOOP_NULL, reg), ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_pause(loop, CEVENTLOOP_REG_NULL), ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_resume(CEVENTLOOP_NULL, reg), ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_resume(loop, CEVENTLOOP_REG_NULL), ccol_invalid_args);
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, resume_after_remove_returns_invalid_args) {
+TEST(ceventloop, resume_after_remove_returns_invalid_args) {
   /* Mirrors the exact timing of
    * fd_modify_after_remove_returns_invalid_args_multi_stripe: a remove
    * followed directly by the operation under test, with nothing forcing a
    * drain. reg stays valid, stale memory only across the short window before
-   * the next reclamation drain claims it, so ccol_event_loop_resume needs to
+   * the next reclamation drain claims it, so ceventloop_resume needs to
    * key its stripe lookup off reg's stripe_idx, report ccol_invalid_args
    * cleanly and never crash. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
-  REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
-  REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_resume(loop, reg), ccol_invalid_args);
 
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop,
-     sequential_double_remove_returns_invalid_args_not_success) {
+TEST(ceventloop, sequential_double_remove_returns_invalid_args_not_success) {
   /* This pins the documented contract exactly: a SECOND
-   * ccol_event_loop_remove() call on the same reg, made strictly after an
+   * ceventloop_remove() call on the same reg, made strictly after an
    * earlier one has returned, isn't a success that does nothing. The earlier
    * call already released reg's slot before it returned
-   * (_ccol_event_reg_slot_release does that, and the successful-removal path
+   * (_ceventloop_reg_slot_release does that, and the successful-removal path
    * always calls it before the function returns), so reg_h doesn't resolve
    * at all by the time this second, purely sequential call runs, and the
-   * call reports ccol_invalid_args. ccol_event_loop_modify(),
-   * ccol_event_loop_pause(), ccol_event_loop_resume() and
-   * ccol_event_loop_reg_generation() give the same result for a reg that's
+   * call reports ccol_invalid_args. ceventloop_modify(),
+   * ceventloop_pause(), ceventloop_resume() and
+   * ceventloop_reg_generation() give the same result for a reg that's
    * already removed. Only a call that really RACES the first one, resolving
    * reg before that first call's slot release, can see ccol_success from a
    * second removal; reg_handle_survives_concurrent_remove_vs_accessor_race
    * below covers that separate, narrower window. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
 
-  ccol_event_handlers_t handlers = {0};
+  ceventloop_handlers_t handlers = {0};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_success);
-  REQUIRE_EQ(ccol_event_loop_remove(loop, reg), ccol_invalid_args);
+  REQUIRE_EQ(ceventloop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_remove(loop, reg), ccol_invalid_args);
 
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, pause_resume_preserve_reg_count_and_generation) {
+TEST(ceventloop, pause_resume_preserve_reg_count_and_generation) {
   /* To any observer outside the library a pause and a resume must never
    * look like a remove followed by an add, since the registration itself
    * never goes away, so both identities a caller can see stay exactly the
    * same across a pause and resume cycle. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  size_t count_before = ccol_event_loop_reg_count(loop);
-  uint64_t gen_before = ccol_event_loop_reg_generation(loop, reg);
+  size_t count_before = ceventloop_reg_count(loop);
+  uint64_t gen_before = ceventloop_reg_generation(loop, reg);
 
-  REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
-  REQUIRE_EQ(ccol_event_loop_reg_count(loop), count_before);
-  REQUIRE_EQ(ccol_event_loop_reg_generation(loop, reg), gen_before);
+  REQUIRE_EQ(ceventloop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_reg_count(loop), count_before);
+  REQUIRE_EQ(ceventloop_reg_generation(loop, reg), gen_before);
 
-  REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_success);
-  REQUIRE_EQ(ccol_event_loop_reg_count(loop), count_before);
-  REQUIRE_EQ(ccol_event_loop_reg_generation(loop, reg), gen_before);
+  REQUIRE_EQ(ceventloop_resume(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_reg_count(loop), count_before);
+  REQUIRE_EQ(ceventloop_reg_generation(loop, reg), gen_before);
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   close(pfd[0]);
   close(pfd[1]);
 }
 
 /* The kernel always reports EPOLLERR and EPOLLHUP whatever the registered
  * interest mask is, even for a mask of 0, so the only way to fully silence
- * a registration that ccol_event_loop_pause paused is to take its fd out of
+ * a registration that ceventloop_pause paused is to take its fd out of
  * the epoll set altogether. That matters when the fd enters an error or
  * hangup condition, or is already in one, because level-triggered
  * epoll_wait would otherwise report that condition on every single call for
  * ever. The re-check of reg->paused correctly skips the callback itself, but
  * nothing stops the reactor from seeing and collecting the condition again,
  * which is a silent CPU-spin busy loop with no bound. That flatly
- * contradicts the documented contract of ccol_event_loop_pause, "no
+ * contradicts the documented contract of ceventloop_pause, "no
  * callback fires, exactly as if it had been removed". A registration that's
  * really removed produces zero further wakeups because of EPOLL_CTL_DEL,
  * while a paused one whose mask is only narrowed can't, because the interest
- * mask can't turn ERR and HUP off. So _ccol_event_loop_rearm_entry_locked
+ * mask can't turn ERR and HUP off. So _ceventloop_rearm_entry_locked
  * takes the fd out of the epoll interest set with EPOLL_CTL_DEL whenever
  * every live direction on it is paused, which the event_entry.epoll_added
  * field tracks, and once some direction wants real interest again an fd
  * removed this way has to come back with EPOLL_CTL_ADD, not EPOLL_CTL_MOD.
  *
- * We measure with _ccol_event_loop_poller_iterations_for_tests, a direct
+ * We measure with _ceventloop_poller_iterations_for_tests, a direct
  * count of completed epoll_wait calls, rather than wall-clock or CPU time.
  * With an unguarded pause the counter races into the thousands inside the
  * sleep window below. With this handling in place the poller stays really
@@ -7116,17 +6987,17 @@ TEST(fd_half_close, a_write_select_on_a_half_closed_socket_reports_writable) {
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
   REQUIRE_EQ(shutdown(sv[1], SHUT_WR), 0);
   usleep(20000);
-  ccol_selectable sel = ccol_selectable_from_fd(sv[0], ccol_select_write);
+  cselectable_t sel = cselectable_fd(sv[0], cselect_write);
   size_t idx = 99;
-  ccol_retval_t rv = ccol_select_timed(&idx, 1, &sel, 2000000);
+  ccol_retval_t rv = cselect_timed(&idx, 1, &sel, 2000000);
   close(sv[0]);
   close(sv[1]);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_EQ(idx, (size_t)0);
 }
 
-static void fd_half_close_fill(ccol_event_loop loop, ccol_event_reg reg,
-                               ccol_selectable *sel, void *arg) {
+static void fd_half_close_fill(ceventloop loop, ceventloop_reg reg,
+                               cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   static char chunk[16384];
@@ -7147,42 +7018,41 @@ TEST(fd_half_close, a_writer_on_a_full_half_closed_socket_does_not_spin) {
   }
   REQUIRE_EQ(shutdown(sv[1], SHUT_WR), 0);
   _Atomic int fills = 0;
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-  ccol_event_handlers_t handlers = {.on_writable = fd_half_close_fill};
+  ceventloop_construct_scoped(loop, 8, 1, 1);
+  ceventloop_handlers_t handlers = {.on_writable = fd_half_close_fill};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(sv[0], ccol_select_write), handlers,
-      (void *)&fills, &err);
+  ceventloop_reg reg =
+      ceventloop_add(loop, cselectable_fd(sv[0], cselect_write), handlers,
+                     (void *)&fills, &err);
   usleep(50000);
-  uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
+  uint64_t before = _ceventloop_poller_iterations_for_tests(loop);
   usleep(150000);
-  uint64_t after = _ccol_event_loop_poller_iterations_for_tests(loop);
-  if (reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, reg);
-  ccol_event_loop_destroy(loop);
+  uint64_t after = _ceventloop_poller_iterations_for_tests(loop);
+  if (reg != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, reg);
+  ceventloop_destroy(loop);
   close(sv[0]);
   close(sv[1]);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
   REQUIRE_LT(after - before, (uint64_t)20);
 }
 
-TEST(ccol_event_loop,
+TEST(ceventloop,
      pause_does_not_spin_when_fd_hangs_up_while_paused_single_thread) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+  ceventloop_construct_scoped(loop, 8, 1, 1);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {.on_readable = evl_on_readable,
+  ceventloop_handlers_t handlers = {.on_readable = evl_on_readable,
                                     .on_writable = NULL,
                                     .on_error = evl_on_error};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_pause(loop, reg), ccol_success);
 
   /* Puts the fd into a persistent, level-triggered hangup condition while
    * it's paused, since closing the write end makes the read end report
@@ -7193,9 +7063,9 @@ TEST(ccol_event_loop,
    * sample, and then the test measures the delta across another wide
    * window. */
   usleep(50000);
-  uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
+  uint64_t before = _ceventloop_poller_iterations_for_tests(loop);
   usleep(150000);
-  uint64_t after = _ccol_event_loop_poller_iterations_for_tests(loop);
+  uint64_t after = _ceventloop_poller_iterations_for_tests(loop);
 
   REQUIRE_LT(after - before, (uint64_t)20);
 
@@ -7204,12 +7074,12 @@ TEST(ccol_event_loop,
   REQUIRE_EQ(ctx.error_count, 0);
   pthread_mutex_unlock(&ctx.mtx);
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
 }
@@ -7217,36 +7087,35 @@ TEST(ccol_event_loop,
 /* The multi-threaded reactor counterpart of the test above. With a
  * dispatch_pool present the fully-paused mask holds EPOLLONESHOT alone and
  * no real interest bits, so the spin takes the shape of a continuous
- * epoll_wait -> ctpool submit -> worker dequeue -> skip -> re-arm cycle
+ * epoll_wait -> cthrpool submit -> worker dequeue -> skip -> re-arm cycle
  * instead of a tight single-thread loop, and it's just as unbounded. The same
  * poller_iterations_for_tests counter catches it the same way, because it
  * counts completed epoll_wait calls on the one and only poller thread
  * whatever num_reactor_threads is. */
-TEST(ccol_event_loop,
+TEST(ceventloop,
      pause_does_not_spin_when_fd_hangs_up_while_paused_multi_thread) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 3);
+  ceventloop_construct_scoped(loop, 8, 4, 3);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {.on_readable = evl_on_readable,
+  ceventloop_handlers_t handlers = {.on_readable = evl_on_readable,
                                     .on_writable = NULL,
                                     .on_error = evl_on_error};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_pause(loop, reg), ccol_success);
 
   close(pfd[1]);
 
   usleep(50000);
-  uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
+  uint64_t before = _ceventloop_poller_iterations_for_tests(loop);
   usleep(150000);
-  uint64_t after = _ccol_event_loop_poller_iterations_for_tests(loop);
+  uint64_t after = _ceventloop_poller_iterations_for_tests(loop);
 
   REQUIRE_LT(after - before, (uint64_t)20);
 
@@ -7255,12 +7124,12 @@ TEST(ccol_event_loop,
   REQUIRE_EQ(ctx.error_count, 0);
   pthread_mutex_unlock(&ctx.mtx);
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
 }
@@ -7274,53 +7143,52 @@ TEST(ccol_event_loop,
  * library sees and dispatches the hangup condition, which is still there,
  * once the resume happens, which proves the re-add path really works.
  * Without it the fd silently stays unregistered. */
-TEST(ccol_event_loop, resume_after_hangup_while_paused_delivers_dispatch) {
+TEST(ceventloop, resume_after_hangup_while_paused_delivers_dispatch) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+  ceventloop_construct_scoped(loop, 8, 1, 1);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {.on_readable = evl_on_readable,
+  ceventloop_handlers_t handlers = {.on_readable = evl_on_readable,
                                     .on_writable = NULL,
                                     .on_error = evl_on_error};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-  REQUIRE_EQ(ccol_event_loop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_pause(loop, reg), ccol_success);
   close(pfd[1]);
   /* Lets the reactor settle with the fd fully de-registered before the
    * resume below. */
   usleep(100000);
 
-  REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_success);
+  REQUIRE_EQ(ceventloop_resume(loop, reg), ccol_success);
 
   /* An empty pipe whose write end is closed reports EPOLLHUP alone; a
    * standalone epoll_ctl and epoll_wait probe against this kernel reports
    * exactly that, with no EPOLLIN or EPOLLRDHUP bit here. The socket case
    * where the peer writes and then closes is different, and the has_reader
-   * comment of _ccol_event_loop_handle_event documents it. So this one is
+   * comment of _ceventloop_handle_event documents it. So this one is
    * dispatched as an error event rather than a readable event. */
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.error_count, 1, EVL_WAIT_MS));
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
 }
 
 typedef struct {
   evl_sync_ctx *ctx;
-  ccol_event_loop loop;
+  ceventloop loop;
   /* This field is _Atomic for one reason only. reg is known only once
-   * ccol_event_loop_add below returns, so the code publishes it to this
+   * ceventloop_add below returns, so the code publishes it to this
    * struct AFTER the registration is live, when in principle another thread
    * can dispatch it. In this test's exact sequence the callback can never see
    * reg unset, because the fd really has nothing to read until the test's
@@ -7331,49 +7199,47 @@ typedef struct {
    * doesn't change that. ThreadSanitizer reports this race, which reading
    * the code alone doesn't show. An atomic store and load add the missing
    * synchronization and change no real behavior. */
-  _Atomic(ccol_event_reg) reg;
+  _Atomic(ceventloop_reg) reg;
 } evl_pause_from_callback_args;
 
 /* This callback pauses its own registration from inside itself, exactly
- * like the _conn_start_diverted -> ccol_event_loop_pause call site of
+ * like the _conn_start_diverted -> ceventloop_pause call site of
  * chttpserver.c, which runs synchronously from inside an on_readable
  * dispatch that's in flight. */
-static void evl_on_readable_pause_self(ccol_event_loop loop, ccol_event_reg reg,
-                                       ccol_selectable *sel, void *arg) {
+static void evl_on_readable_pause_self(ceventloop loop, ceventloop_reg reg,
+                                       cselectable_t *sel, void *arg) {
   evl_pause_from_callback_args *a = (evl_pause_from_callback_args *)arg;
   /* assert() instead of REQUIRE_EQ; the comment of
    * evl_on_readable_self_remove above explains why calling a Tau assertion
    * macro from such a callback is unsafe. That callback runs on the reactor
-   * thread or the dispatch thread of ccol_event_loop, at the same time as
+   * thread or the dispatch thread of ceventloop, at the same time as
    * the main test thread's REQUIRE_* calls. */
   assert(reg == atomic_load(&a->reg));
-  assert(ccol_event_loop_pause(a->loop, reg) == ccol_success);
+  assert(ceventloop_pause(a->loop, reg) == ccol_success);
   evl_on_readable(loop, reg, sel, a->ctx);
 }
 
-TEST(ccol_event_loop,
-     pause_from_within_callback_then_resume_from_another_thread) {
+TEST(ceventloop, pause_from_within_callback_then_resume_from_another_thread) {
   /* The exact pattern chttpserver.c depends on: on_readable pauses its own
    * registration synchronously from inside the dispatch callback, as
    * _conn_start_diverted does, and a completely separate thread resumes it
    * later. That thread plays the part of chttpserver's worker_pool, which is
    * separate from the internal reactor threads and dispatch threads of
-   * ccol_event_loop. */
+   * ceventloop. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop_construct_scoped(loop, 8, 4, 2);
+  ceventloop_construct_scoped(loop, 8, 4, 2);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
   evl_pause_from_callback_args cb_args = {.ctx = &ctx, .loop = loop};
-  ccol_event_handlers_t handlers = {.on_readable = evl_on_readable_pause_self,
+  ceventloop_handlers_t handlers = {.on_readable = evl_on_readable_pause_self,
                                     .on_writable = NULL,
                                     .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers,
-      &cb_args, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &cb_args, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
   atomic_store(&cb_args.reg, reg);
 
   int val = 1;
@@ -7389,30 +7255,30 @@ TEST(ccol_event_loop,
   REQUIRE_FALSE(evl_wait_for(&ctx, &ctx.readable_count, 2, 300));
 
   /* This resume runs on the TEST's own thread, not on an internal thread of
-   * ccol_event_loop (the poller or a dispatch_pool worker). */
-  REQUIRE_EQ(ccol_event_loop_resume(loop, reg), ccol_success);
+   * ceventloop (the poller or a dispatch_pool worker). */
+  REQUIRE_EQ(ceventloop_resume(loop, reg), ccol_success);
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 2, EVL_WAIT_MS));
 
-  ccol_event_loop_remove(loop, reg);
+  ceventloop_remove(loop, reg);
   /* Joins the poller thread and any dispatch workers, so no callback can be
      running with &ctx when the code below destroys the sync context;
-     ccol_event_loop_remove alone doesn't wait for a dispatch that was
+     ceventloop_remove alone doesn't wait for a dispatch that was
      already in flight when it was called. */
-  ccol_event_loop_shutdown(loop);
+  ceventloop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-/* A registration's callback that runs before ccol_event_loop_add has
+/* A registration's callback that runs before ceventloop_add has
  * returned gets the handle of its own registration anyway and can remove
  * that registration with it. The add hook of this file makes the first
- * dispatch run while ccol_event_loop_add is still inside the call, so the
+ * dispatch run while ceventloop_add is still inside the call, so the
  * handle the adding thread stores afterwards isn't there yet. */
 typedef struct {
-  _Atomic ccol_event_reg returned_reg; /* stored after add returns */
-  _Atomic ccol_event_reg reg_seen;     /* reg parameter of the dispatch */
-  _Atomic ccol_event_reg stored_seen;  /* returned_reg read in the dispatch */
+  _Atomic ceventloop_reg returned_reg; /* stored after add returns */
+  _Atomic ceventloop_reg reg_seen;     /* reg parameter of the dispatch */
+  _Atomic ceventloop_reg stored_seen;  /* returned_reg read in the dispatch */
   _Atomic int dispatch_count;
   _Atomic int remove_rv;
   _Atomic bool first_dispatch_done;
@@ -7421,14 +7287,14 @@ typedef struct {
 
 static evl_early_reg_ctx *_Atomic g_evl_early_reg_ctx = NULL;
 
-static void evl_early_reg_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                      ccol_selectable *sel, void *arg) {
+static void evl_early_reg_on_readable(ceventloop loop, ceventloop_reg reg,
+                                      cselectable_t *sel, void *arg) {
   (void)sel;
   evl_early_reg_ctx *c = (evl_early_reg_ctx *)arg;
   if (atomic_fetch_add(&c->dispatch_count, 1) != 0) return;
   atomic_store(&c->stored_seen, atomic_load(&c->returned_reg));
   atomic_store(&c->reg_seen, reg);
-  atomic_store(&c->remove_rv, (int)ccol_event_loop_remove(loop, reg));
+  atomic_store(&c->remove_rv, (int)ceventloop_remove(loop, reg));
   atomic_store(&c->first_dispatch_done, true);
 }
 
@@ -7437,7 +7303,7 @@ static void evl_early_reg_on_removed(void *arg) {
   atomic_fetch_add(&c->removed_count, 1);
 }
 
-/* Runs inside ccol_event_loop_add and waits, with a ten second bound, until
+/* Runs inside ceventloop_add and waits, with a ten second bound, until
  * the new registration's first dispatch has finished. */
 static void evl_early_reg_add_hook(void) {
   evl_early_reg_ctx *c = atomic_load(&g_evl_early_reg_ctx);
@@ -7447,7 +7313,7 @@ static void evl_early_reg_add_hook(void) {
     nanosleep(&ts, NULL);
 }
 
-TEST(ccol_event_loop, callback_before_add_returns_removes_itself_by_reg) {
+TEST(ceventloop, callback_before_add_returns_removes_itself_by_reg) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   /* The fd is readable before the registration exists. */
@@ -7455,25 +7321,25 @@ TEST(ccol_event_loop, callback_before_add_returns_removes_itself_by_reg) {
   ssize_t wrote = write(pfd[1], &byte, 1);
 
   evl_early_reg_ctx ctx;
-  atomic_init(&ctx.returned_reg, CCOL_EVENT_REG_NULL);
-  atomic_init(&ctx.reg_seen, CCOL_EVENT_REG_NULL);
-  atomic_init(&ctx.stored_seen, CCOL_EVENT_REG_NULL);
+  atomic_init(&ctx.returned_reg, CEVENTLOOP_REG_NULL);
+  atomic_init(&ctx.reg_seen, CEVENTLOOP_REG_NULL);
+  atomic_init(&ctx.stored_seen, CEVENTLOOP_REG_NULL);
   atomic_init(&ctx.dispatch_count, 0);
   atomic_init(&ctx.remove_rv, -1);
   atomic_init(&ctx.first_dispatch_done, false);
   atomic_init(&ctx.removed_count, 0);
 
-  ccol_event_loop loop = ccol_event_loop_create(8, 4, 4, NULL);
-  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
-  if (loop != CCOL_EVENT_LOOP_NULL && wrote == 1) {
+  ceventloop loop = ceventloop_create(8, 4, 4, NULL);
+  ceventloop_reg reg = CEVENTLOOP_REG_NULL;
+  if (loop != CEVENTLOOP_NULL && wrote == 1) {
     atomic_store(&g_evl_early_reg_ctx, &ctx);
-    _ccol_event_loop_test_set_add_before_return_hook(evl_early_reg_add_hook);
-    reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read),
-        (ccol_event_handlers_t){.on_readable = evl_early_reg_on_readable,
+    _ceventloop_test_set_add_before_return_hook(evl_early_reg_add_hook);
+    reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read),
+        (ceventloop_handlers_t){.on_readable = evl_early_reg_on_readable,
                                 .on_removed = evl_early_reg_on_removed},
         &ctx, NULL);
-    _ccol_event_loop_test_set_add_before_return_hook(NULL);
+    _ceventloop_test_set_add_before_return_hook(NULL);
     atomic_store(&g_evl_early_reg_ctx, NULL);
     atomic_store(&ctx.returned_reg, reg);
     /* on_removed runs asynchronously after the removal, so we wait for it,
@@ -7483,16 +7349,16 @@ TEST(ccol_event_loop, callback_before_add_returns_removes_itself_by_reg) {
       nanosleep(&ts, NULL);
   }
   int removed_before_destroy = atomic_load(&ctx.removed_count);
-  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
+  if (loop != CEVENTLOOP_NULL) ceventloop_destroy(loop);
   close(pfd[0]);
   close(pfd[1]);
 
   REQUIRE_EQ(wrote, (ssize_t)1);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
   REQUIRE_TRUE(atomic_load(&ctx.first_dispatch_done));
-  /* The dispatch ran before ccol_event_loop_add returned, so the handle the
+  /* The dispatch ran before ceventloop_add returned, so the handle the
    * adding thread stores afterwards was still unset at that moment. */
-  REQUIRE_EQ(atomic_load(&ctx.stored_seen), CCOL_EVENT_REG_NULL);
+  REQUIRE_EQ(atomic_load(&ctx.stored_seen), CEVENTLOOP_REG_NULL);
   REQUIRE_EQ(atomic_load(&ctx.reg_seen), reg);
   REQUIRE_EQ(atomic_load(&ctx.remove_rv), (int)ccol_success);
   REQUIRE_EQ(atomic_load(&ctx.dispatch_count), 1);
@@ -7501,7 +7367,7 @@ TEST(ccol_event_loop, callback_before_add_returns_removes_itself_by_reg) {
 }
 
 typedef struct {
-  ccol_event_loop loop;
+  ceventloop loop;
   int thread_id;
   int iterations;
   /* The test opens this once before this worker's loop and closes it once
@@ -7515,7 +7381,7 @@ typedef struct {
   int pfd[2];
   /* The test logs each iteration's ctx here instead of destroying it in
    * place, for the same reason as the identical field of
-   * evl_reuse_driver_args. ccol_event_loop_remove can return while a
+   * evl_reuse_driver_args. ceventloop_remove can return while a
    * callback for the removed reg is still in flight, so destroying ctx.mtx
    * right after remove() returns can race that callback, and so can reusing
    * ctx's stack slot on the next iteration. It's a real race even with a
@@ -7524,31 +7390,30 @@ typedef struct {
    * after it has joined the whole loop and every worker thread. */
   evl_sync_ctx **ctx_log;
   int ctx_log_count;
-  /* Only the queue worker uses this field. It holds the ccol_circular_queue
+  /* Only the queue worker uses this field. It holds the ccircq
    * that pairs with ctx_log[j] at the same index j, which the test defers
    * and frees next to that ctx for the same reason (see the comment of
    * ctx_log above, and how evl_stripe_stress_queue_worker uses this field).
    * The fd worker doesn't use it and leaves it NULL. */
-  ccol_circular_queue **cq_log;
+  ccircq **cq_log;
 } evl_stripe_stress_args;
 
 static void *evl_stripe_stress_fd_worker(void *arg) {
   evl_stripe_stress_args *a = (evl_stripe_stress_args *)arg;
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   for (int i = 0; i < a->iterations; i++) {
     evl_sync_ctx *ctx = malloc(sizeof(*ctx));
     evl_sync_ctx_init(ctx);
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        a->loop, ccol_selectable_from_fd(a->pfd[0], ccol_select_read), handlers,
-        ctx, &err);
+    ceventloop_reg reg = ceventloop_add(
+        a->loop, cselectable_fd(a->pfd[0], cselect_read), handlers, ctx, &err);
     if (reg) {
       a->ctx_log[a->ctx_log_count++] = ctx;
       int val = a->thread_id;
       test_write_retry_eintr(a->pfd[1], &val, sizeof(val));
       evl_wait_for(ctx, &ctx->readable_count, 1, EVL_WAIT_MS);
-      ccol_event_loop_remove(a->loop, reg);
+      ceventloop_remove(a->loop, reg);
     } else {
       evl_sync_ctx_destroy(ctx);
       free(ctx);
@@ -7557,11 +7422,11 @@ static void *evl_stripe_stress_fd_worker(void *arg) {
   return NULL;
 }
 
-TEST(ccol_event_loop, multi_threaded_multi_fd_stress_with_stripes) {
+TEST(ceventloop, multi_threaded_multi_fd_stress_with_stripes) {
   /* This test uses many threads and many DISTINCT fds, unlike
    * high_add_remove_churn_stress, which is single-threaded with a stripe
    * count of 1. Here num_lock_stripes is well above 1, so the test exercises
-   * really concurrent ccol_event_loop_add, ccol_event_loop_remove and
+   * really concurrent ceventloop_add, ceventloop_remove and
    * dispatch calls across different stripes running in parallel, not just
    * churn on a single lock. */
   const int n_threads = 8;
@@ -7589,7 +7454,7 @@ TEST(ccol_event_loop, multi_threaded_multi_fd_stress_with_stripes) {
      * The loop's destructor joins every reactor thread at the closing brace
      * of this block, and that join is what makes it safe to free every
      * logged ctx below. */
-    ccol_event_loop_construct_scoped(loop, 32, 16, 1);
+    ceventloop_construct_scoped(loop, 32, 16, 1);
     int started = 0;
     for (int i = 0; i < n_threads; i++) {
       args[i].loop = loop;
@@ -7614,7 +7479,7 @@ TEST(ccol_event_loop, multi_threaded_multi_fd_stress_with_stripes) {
        The registration count needs to be read while the loop is alive, which
        is why that read stays inside the block. */
     all_started = (started == n_threads);
-    residual_regs = ccol_event_loop_reg_count(loop);
+    residual_regs = ceventloop_reg_count(loop);
   }
 
   for (int i = 0; i < n_threads; i++) {
@@ -7633,19 +7498,18 @@ TEST(ccol_event_loop, multi_threaded_multi_fd_stress_with_stripes) {
 
 static void *evl_stripe_stress_queue_worker(void *arg) {
   evl_stripe_stress_args *a = (evl_stripe_stress_args *)arg;
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   for (int i = 0; i < a->iterations; i++) {
-    ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+    ccircq *cq = ccircq_create(4, NULL);
     evl_sync_ctx *ctx = malloc(sizeof(*ctx));
     evl_sync_ctx_init(ctx);
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        a->loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers,
-        ctx, &err);
+    ceventloop_reg reg = ceventloop_add(
+        a->loop, ccircq_selectable(cq, cselect_read), handlers, ctx, &err);
     if (reg) {
       /* The worker logs these instead of destroying them in place, because
-       * ccol_event_loop_remove can return while a callback for the removed
+       * ceventloop_remove can return while a callback for the removed
        * reg is still in flight (see the field comments of ctx_log and cq_log
        * in evl_stripe_stress_args). Destroying ctx's mutex and condition
        * variable right after remove() returns can race that callback, and so
@@ -7657,20 +7521,20 @@ static void *evl_stripe_stress_queue_worker(void *arg) {
       a->ctx_log_count++;
       int *payload = malloc(sizeof(int));
       *payload = a->thread_id;
-      c_message_t msg = {.data = payload, .size = sizeof(int)};
-      ccol_circq_send_zc(cq, &msg);
+      cmessage_t msg = {.data = payload, .size = sizeof(int)};
+      ccircq_send(cq, &msg);
       evl_wait_for(ctx, &ctx->readable_count, 1, EVL_WAIT_MS);
-      ccol_event_loop_remove(a->loop, reg);
+      ceventloop_remove(a->loop, reg);
     } else {
       evl_sync_ctx_destroy(ctx);
       free(ctx);
-      ccol_circular_queue_destroy(cq);
+      ccircq_destroy(cq);
     }
   }
   return NULL;
 }
 
-TEST(ccol_event_loop, multi_threaded_multi_queue_stress_with_stripes) {
+TEST(ceventloop, multi_threaded_multi_queue_stress_with_stripes) {
   /* The queue-selectable version of the fd stress test above. It uses many
    * distinct queues, and so many distinct bridge_efds, which the loop
    * spreads over the stripes round robin through loop->next_queue_stripe,
@@ -7684,7 +7548,7 @@ TEST(ccol_event_loop, multi_threaded_multi_queue_stress_with_stripes) {
     args[i].thread_id = i;
     args[i].iterations = iterations;
     args[i].ctx_log = malloc(sizeof(evl_sync_ctx *) * (size_t)iterations);
-    args[i].cq_log = malloc(sizeof(ccol_circular_queue *) * (size_t)iterations);
+    args[i].cq_log = malloc(sizeof(ccircq *) * (size_t)iterations);
     args[i].ctx_log_count = 0;
   }
 
@@ -7695,7 +7559,7 @@ TEST(ccol_event_loop, multi_threaded_multi_queue_stress_with_stripes) {
      * The loop's destructor joins every reactor thread at the closing brace
      * of this block, and that join is what makes it safe to free every
      * logged ctx and cq below. */
-    ccol_event_loop_construct_scoped(loop, 32, 16, 1);
+    ceventloop_construct_scoped(loop, 32, 16, 1);
     int started = 0;
     for (int i = 0; i < n_threads; i++) {
       args[i].loop = loop;
@@ -7720,7 +7584,7 @@ TEST(ccol_event_loop, multi_threaded_multi_queue_stress_with_stripes) {
        The registration count has to be read while the loop is alive, which
        is why that read stays inside the block. */
     all_started = (started == n_threads);
-    residual_regs = ccol_event_loop_reg_count(loop);
+    residual_regs = ceventloop_reg_count(loop);
   }
 
   size_t undelivered = 0;
@@ -7732,13 +7596,13 @@ TEST(ccol_event_loop, multi_threaded_multi_queue_stress_with_stripes) {
        * the test counts it and fails below. It is drained first because a
        * destroy of a queue that holds a message ends the process, and that
        * would hide every other result of the run. */
-      c_message_t left = {.data = NULL, .size = 0};
-      while (ccol_circq_try_recv_zc(args[i].cq_log[j], &left) == ccol_success) {
+      cmessage_t left = {.data = NULL, .size = 0};
+      while (ccircq_try_recv(args[i].cq_log[j], &left) == ccol_success) {
         free(left.data);
-        left = (c_message_t){.data = NULL, .size = 0};
+        left = (cmessage_t){.data = NULL, .size = 0};
         undelivered++;
       }
-      ccol_circular_queue_destroy(args[i].cq_log[j]);
+      ccircq_destroy(args[i].cq_log[j]);
     }
     free(args[i].ctx_log);
     free(args[i].cq_log);
@@ -7749,53 +7613,52 @@ TEST(ccol_event_loop, multi_threaded_multi_queue_stress_with_stripes) {
   REQUIRE_EQ(undelivered, (size_t)0);
 }
 
-TEST(ccol_event_loop, destroy_frees_registrations_across_multiple_stripes) {
+TEST(ceventloop, destroy_frees_registrations_across_multiple_stripes) {
   /* Registers enough distinct fds and queues, with num_lock_stripes > 1, to
    * spread the live registrations over several stripes, and then destroys
    * the loop WITHOUT removing anything first. That exercises the per-stripe
-   * walk of __ccol_event_loop_destroy, over the fd_index chmap and the
+   * walk of __ceventloop_destroy, over the fd_index chmap and the
    * unlink of queue_regs_head, which has to run for every stripe, stripe 0
    * included. */
   const int n = 20;
   int pfds[20][2];
-  ccol_circular_queue *queues[20];
-  ccol_event_handlers_t handlers = {
+  ccircq *queues[20];
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
 
   {
-    ccol_event_loop_construct_scoped(loop, 32, 8, 1);
+    ceventloop_construct_scoped(loop, 32, 8, 1);
     char *err = NULL;
 
     for (int i = 0; i < n; i++) {
       REQUIRE_EQ(pipe(pfds[i]), 0);
-      ccol_event_reg reg = ccol_event_loop_add(
-          loop, ccol_selectable_from_fd(pfds[i][0], ccol_select_read), handlers,
-          NULL, &err);
-      REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+      ceventloop_reg reg = ceventloop_add(
+          loop, cselectable_fd(pfds[i][0], cselect_read), handlers, NULL, &err);
+      REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
-      queues[i] = ccol_circular_queue_create(4, NULL);
-      ccol_event_reg qreg = ccol_event_loop_add(
-          loop, ccol_selectable_from_circq(queues[i], ccol_select_read),
-          handlers, NULL, &err);
-      REQUIRE_NE(qreg, CCOL_EVENT_REG_NULL);
+      queues[i] = ccircq_create(4, NULL);
+      ceventloop_reg qreg =
+          ceventloop_add(loop, ccircq_selectable(queues[i], cselect_read),
+                         handlers, NULL, &err);
+      REQUIRE_NE(qreg, CEVENTLOOP_REG_NULL);
     }
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)(2 * n));
+    REQUIRE_EQ(ceventloop_reg_count(loop), (size_t)(2 * n));
 
     /* Leaving the scope destroys loop while every registration is live, so
-     * __ccol_event_loop_destroy walks all of them across every stripe
+     * __ceventloop_destroy walks all of them across every stripe
      * and frees them. */
   }
 
   for (int i = 0; i < n; i++) {
     close(pfds[i][0]);
     close(pfds[i][1]);
-    ccol_circular_queue_destroy(queues[i]);
+    ccircq_destroy(queues[i]);
   }
 }
 
 /* Multi-threaded reactor (num_reactor_threads > 1) tests below */
 
-TEST(ccol_event_loop, multi_thread_basic_smoke) {
+TEST(ceventloop, multi_thread_basic_smoke) {
   /* A plain single-fd readable dispatch, but with several reactor threads
    * sharing the epoll instance. It confirms that ordinary dispatch works
    * correctly once more than one thread calls epoll_wait on the same epfd,
@@ -7811,26 +7674,25 @@ TEST(ccol_event_loop, multi_thread_basic_smoke) {
      * below. evl_sync_ctx_destroy assumes no callback can touch ctx any more
      * by the time it runs, and nothing else in this test makes sure of that.
      * The number of reactor threads doesn't matter here, because even with
-     * one the poller is a thread of its own and ccol_event_loop_remove
+     * one the poller is a thread of its own and ceventloop_remove
      * explicitly doesn't wait for a dispatch that's already in flight when
      * it's called. The join is what makes this safe, so ctx must outlive
      * the loop, and both leaving this block and an explicit
-     * ccol_event_loop_shutdown before the teardown give that join. */
-    ccol_event_loop_construct_scoped(loop, 8, 4, 6);
+     * ceventloop_shutdown before the teardown give that join. */
+    ceventloop_construct_scoped(loop, 8, 4, 6);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+    REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
     int val = 7;
     REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
     REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
   }
 
   evl_sync_ctx_destroy(&ctx);
@@ -7852,10 +7714,9 @@ typedef struct evl_no_double_dispatch_ctx {
  * callback at the same time. epoll's default level-triggered,
  * non-EPOLLEXCLUSIVE semantics really allow that, but only a broken or
  * missing dispatch_lock lets it happen. */
-static void evl_no_double_dispatch_on_readable(ccol_event_loop loop,
-                                               ccol_event_reg reg,
-                                               ccol_selectable *sel,
-                                               void *arg) {
+static void evl_no_double_dispatch_on_readable(ceventloop loop,
+                                               ceventloop_reg reg,
+                                               cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_no_double_dispatch_ctx *c = (evl_no_double_dispatch_ctx *)arg;
@@ -7896,7 +7757,7 @@ static void *evl_feeder_thread(void *arg) {
   return NULL;
 }
 
-TEST(ccol_event_loop, multi_thread_no_double_dispatch_same_fd) {
+TEST(ceventloop, multi_thread_no_double_dispatch_same_fd) {
   /* Many reactor threads and ONE hot fd that a writer thread keeps feeding,
    * which is exactly the thundering-herd scenario entry->dispatch_lock
    * exists to close (see that lock's field comment in cthreadcomm.c).
@@ -7923,17 +7784,16 @@ TEST(ccol_event_loop, multi_thread_no_double_dispatch_same_fd) {
      * ctx or close pfd until it has really joined every reactor thread,
      * which happens at the closing brace of this block; a grace period that
      * only guesses isn't enough. */
-    ccol_event_loop_construct_scoped(loop, 8, 4, 12);
+    ceventloop_construct_scoped(loop, 8, 4, 12);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_no_double_dispatch_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+    REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
     evl_feeder_args feeder_args = {.write_fd = pfd[1], .iterations = 4000};
     pthread_t feeder;
@@ -7952,7 +7812,7 @@ TEST(ccol_event_loop, multi_thread_no_double_dispatch_same_fd) {
       nanosleep(&ts, NULL);
     }
 
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
 
     /* Leaving the block shuts loop down and joins every reactor thread, so
      * ctx and pfd are quiet from here on. */
@@ -7970,8 +7830,8 @@ TEST(ccol_event_loop, multi_thread_no_double_dispatch_same_fd) {
  * shared by a read-direction callback and a write-direction callback on the
  * SAME fd, which checks the stricter cross-direction guarantee of
  * entry->dispatch_lock and not only self-exclusion. */
-static void evl_cross_dir_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                      ccol_selectable *sel, void *arg) {
+static void evl_cross_dir_on_readable(ceventloop loop, ceventloop_reg reg,
+                                      cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_no_double_dispatch_ctx *c = (evl_no_double_dispatch_ctx *)arg;
@@ -7992,8 +7852,8 @@ static void evl_cross_dir_on_readable(ccol_event_loop loop, ccol_event_reg reg,
   atomic_fetch_add(&c->total_calls, 1);
 }
 
-static void evl_cross_dir_on_writable(ccol_event_loop loop, ccol_event_reg reg,
-                                      ccol_selectable *sel, void *arg) {
+static void evl_cross_dir_on_writable(ceventloop loop, ceventloop_reg reg,
+                                      cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)sel;
@@ -8012,7 +7872,7 @@ static void evl_cross_dir_on_writable(ccol_event_loop loop, ccol_event_reg reg,
   atomic_fetch_add(&c->total_calls, 1);
 }
 
-TEST(ccol_event_loop, multi_thread_cross_direction_serialization) {
+TEST(ceventloop, multi_thread_cross_direction_serialization) {
   /* A stream socketpair gives one fd whose two directions are live
    * independently. The write direction of sv[0] stays ready for ever, since
    * nothing here writes from sv[0] to sv[1] and so nothing fills its send
@@ -8032,13 +7892,13 @@ TEST(ccol_event_loop, multi_thread_cross_direction_serialization) {
   assert(pthread_mutex_init(&ctx.mtx, NULL) == 0);
 
   {
-    /* A nested block. The destructor of ccol_event_loop_construct_scoped
+    /* A nested block. The destructor of ceventloop_construct_scoped
      * fires at the closing brace of this block and shuts down AND JOINS
      * every reactor thread before control leaves the block. That join is a
      * real guarantee rather than a guess: no callback that references ctx
      * can run after it, while ThreadSanitizer catches a real race through a
      * grace period built on a fixed nanosleep. The documented contract of
-     * ccol_event_loop_remove only guarantees that an in-flight callback for
+     * ceventloop_remove only guarantees that an in-flight callback for
      * the reg being removed finishes, not that no OTHER dispatch for the
      * same, still live entry is running, because another reactor thread can
      * collect such a dispatch on its own, which is a legitimate and expected
@@ -8048,25 +7908,23 @@ TEST(ccol_event_loop, multi_thread_cross_direction_serialization) {
      * exactly the hazard this nested block avoids, and returning from this
      * function before the join is the same hazard, because it frees ctx's
      * stack slot. */
-    ccol_event_loop_construct_scoped(loop, 8, 4, 12);
+    ceventloop_construct_scoped(loop, 8, 4, 12);
 
-    ccol_event_handlers_t read_handlers = {
+    ceventloop_handlers_t read_handlers = {
         .on_readable = evl_cross_dir_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
-    ccol_event_handlers_t write_handlers = {
+    ceventloop_handlers_t write_handlers = {
         .on_readable = NULL,
         .on_writable = evl_cross_dir_on_writable,
         .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg rreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), read_handlers,
-        &ctx, &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
-    ccol_event_reg wreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), write_handlers,
-        &ctx, &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg rreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), read_handlers, &ctx, &err);
+    REQUIRE_NE(rreg, CEVENTLOOP_REG_NULL);
+    ceventloop_reg wreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), write_handlers, &ctx, &err);
+    REQUIRE_NE(wreg, CEVENTLOOP_REG_NULL);
 
     evl_feeder_args feeder_args = {.write_fd = sv[1], .iterations = 4000};
     pthread_t feeder;
@@ -8080,8 +7938,8 @@ TEST(ccol_event_loop, multi_thread_cross_direction_serialization) {
       nanosleep(&ts, NULL);
     }
 
-    ccol_event_loop_remove(loop, rreg);
-    ccol_event_loop_remove(loop, wreg);
+    ceventloop_remove(loop, rreg);
+    ceventloop_remove(loop, wreg);
 
     /* Leaving the block shuts loop down and joins every reactor thread, so
      * ctx is quiet from here on. */
@@ -8096,14 +7954,14 @@ TEST(ccol_event_loop, multi_thread_cross_direction_serialization) {
 }
 
 typedef struct evl_reuse_ctx {
-  ccol_event_reg reg;
+  ceventloop_reg reg;
   uint64_t expected_generation;
   _Atomic int mismatch_count;
   _Atomic int call_count;
 } evl_reuse_ctx;
 
-static void evl_reuse_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                  ccol_selectable *sel, void *arg) {
+static void evl_reuse_on_readable(ceventloop loop, ceventloop_reg reg,
+                                  cselectable_t *sel, void *arg) {
   (void)reg;
   evl_reuse_ctx *c = (evl_reuse_ctx *)arg;
   char buf[16];
@@ -8113,18 +7971,18 @@ static void evl_reuse_on_readable(ccol_event_loop loop, ccol_event_reg reg,
    * already removed, on a recycled fd number. If such an entry ever
    * misdispatches into this callback with the WRONG pairing of ctx and reg,
    * this check sees a generation mismatch. */
-  if (ccol_event_loop_reg_generation(loop, c->reg) != c->expected_generation) {
+  if (ceventloop_reg_generation(loop, c->reg) != c->expected_generation) {
     atomic_fetch_add(&c->mismatch_count, 1);
   }
   atomic_fetch_add(&c->call_count, 1);
 }
 
 typedef struct evl_reuse_driver_args {
-  ccol_event_loop loop;
+  ceventloop loop;
   int iterations;
   _Atomic int mismatch_total;
   /* The driver logs each iteration's ctx here instead of freeing it in
-   * place. The documented contract of ccol_event_loop_remove says the call is
+   * place. The documented contract of ceventloop_remove says the call is
    * "safe to call concurrently with an in-flight dispatch" and that
    * "teardown is deferred until any in-progress callback returns", but it
    * does NOT promise that no more callback calls for this reg can be in
@@ -8138,7 +7996,7 @@ typedef struct evl_reuse_driver_args {
    * report definitely-lost, and a fixed-length grace-period sleep makes
    * ThreadSanitizer report a real use-after-free. Only a real join gives the
    * guarantee, so the test function frees every logged ctx only after it
-   * has shut down and joined the whole ccol_event_loop, meaning every
+   * has shut down and joined the whole ceventloop, meaning every
    * reactor thread. The nested-block comment of that test explains why a
    * join is a real guarantee and a sleep isn't. */
   evl_reuse_ctx **ctx_log;
@@ -8146,12 +8004,12 @@ typedef struct evl_reuse_driver_args {
   /* This fd stays open for this driver's ENTIRE run instead of being closed
    * and reopened every iteration. Re-adding the SAME still-open fd after a
    * removal mints a fresh event_entry, and so a fresh generation, every
-   * time anyway, because ccol_event_loop_remove deletes the fd's registry
-   * entry before it returns, so a later ccol_event_loop_add on the same fd
+   * time anyway, because ceventloop_remove deletes the fd's registry
+   * entry before it returns, so a later ceventloop_add on the same fd
    * number always takes the new-entry path. That's enough to exercise this
    * module's core generation guarantee under heavy concurrent churn of add,
    * remove, dispatch and reclaim calls across drivers sharing one
-   * ccol_event_loop. It also avoids calling close() on an fd that a
+   * ceventloop. It also avoids calling close() on an fd that a
    * legitimate, rare thundering-herd duplicate dispatch can still be
    * reading, since a close per iteration produces exactly that
    * close()-against-read() race, which ThreadSanitizer reports. */
@@ -8160,7 +8018,7 @@ typedef struct evl_reuse_driver_args {
 
 static void *evl_reuse_driver_thread(void *arg) {
   evl_reuse_driver_args *a = (evl_reuse_driver_args *)arg;
-  ccol_event_handlers_t handlers = {.on_readable = evl_reuse_on_readable,
+  ceventloop_handlers_t handlers = {.on_readable = evl_reuse_on_readable,
                                     .on_writable = NULL,
                                     .on_error = NULL};
 
@@ -8168,15 +8026,14 @@ static void *evl_reuse_driver_thread(void *arg) {
     evl_reuse_ctx *ctx = malloc(sizeof(*ctx));
     memset(ctx, 0, sizeof(*ctx));
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        a->loop, ccol_selectable_from_fd(a->pfd[0], ccol_select_read), handlers,
-        ctx, &err);
+    ceventloop_reg reg = ceventloop_add(
+        a->loop, cselectable_fd(a->pfd[0], cselect_read), handlers, ctx, &err);
     if (!reg) {
       free(ctx);
       continue;
     }
     ctx->reg = reg;
-    ctx->expected_generation = ccol_event_loop_reg_generation(a->loop, reg);
+    ctx->expected_generation = ceventloop_reg_generation(a->loop, reg);
     a->ctx_log[a->ctx_log_count++] = ctx;
 
     int val = i;
@@ -8196,20 +8053,20 @@ static void *evl_reuse_driver_thread(void *arg) {
       nanosleep(&ts, NULL);
     }
 
-    ccol_event_loop_remove(a->loop, reg);
+    ceventloop_remove(a->loop, reg);
 
     atomic_fetch_add(&a->mismatch_total, atomic_load(&ctx->mismatch_count));
   }
   return NULL;
 }
 
-TEST(ccol_event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
+TEST(ceventloop, multi_thread_fd_reuse_generation_stays_consistent) {
   /* Several driver threads run at the same time, each registering, writing
    * and removing against its own fd in a tight loop while they all share one
-   * ccol_event_loop. That's exactly the high-churn workload of add, remove,
+   * ceventloop. That's exactly the high-churn workload of add, remove,
    * dispatch and reclaim calls under which the library must mint a fresh
    * generation every single time and every dispatch must see that
-   * generation correctly, the core guarantee ccol_event_loop_reg_generation
+   * generation correctly, the core guarantee ceventloop_reg_generation
    * exists to make safe by construction (see its own doc comment). The bug
    * CLASS is stale identity confusion across one fd's registration
    * lifecycle, which a hand-off that reuses an fd across a redirect also
@@ -8246,7 +8103,7 @@ TEST(ccol_event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
      * down and joins every reactor thread at the closing brace of this block,
      * and that join, not a guess at the timing, is what makes it safe to free
      * every logged ctx below. */
-    ccol_event_loop_construct_scoped(loop, 8, 4, 8);
+    ceventloop_construct_scoped(loop, 8, 4, 8);
     int started = 0;
     for (int i = 0; i < n_drivers; i++) {
       args[i].loop = loop;
@@ -8285,14 +8142,14 @@ TEST(ccol_event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
   REQUIRE_EQ(total_mismatches, 0);
 }
 
-TEST(ccol_event_loop, multi_thread_shutdown_joins_poller_promptly) {
+TEST(ceventloop, multi_thread_shutdown_joins_poller_promptly) {
   /* Many reactor threads and nothing registered, so only ONE thread,
    * poller_thread, ever blocks in epoll_wait here, while the rest are idle
-   * ctpool workers with nothing queued (see
+   * cthrpool workers with nothing queued (see
    * multi_thread_shutdown_drains_idle_dispatch_pool_promptly below for that
-   * half). The single write() ccol_event_loop_shutdown makes to shutdown_efd
+   * half). The single write() ceventloop_shutdown makes to shutdown_efd
    * must wake poller_thread and join it promptly. Nothing ever drains
-   * shutdown_efd, on purpose (the comment of ccol_event_loop_shutdown says
+   * shutdown_efd, on purpose (the comment of ceventloop_shutdown says
    * which hang draining it causes), so poller_thread's epoll_wait keeps
    * seeing it ready however long that thread takes to return and notice
    * shutting_down. The test bounds how long the shutdown may take instead of
@@ -8300,45 +8157,44 @@ TEST(ccol_event_loop, multi_thread_shutdown_joins_poller_promptly) {
    * poller_thread stuck shows up as a slow or hung test and not a silent
    * pass. */
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create(8, 4, 16, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(8, 4, 16, &err);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
   struct timespec start, end;
   clock_gettime(CLOCK_MONOTONIC, &start);
-  REQUIRE_EQ(ccol_event_loop_shutdown(loop), ccol_success);
+  REQUIRE_EQ(ceventloop_shutdown(loop), ccol_success);
   clock_gettime(CLOCK_MONOTONIC, &end);
 
   double elapsed_ms = (double)(end.tv_sec - start.tv_sec) * 1000.0 +
                       (double)(end.tv_nsec - start.tv_nsec) / 1e6;
   REQUIRE_LT(elapsed_ms, 2000.0);
 
-  ccol_event_loop_destroy(loop);
+  ceventloop_destroy(loop);
 }
 
-TEST(ccol_event_loop,
-     multi_thread_shutdown_drains_idle_dispatch_pool_promptly) {
+TEST(ceventloop, multi_thread_shutdown_drains_idle_dispatch_pool_promptly) {
   /* The other half of the shutdown. With num_reactor_threads > 1,
-   * ccol_event_loop_shutdown also calls ctpool_shutdown_drain on
+   * ceventloop_shutdown also calls cthrpool_shutdown_drain on
    * dispatch_pool, a completely different mechanism from the poller-wake
-   * path above: a condition-variable broadcast that wakes idle ctpool
+   * path above: a condition-variable broadcast that wakes idle cthrpool
    * workers rather than an epoll_wait wakeup. The test bounds how long that
    * call takes with a large, fully idle worker pool, the same way the test
    * above bounds the poller half, so a regression that leaves some idle
    * worker unwoken shows up here as a slow or hung test. */
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create(8, 4, 16, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(8, 4, 16, &err);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
   struct timespec start, end;
   clock_gettime(CLOCK_MONOTONIC, &start);
-  REQUIRE_EQ(ccol_event_loop_shutdown(loop), ccol_success);
+  REQUIRE_EQ(ceventloop_shutdown(loop), ccol_success);
   clock_gettime(CLOCK_MONOTONIC, &end);
 
   double elapsed_ms = (double)(end.tv_sec - start.tv_sec) * 1000.0 +
                       (double)(end.tv_nsec - start.tv_nsec) / 1e6;
   REQUIRE_LT(elapsed_ms, 2000.0);
 
-  ccol_event_loop_destroy(loop);
+  ceventloop_destroy(loop);
 }
 
 typedef struct evl_shutdown_drain_ctx {
@@ -8350,12 +8206,11 @@ typedef struct evl_shutdown_drain_ctx {
 
 /* This callback signals "started" the moment it begins to run, then sleeps,
  * and only then signals "finished". That gives the test driver a reliable
- * way to call ccol_event_loop_shutdown while this job is provably in flight,
+ * way to call ceventloop_shutdown while this job is provably in flight,
  * and without it the shutdown races the poller, which might not even notice
  * the write that triggers the callback. */
-static void evl_shutdown_drain_on_readable(ccol_event_loop loop,
-                                           ccol_event_reg reg,
-                                           ccol_selectable *sel, void *arg) {
+static void evl_shutdown_drain_on_readable(ceventloop loop, ceventloop_reg reg,
+                                           cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_shutdown_drain_ctx *c = (evl_shutdown_drain_ctx *)arg;
@@ -8377,13 +8232,13 @@ static void evl_shutdown_drain_on_readable(ccol_event_loop loop,
   pthread_mutex_unlock(&c->mtx);
 }
 
-TEST(ccol_event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
+TEST(ceventloop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
   /* Unlike the two tests above, which use an idle pool, this one puts a real
    * job in flight whose callback sleeps on purpose and synchronizes with the
    * test driver, so the driver knows the callback really started before it
-   * calls ccol_event_loop_shutdown. That directly exercises the "finish
-   * in-flight work" contract of ctpool_shutdown_drain, which the module picks
-   * over ctpool_shutdown_immediate to keep ccol_event_loop_shutdown's
+   * calls ceventloop_shutdown. That directly exercises the "finish
+   * in-flight work" contract of cthrpool_shutdown_drain, which the module picks
+   * over cthrpool_shutdown_immediate to keep ceventloop_shutdown's
    * documented guarantee that no dispatch can be in flight once the call
    * returns (see the comment of that function). The test asserts that the
    * callback really completed, not just that the shutdown returned, which
@@ -8397,18 +8252,17 @@ TEST(ccol_event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
   assert(pthread_mutex_init(&ctx.mtx, NULL) == 0);
   assert(pthread_cond_init(&ctx.cond, NULL) == 0);
 
-  ccol_event_loop loop = ccol_event_loop_create(8, 4, 4, NULL);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(8, 4, 4, NULL);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_shutdown_drain_on_readable,
       .on_writable = NULL,
       .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   int val = 7;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
@@ -8416,26 +8270,25 @@ TEST(ccol_event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
   bool started = evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.started, EVL_WAIT_MS);
   REQUIRE_TRUE(started);
 
-  REQUIRE_EQ(ccol_event_loop_shutdown(loop), ccol_success);
+  REQUIRE_EQ(ceventloop_shutdown(loop), ccol_success);
 
   pthread_mutex_lock(&ctx.mtx);
   bool finished = ctx.finished;
   pthread_mutex_unlock(&ctx.mtx);
   REQUIRE_TRUE(finished);
 
-  ccol_event_loop_destroy(loop);
+  ceventloop_destroy(loop);
   pthread_mutex_destroy(&ctx.mtx);
   pthread_cond_destroy(&ctx.cond);
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, reg_generation_semantics) {
+TEST(ceventloop, reg_generation_semantics) {
   /* A NULL reg reads as generation 0, a reserved value the library never
    * mints for a real registration. */
-  REQUIRE_EQ(
-      ccol_event_loop_reg_generation(CCOL_EVENT_LOOP_NULL, CCOL_EVENT_REG_NULL),
-      (uint64_t)0);
+  REQUIRE_EQ(ceventloop_reg_generation(CEVENTLOOP_NULL, CEVENTLOOP_REG_NULL),
+             (uint64_t)0);
 
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -8453,46 +8306,42 @@ TEST(ccol_event_loop, reg_generation_semantics) {
      * dispatch, and any other one in flight, is sure to be finished, and this
      * function must not return before then either, because returning frees
      * ctx's stack slot. Only this block's join gives that guarantee. */
-    ccol_event_loop_construct_scoped(loop, 8, 1, 4);
-    ccol_event_handlers_t handlers = {
+    ceventloop_construct_scoped(loop, 8, 1, 4);
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
     char *err = NULL;
 
     /* Both directions on the same fd share one generation. */
-    ccol_event_reg rreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
-    REQUIRE_NE(rreg, CCOL_EVENT_REG_NULL);
-    uint64_t rgen = ccol_event_loop_reg_generation(loop, rreg);
+    ceventloop_reg rreg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+    REQUIRE_NE(rreg, CEVENTLOOP_REG_NULL);
+    uint64_t rgen = ceventloop_reg_generation(loop, rreg);
     REQUIRE_GT(rgen, (uint64_t)0);
 
-    ccol_event_handlers_t write_handlers = {
+    ceventloop_handlers_t write_handlers = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
-    ccol_event_reg wreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_write),
-        write_handlers, &ctx, &err);
-    REQUIRE_NE(wreg, CCOL_EVENT_REG_NULL);
-    REQUIRE_EQ(ccol_event_loop_reg_generation(loop, wreg), rgen);
+    ceventloop_reg wreg =
+        ceventloop_add(loop, cselectable_fd(pfd[0], cselect_write),
+                       write_handlers, &ctx, &err);
+    REQUIRE_NE(wreg, CEVENTLOOP_REG_NULL);
+    REQUIRE_EQ(ceventloop_reg_generation(loop, wreg), rgen);
 
-    /* Flipping the direction with ccol_event_loop_modify keeps the same
+    /* Flipping the direction with ceventloop_modify keeps the same
      * generation, since it's the same fd and the same connection under it,
      * just a different direction. */
-    ccol_event_loop_remove(loop, wreg);
-    REQUIRE_EQ(ccol_event_loop_modify(loop, rreg, ccol_select_write),
-               ccol_success);
-    REQUIRE_EQ(ccol_event_loop_reg_generation(loop, rreg), rgen);
-    REQUIRE_EQ(ccol_event_loop_modify(loop, rreg, ccol_select_read),
-               ccol_success);
+    ceventloop_remove(loop, wreg);
+    REQUIRE_EQ(ceventloop_modify(loop, rreg, cselect_write), ccol_success);
+    REQUIRE_EQ(ceventloop_reg_generation(loop, rreg), rgen);
+    REQUIRE_EQ(ceventloop_modify(loop, rreg, cselect_read), ccol_success);
 
     /* A different fd gets a different generation. */
-    ccol_event_reg reg2 = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd2[0], ccol_select_read), handlers,
-        &ctx, &err);
-    REQUIRE_NE(reg2, CCOL_EVENT_REG_NULL);
-    REQUIRE_NE(ccol_event_loop_reg_generation(loop, reg2), rgen);
+    ceventloop_reg reg2 = ceventloop_add(
+        loop, cselectable_fd(pfd2[0], cselect_read), handlers, &ctx, &err);
+    REQUIRE_NE(reg2, CEVENTLOOP_REG_NULL);
+    REQUIRE_NE(ceventloop_reg_generation(loop, reg2), rgen);
 
-    ccol_event_loop_remove(loop, rreg);
-    ccol_event_loop_remove(loop, reg2);
+    ceventloop_remove(loop, rreg);
+    ceventloop_remove(loop, reg2);
   }
 
   evl_sync_ctx_destroy(&ctx);
@@ -8509,8 +8358,8 @@ TEST(ccol_event_loop, reg_generation_semantics) {
  * write end is writable from the moment it exists and stays that way for
  * ever, so a few of them registered for write interest keep the reactor busy
  * without a second thread feeding it. */
-static void evl_reg_race_hot_writable(ccol_event_loop loop, ccol_event_reg reg,
-                                      ccol_selectable *sel, void *arg) {
+static void evl_reg_race_hot_writable(ceventloop loop, ceventloop_reg reg,
+                                      cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)sel;
@@ -8518,48 +8367,48 @@ static void evl_reg_race_hot_writable(ccol_event_loop loop, ccol_event_reg reg,
 }
 
 typedef struct evl_reg_race_args {
-  ccol_event_loop loop;
-  ccol_event_reg reg;
+  ceventloop loop;
+  ceventloop_reg reg;
 } evl_reg_race_args;
 
 static void *evl_reg_race_remover_thread(void *arg) {
   evl_reg_race_args *a = (evl_reg_race_args *)arg;
-  ccol_event_loop_remove(a->loop, a->reg);
+  ceventloop_remove(a->loop, a->reg);
   return NULL;
 }
 
 static void *evl_reg_race_accessor_thread(void *arg) {
   evl_reg_race_args *a = (evl_reg_race_args *)arg;
-  /* This thread really races the ccol_event_loop_remove call on the other
+  /* This thread really races the ceventloop_remove call on the other
    * thread for the exact same reg. Any return value from any of these five
    * calls is acceptable (ccol_success, ccol_not_permitted, ccol_invalid_args
    * or generation 0), since the value depends only on which thread the
    * scheduler lets win. What the test checks is something else: none of
    * these calls may ever touch memory the reclaimer has already freed under
    * them. A clean run shows that, and a clean `make memtest` run shows it
-   * best. See the field comment of reg_slots in struct _ccol_event_loop_s. */
-  ccol_event_loop_modify(a->loop, a->reg, ccol_select_write);
-  ccol_event_loop_pause(a->loop, a->reg);
-  ccol_event_loop_resume(a->loop, a->reg);
-  (void)ccol_event_loop_reg_generation(a->loop, a->reg);
-  ccol_event_loop_remove(a->loop, a->reg);
+   * best. See the field comment of reg_slots in struct _ceventloop_s. */
+  ceventloop_modify(a->loop, a->reg, cselect_write);
+  ceventloop_pause(a->loop, a->reg);
+  ceventloop_resume(a->loop, a->reg);
+  (void)ceventloop_reg_generation(a->loop, a->reg);
+  ceventloop_remove(a->loop, a->reg);
   return NULL;
 }
 
-TEST(ccol_event_loop, reg_handle_survives_concurrent_remove_vs_accessor_race) {
-  /* ccol_event_loop_modify, ccol_event_loop_pause, ccol_event_loop_resume,
-   * ccol_event_loop_remove and ccol_event_loop_reg_generation must not
+TEST(ceventloop, reg_handle_survives_concurrent_remove_vs_accessor_race) {
+  /* ceventloop_modify, ceventloop_pause, ceventloop_resume,
+   * ceventloop_remove and ceventloop_reg_generation must not
    * dereference a reg pointer from the caller directly, starting with
    * reg->stripe_idx, which only tells the call which stripe lock would
    * protect the rest of it. Such a dereference has no protection against a
    * concurrent poller reclaim of that exact reg, which can complete on the
    * very next turn of the poller loop after a DIFFERENT thread deferred it
-   * with ccol_event_loop_remove(). For two threads racing on the same reg
+   * with ceventloop_remove(). For two threads racing on the same reg
    * that's a real use-after-free, not a theoretical concern. So
-   * ccol_event_reg is an opaque, generation-checked VALUE handle that the
+   * ceventloop_reg is an opaque, generation-checked VALUE handle that the
    * library resolves through its own loop's registration table before it
-   * dereferences anything, the same way ccol_event_loop's own handle works.
-   * See the field comment of reg_slots in struct _ccol_event_loop_s for the
+   * dereferences anything, the same way ceventloop's own handle works.
+   * See the field comment of reg_slots in struct _ceventloop_s for the
    * full design.
    *
    * A few always-ready write-direction "hot" registrations keep the poller
@@ -8571,34 +8420,33 @@ TEST(ccol_event_loop, reg_handle_survives_concurrent_remove_vs_accessor_race) {
    * here. Run it under `make memtest`, where an unprotected dereference
    * reliably reports a real use-after-free that valgrind detects instead of
    * a failure that only happens now and then. */
-  ccol_event_loop_construct_scoped(loop, 64, 4, 4);
+  ceventloop_construct_scoped(loop, 64, 4, 4);
 
   enum { N_HOT = 4 };
   int hot_pfd[N_HOT][2];
-  ccol_event_reg hot_reg[N_HOT];
-  ccol_event_handlers_t hot_handlers = {
+  ceventloop_reg hot_reg[N_HOT];
+  ceventloop_handlers_t hot_handlers = {
       .on_readable = NULL,
       .on_writable = evl_reg_race_hot_writable,
       .on_error = NULL};
   for (int i = 0; i < N_HOT; i++) {
     REQUIRE_EQ(pipe(hot_pfd[i]), 0);
     char *err = NULL;
-    hot_reg[i] = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(hot_pfd[i][1], ccol_select_write),
-        hot_handlers, NULL, &err);
-    REQUIRE_NE(hot_reg[i], CCOL_EVENT_REG_NULL);
+    hot_reg[i] =
+        ceventloop_add(loop, cselectable_fd(hot_pfd[i][1], cselect_write),
+                       hot_handlers, NULL, &err);
+    REQUIRE_NE(hot_reg[i], CEVENTLOOP_REG_NULL);
   }
 
   const int iterations = 300;
-  ccol_event_handlers_t reg_handlers = {0};
+  ceventloop_handlers_t reg_handlers = {0};
   for (int i = 0; i < iterations; i++) {
     int pfd[2];
     REQUIRE_EQ(pipe(pfd), 0);
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), reg_handlers,
-        NULL, &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), reg_handlers, NULL, &err);
+    REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
     evl_reg_race_args shared = {loop, reg};
     pthread_t remover, accessor;
@@ -8616,7 +8464,7 @@ TEST(ccol_event_loop, reg_handle_survives_concurrent_remove_vs_accessor_race) {
   }
 
   for (int i = 0; i < N_HOT; i++) {
-    ccol_event_loop_remove(loop, hot_reg[i]);
+    ceventloop_remove(loop, hot_reg[i]);
     close(hot_pfd[i][0]);
     close(hot_pfd[i][1]);
   }
@@ -8631,10 +8479,9 @@ typedef struct evl_bounded_ctx {
  * dispatch job for this exact fd is queued or running. That's exactly the
  * scenario that mints an unbounded stream of redundant dispatch jobs, and
  * only the re-arm-after-dispatch handling of EPOLLONESHOT stops it; see the
- * comment of _ccol_event_loop_poller_collect in cthreadcomm.c. */
-static void evl_bounded_hot_fd_on_readable(ccol_event_loop loop,
-                                           ccol_event_reg reg,
-                                           ccol_selectable *sel, void *arg) {
+ * comment of _ceventloop_poller_collect in cthreadcomm.c. */
+static void evl_bounded_hot_fd_on_readable(ceventloop loop, ceventloop_reg reg,
+                                           cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_bounded_ctx *c = (evl_bounded_ctx *)arg;
@@ -8658,14 +8505,14 @@ static void *evl_bounded_feeder_thread(void *arg) {
   return NULL;
 }
 
-TEST(ccol_event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
+TEST(ceventloop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
   /* A direct regression test for the EPOLLONESHOT re-arm contract.
-   * Collection runs on poller_thread and dispatch on a ctpool worker, so the
+   * Collection runs on poller_thread and dispatch on a cthrpool worker, so the
    * two are decoupled, and an fd that is still ready but hasn't been re-armed
    * yet must never be collected again. Without that rule the pending-job
    * count of dispatch_pool grows without bound for as long as a slow callback
    * lags behind a fast feeder. The test samples
-   * _ccol_event_loop_dispatch_pool_pending_count_for_tests while a feeder
+   * _ceventloop_dispatch_pool_pending_count_for_tests while a feeder
    * thread writes the whole time, and asserts that the count never goes
    * above a small bound, well below num_reactor_threads - 1 workers plus one
    * more queued job. The livelock this test guards against goes far past
@@ -8679,17 +8526,16 @@ TEST(ccol_event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
 
   size_t max_pending = 0;
   {
-    ccol_event_loop_construct_scoped(loop, 8, 4, 8);
+    ceventloop_construct_scoped(loop, 8, 4, 8);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_bounded_hot_fd_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+    REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
     /* This count is modest on purpose. At about 0.5ms per dispatch it drains
      * completely inside the grace period below, the same pattern as
@@ -8703,8 +8549,7 @@ TEST(ccol_event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
         0);
 
     for (int i = 0; i < 200; i++) {
-      size_t pending =
-          _ccol_event_loop_dispatch_pool_pending_count_for_tests(loop);
+      size_t pending = _ceventloop_dispatch_pool_pending_count_for_tests(loop);
       if (pending > max_pending) max_pending = pending;
       struct timespec ts = {0, 1000000}; /* 1ms */
       nanosleep(&ts, NULL);
@@ -8714,7 +8559,7 @@ TEST(ccol_event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
 
     /* A short, best-effort settle time before any teardown, only as test
      * hygiene. Nothing here asserts on unread pipe bytes, unlike the queue
-     * version of this test below where ccol_circular_queue_destroy does
+     * version of this test below where ccircq_destroy does
      * assert. The max_pending assertion holds without this loop, which
      * stays short because a full drain isn't needed and isn't worth the
      * test's wall-clock time. */
@@ -8725,54 +8570,53 @@ TEST(ccol_event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
       nanosleep(&ts, NULL);
     }
 
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
   }
 
   REQUIRE_LT(max_pending, (size_t)10);
 }
 
 typedef struct evl_bounded_queue_feeder_args {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   int iterations;
 } evl_bounded_queue_feeder_args;
 
 static void *evl_bounded_queue_feeder_thread(void *arg) {
   evl_bounded_queue_feeder_args *a = (evl_bounded_queue_feeder_args *)arg;
   for (int i = 0; i < a->iterations; i++) {
-    c_message_t msg = {.data = NULL, .size = 0};
-    /* This send blocks, it isn't ccol_circq_try_send_zc. A full queue should
+    cmessage_t msg = {.data = NULL, .size = 0};
+    /* This send blocks, it isn't ccircq_try_send. A full queue should
      * throttle this feeder exactly as a full pipe buffer throttles the plain
      * write() of evl_bounded_feeder_thread above, so both tests get the same
      * guarantee that every iteration is delivered in the end. A try-send
      * would silently drop the sends past the capacity, and ctx.calls would
      * then never reliably reach iterations below. */
-    (void)ccol_circq_send_zc(a->cq, &msg);
+    (void)ccircq_send(a->cq, &msg);
   }
   return NULL;
 }
 
 /* The same slow-callback shape as evl_bounded_hot_fd_on_readable, but for
  * the path of the bridge eventfd and the queue selectable. The design note
- * in _ccol_event_loop_dispatch_job_fn marks this case as one with NO natural
+ * in _ceventloop_dispatch_job_fn marks this case as one with NO natural
  * throttle of its own, because a bridge eventfd has no finite kernel buffer
  * while a pipe does, so this one is the more valuable of the two regression
  * tests rather than a redundant mirror of the fd one. */
-static void evl_bounded_hot_queue_on_readable(ccol_event_loop loop,
-                                              ccol_event_reg reg,
-                                              ccol_selectable *sel, void *arg) {
+static void evl_bounded_hot_queue_on_readable(ceventloop loop,
+                                              ceventloop_reg reg,
+                                              cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   evl_bounded_ctx *c = (evl_bounded_ctx *)arg;
-  c_message_t msg = {.data = NULL, .size = 0};
-  (void)ccol_circq_try_recv_zc(sel->cq, &msg);
+  cmessage_t msg = {.data = NULL, .size = 0};
+  (void)ccircq_try_recv(sel->cq, &msg);
   struct timespec ts = {0, 500000}; /* 0.5ms */
   nanosleep(&ts, NULL);
   atomic_fetch_add(&c->calls, 1);
 }
 
-TEST(ccol_event_loop,
-     multi_thread_hot_queue_dispatch_pool_pending_stays_bounded) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(64, NULL);
+TEST(ceventloop, multi_thread_hot_queue_dispatch_pool_pending_stays_bounded) {
+  ccircq *cq = ccircq_create(64, NULL);
   REQUIRE_NE((void *)cq, NULL);
 
   evl_bounded_ctx ctx;
@@ -8780,17 +8624,16 @@ TEST(ccol_event_loop,
 
   size_t max_pending = 0;
   {
-    ccol_event_loop_construct_scoped(loop, 8, 4, 8);
+    ceventloop_construct_scoped(loop, 8, 4, 8);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_bounded_hot_queue_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
-        &err);
-    REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, ccircq_selectable(cq, cselect_read), handlers, &ctx, &err);
+    REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
     evl_bounded_queue_feeder_args feeder_args = {.cq = cq, .iterations = 1000};
     pthread_t feeder;
@@ -8799,8 +8642,7 @@ TEST(ccol_event_loop,
                0);
 
     for (int i = 0; i < 200; i++) {
-      size_t pending =
-          _ccol_event_loop_dispatch_pool_pending_count_for_tests(loop);
+      size_t pending = _ceventloop_dispatch_pool_pending_count_for_tests(loop);
       if (pending > max_pending) max_pending = pending;
       struct timespec ts = {0, 1000000}; /* 1ms */
       nanosleep(&ts, NULL);
@@ -8814,7 +8656,7 @@ TEST(ccol_event_loop,
      * unconsumed once the feeder stops, because of the notify-on-send
      * coalescing of the bridge eventfd, and that has nothing to do with the
      * EPOLLONESHOT coverage of this test. The direct drain below, after the
-     * registration is removed, is what makes sure ccol_circular_queue_destroy
+     * registration is removed, is what makes sure ccircq_destroy
      * never asserts, not this loop. */
     for (int spins = 0; spins < 500 && atomic_load(&ctx.calls) <
                                            (size_t)feeder_args.iterations;
@@ -8823,31 +8665,31 @@ TEST(ccol_event_loop,
       nanosleep(&ts, NULL);
     }
 
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
   }
 
   /* Drains directly whatever the consumption above, driven by
-   * ccol_event_loop, didn't reach (see the comment of the grace-period
+   * ceventloop, didn't reach (see the comment of the grace-period
    * loop). It runs here because the test has already removed reg and the
-   * loop's scope has already closed. ccol_circular_queue_destroy asserts on
+   * loop's scope has already closed. ccircq_destroy asserts on
    * any message that's left (see its own comment in cthreadcomm.c), so this
    * drain is needed for a clean teardown and isn't optional hygiene. */
-  c_message_t leftover = {.data = NULL, .size = 0};
-  while (ccol_circq_try_recv_zc(cq, &leftover) == ccol_success) {
+  cmessage_t leftover = {.data = NULL, .size = 0};
+  while (ccircq_try_recv(cq, &leftover) == ccol_success) {
     /* nothing to free: every sent message here has data == NULL */
   }
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
   REQUIRE_LT(max_pending, (size_t)10);
 }
 
 /* An on_readable handler that never returns on its own. Its only use is to
  * hold a job in flight on a dispatch_pool worker (or, for
  * num_reactor_threads == 1, to occupy the only thread instead) long enough
- * for the test driver to reliably call ccol_event_loop_shutdown from inside
+ * for the test driver to reliably call ceventloop_shutdown from inside
  * it. */
 typedef struct evl_self_shutdown_ctx {
-  ccol_event_loop loop;
+  ceventloop loop;
   _Atomic int observed_rv; /* This holds a ccol_retval_t. It is _Atomic for
                             * one reason: the test driver polls it from the
                             * main thread while the callback, which runs on
@@ -8858,16 +8700,15 @@ typedef struct evl_self_shutdown_ctx {
                             * reports. */
 } evl_self_shutdown_ctx;
 
-static void evl_self_shutdown_on_readable(ccol_event_loop loop,
-                                          ccol_event_reg reg,
-                                          ccol_selectable *sel, void *arg) {
+static void evl_self_shutdown_on_readable(ceventloop loop, ceventloop_reg reg,
+                                          cselectable_t *sel, void *arg) {
   (void)reg;
   (void)sel;
   evl_self_shutdown_ctx *c = (evl_self_shutdown_ctx *)arg;
-  atomic_store(&c->observed_rv, (int)ccol_event_loop_shutdown(loop));
+  atomic_store(&c->observed_rv, (int)ceventloop_shutdown(loop));
 }
 
-TEST(ccol_event_loop,
+TEST(ceventloop,
      shutdown_from_within_callback_returns_not_permitted_single_thread) {
   /* With num_reactor_threads == 1 the only thread both polls and
    * dispatches, so without the guard a self-call here joins that thread to
@@ -8879,19 +8720,18 @@ TEST(ccol_event_loop,
   evl_self_shutdown_ctx ctx;
   atomic_init(&ctx.observed_rv, (int)ccol_unexpected_failure);
 
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
   ctx.loop = loop;
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_self_shutdown_on_readable,
       .on_writable = NULL,
       .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   int val = 7;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
@@ -8908,18 +8748,18 @@ TEST(ccol_event_loop,
     mono_poll_pause();
   int observed = atomic_load(&ctx.observed_rv);
 
-  ccol_event_loop_remove(loop, reg);
-  ccol_event_loop_destroy(loop);
+  ceventloop_remove(loop, reg);
+  ceventloop_destroy(loop);
   close(pfd[0]);
   close(pfd[1]);
   REQUIRE_EQ(observed, (int)ccol_not_permitted);
 }
 
-TEST(ccol_event_loop,
+TEST(ceventloop,
      shutdown_from_within_callback_returns_not_permitted_multi_thread) {
   /* With num_reactor_threads > 1 the callback runs on a dispatch_pool
    * worker, not on poller_thread. Without the guard a self-call here calls
-   * ctpool_shutdown_drain from inside one of that pool's workers, which then
+   * cthrpool_shutdown_drain from inside one of that pool's workers, which then
    * joins itself with _ccol_thread_join. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -8928,19 +8768,18 @@ TEST(ccol_event_loop,
   evl_self_shutdown_ctx ctx;
   atomic_init(&ctx.observed_rv, (int)ccol_unexpected_failure);
 
-  ccol_event_loop loop = ccol_event_loop_create(8, 4, 4, NULL);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create(8, 4, 4, NULL);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
   ctx.loop = loop;
 
-  ccol_event_handlers_t handlers = {
+  ceventloop_handlers_t handlers = {
       .on_readable = evl_self_shutdown_on_readable,
       .on_writable = NULL,
       .on_error = NULL};
   char *err = NULL;
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-      &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   int val = 7;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
@@ -8953,8 +8792,8 @@ TEST(ccol_event_loop,
     mono_poll_pause();
   int observed = atomic_load(&ctx.observed_rv);
 
-  ccol_event_loop_remove(loop, reg);
-  ccol_event_loop_destroy(loop);
+  ceventloop_remove(loop, reg);
+  ceventloop_destroy(loop);
   close(pfd[0]);
   close(pfd[1]);
   REQUIRE_EQ(observed, (int)ccol_not_permitted);
@@ -8966,10 +8805,10 @@ TEST(ccol_event_loop,
 
 /* This group mirrors the chttpcli_handle_lifecycle test group in
  * tests/chttpclient/tests.c, adapted for the fully lock-free pin mechanism
- * of ccol_event_loop. The field comment of pending_resolve_count in struct
- * _ccol_event_loop_s in src/cthreadcomm.c explains why the unpin side here
+ * of ceventloop. The field comment of pending_resolve_count in struct
+ * _ceventloop_s in src/cthreadcomm.c explains why the unpin side here
  * is a bare atomic decrement instead of the lock-protected one of chttpcli
- * and chttpsvr, and the comment of __ccol_event_loop_destroy explains why
+ * and chttpsvr, and the comment of __ceventloop_destroy explains why
  * that makes destroy wait by polling instead of on a condition variable. */
 
 /* A destroy can complete fully, but a second destroy later, on a copy of the
@@ -8977,7 +8816,7 @@ TEST(ccol_event_loop,
  * fatal error. It runs in a forked child because _ccol_fatal_err aborts the
  * whole process, following the precedent tests/clogger/tests.c sets for a
  * fork test of misuse that stops the process. */
-TEST(ccol_event_loop_handle_lifecycle, sequential_double_destroy_is_fatal) {
+TEST(ceventloop_handle_lifecycle, sequential_double_destroy_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
@@ -8988,15 +8827,15 @@ TEST(ccol_event_loop_handle_lifecycle, sequential_double_destroy_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
-    ccol_event_loop stale = loop;     /* This is a copy of the handle value that
+    ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+    if (loop == CEVENTLOOP_NULL) test_child_exit(2);
+    ceventloop stale = loop;     /* This is a copy of the handle value that
             the caller holds on its own. It differs from the local variable that
             the macro below invalidates. */
-    ccol_event_loop_destroy(loop);    /* This completes normally. The local
-           `loop` is now CCOL_EVENT_LOOP_NULL, but `stale` still holds the
+    ceventloop_destroy(loop);    /* This completes normally. The local
+           `loop` is now CEVENTLOOP_NULL, but `stale` still holds the
            original value. */
-    __ccol_event_loop_destroy(stale); /* This is the misuse under test. It is
+    __ceventloop_destroy(stale); /* This is the misuse under test. It is
         a second, purely sequential destroy of a handle that is already fully
         torn down. */
     /* not reachable when _ccol_fatal_err() aborts, as it must */
@@ -9011,30 +8850,29 @@ TEST(ccol_event_loop_handle_lifecycle, sequential_double_destroy_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-static void evl_self_destroy_on_readable(ccol_event_loop loop,
-                                         ccol_event_reg reg,
-                                         ccol_selectable *sel, void *arg) {
+static void evl_self_destroy_on_readable(ceventloop loop, ceventloop_reg reg,
+                                         cselectable_t *sel, void *arg) {
   (void)reg;
   (void)sel;
   (void)arg;
-  ccol_event_loop_destroy(loop); /* This is the misuse under test. */
+  ceventloop_destroy(loop); /* This is the misuse under test. */
 }
 
-/* Calling ccol_event_loop_destroy on a loop has to be a fatal error when the
+/* Calling ceventloop_destroy on a loop has to be a fatal error when the
  * call comes from inside a callback that dispatches on a thread of that same
  * loop: the poller thread for num_reactor_threads == 1, or a dispatch_pool
  * worker for a larger count. That matches the sequential and concurrent
  * double-destroy cases above, instead of being a teardown the library
- * silently skips. The internal ccol_event_loop_shutdown call of
- * __ccol_event_loop_destroy already detects and refuses a self-join here
+ * silently skips. The internal ceventloop_shutdown call of
+ * __ceventloop_destroy already detects and refuses a self-join here
  * (see shutdown_from_within_callback_returns_not_permitted_* above), but
- * that alone isn't enough because __ccol_event_loop_destroy can't pass
+ * that alone isn't enough because __ceventloop_destroy can't pass
  * the refusal on through its macro-driven contract, which returns void.
  * Without a guard of its own it frees every live registration and the loop
  * struct itself under the callback that's running, which is a real
  * use-after-free, beyond a deadlock. It runs in a forked child because
  * _ccol_fatal_err aborts the whole process. */
-TEST(ccol_event_loop_handle_lifecycle,
+TEST(ceventloop_handle_lifecycle,
      destroy_from_within_callback_is_fatal_single_thread) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
@@ -9050,17 +8888,16 @@ TEST(ccol_event_loop_handle_lifecycle,
     if (pipe(pfd) != 0) test_child_exit(2);
     evl_set_nonblocking(pfd[0]);
 
-    ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
+    ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+    if (loop == CEVENTLOOP_NULL) test_child_exit(2);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_self_destroy_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-        NULL);
-    if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, NULL);
+    if (reg == CEVENTLOOP_REG_NULL) test_child_exit(2);
 
     int val = 7;
     if (write(pfd[1], &val, sizeof(val)) != (ssize_t)sizeof(val))
@@ -9086,7 +8923,7 @@ TEST(ccol_event_loop_handle_lifecycle,
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-TEST(ccol_event_loop_handle_lifecycle,
+TEST(ceventloop_handle_lifecycle,
      destroy_from_within_callback_is_fatal_multi_thread) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
@@ -9102,17 +8939,16 @@ TEST(ccol_event_loop_handle_lifecycle,
     if (pipe(pfd) != 0) test_child_exit(2);
     evl_set_nonblocking(pfd[0]);
 
-    ccol_event_loop loop = ccol_event_loop_create(8, 4, 4, NULL);
-    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
+    ceventloop loop = ceventloop_create(8, 4, 4, NULL);
+    if (loop == CEVENTLOOP_NULL) test_child_exit(2);
 
-    ccol_event_handlers_t handlers = {
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_self_destroy_on_readable,
         .on_writable = NULL,
         .on_error = NULL};
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL,
-        NULL);
-    if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, NULL, NULL);
+    if (reg == CEVENTLOOP_REG_NULL) test_child_exit(2);
 
     int val = 7;
     if (write(pfd[1], &val, sizeof(val)) != (ssize_t)sizeof(val))
@@ -9134,12 +8970,12 @@ TEST(ccol_event_loop_handle_lifecycle,
 }
 
 typedef struct {
-  ccol_event_loop h;
+  ceventloop h;
 } evl_concurrent_destroy_arg_t;
 
 static void *evl_concurrent_destroy_thread(void *arg) {
   evl_concurrent_destroy_arg_t *a = (evl_concurrent_destroy_arg_t *)arg;
-  __ccol_event_loop_destroy(a->h);
+  __ceventloop_destroy(a->h);
   return NULL;
 }
 
@@ -9148,7 +8984,7 @@ static void *evl_concurrent_destroy_thread(void *arg) {
  * that is fatal too. It's the same class of concurrent double free
  * the generation-tagged slot table exists to close for chttpcli and
  * chttpsvr. */
-TEST(ccol_event_loop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
+TEST(ceventloop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   pid_t pid = fork();
   if (pid == 0) {
@@ -9159,8 +8995,8 @@ TEST(ccol_event_loop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
+    ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+    if (loop == CEVENTLOOP_NULL) test_child_exit(2);
     evl_concurrent_destroy_arg_t a1 = {.h = loop};
     evl_concurrent_destroy_arg_t a2 = {.h = loop};
     pthread_t t1, t2;
@@ -9193,7 +9029,7 @@ TEST(ccol_event_loop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
 }
 
 typedef struct {
-  ccol_event_loop h;
+  ceventloop h;
   atomic_int pinned;
   atomic_int release;
   bool resolved;
@@ -9201,8 +9037,8 @@ typedef struct {
 
 static void *evl_pin_hold_thread(void *arg) {
   evl_pin_hold_arg_t *a = (evl_pin_hold_arg_t *)arg;
-  a->resolved = _ccol_event_loop_resolve_pin_until_for_tests(a->h, &a->pinned,
-                                                             &a->release);
+  a->resolved =
+      _ceventloop_resolve_pin_until_for_tests(a->h, &a->pinned, &a->release);
   /* A handle that didn't resolve never sets pinned, so the test must not
    * wait for it. */
   if (!a->resolved) atomic_store(&a->pinned, -1);
@@ -9210,21 +9046,21 @@ static void *evl_pin_hold_thread(void *arg) {
 }
 
 typedef struct {
-  ccol_event_loop h;
+  ceventloop h;
   atomic_int returned;
 } evl_destroy_arg_t;
 
 static void *evl_destroy_thread(void *arg) {
   evl_destroy_arg_t *a = (evl_destroy_arg_t *)arg;
-  ccol_event_loop_destroy(a->h);
+  ceventloop_destroy(a->h);
   atomic_store(&a->returned, 1);
   return NULL;
 }
 
 /* This proves that destroy waits out a resolve that's in flight. A thread
  * resolves and pins the handle and holds the pin until this test releases
- * it, through _ccol_event_loop_resolve_pin_until_for_tests, since
- * ccol_event_loop has no naturally slow public entry point we could borrow.
+ * it, through _ceventloop_resolve_pin_until_for_tests, since
+ * ceventloop has no naturally slow public entry point we could borrow.
  * A destroy on a second thread must block until the pin is released instead
  * of racing ahead and freeing the loop under the pointer that's still
  * resolved.
@@ -9233,9 +9069,9 @@ static void *evl_destroy_thread(void *arg) {
  * held, so a destroy that waits for pins can't have returned, however slow
  * the machine is. The wait before the check gives a destroy that doesn't
  * wait for pins enough time to return, and the test then fails. */
-TEST(ccol_event_loop_handle_lifecycle, resolve_then_use_race_destroy_waits) {
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+TEST(ceventloop_handle_lifecycle, resolve_then_use_race_destroy_waits) {
+  ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
   evl_pin_hold_arg_t pin_arg = {.h = loop, .resolved = false};
   atomic_init(&pin_arg.pinned, 0);
@@ -9267,7 +9103,7 @@ TEST(ccol_event_loop_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   if (destroy_started) {
     pthread_join(destroy_thread, NULL);
   } else {
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
 
   REQUIRE_TRUE(pin_started);
@@ -9279,7 +9115,7 @@ TEST(ccol_event_loop_handle_lifecycle, resolve_then_use_race_destroy_waits) {
 }
 
 typedef struct {
-  ccol_event_loop h;
+  ceventloop h;
 } evl_reg_count_arg_t;
 
 static void *evl_reg_count_thread(void *arg) {
@@ -9289,7 +9125,7 @@ static void *evl_reg_count_thread(void *arg) {
    * instead of succeeding, and both outcomes are correct. This thread only
    * exists to make resolve, pin and unpin traffic at the same time as the
    * destroy thread below. */
-  ccol_event_loop_reg_count(a->h);
+  ceventloop_reg_count(a->h);
   return NULL;
 }
 
@@ -9297,7 +9133,7 @@ static void *evl_reg_count_thread(void *arg) {
  * The long pin that test holds on purpose keeps pending_resolve_count above
  * 0 for the whole race window, so destroy's poll-wait always finds it
  * nonzero on its first check there. This one needs the opposite shape: it
- * races a fast, non-blocking entry point, ccol_event_loop_reg_count, which
+ * races a fast, non-blocking entry point, ceventloop_reg_count, which
  * resolves, does one atomic read, unpins and returns with no sleep at all,
  * against a concurrent destroy, and repeats that race under stress. For a
  * truly lock-free pin and unpin pair the failure window is only a few
@@ -9305,11 +9141,11 @@ static void *evl_reg_count_thread(void *arg) {
  * reliably. Each iteration uses a fresh loop, so every repetition gets its
  * own independent race and none of them reuses an already destroyed
  * handle. */
-TEST(ccol_event_loop_handle_lifecycle, resolve_unpin_race_stress) {
+TEST(ceventloop_handle_lifecycle, resolve_unpin_race_stress) {
   enum { ITERATIONS = 25 };
   for (int i = 0; i < ITERATIONS; i++) {
-    ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+    ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+    REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
     evl_reg_count_arg_t reg_count_arg = {.h = loop};
     evl_concurrent_destroy_arg_t destroy_arg = {.h = loop};
@@ -9330,25 +9166,25 @@ TEST(ccol_event_loop_handle_lifecycle, resolve_unpin_race_stress) {
 /* The library must never confuse a legitimate reuse of a slot with a stale
  * handle to the slot's earlier occupant, and that's what the generation
  * counter is for. */
-TEST(ccol_event_loop_handle_lifecycle,
+TEST(ceventloop_handle_lifecycle,
      legitimate_slot_reuse_not_confused_with_stale_handle) {
-  ccol_event_loop a = ccol_event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE(a, CCOL_EVENT_LOOP_NULL);
-  ccol_event_loop stale_a = a;
-  ccol_event_loop_destroy(a);
+  ceventloop a = ceventloop_create(8, 1, 1, NULL);
+  REQUIRE_NE(a, CEVENTLOOP_NULL);
+  ceventloop stale_a = a;
+  ceventloop_destroy(a);
 
-  ccol_event_loop b = ccol_event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE(b, CCOL_EVENT_LOOP_NULL);
+  ceventloop b = ceventloop_create(8, 1, 1, NULL);
+  REQUIRE_NE(b, CEVENTLOOP_NULL);
 
   /* B's operations must succeed normally whether or not the allocator
    * reused A's exact address for B. */
-  REQUIRE_EQ(ccol_event_loop_reg_count(b), (size_t)0);
+  REQUIRE_EQ(ceventloop_reg_count(b), (size_t)0);
 
   /* A's stale handle must never resolve to B, even when B reuses the same
    * address below it; that's what the generation counter is for. */
-  REQUIRE_EQ((void *)_ccol_event_loop_resolve_for_tests(stale_a), NULL);
+  REQUIRE_EQ((void *)_ceventloop_resolve_for_tests(stale_a), NULL);
 
-  ccol_event_loop_destroy(b);
+  ceventloop_destroy(b);
 }
 
 /* The slot table is bounded and doesn't grow for ever. A churn loop of
@@ -9359,23 +9195,21 @@ TEST(ccol_event_loop_handle_lifecycle,
  * because earlier tests in the same process may already have grown the
  * table to some N above 1. What this test has to prove is that ITS OWN churn
  * adds no growth, without knowing the table's absolute size when it runs. */
-TEST(ccol_event_loop_handle_lifecycle, bounded_slot_reuse_under_churn) {
+TEST(ceventloop_handle_lifecycle, bounded_slot_reuse_under_churn) {
   enum { ITERATIONS = 25 };
 
-  ccol_event_loop loop0 = ccol_event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE(loop0, CCOL_EVENT_LOOP_NULL);
-  ccol_event_loop_destroy(loop0);
-  size_t capacity_after_first =
-      _ccol_event_loop_slot_table_capacity_for_tests();
+  ceventloop loop0 = ceventloop_create(8, 1, 1, NULL);
+  REQUIRE_NE(loop0, CEVENTLOOP_NULL);
+  ceventloop_destroy(loop0);
+  size_t capacity_after_first = _ceventloop_slot_table_capacity_for_tests();
 
   for (int i = 1; i < ITERATIONS; i++) {
-    ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
-    ccol_event_loop_destroy(loop);
+    ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+    REQUIRE_NE(loop, CEVENTLOOP_NULL);
+    ceventloop_destroy(loop);
   }
 
-  REQUIRE_EQ(_ccol_event_loop_slot_table_capacity_for_tests(),
-             capacity_after_first);
+  REQUIRE_EQ(_ceventloop_slot_table_capacity_for_tests(), capacity_after_first);
 }
 
 /* ========================================================================== */
@@ -9384,20 +9218,19 @@ TEST(ccol_event_loop_handle_lifecycle, bounded_slot_reuse_under_churn) {
 
 /* The whole rest of this file exercises the fork() safety machinery of
  * src/cthreadcomm.c, which is built on pthread_atfork(): the machinery of
- * ccol_event_loop itself and the merged mutex registry of
- * ccol_circular_queue and ccol_dynamic_queue. The compiler drops that
+ * ceventloop itself and the merged mutex registry of
+ * ccircq and cdynmq. The compiler drops that
  * machinery when CCOL_FORK_SAFETY_REQUIRED is 0 (see the doc comment of that
  * macro in common.h), and without it the premises of these tests don't
- * hold: that a forked child never inherits a locked ccol_event_loop mutex or
+ * hold: that a forked child never inherits a locked ceventloop mutex or
  * queue mutex, and that it never runs into the AB-BA lock-ordering hazard
  * that two independently registered sets of atfork handlers are exposed to.
  * So these tests are dropped together with the machinery instead of staying
  * in to hang or fail. */
 #if CCOL_FORK_SAFETY_REQUIRED
 
-static void fork_safety_hot_fd_on_readable(ccol_event_loop loop,
-                                           ccol_event_reg reg,
-                                           ccol_selectable *sel, void *arg) {
+static void fork_safety_hot_fd_on_readable(ceventloop loop, ceventloop_reg reg,
+                                           cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)arg;
@@ -9417,50 +9250,49 @@ typedef struct {
   _Atomic int stop;
 } fork_safety_churn_arg_t;
 
-/* This thread keeps creating and destroying throwaway ccol_event_loop
+/* This thread keeps creating and destroying throwaway ceventloop
  * instances, completely unrelated to the loop the main test thread keeps
  * busy below. Its only purpose is to have SOME thread inside the mutex of
- * ccol_event_loop_slot_table, which it reaches through
- * ccol_event_loop_create and ccol_event_loop_destroy, as often as possible,
+ * ceventloop_slot_table, which it reaches through
+ * ceventloop_create and ceventloop_destroy, as often as possible,
  * so it races this test's repeated fork() calls. */
 static void *fork_safety_churn_thread(void *arg) {
   fork_safety_churn_arg_t *a = (fork_safety_churn_arg_t *)arg;
   while (!atomic_load(&a->stop)) {
     char *err = NULL;
-    ccol_event_loop l = ccol_event_loop_create_mp(4, 1, 1, NULL, &err);
-    if (l != CCOL_EVENT_LOOP_NULL) {
+    ceventloop l = ceventloop_create_mp(4, 1, 1, NULL, &err);
+    if (l != CEVENTLOOP_NULL) {
       int pfd[2];
       if (pipe(pfd) == 0) {
-        ccol_event_handlers_t h = {0};
-        ccol_event_reg r = ccol_event_loop_add(
-            l, ccol_selectable_from_fd(pfd[0], ccol_select_read), h, NULL,
-            NULL);
+        ceventloop_handlers_t h = {0};
+        ceventloop_reg r = ceventloop_add(
+            l, cselectable_fd(pfd[0], cselect_read), h, NULL, NULL);
         (void)r;
         close(pfd[0]);
         close(pfd[1]);
       }
-      ccol_event_loop_destroy(l);
+      ceventloop_destroy(l);
     }
   }
   return NULL;
 }
 
 /* This test guards against a fork-safety hang; the doc comment of
- * _ccol_event_loop_atfork_prepare in src/cthreadcomm.c describes the
+ * _ceventloop_atfork_prepare in src/cthreadcomm.c describes the
  * mechanism. fork() duplicates only the thread that calls it, so without
  * that machinery a child inherits several locks in a locked state (the
- * mutex of ccol_event_loop_slot_table, and the shutdown_lock, the
+ * mutex of ceventloop_slot_table, and the shutdown_lock, the
  * reg_slot_rwlock and the stripes[].lock of any live loop) and no thread is
  * left alive in that child that could ever unlock them.
  *
  * This one bounded test recreates both shapes of the hazard at once. A churn
- * thread keeps creating and destroying throwaway ccol_event_loop instances,
- * which touches the mutex of ccol_event_loop_slot_table, and races the
+ * thread keeps creating and destroying throwaway ceventloop instances,
+ * which touches the mutex of ceventloop_slot_table, and races the
  * process's repeated fork() calls. The same process ALSO keeps one
- * single-stripe, multi-threaded ccol_event_loop busy with a hot fd, so its
+ * single-stripe, multi-threaded ceventloop busy with a hot fd, so its
  * poller thread and dispatch threads take and release that loop's one and
  * only stripe lock over and over. Each forked child first tries one more
- * ccol_event_loop_add on the exact loop it just inherited, guarded by
+ * ceventloop_add on the exact loop it just inherited, guarded by
  * alarm(30), which turns a hang on an inherited locked mutex into a visible
  * failure instead of a test that never finishes. A single stripe gives
  * fork() the best chance to land in the middle of a critical section on
@@ -9484,18 +9316,18 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
              0);
 
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create_mp(16, 1, 3, NULL, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create_mp(16, 1, 3, NULL, &err);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
   int hotfd[2];
   REQUIRE_EQ(pipe(hotfd), 0);
   evl_set_nonblocking(hotfd[0]);
-  ccol_event_handlers_t h = {.on_readable = fork_safety_hot_fd_on_readable,
+  ceventloop_handlers_t h = {.on_readable = fork_safety_hot_fd_on_readable,
                              .on_writable = NULL,
                              .on_error = NULL};
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(hotfd[0], ccol_select_read), h, NULL, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg = ceventloop_add(
+      loop, cselectable_fd(hotfd[0], cselect_read), h, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   enum { TRIALS = 30 };
   int hangs = 0;
@@ -9515,12 +9347,11 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
       int fd2[2];
       if (pipe(fd2) != 0) test_child_exit(2);
       evl_set_nonblocking(fd2[0]);
-      ccol_event_handlers_t h2 = {0};
-      ccol_event_reg r2 = ccol_event_loop_add(
-          loop, ccol_selectable_from_fd(fd2[0], ccol_select_read), h2, NULL,
-          NULL);
+      ceventloop_handlers_t h2 = {0};
+      ceventloop_reg r2 = ceventloop_add(
+          loop, cselectable_fd(fd2[0], cselect_read), h2, NULL, NULL);
       int rc = r2 ? 0 : 1;
-      if (r2 != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r2);
+      if (r2 != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r2);
       test_child_exit(rc);
     }
 
@@ -9539,8 +9370,8 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
   atomic_store(&churn.stop, 1);
   pthread_join(churn_tid, NULL);
 
-  ccol_event_loop_remove(loop, reg);
-  ccol_event_loop_destroy(loop);
+  ceventloop_remove(loop, reg);
+  ceventloop_destroy(loop);
   close(hotfd[0]);
   close(hotfd[1]);
 
@@ -9548,7 +9379,7 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
 }
 
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   _Atomic bool locked;
   _Atomic bool released;
   int hold_ms;
@@ -9556,7 +9387,7 @@ typedef struct {
 
 static void *queue_fork_lock_thread(void *arg) {
   queue_fork_lock_arg_t *a = (queue_fork_lock_arg_t *)arg;
-  _ccol_circq_test_lock_mutex_for_tests(a->cq);
+  _ccircq_test_lock_mutex_for_tests(a->cq);
   atomic_store(&a->locked, true);
   /* This thread releases on its own fixed schedule, completely independent
    * of what the forking thread does below. pthread_atfork's prepare()
@@ -9574,13 +9405,13 @@ static void *queue_fork_lock_thread(void *arg) {
   /* The store comes before the unlock, so a prepare handler that waits for
    * the unlock can't let fork() return before the store is visible. */
   atomic_store(&a->released, true);
-  _ccol_circq_test_unlock_mutex_for_tests(a->cq);
+  _ccircq_test_unlock_mutex_for_tests(a->cq);
   return NULL;
 }
 
 /* A pthread_atfork() handler of its own walks the internal mutex of
- * ccol_circular_queue, ccol_dynamic_queue and ccol_channel, exactly as for
- * every lock that ccol_event_loop owns (see
+ * ccircq, cdynmq and cchan, exactly as for
+ * every lock that ceventloop owns (see
  * fork_does_not_inherit_a_locked_event_loop_mutex above and the doc comment
  * of _queue_atfork_prepare in src/cthreadcomm.c). Without that handler a
  * child inherits a locked cq->mutex whenever a thread OTHER than the one
@@ -9588,11 +9419,11 @@ static void *queue_fork_lock_thread(void *arg) {
  * thread is left alive in the child to unlock it, every later operation on
  * that queue in the child hangs.
  *
- * The ccol_event_loop regression test above depends on many repeated fork()
+ * The ceventloop regression test above depends on many repeated fork()
  * trials racing a real critical section, which is naturally short, while
  * this test reproduces the hazard deterministically.
- * _ccol_circq_test_lock_mutex_for_tests and
- * _ccol_circq_test_unlock_mutex_for_tests exist only under
+ * _ccircq_test_lock_mutex_for_tests and
+ * _ccircq_test_unlock_mutex_for_tests exist only under
  * RUNNING_UNIT_TESTS and let a dedicated holder thread keep cq->mutex locked
  * for a fixed window of HOLD_MS, much longer than any real critical section,
  * after which the holder releases on its own schedule. The forking thread
@@ -9611,7 +9442,7 @@ static void *queue_fork_lock_thread(void *arg) {
 TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   char *err = NULL;
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, &err);
+  ccircq *cq = ccircq_create(4, &err);
   REQUIRE_NE((void *)cq, NULL);
 
   enum { HOLD_MS = 300 };
@@ -9680,8 +9511,8 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
       close(dn);
     }
     alarm(30);
-    c_message_t msg = {.data = NULL, .size = 0};
-    ccol_retval_t rv = ccol_circq_try_send_zc(cq, &msg);
+    cmessage_t msg = {.data = NULL, .size = 0};
+    ccol_retval_t rv = ccircq_try_send(cq, &msg);
     char byte = (rv == ccol_success) ? 1 : 0;
     test_write_retry_eintr(result_pipe[1], &byte, 1);
     close(result_pipe[1]);
@@ -9721,11 +9552,11 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
   REQUIRE_TRUE(reaped);
   if (reaped) REQUIRE_TRUE(WIFEXITED(status));
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 }
 
 typedef struct {
-  ccol_event_loop loop;
+  ceventloop loop;
   _Atomic bool locked;
   _Atomic bool released;
   int hold_ms;
@@ -9735,10 +9566,10 @@ static void *reg_slot_fork_lock_thread(void *arg) {
   reg_slot_fork_lock_arg_t *a = (reg_slot_fork_lock_arg_t *)arg;
   /* The matching unlock call below has to get the opaque pointer this call
    * returns and not a->loop itself (see the doc comment of
-   * _ccol_event_loop_test_wrlock_reg_slot_for_tests), because resolving
+   * _ceventloop_test_wrlock_reg_slot_for_tests), because resolving
    * a->loop a second time from this thread at unlock time is a real deadlock
    * hazard against a concurrent fork(). */
-  void *resolved = _ccol_event_loop_test_wrlock_reg_slot_for_tests(a->loop);
+  void *resolved = _ceventloop_test_wrlock_reg_slot_for_tests(a->loop);
   atomic_store(&a->locked, true);
   /* This thread releases on its own fixed schedule, completely independent
    * of what the forking thread does below. The same comment of
@@ -9751,17 +9582,17 @@ static void *reg_slot_fork_lock_thread(void *arg) {
   nanosleep(&ts, NULL);
   /* See queue_fork_lock_thread for why the store comes before the unlock. */
   atomic_store(&a->released, true);
-  _ccol_event_loop_test_wrunlock_reg_slot_for_tests(resolved);
+  _ceventloop_test_wrunlock_reg_slot_for_tests(resolved);
   return NULL;
 }
 
 /* A regression test for the TID-tracked write-lock hazard of
  * reg_slot_rwlock, which the comment of _cthreadcomm_atfork_release_impl on
  * its in_child branch for reg_slot_rwlock describes. reg_slot_rwlock is a
- * _ccol_rw_lock_t, so concurrent _ccol_event_reg_resolve calls, the hottest
- * path of ccol_event_loop under a caller that pauses and resumes for each
+ * _ccol_rw_lock_t, so concurrent _ceventloop_reg_resolve calls, the hottest
+ * path of ceventloop under a caller that pauses and resumes for each
  * request such as chttpserver, don't serialize behind one lock. Any thread
- * that calls ccol_event_loop_add or ccol_event_loop_remove can take the
+ * that calls ceventloop_add or ceventloop_remove can take the
  * write side, and that's not always the thread that later calls fork().
  * glibc's rwlock write-lock tracks ownership by TID, so a plain
  * _ccol_rw_lock_unlock from the child's surviving thread, which has a
@@ -9769,23 +9600,23 @@ static void *reg_slot_fork_lock_thread(void *arg) {
  * gone by now, really locked, and every later resolve in that child hangs.
  * This test has exactly the structure of
  * fork_does_not_inherit_a_locked_circular_queue_mutex, with the
- * reg_slot_rwlock of ccol_event_loop in place of the cq->mutex of
- * ccol_circular_queue. */
+ * reg_slot_rwlock of ceventloop in place of the cq->mutex of
+ * ccircq. */
 TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create_mp(4, 1, 1, NULL, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create_mp(4, 1, 1, NULL, &err);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   evl_set_nonblocking(pfd[0]);
-  ccol_event_handlers_t h = {.on_readable = fork_safety_hot_fd_on_readable,
+  ceventloop_handlers_t h = {.on_readable = fork_safety_hot_fd_on_readable,
                              .on_writable = NULL,
                              .on_error = NULL};
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h, NULL, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg =
+      ceventloop_add(loop, cselectable_fd(pfd[0], cselect_read), h, NULL, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   enum { HOLD_MS = 300 };
   reg_slot_fork_lock_arg_t arg = {
@@ -9818,7 +9649,7 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
      * handling the child does a plain _ccol_rw_lock_unlock instead of a
      * reinit, this process inherits reg_slot_rwlock write-locked with no
      * thread that could ever release it, and the resolve inside
-     * ccol_event_loop_reg_generation below hangs until alarm(30) kills this
+     * ceventloop_reg_generation below hangs until alarm(30) kills this
      * child. */
     close(result_pipe[0]);
     int dn = open("/dev/null", O_WRONLY);
@@ -9828,7 +9659,7 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
       close(dn);
     }
     alarm(30);
-    uint64_t gen = ccol_event_loop_reg_generation(loop, reg);
+    uint64_t gen = ceventloop_reg_generation(loop, reg);
     char byte = (gen != 0) ? 1 : 0;
     test_write_retry_eintr(result_pipe[1], &byte, 1);
     close(result_pipe[1]);
@@ -9873,11 +9704,11 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
    * the child does a reinit, and the fork() call of this same thread validly
    * released that lock, so a plain unlock on it is exactly what should
    * work. */
-  uint64_t gen_after = ccol_event_loop_reg_generation(loop, reg);
+  uint64_t gen_after = ceventloop_reg_generation(loop, reg);
   REQUIRE_NE(gen_after, (uint64_t)0);
 
-  ccol_event_loop_remove(loop, reg);
-  ccol_event_loop_destroy(loop);
+  ceventloop_remove(loop, reg);
+  ceventloop_destroy(loop);
   close(pfd[0]);
   close(pfd[1]);
 }
@@ -9886,12 +9717,12 @@ typedef struct {
   _Atomic bool locked;
   _Atomic bool released;
   int hold_ms;
-} ccol_event_loop_slot_table_fork_lock_arg_t;
+} ceventloop_slot_table_fork_lock_arg_t;
 
-static void *ccol_event_loop_slot_table_fork_lock_thread(void *arg) {
-  ccol_event_loop_slot_table_fork_lock_arg_t *a =
-      (ccol_event_loop_slot_table_fork_lock_arg_t *)arg;
-  _ccol_event_loop_test_wrlock_slot_table_for_tests();
+static void *ceventloop_slot_table_fork_lock_thread(void *arg) {
+  ceventloop_slot_table_fork_lock_arg_t *a =
+      (ceventloop_slot_table_fork_lock_arg_t *)arg;
+  _ceventloop_test_wrlock_slot_table_for_tests();
   atomic_store(&a->locked, true);
   /* This thread releases on its own fixed schedule, completely independent
    * of what the forking thread does below; the same reasoning of
@@ -9901,37 +9732,37 @@ static void *ccol_event_loop_slot_table_fork_lock_thread(void *arg) {
   nanosleep(&ts, NULL);
   /* See queue_fork_lock_thread for why the store comes before the unlock. */
   atomic_store(&a->released, true);
-  _ccol_event_loop_test_wrunlock_slot_table_for_tests();
+  _ceventloop_test_wrunlock_slot_table_for_tests();
   return NULL;
 }
 
 /* A regression test for the TID-tracked write-lock hazard of
- * ccol_event_loop_slot_table.rwlock, which the comment of
+ * ceventloop_slot_table.rwlock, which the comment of
  * _cthreadcomm_atfork_release_impl on its in_child branch for that lock
  * describes. This lock guards the process-wide LOOP table, unlike the
  * reg_slot_rwlock of a single loop that
  * fork_does_not_inherit_a_write_locked_reg_slot_rwlock above covers. Every
- * ccol_event_loop_create and every ccol_event_loop_destroy call takes it,
- * and its read side is the very first thing that ccol_event_loop_pause,
- * ccol_event_loop_resume, ccol_event_loop_modify, ccol_event_loop_remove
- * and ccol_event_loop_reg_generation do. Any thread that calls
- * ccol_event_loop_create or ccol_event_loop_destroy can take the write side,
+ * ceventloop_create and every ceventloop_destroy call takes it,
+ * and its read side is the very first thing that ceventloop_pause,
+ * ceventloop_resume, ceventloop_modify, ceventloop_remove
+ * and ceventloop_reg_generation do. Any thread that calls
+ * ceventloop_create or ceventloop_destroy can take the write side,
  * and that's not always the thread that later calls fork(). glibc's rwlock
  * write-lock tracks ownership by TID, so a plain _ccol_rw_lock_unlock from
  * the child's surviving thread, which has a different TID, silently fails
  * to release a lock that a different thread, gone by now, really locked.
- * Every later _ccol_event_loop_resolve in that child then hangs, which
- * covers every ccol_event_loop_create, ccol_event_loop_destroy,
- * ccol_event_loop_add, ccol_event_loop_remove, ccol_event_loop_pause,
- * ccol_event_loop_resume and ccol_event_loop_modify call. */
+ * Every later _ceventloop_resolve in that child then hangs, which
+ * covers every ceventloop_create, ceventloop_destroy,
+ * ceventloop_add, ceventloop_remove, ceventloop_pause,
+ * ceventloop_resume and ceventloop_modify call. */
 TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   enum { HOLD_MS = 300 };
-  ccol_event_loop_slot_table_fork_lock_arg_t arg = {
+  ceventloop_slot_table_fork_lock_arg_t arg = {
       .locked = false, .released = false, .hold_ms = HOLD_MS};
   pthread_t holder;
   REQUIRE_EQ(pthread_create(&holder, NULL,
-                            ccol_event_loop_slot_table_fork_lock_thread, &arg),
+                            ceventloop_slot_table_fork_lock_thread, &arg),
              0);
 
   while (!atomic_load(&arg.locked)) {
@@ -9942,7 +9773,7 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
   }
 
   /* Every step from here on can fail while holder is already alive and
-   * holds ccol_event_loop_slot_table.rwlock, so NONE of them may carry a
+   * holds ceventloop_slot_table.rwlock, so NONE of them may carry a
    * direct assertion. A REQUIRE_* failure returns from this test function at
    * once, and holder's lifetime doesn't depend on pipe(), fork(), the
    * release check or the child's response succeeding, so a direct assertion
@@ -9971,20 +9802,20 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
       /* `holder` doesn't exist here, since fork() duplicates only the
        * thread that calls it. This child can only come into existence once
        * the parent's fork() call returns, which needs the
-       * _ccol_rw_lock_wrlock(ccol_event_loop_slot_table.rwlock) of
+       * _ccol_rw_lock_wrlock(ceventloop_slot_table.rwlock) of
        * _cthreadcomm_atfork_prepare to have succeeded, so the holder thread,
        * gone in this process, must already have released it. Without this
        * handling the child does a plain _ccol_rw_lock_unlock instead of a
-       * reinit, this process inherits ccol_event_loop_slot_table.rwlock
+       * reinit, this process inherits ceventloop_slot_table.rwlock
        * write-locked with no thread that could ever release it, and the
-       * resolve inside ccol_event_loop_create below hangs until alarm(30)
+       * resolve inside ceventloop_create below hangs until alarm(30)
        * kills this child. */
       close(result_pipe[0]);
       alarm(30);
       char *err = NULL;
-      ccol_event_loop l = ccol_event_loop_create(4, 1, 1, &err);
-      char b = (l != CCOL_EVENT_LOOP_NULL) ? 1 : 0;
-      if (l != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(l);
+      ceventloop l = ceventloop_create(4, 1, 1, &err);
+      char b = (l != CEVENTLOOP_NULL) ? 1 : 0;
+      if (l != CEVENTLOOP_NULL) ceventloop_destroy(l);
       test_write_retry_eintr(result_pipe[1], &b, 1);
       close(result_pipe[1]);
       test_child_exit(0);
@@ -10037,19 +9868,19 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
   REQUIRE_TRUE(reaped);
   if (reaped) REQUIRE_TRUE(WIFEXITED(status));
 
-  /* The parent's ccol_event_loop_slot_table.rwlock must be really usable
+  /* The parent's ceventloop_slot_table.rwlock must be really usable
    * after all of the above. The parent releases it with a plain
    * _ccol_rw_lock_unlock, while the child does a reinit, and the fork() call
    * of this same thread validly released that lock, so a plain unlock on it
    * is exactly what needs to work. */
   char *err2 = NULL;
-  ccol_event_loop l2 = ccol_event_loop_create(4, 1, 1, &err2);
-  REQUIRE_NE(l2, CCOL_EVENT_LOOP_NULL);
-  ccol_event_loop_destroy(l2);
+  ceventloop l2 = ceventloop_create(4, 1, 1, &err2);
+  REQUIRE_NE(l2, CEVENTLOOP_NULL);
+  ceventloop_destroy(l2);
 }
 
-static void fork_safety2_noop_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                       ccol_selectable *sel, void *arg) {
+static void fork_safety2_noop_readable(ceventloop loop, ceventloop_reg reg,
+                                       cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)sel;
@@ -10057,15 +9888,15 @@ static void fork_safety2_noop_readable(ccol_event_loop loop, ccol_event_reg reg,
 }
 
 typedef struct {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   _Atomic bool started;
 } fork_safety2_sender_arg_t;
 
 static void *fork_safety2_sender_thread(void *arg) {
   fork_safety2_sender_arg_t *a = (fork_safety2_sender_arg_t *)arg;
   atomic_store(&a->started, true);
-  c_message_t msg = {.data = NULL, .size = 0};
-  ccol_circq_send_zc(a->cq, &msg);
+  cmessage_t msg = {.data = NULL, .size = 0};
+  ccircq_send(a->cq, &msg);
   return NULL;
 }
 
@@ -10074,14 +9905,14 @@ static void *fork_safety2_sender_thread(void *arg) {
  * possible. pthread_atfork runs prepare handlers in REVERSE registration
  * order, so which of two independent handler sets runs first at fork() time
  * is an accident that depends only on which subsystem the process happens to
- * use first, a ccol_circular_queue or a ccol_event_loop.
- * Take a queue created before the first ccol_event_loop. The queue's atfork
- * triple registers first, so the prepare handler of ccol_event_loop, which
+ * use first, a ccircq or a ceventloop.
+ * Take a queue created before the first ceventloop. The queue's atfork
+ * triple registers first, so the prepare handler of ceventloop, which
  * registers second, runs FIRST at fork() time and locks the wait_mtx of a
  * queue-backed registration. A separate queue-registry prepare handler then
  * tries to lock the cq->mutex of that SAME queue, the reverse of the order
- * _notify_waiter always uses, and any ordinary ccol_circq_send_zc or
- * ccol_circq_recv_zc call running at the same time on an unrelated thread
+ * _notify_waiter always uses, and any ordinary ccircq_send or
+ * ccircq_recv call running at the same time on an unrelated thread
  * reaches _notify_waiter. The forking thread then deadlocks inside fork()
  * itself: it blocks on cq->mutex from that second, independent atfork
  * prepare handler while a concurrent sender thread blocks on wait_mtx inside
@@ -10094,7 +9925,7 @@ static void *fork_safety2_sender_thread(void *arg) {
  * first.
  *
  * The test forces exactly that dangerous construction order by creating a
- * ccol_circular_queue before the first ccol_event_loop in a fresh process.
+ * ccircq before the first ceventloop in a fresh process.
  * It then uses _notify_waiter_test_set_delay_us, which exists only under
  * RUNNING_UNIT_TESTS, to widen a real window inside _notify_waiter between
  * "cq->mutex already held" and "about to lock wait_mtx". That window is
@@ -10155,19 +9986,17 @@ TEST(fork_safety,
                       proves otherwise. */
 
     /* This forces the dangerous construction order. It's the first use of a
-     * ccol_circular_queue or a ccol_event_loop in this freshly forked
+     * ccircq or a ceventloop in this freshly forked
      * process, so creating a queue before the loop makes the lazy init of
      * the queue-mutex registry happen first, every time. */
     char *err = NULL;
-    ccol_circular_queue *cq = ccol_circular_queue_create(4, &err);
-    ccol_event_loop loop =
-        cq ? ccol_event_loop_create(16, 1, 1, &err) : CCOL_EVENT_LOOP_NULL;
-    ccol_event_reg reg = CCOL_EVENT_REG_NULL;
+    ccircq *cq = ccircq_create(4, &err);
+    ceventloop loop = cq ? ceventloop_create(16, 1, 1, &err) : CEVENTLOOP_NULL;
+    ceventloop_reg reg = CEVENTLOOP_REG_NULL;
     if (cq && loop) {
-      ccol_event_handlers_t h = {.on_readable = fork_safety2_noop_readable};
-      reg = ccol_event_loop_add(
-          loop, ccol_selectable_from_circq(cq, ccol_select_read), h, NULL,
-          &err);
+      ceventloop_handlers_t h = {.on_readable = fork_safety2_noop_readable};
+      reg = ceventloop_add(loop, ccircq_selectable(cq, cselect_read), h, NULL,
+                           &err);
     }
 
     if (cq && loop && reg) {
@@ -10200,7 +10029,7 @@ TEST(fork_safety,
           0) {
         while (!atomic_load(&sarg.started)) {
           /* Waits for the sender to confirm it's about to call
-           * ccol_circq_send_zc, before the fork below. A bare atomic-load
+           * ccircq_send, before the fork below. A bare atomic-load
            * spin with no yield isn't cheap under valgrind, because memcheck
            * time-slices every thread through one single instrumented
            * execution engine instead of giving them real parallelism across
@@ -10244,13 +10073,13 @@ TEST(fork_safety,
     test_write_retry_eintr(result_pipe[1], &byte, 1);
     close(result_pipe[1]);
 
-    if (reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, reg);
+    if (reg != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, reg);
     if (cq) {
-      c_message_t drain = {0};
-      ccol_circq_try_recv_zc(cq, &drain);
-      ccol_circular_queue_destroy(cq);
+      cmessage_t drain = {0};
+      ccircq_try_recv(cq, &drain);
+      ccircq_destroy(cq);
     }
-    if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
+    if (loop != CEVENTLOOP_NULL) ceventloop_destroy(loop);
     test_child_exit(0);
   }
 
@@ -10277,20 +10106,20 @@ TEST(fork_safety,
   REQUIRE_EQ((int)byte, 1);
 }
 
-/* This test covers ccol_event_loop_shutdown and ccol_event_loop_destroy on a
- * ccol_event_loop that a child INHERITS across fork(), while every other
- * fork test in this file either only calls ccol_event_loop_add and
- * ccol_event_loop_remove on the inherited loop or destroys a loop the child
+/* This test covers ceventloop_shutdown and ceventloop_destroy on a
+ * ceventloop that a child INHERITS across fork(), while every other
+ * fork test in this file either only calls ceventloop_add and
+ * ceventloop_remove on the inherited loop or destroys a loop the child
  * created fresh. It's exactly the scenario the foreign_since_fork field of
- * struct _ccol_event_loop_s exists for. fork() duplicates only the thread
+ * struct _ceventloop_s exists for. fork() duplicates only the thread
  * that calls it, so in a forked child the poller_thread field names a
  * pthread_t that this process never created and can never join, and
  * loop->shutdown_efd is a real kernel object that the child shares with the
  * parent instead of copying, with a really live poller thread on the parent
- * side. Without the foreign_since_fork fixup, ccol_event_loop_destroy() in a
+ * side. Without the foreign_since_fork fixup, ceventloop_destroy() in a
  * forked child SIGSEGVs for an inherited loop with num_reactor_threads > 1
  * on almost every run, inside glibc's __pthread_clockjoin_ex, reached
- * through the worker-thread join loop of ctpool_shutdown_drain. The test
+ * through the worker-thread join loop of cthrpool_shutdown_drain. The test
  * guards against a future regression that moves where the
  * foreign_since_fork check sits relative to the self-call guard, or changes
  * the matching fixup in cthreadpool.c that this mechanism depends on.
@@ -10302,25 +10131,25 @@ TEST(fork_safety,
  * this by confirming that the parent's identical, still registered fd
  * selectable keeps dispatching normally after the child has torn down its
  * own copy completely. */
-TEST(fork_safety, ccol_event_loop_destroy_of_inherited_loop_in_child_is_safe) {
+TEST(fork_safety, ceventloop_destroy_of_inherited_loop_in_child_is_safe) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   int result_pipe[2];
   REQUIRE_EQ(pipe(result_pipe), 0);
 
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create_mp(8, 2, 3, NULL, &err);
-  REQUIRE_NE(loop, CCOL_EVENT_LOOP_NULL);
+  ceventloop loop = ceventloop_create_mp(8, 2, 3, NULL, &err);
+  REQUIRE_NE(loop, CEVENTLOOP_NULL);
 
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   evl_set_nonblocking(pfd[0]);
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t h = {
+  ceventloop_handlers_t h = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-  ccol_event_reg reg = ccol_event_loop_add(
-      loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h, &ctx, &err);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  ceventloop_reg reg =
+      ceventloop_add(loop, cselectable_fd(pfd[0], cselect_read), h, &ctx, &err);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
 
   pid_t pid = fork();
   REQUIRE_NE(pid, -1);
@@ -10344,7 +10173,7 @@ TEST(fork_safety, ccol_event_loop_destroy_of_inherited_loop_in_child_is_safe) {
     /* The misuse under test: it destroys the exact, fully inherited loop
      * handle, whose dispatch_pool workers and poller thread exist in this
      * process only as inert, copy-on-write memory. */
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
 
     char byte = 1;
     test_write_retry_eintr(result_pipe[1], &byte, 1);
@@ -10395,8 +10224,8 @@ TEST(fork_safety, ccol_event_loop_destroy_of_inherited_loop_in_child_is_safe) {
   REQUIRE_EQ(write(pfd[1], &val, 1), 1);
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, EVL_WAIT_MS));
 
-  ccol_event_loop_remove(loop, reg);
-  ccol_event_loop_destroy(loop);
+  ceventloop_remove(loop, reg);
+  ceventloop_destroy(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
@@ -10419,13 +10248,13 @@ static void evl_sleep_ms(int ms) {
   nanosleep(&ts, NULL);
 }
 
-TEST(ccol_event_loop, queue_cascade_finishes_before_remove_returns) {
+TEST(ceventloop, queue_cascade_finishes_before_remove_returns) {
   /* The cascade step that runs after a dispatch for a queue-backed
    * registration locks the mutex of the queue below it, which the
    * application owns and which has no refcount of its own. The module
    * documents one supported way to retire such a registration: call
-   * ccol_event_loop_remove and then destroy the queue immediately (see
-   * ccol_circular_queue_destroy). So the cascade must never be on its way
+   * ceventloop_remove and then destroy the queue immediately (see
+   * ccircq_destroy). So the cascade must never be on its way
    * to that mutex any more once remove returns, or it locks freed memory.
    *
    * We assert the ordering directly instead of hoping a sanitizer sees the
@@ -10438,35 +10267,34 @@ TEST(ccol_event_loop, queue_cascade_finishes_before_remove_returns) {
    * Move the cascade's readiness check out from under the stripe lock and
    * remove returns with finished at the value it had before the dispatch,
    * which fails the test. */
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
+  ccircq *cq = ccircq_create(4, NULL);
   bool queue_created = (cq != NULL);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  ccol_event_handlers_t handlers = {.on_readable = evl_on_readable,
+  ceventloop_handlers_t handlers = {.on_readable = evl_on_readable,
                                     .on_writable = NULL,
                                     .on_error = NULL,
                                     .on_removed = NULL};
   char *err = NULL;
-  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
+  ceventloop_reg reg = CEVENTLOOP_REG_NULL;
   if (queue_created)
-    reg = ccol_event_loop_add(loop,
-                              ccol_selectable_from_circq(cq, ccol_select_read),
-                              handlers, &ctx, &err);
-  bool registered = (reg != CCOL_EVENT_REG_NULL);
+    reg = ceventloop_add(loop, ccircq_selectable(cq, cselect_read), handlers,
+                         &ctx, &err);
+  bool registered = (reg != CEVENTLOOP_REG_NULL);
 
   uint64_t begun_before = 0, finished_before = 0;
-  _ccol_event_loop_test_queue_cascade_counts(&begun_before, &finished_before);
+  _ceventloop_test_queue_cascade_counts(&begun_before, &finished_before);
 
   bool sent = false, dispatched = false, cascade_begun = false;
   if (registered) {
-    _ccol_event_loop_test_delay_next_queue_cascade_us(300000);
+    _ceventloop_test_delay_next_queue_cascade_us(300000);
     char *payload = (char *)malloc(4);
     if (payload) {
       memcpy(payload, "abc", 4);
-      c_message_t msg = {.data = payload, .size = 4};
-      sent = (ccol_circq_send_zc(cq, &msg) == ccol_success);
+      cmessage_t msg = {.data = payload, .size = 4};
+      sent = (ccircq_send(cq, &msg) == ccol_success);
       if (!sent) free(payload);
     }
     dispatched = sent && evl_wait_for(&ctx, &ctx.readable_count, 1, 5000);
@@ -10476,7 +10304,7 @@ TEST(ccol_event_loop, queue_cascade_finishes_before_remove_returns) {
      * not a guess about elapsed time. */
     for (int i = 0; i < 5000 && !cascade_begun; i++) {
       uint64_t begun = 0;
-      _ccol_event_loop_test_queue_cascade_counts(&begun, NULL);
+      _ceventloop_test_queue_cascade_counts(&begun, NULL);
       if (begun > begun_before) {
         cascade_begun = true;
         break;
@@ -10488,17 +10316,17 @@ TEST(ccol_event_loop, queue_cascade_finishes_before_remove_returns) {
   ccol_retval_t remove_rv = ccol_invalid_args;
   uint64_t finished_at_return = finished_before;
   if (registered) {
-    remove_rv = ccol_event_loop_remove(loop, reg);
-    _ccol_event_loop_test_queue_cascade_counts(NULL, &finished_at_return);
+    remove_rv = ceventloop_remove(loop, reg);
+    _ceventloop_test_queue_cascade_counts(NULL, &finished_at_return);
   }
 
   /* The documented retirement pattern, exercised for real: we wait for
    * nothing else between the removal and this destroy. */
-  if (queue_created) ccol_circular_queue_destroy(cq);
+  if (queue_created) ccircq_destroy(cq);
 
   /* Unconditional and before any assertion, so an unconsumed delay can
    * never leak into a later test. */
-  _ccol_event_loop_test_delay_next_queue_cascade_us(0);
+  _ceventloop_test_delay_next_queue_cascade_us(0);
   evl_sync_ctx_destroy(&ctx);
 
   REQUIRE_TRUE(queue_created);
@@ -10516,19 +10344,18 @@ TEST(ccol_event_loop, queue_cascade_finishes_before_remove_returns) {
  * bounded retry and this count keeps moving. The count has to be non-zero
  * already, so a poller that simply hasn't started yet is never mistaken for
  * a parked one. */
-static bool evl_wait_until_poller_parked(ccol_event_loop loop, int timeout_ms) {
-  uint64_t prev = _ccol_event_loop_poller_iterations_for_tests(loop);
+static bool evl_wait_until_poller_parked(ceventloop loop, int timeout_ms) {
+  uint64_t prev = _ceventloop_poller_iterations_for_tests(loop);
   for (int waited = 0; waited < timeout_ms; waited += 150) {
     evl_sleep_ms(150);
-    uint64_t now = _ccol_event_loop_poller_iterations_for_tests(loop);
+    uint64_t now = _ceventloop_poller_iterations_for_tests(loop);
     if (now > 0 && now == prev) return true;
     prev = now;
   }
   return false;
 }
 
-TEST(ccol_event_loop,
-     idle_loop_reclaims_removed_registrations_without_handlers) {
+TEST(ceventloop, idle_loop_reclaims_removed_registrations_without_handlers) {
   /* The library closes the bridge eventfd of a removed registration only
    * when it finally reclaims that deferred registration, and only the poller
    * thread ever reclaims one. Neither epoll_ctl(EPOLL_CTL_DEL) nor
@@ -10551,8 +10378,8 @@ TEST(ccol_event_loop,
    * on_removed handler, the descriptor count would stay CYCLES above its
    * baseline and the test would fail. */
   enum { CYCLES = 8 };
-  ccol_event_loop_construct_scoped(loop, 8, 4, 1);
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ceventloop_construct_scoped(loop, 8, 4, 1);
+  ccircq *cq = ccircq_create(4, NULL);
   bool queue_created = (cq != NULL);
 
   evl_sync_ctx ctx;
@@ -10560,28 +10387,27 @@ TEST(ccol_event_loop,
 
   /* One real dispatch first, only to prove that the poller thread runs and
    * has completed at least one epoll_wait. */
-  ccol_event_handlers_t warm_handlers = {.on_readable = evl_on_readable,
+  ceventloop_handlers_t warm_handlers = {.on_readable = evl_on_readable,
                                          .on_writable = NULL,
                                          .on_error = NULL,
                                          .on_removed = NULL};
   char *err = NULL;
-  ccol_event_reg warm = CCOL_EVENT_REG_NULL;
+  ceventloop_reg warm = CEVENTLOOP_REG_NULL;
   if (queue_created)
-    warm = ccol_event_loop_add(loop,
-                               ccol_selectable_from_circq(cq, ccol_select_read),
-                               warm_handlers, &ctx, &err);
+    warm = ceventloop_add(loop, ccircq_selectable(cq, cselect_read),
+                          warm_handlers, &ctx, &err);
   bool warmed = false, warm_removed = false;
-  if (warm != CCOL_EVENT_REG_NULL) {
+  if (warm != CEVENTLOOP_REG_NULL) {
     char *payload = (char *)malloc(4);
     if (payload) {
       memcpy(payload, "abc", 4);
-      c_message_t msg = {.data = payload, .size = 4};
-      if (ccol_circq_send_zc(cq, &msg) == ccol_success)
+      cmessage_t msg = {.data = payload, .size = 4};
+      if (ccircq_send(cq, &msg) == ccol_success)
         warmed = evl_wait_for(&ctx, &ctx.readable_count, 1, 5000);
       else
         free(payload);
     }
-    warm_removed = (ccol_event_loop_remove(loop, warm) == ccol_success);
+    warm_removed = (ceventloop_remove(loop, warm) == ccol_success);
   }
 
   bool parked =
@@ -10592,22 +10418,20 @@ TEST(ccol_event_loop,
    * close again. */
   size_t baseline = evl_count_open_fds();
 
-  ccol_event_handlers_t handlers = {.on_readable = NULL,
+  ceventloop_handlers_t handlers = {.on_readable = NULL,
                                     .on_writable = NULL,
                                     .on_error = NULL,
                                     .on_removed = NULL};
   bool all_cycles_ok = parked;
   for (int i = 0; i < CYCLES && all_cycles_ok; i++) {
     char *cycle_err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, NULL,
-        &cycle_err);
-    if (reg == CCOL_EVENT_REG_NULL) {
+    ceventloop_reg reg = ceventloop_add(
+        loop, ccircq_selectable(cq, cselect_read), handlers, NULL, &cycle_err);
+    if (reg == CEVENTLOOP_REG_NULL) {
       all_cycles_ok = false;
       break;
     }
-    if (ccol_event_loop_remove(loop, reg) != ccol_success)
-      all_cycles_ok = false;
+    if (ceventloop_remove(loop, reg) != ccol_success) all_cycles_ok = false;
   }
 
   /* A bounded loop. A correct reclaim happens within one poller wakeup, so
@@ -10625,12 +10449,12 @@ TEST(ccol_event_loop,
     evl_sleep_ms(1);
   }
 
-  size_t reg_count = ccol_event_loop_reg_count(loop);
-  if (queue_created) ccol_circular_queue_destroy(cq);
+  size_t reg_count = ceventloop_reg_count(loop);
+  if (queue_created) ccircq_destroy(cq);
   evl_sync_ctx_destroy(&ctx);
 
   REQUIRE_TRUE(queue_created);
-  REQUIRE_NE(warm, CCOL_EVENT_REG_NULL);
+  REQUIRE_NE(warm, CEVENTLOOP_REG_NULL);
   REQUIRE_TRUE(warmed);
   REQUIRE_TRUE(warm_removed);
   REQUIRE_TRUE(parked);
@@ -10640,15 +10464,14 @@ TEST(ccol_event_loop,
   REQUIRE_LE(observed, baseline);
 }
 
-TEST(ccol_event_loop,
-     on_removed_fires_on_destroy_for_a_live_queue_registration) {
+TEST(ceventloop, on_removed_fires_on_destroy_for_a_live_queue_registration) {
   /* The teardown walk for a queue-backed registration that is still
    * registered frees that registration and the event entry it owns. The
    * registration is what names the entry, and whether on_removed fires
    * depends on freeing that registration, so the code needs to read both
    * before it releases either one. This test pins that on_removed reaches a
    * queue-backed registration torn down this way. */
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
   bool queue_created = (cq != NULL);
 
   evl_slow_cb_ctx read_ctx, write_ctx;
@@ -10657,20 +10480,18 @@ TEST(ccol_event_loop,
 
   bool read_registered = false, write_registered = false;
   if (queue_created) {
-    ccol_event_loop_construct_scoped(loop, 8, 4, 1);
-    ccol_event_handlers_t handlers = {.on_readable = NULL,
+    ceventloop_construct_scoped(loop, 8, 4, 1);
+    ceventloop_handlers_t handlers = {.on_readable = NULL,
                                       .on_writable = NULL,
                                       .on_error = NULL,
                                       .on_removed = evl_on_removed_slow};
     char *err = NULL;
     read_registered =
-        (ccol_event_loop_add(loop,
-                             ccol_selectable_from_circq(cq, ccol_select_read),
-                             handlers, &read_ctx, &err) != CCOL_EVENT_REG_NULL);
+        (ceventloop_add(loop, ccircq_selectable(cq, cselect_read), handlers,
+                        &read_ctx, &err) != CEVENTLOOP_REG_NULL);
     write_registered =
-        (ccol_event_loop_add(
-             loop, ccol_selectable_from_circq(cq, ccol_select_write), handlers,
-             &write_ctx, &err) != CCOL_EVENT_REG_NULL);
+        (ceventloop_add(loop, ccircq_selectable(cq, cselect_write), handlers,
+                        &write_ctx, &err) != CEVENTLOOP_REG_NULL);
     /* Nothing ever removes these two. The destructor of the scoped loop, at
      * the closing brace of this block, tears both of them down while they
      * are registered. */
@@ -10687,7 +10508,7 @@ TEST(ccol_event_loop,
 
   /* This is safe here because the teardown walk unlinked both waiter nodes
    * from the queue. */
-  if (queue_created) ccol_circular_queue_destroy(cq);
+  if (queue_created) ccircq_destroy(cq);
   evl_slow_cb_ctx_destroy(&read_ctx);
   evl_slow_cb_ctx_destroy(&write_ctx);
 
@@ -10700,7 +10521,7 @@ TEST(ccol_event_loop,
   REQUIRE_EQ(write_arg_seen, (void *)&write_ctx);
 }
 
-TEST(ccol_event_loop, a_free_list_push_failure_does_not_strand_a_reg_slot) {
+TEST(ceventloop, a_free_list_push_failure_does_not_strand_a_reg_slot) {
   /* The library releases a registration slot in two steps: it clears that
    * slot's entry and then pushes the slot's index back onto the loop's free
    * list. That push can fail to allocate, and then the library counts the
@@ -10722,47 +10543,43 @@ TEST(ccol_event_loop, a_free_list_push_failure_does_not_strand_a_reg_slot) {
   bool reusable = false;
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-    ccol_event_handlers_t handlers = {
+    ceventloop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
 
     /* One add and remove pair first to warm the free list, so `before`
      * counts a table that has already reached its steady size. */
     char *err = NULL;
-    ccol_event_reg warm = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
-    if (warm == CCOL_EVENT_REG_NULL) all_ok = false;
-    if (all_ok && ccol_event_loop_remove(loop, warm) != ccol_success)
-      all_ok = false;
+    ceventloop_reg warm = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+    if (warm == CEVENTLOOP_REG_NULL) all_ok = false;
+    if (all_ok && ceventloop_remove(loop, warm) != ccol_success) all_ok = false;
 
-    before = _ccol_event_loop_reg_slot_count_for_tests(loop);
+    before = _ceventloop_reg_slot_count_for_tests(loop);
 
     for (size_t i = 0; i < cycles && all_ok; i++) {
       err = NULL;
-      ccol_event_reg reg = ccol_event_loop_add(
-          loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers,
-          &ctx, &err);
-      if (reg == CCOL_EVENT_REG_NULL) {
+      ceventloop_reg reg = ceventloop_add(
+          loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+      if (reg == CEVENTLOOP_REG_NULL) {
         all_ok = false;
         break;
       }
-      _ccol_event_loop_force_next_reg_free_index_push_failure_for_tests();
-      if (ccol_event_loop_remove(loop, reg) != ccol_success) all_ok = false;
+      _ceventloop_force_next_reg_free_index_push_failure_for_tests();
+      if (ceventloop_remove(loop, reg) != ccol_success) all_ok = false;
     }
 
     /* This registration comes from a recovered index and it should work,
      * so a recovered slot with stale bookkeeping fails here. */
     err = NULL;
-    ccol_event_reg revived = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
-    reusable = (revived != CCOL_EVENT_REG_NULL) &&
-               (ccol_event_loop_reg_generation(loop, revived) > 0);
-    if (reusable && ccol_event_loop_remove(loop, revived) != ccol_success)
+    ceventloop_reg revived = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), handlers, &ctx, &err);
+    reusable = (revived != CEVENTLOOP_REG_NULL) &&
+               (ceventloop_reg_generation(loop, revived) > 0);
+    if (reusable && ceventloop_remove(loop, revived) != ccol_success)
       reusable = false;
 
-    after = _ccol_event_loop_reg_slot_count_for_tests(loop);
+    after = _ceventloop_reg_slot_count_for_tests(loop);
   }
 
   evl_sync_ctx_destroy(&ctx);
@@ -10787,27 +10604,27 @@ TEST(ccol_event_loop, a_free_list_push_failure_does_not_strand_a_reg_slot) {
  * reclaims it, and without that reclaim a process that creates and destroys
  * loops under memory pressure grows the table once per destroy.
  *
- * Take the reclaim branch out of _ccol_event_loop_handle_slot_acquire and
+ * Take the reclaim branch out of _ceventloop_handle_slot_acquire and
  * the final capacity goes past the tolerance below by the number of
  * iterations.
  */
-TEST(ccol_event_loop_slot_table,
+TEST(ceventloop_slot_table,
      a_lost_free_index_is_reclaimed_rather_than_growing) {
   {
-    ccol_event_loop warm = ccol_event_loop_create(8, 1, 1, NULL);
-    if (warm != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(warm);
+    ceventloop warm = ceventloop_create(8, 1, 1, NULL);
+    if (warm != CEVENTLOOP_NULL) ceventloop_destroy(warm);
   }
-  size_t before = _ccol_event_loop_slot_table_capacity_for_tests();
+  size_t before = _ceventloop_slot_table_capacity_for_tests();
 
   bool all_built = true;
   for (int i = 0; i < 4; i++) {
-    ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop == CCOL_EVENT_LOOP_NULL) {
+    ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+    if (loop == CEVENTLOOP_NULL) {
       all_built = false;
       continue;
     }
-    _ccol_event_loop_force_next_free_index_push_failure_for_tests();
-    ccol_event_loop_destroy(loop);
+    _ceventloop_force_next_free_index_push_failure_for_tests();
+    ceventloop_destroy(loop);
   }
 
   /* This loop comes from a reclaimed slot and must be usable, since
@@ -10815,14 +10632,14 @@ TEST(ccol_event_loop_slot_table,
      wrong object instead of failing at acquire time. */
   bool works = false;
   {
-    ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-    if (loop != CCOL_EVENT_LOOP_NULL) {
-      works = (ccol_event_loop_reg_count(loop) == (size_t)0);
-      ccol_event_loop_destroy(loop);
+    ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+    if (loop != CEVENTLOOP_NULL) {
+      works = (ceventloop_reg_count(loop) == (size_t)0);
+      ceventloop_destroy(loop);
     }
   }
 
-  size_t after = _ccol_event_loop_slot_table_capacity_for_tests();
+  size_t after = _ceventloop_slot_table_capacity_for_tests();
 
   REQUIRE_TRUE(all_built);
   REQUIRE_TRUE(works);
@@ -10855,17 +10672,17 @@ static void qdispatch_ctx_destroy(qdispatch_ctx *c) {
 /* This callback drains the queue's one message at once, so the queue is
  * really empty by the time the test's destroy runs. Then it holds the queue
  * for a long, precisely controlled window and touches it one last time
- * after that window. That last ccol_circq_try_recv_zc is the read that lands
+ * after that window. That last ccircq_try_recv is the read that lands
  * on freed memory if a destroy can complete while this callback is still in
  * flight. */
-static void qdispatch_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                  ccol_selectable *sel, void *arg) {
+static void qdispatch_on_readable(ceventloop loop, ceventloop_reg reg,
+                                  cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   qdispatch_ctx *c = (qdispatch_ctx *)arg;
 
-  c_message_t msg = {.data = NULL, .size = 0};
-  if (ccol_circq_try_recv_zc(sel->cq, &msg) == ccol_success) free(msg.data);
+  cmessage_t msg = {.data = NULL, .size = 0};
+  if (ccircq_try_recv(sel->cq, &msg) == ccol_success) free(msg.data);
 
   pthread_mutex_lock(&c->mtx);
   c->callback_entered = true;
@@ -10875,8 +10692,8 @@ static void qdispatch_on_readable(ccol_event_loop loop, ccol_event_reg reg,
   struct timespec hold = {.tv_sec = 0, .tv_nsec = 400000000L};
   nanosleep(&hold, NULL);
 
-  c_message_t again = {.data = NULL, .size = 0};
-  if (ccol_circq_try_recv_zc(sel->cq, &again) == ccol_success) free(again.data);
+  cmessage_t again = {.data = NULL, .size = 0};
+  if (ccircq_try_recv(sel->cq, &again) == ccol_success) free(again.data);
 
   pthread_mutex_lock(&c->mtx);
   c->callback_done_with_queue = true;
@@ -10885,8 +10702,8 @@ static void qdispatch_on_readable(ccol_event_loop loop, ccol_event_reg reg,
 }
 
 /* This test pins the documented teardown sequence (drain the queue, call
- * ccol_event_loop_remove, then destroy) as really safe, beyond documented.
- * ccol_event_loop_remove unlinks the registration's waiter node
+ * ceventloop_remove, then destroy) as really safe, beyond documented.
+ * ceventloop_remove unlinks the registration's waiter node
  * and returns without waiting for a callback the reactor already collected,
  * so the queue looks unwatched the moment that call returns while the
  * callback holds the queue through its own snapshot. The destroy has to wait
@@ -10899,11 +10716,11 @@ static void qdispatch_on_readable(ccol_event_loop loop, ccol_event_reg reg,
  * inside a 400 ms hold it entered before anyone called the destroy. Without
  * the wait the same run is a use-after-free too, which the callback commits
  * a moment later and which AddressSanitizer and valgrind both report. */
-TEST(ccol_event_loop, queue_destroy_waits_for_an_already_collected_dispatch) {
+TEST(ceventloop, queue_destroy_waits_for_an_already_collected_dispatch) {
   qdispatch_ctx ctx;
   qdispatch_ctx_init(&ctx);
 
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(4, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(4, NULL, NULL);
   bool created = (cq != NULL);
   bool registered = false;
   bool sent = false;
@@ -10911,29 +10728,28 @@ TEST(ccol_event_loop, queue_destroy_waits_for_an_already_collected_dispatch) {
   bool done_when_destroy_returned = false;
 
   if (created) {
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_construct_scoped(loop, 8, 1, 1);
 
-    ccol_event_handlers_t handlers = {.on_readable = qdispatch_on_readable,
+    ceventloop_handlers_t handlers = {.on_readable = qdispatch_on_readable,
                                       .on_writable = NULL,
                                       .on_error = NULL};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(cq, ccol_select_read), handlers, &ctx,
-        &err);
-    registered = (reg != CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, ccircq_selectable(cq, cselect_read), handlers, &ctx, &err);
+    registered = (reg != CEVENTLOOP_REG_NULL);
 
     if (registered) {
-      c_message_t m = {.data = malloc(4), .size = 4};
+      cmessage_t m = {.data = malloc(4), .size = 4};
       assert(m.data != NULL);
       memcpy(m.data, "abc", 4);
-      sent = (ccol_circq_send_zc(cq, &m) == ccol_success);
+      sent = (ccircq_send(cq, &m) == ccol_success);
       if (!sent) free(m.data);
 
       entered = evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.callback_entered, 5000);
-      ccol_event_loop_remove(loop, reg);
+      ceventloop_remove(loop, reg);
     }
 
-    ccol_circular_queue_destroy(cq);
+    ccircq_destroy(cq);
 
     pthread_mutex_lock(&ctx.mtx);
     done_when_destroy_returned = ctx.callback_done_with_queue;
@@ -10953,11 +10769,11 @@ TEST(ccol_event_loop, queue_destroy_waits_for_an_already_collected_dispatch) {
 }
 
 /* ==========================================================================
- * A ccol_select() waiter that gives up its wait must not swallow the wake
+ * A cselect() waiter that gives up its wait must not swallow the wake
  * ========================================================================== */
 
 typedef struct sel_forward_ctx {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   int timeout_ms;
   ccol_retval_t rv;
   size_t ready_index;
@@ -10965,11 +10781,10 @@ typedef struct sel_forward_ctx {
 
 static void *sel_forward_waiter_thread(void *arg) {
   sel_forward_ctx *c = (sel_forward_ctx *)arg;
-  ccol_selectable sels[1] = {
-      ccol_selectable_from_circq(c->cq, ccol_select_read)};
+  cselectable_t sels[1] = {ccircq_selectable(c->cq, cselect_read)};
   c->ready_index = (size_t)-1;
-  c->rv = ccol_select_timed(&c->ready_index, 1, sels,
-                            (uint64_t)c->timeout_ms * 1000u);
+  c->rv =
+      cselect_timed(&c->ready_index, 1, sels, (uint64_t)c->timeout_ms * 1000u);
   return NULL;
 }
 
@@ -10986,21 +10801,21 @@ static bool sel_forward_poll_until(bool (*pred)(void *), void *arg,
 }
 
 typedef struct sel_forward_count_arg {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   size_t target;
 } sel_forward_count_arg;
 
 static bool sel_forward_waiters_reached(void *arg) {
   sel_forward_count_arg *a = (sel_forward_count_arg *)arg;
-  return _ccol_circq_test_sel_read_waiter_count_for_tests(a->cq) >= a->target;
+  return _ccircq_test_sel_read_waiter_count_for_tests(a->cq) >= a->target;
 }
 
 static bool sel_forward_delay_entered(void *arg) {
   (void)arg;
-  return _ccol_select_test_timed_out_deregister_delay_count() > 0;
+  return _cselect_test_timed_out_deregister_delay_count() > 0;
 }
 
-/* A producer wakes exactly one ccol_select() waiter per message, and that
+/* A producer wakes exactly one cselect() waiter per message, and that
  * waiter may already have given up because its deadline elapsed, so the
  * notification reaches a thread that never acts on it. The waiter that
  * leaves has to forward it, otherwise a sibling waiter stays parked with a
@@ -11012,13 +10827,13 @@ static bool sel_forward_delay_entered(void *arg) {
  * single notify (a fresh rotation starts at the head). Second, the head
  * waiter's deadline elapses first and the window between that and its
  * deregistration is held open through
- * _ccol_select_test_delay_next_timed_out_deregister_us, so the producer
+ * _cselect_test_delay_next_timed_out_deregister_us, so the producer
  * makes the message squarely inside that window and not by luck.
  *
  * Without the forward nothing ever wakes the second waiter, and it returns
  * ccol_timed_out on its own much later deadline instead of ccol_success. */
-TEST(ccol_select, a_waiter_that_abandons_its_wait_forwards_the_wake) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(4, NULL, NULL);
+TEST(cselect, a_waiter_that_abandons_its_wait_forwards_the_wake) {
+  ccircq *cq = ccircq_create_mp(4, NULL, NULL);
   bool created = (cq != NULL);
   if (!created) {
     REQUIRE_TRUE(created);
@@ -11054,7 +10869,7 @@ TEST(ccol_select, a_waiter_that_abandons_its_wait_forwards_the_wake) {
   if (parked_linked) {
     /* We arm this before the second waiter starts, because that waiter is
      * the only call that can reach its own deadline while it's armed. */
-    _ccol_select_test_delay_next_timed_out_deregister_us(1000000u);
+    _cselect_test_delay_next_timed_out_deregister_us(1000000u);
     abandoning_started =
         (pthread_create(&abandoning_tid, NULL, sel_forward_waiter_thread,
                         &abandoning_waiter) == 0);
@@ -11068,10 +10883,10 @@ TEST(ccol_select, a_waiter_that_abandons_its_wait_forwards_the_wake) {
   }
 
   if (delay_entered) {
-    c_message_t m = {.data = malloc(4), .size = 4};
+    cmessage_t m = {.data = malloc(4), .size = 4};
     assert(m.data != NULL);
     memcpy(m.data, "abc", 4);
-    sent = (ccol_circq_send_zc(cq, &m) == ccol_success);
+    sent = (ccircq_send(cq, &m) == ccol_success);
     if (!sent) free(m.data);
   }
 
@@ -11080,14 +10895,14 @@ TEST(ccol_select, a_waiter_that_abandons_its_wait_forwards_the_wake) {
    * test. */
   if (abandoning_started) pthread_join(abandoning_tid, NULL);
   if (parked_started) pthread_join(parked_tid, NULL);
-  _ccol_select_test_delay_next_timed_out_deregister_us(0u);
+  _cselect_test_delay_next_timed_out_deregister_us(0u);
 
-  c_message_t drained = {.data = NULL, .size = 0};
-  while (ccol_circq_try_recv_zc(cq, &drained) == ccol_success) {
+  cmessage_t drained = {.data = NULL, .size = 0};
+  while (ccircq_try_recv(cq, &drained) == ccol_success) {
     free(drained.data);
-    drained = (c_message_t){.data = NULL, .size = 0};
+    drained = (cmessage_t){.data = NULL, .size = 0};
   }
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
 
   REQUIRE_TRUE(parked_started);
   REQUIRE_TRUE(abandoning_started);
@@ -11116,7 +10931,7 @@ TEST(ccol_select, a_waiter_that_abandons_its_wait_forwards_the_wake) {
  * below would time out. Every epoll_wait also reports the same event again
  * for as long as nothing dispatches it, which the write-direction test below
  * measures directly. */
-TEST(ccol_event_loop,
+TEST(ceventloop,
      fd_error_only_read_registration_fires_on_peer_shutdown_single_thread) {
   int sv[2];
   int pair_rv = socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
@@ -11131,18 +10946,17 @@ TEST(ccol_event_loop,
   bool fired = false;
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-    ccol_event_handlers_t handlers = {
+    ceventloop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_handlers_t handlers = {
         .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), handlers, &ctx,
-        &err);
-    registered = (reg != CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), handlers, &ctx, &err);
+    registered = (reg != CEVENTLOOP_REG_NULL);
     if (registered) {
       shutdown(sv[1], SHUT_WR);
       fired = evl_wait_for(&ctx, &ctx.error_count, 1, 3000);
-      ccol_event_loop_remove(loop, reg);
+      ceventloop_remove(loop, reg);
     }
     /* Leaving the block joins the reactor thread, so ctx is quiet below. */
   }
@@ -11155,9 +10969,9 @@ TEST(ccol_event_loop,
   REQUIRE_TRUE(fired);
 }
 
-/* _ccol_event_loop_poller_collect has its own copy of the dispatch
+/* _ceventloop_poller_collect has its own copy of the dispatch
  * classification, and this is the same case run against that copy. */
-TEST(ccol_event_loop,
+TEST(ceventloop,
      fd_error_only_read_registration_fires_on_peer_shutdown_multi_thread) {
   int sv[2];
   int pair_rv = socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
@@ -11172,18 +10986,17 @@ TEST(ccol_event_loop,
   bool fired = false;
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 4, 3);
-    ccol_event_handlers_t handlers = {
+    ceventloop_construct_scoped(loop, 8, 4, 3);
+    ceventloop_handlers_t handlers = {
         .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), handlers, &ctx,
-        &err);
-    registered = (reg != CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), handlers, &ctx, &err);
+    registered = (reg != CEVENTLOOP_REG_NULL);
     if (registered) {
       shutdown(sv[1], SHUT_WR);
       fired = evl_wait_for(&ctx, &ctx.error_count, 1, 3000);
-      ccol_event_loop_remove(loop, reg);
+      ceventloop_remove(loop, reg);
     }
   }
 
@@ -11203,14 +11016,13 @@ TEST(ccol_event_loop,
  * thread, so the spin starves every other registration on it too, and no
  * action from a peer is needed to trigger it.
  *
- * We measure with _ccol_event_loop_poller_iterations_for_tests, a direct
+ * We measure with _ceventloop_poller_iterations_for_tests, a direct
  * count of completed epoll_wait calls, the same way the pause tests above
  * measure their own spin. Arm EPOLLOUT for a registration with no writer
  * and the delta below reaches the hundreds of thousands. on_error should
  * stay silent as well, because nothing is actually wrong with this
  * socket. */
-TEST(ccol_event_loop,
-     fd_error_only_write_registration_does_not_spin_single_thread) {
+TEST(ceventloop, fd_error_only_write_registration_does_not_spin_single_thread) {
   int sv[2];
   int pair_rv = socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
   if (pair_rv != 0) {
@@ -11225,23 +11037,22 @@ TEST(ccol_event_loop,
   int errors_seen = 0;
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 1, 1);
-    ccol_event_handlers_t handlers = {
+    ceventloop_construct_scoped(loop, 8, 1, 1);
+    ceventloop_handlers_t handlers = {
         .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), handlers, &ctx,
-        &err);
-    registered = (reg != CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), handlers, &ctx, &err);
+    registered = (reg != CEVENTLOOP_REG_NULL);
     if (registered) {
       /* Gives a runaway loop a real chance to start before the first sample,
        * and then the test measures the delta across another wide
        * window. */
       usleep(50000);
-      uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
+      uint64_t before = _ceventloop_poller_iterations_for_tests(loop);
       usleep(150000);
-      iterations = _ccol_event_loop_poller_iterations_for_tests(loop) - before;
-      ccol_event_loop_remove(loop, reg);
+      iterations = _ceventloop_poller_iterations_for_tests(loop) - before;
+      ceventloop_remove(loop, reg);
     }
   }
 
@@ -11262,8 +11073,7 @@ TEST(ccol_event_loop,
  * single-thread loop, and the same counter, the number of completed
  * epoll_wait calls on the one and only poller thread, catches it the same
  * way. */
-TEST(ccol_event_loop,
-     fd_error_only_write_registration_does_not_spin_multi_thread) {
+TEST(ceventloop, fd_error_only_write_registration_does_not_spin_multi_thread) {
   int sv[2];
   int pair_rv = socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
   if (pair_rv != 0) {
@@ -11278,20 +11088,19 @@ TEST(ccol_event_loop,
   int errors_seen = 0;
 
   {
-    ccol_event_loop_construct_scoped(loop, 8, 4, 3);
-    ccol_event_handlers_t handlers = {
+    ceventloop_construct_scoped(loop, 8, 4, 3);
+    ceventloop_handlers_t handlers = {
         .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
     char *err = NULL;
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), handlers, &ctx,
-        &err);
-    registered = (reg != CCOL_EVENT_REG_NULL);
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), handlers, &ctx, &err);
+    registered = (reg != CEVENTLOOP_REG_NULL);
     if (registered) {
       usleep(50000);
-      uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
+      uint64_t before = _ceventloop_poller_iterations_for_tests(loop);
       usleep(150000);
-      iterations = _ccol_event_loop_poller_iterations_for_tests(loop) - before;
-      ccol_event_loop_remove(loop, reg);
+      iterations = _ceventloop_poller_iterations_for_tests(loop) - before;
+      ceventloop_remove(loop, reg);
     }
   }
 
@@ -11312,8 +11121,8 @@ TEST(ccol_event_loop,
  * ========================================================================== */
 
 typedef struct timed_clock_ctx {
-  ccol_circular_queue *cq;
-  ccol_dynamic_queue *dq;
+  ccircq *cq;
+  cdynmq *dq;
   pthread_mutex_t mtx;
   pthread_cond_t cond;
   bool returned;
@@ -11354,8 +11163,8 @@ static void *timed_clock_circq_recv_thread(void *arg) {
   struct timespec started;
   clock_gettime(CLOCK_MONOTONIC, &started);
   uint64_t timeout = 100000;
-  c_message_t m = {.data = NULL, .size = 0};
-  ccol_retval_t rv = ccol_circq_timed_recv_zc(c->cq, &m, timeout);
+  cmessage_t m = {.data = NULL, .size = 0};
+  ccol_retval_t rv = ccircq_timed_recv(c->cq, &m, timeout);
   if (rv == ccol_success) free(m.data);
   timed_clock_ctx_finish(c, rv, &started);
   return NULL;
@@ -11366,10 +11175,10 @@ static void *timed_clock_circq_send_thread(void *arg) {
   struct timespec started;
   clock_gettime(CLOCK_MONOTONIC, &started);
   uint64_t timeout = 100000;
-  c_message_t m = {.data = malloc(4), .size = 4};
+  cmessage_t m = {.data = malloc(4), .size = 4};
   assert(m.data != NULL);
   memcpy(m.data, "abc", 4);
-  ccol_retval_t rv = ccol_circq_timed_send_zc(c->cq, &m, timeout);
+  ccol_retval_t rv = ccircq_timed_send(c->cq, &m, timeout);
   if (rv != ccol_success) free(m.data);
   timed_clock_ctx_finish(c, rv, &started);
   return NULL;
@@ -11380,8 +11189,8 @@ static void *timed_clock_dynmq_recv_thread(void *arg) {
   struct timespec started;
   clock_gettime(CLOCK_MONOTONIC, &started);
   uint64_t timeout = 100000;
-  c_message_t m = {.data = NULL, .size = 0};
-  ccol_retval_t rv = ccol_dynmq_timed_recv_zc(c->dq, &m, timeout);
+  cmessage_t m = {.data = NULL, .size = 0};
+  ccol_retval_t rv = cdynmq_timed_recv(c->dq, &m, timeout);
   if (rv == ccol_success) free(m.data);
   timed_clock_ctx_finish(c, rv, &started);
   return NULL;
@@ -11404,7 +11213,7 @@ static void *timed_clock_dynmq_recv_thread(void *arg) {
 TEST(circular_queues, timed_recv_deadline_matches_its_condition_variable) {
   timed_clock_ctx ctx;
   timed_clock_ctx_init(&ctx);
-  ctx.cq = ccol_circular_queue_create_mp(2, NULL, NULL);
+  ctx.cq = ccircq_create_mp(2, NULL, NULL);
   bool created = (ctx.cq != NULL);
   bool started = false;
   bool returned = false;
@@ -11421,10 +11230,10 @@ TEST(circular_queues, timed_recv_deadline_matches_its_condition_variable) {
     if (!returned) {
       /* Releases a thread that's blocked on a deadline it can never reach,
        * so the test can still join it below. */
-      c_message_t m = {.data = malloc(4), .size = 4};
+      cmessage_t m = {.data = malloc(4), .size = 4};
       assert(m.data != NULL);
       memcpy(m.data, "abc", 4);
-      if (ccol_circq_send_zc(ctx.cq, &m) != ccol_success) free(m.data);
+      if (ccircq_send(ctx.cq, &m) != ccol_success) free(m.data);
     }
     pthread_join(tid, NULL);
     pthread_mutex_lock(&ctx.mtx);
@@ -11434,12 +11243,12 @@ TEST(circular_queues, timed_recv_deadline_matches_its_condition_variable) {
   }
 
   if (created) {
-    c_message_t drained = {.data = NULL, .size = 0};
-    while (ccol_circq_try_recv_zc(ctx.cq, &drained) == ccol_success) {
+    cmessage_t drained = {.data = NULL, .size = 0};
+    while (ccircq_try_recv(ctx.cq, &drained) == ccol_success) {
       free(drained.data);
-      drained = (c_message_t){.data = NULL, .size = 0};
+      drained = (cmessage_t){.data = NULL, .size = 0};
     }
-    ccol_circular_queue_destroy(ctx.cq);
+    ccircq_destroy(ctx.cq);
   }
   timed_clock_ctx_destroy(&ctx);
 
@@ -11454,7 +11263,7 @@ TEST(circular_queues, timed_recv_deadline_matches_its_condition_variable) {
 TEST(circular_queues, timed_send_deadline_matches_its_condition_variable) {
   timed_clock_ctx ctx;
   timed_clock_ctx_init(&ctx);
-  ctx.cq = ccol_circular_queue_create_mp(1, NULL, NULL);
+  ctx.cq = ccircq_create_mp(1, NULL, NULL);
   bool created = (ctx.cq != NULL);
   bool filled = false;
   bool started = false;
@@ -11463,10 +11272,10 @@ TEST(circular_queues, timed_send_deadline_matches_its_condition_variable) {
   long long elapsed_us = 0;
 
   if (created) {
-    c_message_t fill = {.data = malloc(4), .size = 4};
+    cmessage_t fill = {.data = malloc(4), .size = 4};
     assert(fill.data != NULL);
     memcpy(fill.data, "abc", 4);
-    filled = (ccol_circq_send_zc(ctx.cq, &fill) == ccol_success);
+    filled = (ccircq_send(ctx.cq, &fill) == ccol_success);
     if (!filled) free(fill.data);
   }
 
@@ -11480,8 +11289,8 @@ TEST(circular_queues, timed_send_deadline_matches_its_condition_variable) {
     if (!returned) {
       /* A thread is blocked on a deadline it can never reach. This frees
        * the slot it waits for, so the test can still join it below. */
-      c_message_t m = {.data = NULL, .size = 0};
-      if (ccol_circq_try_recv_zc(ctx.cq, &m) == ccol_success) free(m.data);
+      cmessage_t m = {.data = NULL, .size = 0};
+      if (ccircq_try_recv(ctx.cq, &m) == ccol_success) free(m.data);
     }
     pthread_join(tid, NULL);
     pthread_mutex_lock(&ctx.mtx);
@@ -11491,12 +11300,12 @@ TEST(circular_queues, timed_send_deadline_matches_its_condition_variable) {
   }
 
   if (created) {
-    c_message_t drained = {.data = NULL, .size = 0};
-    while (ccol_circq_try_recv_zc(ctx.cq, &drained) == ccol_success) {
+    cmessage_t drained = {.data = NULL, .size = 0};
+    while (ccircq_try_recv(ctx.cq, &drained) == ccol_success) {
       free(drained.data);
-      drained = (c_message_t){.data = NULL, .size = 0};
+      drained = (cmessage_t){.data = NULL, .size = 0};
     }
-    ccol_circular_queue_destroy(ctx.cq);
+    ccircq_destroy(ctx.cq);
   }
   timed_clock_ctx_destroy(&ctx);
 
@@ -11513,7 +11322,7 @@ TEST(circular_queues, timed_send_deadline_matches_its_condition_variable) {
 TEST(dynamic_queues, timed_recv_deadline_matches_its_condition_variable) {
   timed_clock_ctx ctx;
   timed_clock_ctx_init(&ctx);
-  ctx.dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+  ctx.dq = cdynmq_create_mp(NULL, NULL);
   bool created = (ctx.dq != NULL);
   bool started = false;
   bool returned = false;
@@ -11528,10 +11337,10 @@ TEST(dynamic_queues, timed_recv_deadline_matches_its_condition_variable) {
   if (started) {
     returned = evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.returned, 5000);
     if (!returned) {
-      c_message_t m = {.data = malloc(4), .size = 4};
+      cmessage_t m = {.data = malloc(4), .size = 4};
       assert(m.data != NULL);
       memcpy(m.data, "abc", 4);
-      if (ccol_dynmq_send_zc(ctx.dq, &m) != ccol_success) free(m.data);
+      if (cdynmq_send(ctx.dq, &m) != ccol_success) free(m.data);
     }
     pthread_join(tid, NULL);
     pthread_mutex_lock(&ctx.mtx);
@@ -11541,12 +11350,12 @@ TEST(dynamic_queues, timed_recv_deadline_matches_its_condition_variable) {
   }
 
   if (created) {
-    c_message_t drained = {.data = NULL, .size = 0};
-    while (ccol_dynmq_try_recv_zc(ctx.dq, &drained) == ccol_success) {
+    cmessage_t drained = {.data = NULL, .size = 0};
+    while (cdynmq_try_recv(ctx.dq, &drained) == ccol_success) {
       free(drained.data);
-      drained = (c_message_t){.data = NULL, .size = 0};
+      drained = (cmessage_t){.data = NULL, .size = 0};
     }
-    ccol_dynamic_queue_destroy(ctx.dq);
+    cdynmq_destroy(ctx.dq);
   }
   timed_clock_ctx_destroy(&ctx);
 
@@ -11565,14 +11374,14 @@ TEST(dynamic_queues, timed_recv_deadline_matches_its_condition_variable) {
 enum { XQD_CIRCQ = 0, XQD_DYNQ = 1, XQD_CHAN = 2 };
 
 typedef struct xqd_slot {
-  ccol_event_loop loop;
+  ceventloop loop;
   int kind;
-  ccol_circular_queue *trigger;
-  ccol_circular_queue *victim_cq;
-  ccol_dynamic_queue *victim_dq;
-  ccol_channel *victim_ch;
-  ccol_selectable victim_sel;
-  ccol_event_reg victim_reg;
+  ccircq *trigger;
+  ccircq *victim_cq;
+  cdynmq *victim_dq;
+  cchan *victim_ch;
+  cselectable_t victim_sel;
+  ceventloop_reg victim_reg;
   bool victim_destroyed;
   _Atomic int *entered;
   _Atomic int *done;
@@ -11589,36 +11398,36 @@ static void xqd_nap(void) {
 }
 
 static void xqd_drain_victim(xqd_slot *s) {
-  c_message_t m = {.data = NULL, .size = 0};
+  cmessage_t m = {.data = NULL, .size = 0};
   if (s->kind == XQD_DYNQ) {
-    while (ccol_dynmq_try_recv_zc(s->victim_dq, &m) == ccol_success) {
+    while (cdynmq_try_recv(s->victim_dq, &m) == ccol_success) {
       free(m.data);
-      m = (c_message_t){.data = NULL, .size = 0};
+      m = (cmessage_t){.data = NULL, .size = 0};
     }
     return;
   }
   /* A circular queue, or the circular queue that the channel selectable
    * resolved to. The channel's other direction stays empty the whole time. */
-  while (ccol_circq_try_recv_zc(s->victim_sel.cq, &m) == ccol_success) {
+  while (ccircq_try_recv(s->victim_sel.cq, &m) == ccol_success) {
     free(m.data);
-    m = (c_message_t){.data = NULL, .size = 0};
+    m = (cmessage_t){.data = NULL, .size = 0};
   }
 }
 
 static void xqd_destroy_victim(xqd_slot *s) {
   if (s->kind == XQD_CIRCQ) {
-    ccol_circular_queue_destroy(s->victim_cq);
+    ccircq_destroy(s->victim_cq);
   } else if (s->kind == XQD_DYNQ) {
-    ccol_dynamic_queue_destroy(s->victim_dq);
+    cdynmq_destroy(s->victim_dq);
   } else {
-    ccol_channel_destroy(s->victim_ch);
+    cchan_destroy(s->victim_ch);
   }
 }
 
 /* The victim's own callback never needs to do anything. Its dispatch only
  * has to be collected and sit behind the workers that tear it down. */
-static void xqd_victim_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                   ccol_selectable *sel, void *arg) {
+static void xqd_victim_on_readable(ceventloop loop, ceventloop_reg reg,
+                                   cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)sel;
@@ -11629,13 +11438,13 @@ static void xqd_victim_on_readable(ccol_event_loop loop, ccol_event_reg reg,
  * trigger callback AND a dispatch for every victim is queued behind them,
  * and then runs the documented teardown of its victim: remove, drain and
  * destroy. */
-static void xqd_trigger_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                    ccol_selectable *sel, void *arg) {
+static void xqd_trigger_on_readable(ceventloop loop, ceventloop_reg reg,
+                                    cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   xqd_slot *s = (xqd_slot *)arg;
-  c_message_t m = {.data = NULL, .size = 0};
-  if (ccol_circq_try_recv_zc(sel->cq, &m) == ccol_success) free(m.data);
+  cmessage_t m = {.data = NULL, .size = 0};
+  if (ccircq_try_recv(sel->cq, &m) == ccol_success) free(m.data);
 
   atomic_fetch_add(s->entered, 1);
   for (int waited_ms = 0; !atomic_load(s->gate); waited_ms++) {
@@ -11646,19 +11455,18 @@ static void xqd_trigger_on_readable(ccol_event_loop loop, ccol_event_reg reg,
     xqd_nap();
   }
 
-  ccol_event_loop_remove(s->loop, s->victim_reg);
+  ceventloop_remove(s->loop, s->victim_reg);
   xqd_drain_victim(s);
   xqd_destroy_victim(s);
   s->victim_destroyed = true;
   atomic_fetch_add(s->done, 1);
 }
 
-static bool xqd_send_one(ccol_circular_queue *cq, ccol_dynamic_queue *dq) {
-  c_message_t m = {.data = malloc(4), .size = 4};
+static bool xqd_send_one(ccircq *cq, cdynmq *dq) {
+  cmessage_t m = {.data = malloc(4), .size = 4};
   if (!m.data) return false;
   memcpy(m.data, "abc", 4);
-  ccol_retval_t rv =
-      cq ? ccol_circq_send_zc(cq, &m) : ccol_dynmq_send_zc(dq, &m);
+  ccol_retval_t rv = cq ? ccircq_send(cq, &m) : cdynmq_send(dq, &m);
   if (rv != ccol_success) free(m.data);
   return rv == ccol_success;
 }
@@ -11666,7 +11474,7 @@ static bool xqd_send_one(ccol_circular_queue *cq, ccol_dynamic_queue *dq) {
 enum { XQD_MAX_WORKERS = 8 };
 
 typedef struct xqd_scenario {
-  ccol_event_loop loop;
+  ceventloop loop;
   size_t workers;
   size_t built; /* how many slots hold live queues */
   xqd_slot slots[XQD_MAX_WORKERS];
@@ -11694,15 +11502,15 @@ static bool xqd_wait_count(_Atomic int *counter, int target) {
 static bool xqd_teardown(xqd_scenario *sc) {
   atomic_store(&sc->gate, true);
   if (!xqd_wait_count(&sc->done, atomic_load(&sc->entered))) return false;
-  if (sc->loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(sc->loop);
+  if (sc->loop != CEVENTLOOP_NULL) ceventloop_destroy(sc->loop);
   for (size_t i = 0; i < sc->built; i++) {
     xqd_slot *s = &sc->slots[i];
-    c_message_t m = {.data = NULL, .size = 0};
-    while (ccol_circq_try_recv_zc(s->trigger, &m) == ccol_success) {
+    cmessage_t m = {.data = NULL, .size = 0};
+    while (ccircq_try_recv(s->trigger, &m) == ccol_success) {
       free(m.data);
-      m = (c_message_t){.data = NULL, .size = 0};
+      m = (cmessage_t){.data = NULL, .size = 0};
     }
-    ccol_circular_queue_destroy(s->trigger);
+    ccircq_destroy(s->trigger);
     if (!s->victim_destroyed) {
       xqd_drain_victim(s);
       xqd_destroy_victim(s);
@@ -11722,24 +11530,23 @@ static bool xqd_build_slot(xqd_scenario *sc, size_t i, int kind) {
   s->gate = &sc->gate;
   s->gate_timed_out = &sc->gate_timed_out;
   s->victim_destroyed = false;
-  s->trigger = ccol_circular_queue_create_mp(4, NULL, NULL);
+  s->trigger = ccircq_create_mp(4, NULL, NULL);
   if (!s->trigger) return false;
   if (kind == XQD_CIRCQ) {
-    s->victim_cq = ccol_circular_queue_create_mp(4, NULL, NULL);
+    s->victim_cq = ccircq_create_mp(4, NULL, NULL);
     if (s->victim_cq)
-      s->victim_sel =
-          ccol_selectable_from_circq(s->victim_cq, ccol_select_read);
+      s->victim_sel = ccircq_selectable(s->victim_cq, cselect_read);
   } else if (kind == XQD_DYNQ) {
-    s->victim_dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+    s->victim_dq = cdynmq_create_mp(NULL, NULL);
     if (s->victim_dq)
-      s->victim_sel = ccol_selectable_from_dynq(s->victim_dq, ccol_select_read);
+      s->victim_sel = cdynmq_selectable(s->victim_dq, cselect_read);
   } else {
-    s->victim_ch = ccol_channel_create_mp(4, NULL, NULL);
+    s->victim_ch = cchan_create_mp(4, NULL, NULL);
     if (s->victim_ch)
-      s->victim_sel = ccol_selectable_from_chan(s->victim_ch, ccol_select_read);
+      s->victim_sel = cchan_selectable(s->victim_ch, cselect_read);
   }
   if (!s->victim_cq && !s->victim_dq && !s->victim_ch) {
-    ccol_circular_queue_destroy(s->trigger);
+    ccircq_destroy(s->trigger);
     return false;
   }
   return true;
@@ -11755,15 +11562,15 @@ static int xqd_run_scenario(size_t num_reactor_threads, int kind) {
     free(sc);
     return 10;
   }
-  sc->loop = ccol_event_loop_create(8, 1, num_reactor_threads, NULL);
-  if (sc->loop == CCOL_EVENT_LOOP_NULL) {
+  sc->loop = ceventloop_create(8, 1, num_reactor_threads, NULL);
+  if (sc->loop == CEVENTLOOP_NULL) {
     free(sc);
     return 11;
   }
 
   int rc = 0;
-  ccol_event_handlers_t trig_h = {.on_readable = xqd_trigger_on_readable};
-  ccol_event_handlers_t vict_h = {.on_readable = xqd_victim_on_readable};
+  ceventloop_handlers_t trig_h = {.on_readable = xqd_trigger_on_readable};
+  ceventloop_handlers_t vict_h = {.on_readable = xqd_victim_on_readable};
   for (size_t i = 0; i < sc->workers && rc == 0; i++) {
     if (!xqd_build_slot(sc, i, kind)) {
       rc = 12;
@@ -11771,12 +11578,10 @@ static int xqd_run_scenario(size_t num_reactor_threads, int kind) {
     }
     sc->built++;
     xqd_slot *s = &sc->slots[i];
-    s->victim_reg =
-        ccol_event_loop_add(sc->loop, s->victim_sel, vict_h, s, NULL);
-    ccol_event_reg tr = ccol_event_loop_add(
-        sc->loop, ccol_selectable_from_circq(s->trigger, ccol_select_read),
-        trig_h, s, NULL);
-    if (s->victim_reg == CCOL_EVENT_REG_NULL || tr == CCOL_EVENT_REG_NULL)
+    s->victim_reg = ceventloop_add(sc->loop, s->victim_sel, vict_h, s, NULL);
+    ceventloop_reg tr = ceventloop_add(
+        sc->loop, ccircq_selectable(s->trigger, cselect_read), trig_h, s, NULL);
+    if (s->victim_reg == CEVENTLOOP_REG_NULL || tr == CEVENTLOOP_REG_NULL)
       rc = 13;
   }
 
@@ -11795,8 +11600,8 @@ static int xqd_run_scenario(size_t num_reactor_threads, int kind) {
     if (!ok) rc = 16;
   }
   for (int waited_ms = 0;
-       rc == 0 && _ccol_event_loop_dispatch_pool_pending_count_for_tests(
-                      sc->loop) < sc->workers;
+       rc == 0 && _ceventloop_dispatch_pool_pending_count_for_tests(sc->loop) <
+                      sc->workers;
        waited_ms++) {
     if (waited_ms >= 20000) rc = 17;
     xqd_nap();
@@ -11829,7 +11634,7 @@ static int xqd_run_scenario(size_t num_reactor_threads, int kind) {
  * the same way, so no worker is left to run a queued victim job. A
  * deadlocked loop can't be destroyed, so on that failure the scenario leaves
  * it behind and the rest of the suite runs anyway. */
-TEST(ccol_event_loop, cross_queue_teardown_from_a_callback_on_the_pool) {
+TEST(ceventloop, cross_queue_teardown_from_a_callback_on_the_pool) {
   static const size_t thread_counts[] = {2, 3, 4};
   static const int kinds[] = {XQD_CIRCQ, XQD_DYNQ, XQD_CHAN};
   int results[3][3];
@@ -11846,10 +11651,10 @@ TEST(ccol_event_loop, cross_queue_teardown_from_a_callback_on_the_pool) {
 
 typedef struct nwk_ctx {
   int kind; /* XQD_CIRCQ, XQD_DYNQ or XQD_CHAN */
-  ccol_circular_queue *cq;
-  ccol_dynamic_queue *dq;
-  ccol_channel *ch;
-  ccol_selectable sel; /* the read selectable that the listener watches */
+  ccircq *cq;
+  cdynmq *dq;
+  cchan *ch;
+  cselectable_t sel; /* the read selectable that the listener watches */
   _Atomic long received;
   _Atomic long callbacks;
   _Atomic bool first_entered;
@@ -11858,31 +11663,29 @@ typedef struct nwk_ctx {
 } nwk_ctx;
 
 static bool nwk_try_recv(nwk_ctx *c) {
-  c_message_t m = {.data = NULL, .size = 0};
-  if (c->kind == XQD_DYNQ)
-    return ccol_dynmq_try_recv_zc(c->dq, &m) == ccol_success;
+  cmessage_t m = {.data = NULL, .size = 0};
+  if (c->kind == XQD_DYNQ) return cdynmq_try_recv(c->dq, &m) == ccol_success;
   /* A channel selectable resolves to one circular queue, and a channel
    * listener's callback receives on that queue rather than through the
    * channel. */
-  return ccol_circq_try_recv_zc(c->sel.cq, &m) == ccol_success;
+  return ccircq_try_recv(c->sel.cq, &m) == ccol_success;
 }
 
 /* Sends one empty message to the queue the listener watches. A full
  * circular queue is retried until the run is aborted. */
 static bool nwk_send(nwk_ctx *c) {
   for (;;) {
-    c_message_t m = {.data = NULL, .size = 0};
-    ccol_retval_t rv = (c->kind == XQD_DYNQ)
-                           ? ccol_dynmq_send_zc(c->dq, &m)
-                           : ccol_circq_try_send_zc(c->sel.cq, &m);
+    cmessage_t m = {.data = NULL, .size = 0};
+    ccol_retval_t rv = (c->kind == XQD_DYNQ) ? cdynmq_send(c->dq, &m)
+                                             : ccircq_try_send(c->sel.cq, &m);
     if (rv == ccol_success) return true;
     if (rv != ccol_container_full || atomic_load(&c->abort_run)) return false;
     xqd_nap();
   }
 }
 
-static void nwk_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                            ccol_selectable *sel, void *arg) {
+static void nwk_on_readable(ceventloop loop, ceventloop_reg reg,
+                            cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)sel;
@@ -11900,17 +11703,17 @@ static bool nwk_setup(nwk_ctx *c, int kind) {
   memset(c, 0, sizeof(*c));
   c->kind = kind;
   if (kind == XQD_CIRCQ) {
-    c->cq = ccol_circular_queue_create_mp(64, NULL, NULL);
+    c->cq = ccircq_create_mp(64, NULL, NULL);
     if (!c->cq) return false;
-    c->sel = ccol_selectable_from_circq(c->cq, ccol_select_read);
+    c->sel = ccircq_selectable(c->cq, cselect_read);
   } else if (kind == XQD_DYNQ) {
-    c->dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+    c->dq = cdynmq_create_mp(NULL, NULL);
     if (!c->dq) return false;
-    c->sel = ccol_selectable_from_dynq(c->dq, ccol_select_read);
+    c->sel = cdynmq_selectable(c->dq, cselect_read);
   } else {
-    c->ch = ccol_channel_create_mp(64, NULL, NULL);
+    c->ch = cchan_create_mp(64, NULL, NULL);
     if (!c->ch) return false;
-    c->sel = ccol_selectable_from_chan(c->ch, ccol_select_read);
+    c->sel = cchan_selectable(c->ch, cselect_read);
   }
   return true;
 }
@@ -11919,11 +11722,11 @@ static void nwk_teardown(nwk_ctx *c) {
   while (nwk_try_recv(c)) {
   }
   if (c->kind == XQD_CIRCQ) {
-    ccol_circular_queue_destroy(c->cq);
+    ccircq_destroy(c->cq);
   } else if (c->kind == XQD_DYNQ) {
-    ccol_dynamic_queue_destroy(c->dq);
+    cdynmq_destroy(c->dq);
   } else {
-    ccol_channel_destroy(c->ch);
+    cchan_destroy(c->ch);
   }
 }
 
@@ -11945,16 +11748,15 @@ static long nwk_burst_wakes(size_t num_reactor_threads, int kind, long burst,
   *delivered_out = false;
   nwk_ctx c;
   if (!nwk_setup(&c, kind)) return -1;
-  ccol_event_loop loop =
-      ccol_event_loop_create(8, 1, num_reactor_threads, NULL);
-  if (loop == CCOL_EVENT_LOOP_NULL) {
+  ceventloop loop = ceventloop_create(8, 1, num_reactor_threads, NULL);
+  if (loop == CEVENTLOOP_NULL) {
     nwk_teardown(&c);
     return -1;
   }
-  ccol_event_handlers_t h = {.on_readable = nwk_on_readable};
-  ccol_event_reg reg = ccol_event_loop_add(loop, c.sel, h, &c, NULL);
+  ceventloop_handlers_t h = {.on_readable = nwk_on_readable};
+  ceventloop_reg reg = ceventloop_add(loop, c.sel, h, &c, NULL);
   long wakes = -1;
-  if (reg != CCOL_EVENT_REG_NULL) {
+  if (reg != CEVENTLOOP_REG_NULL) {
     bool entered = nwk_send(&c);
     for (int waited_ms = 0; entered && !atomic_load(&c.first_entered);
          waited_ms++) {
@@ -11962,23 +11764,23 @@ static long nwk_burst_wakes(size_t num_reactor_threads, int kind, long burst,
       xqd_nap();
     }
     if (entered) {
-      uint64_t before = _ccol_select_test_eventfd_wake_count();
+      uint64_t before = _cselect_test_eventfd_wake_count();
       bool sent_all = true;
       for (long i = 0; i < burst && sent_all; i++) {
         /* A 64-slot circular queue can't hold a longer burst while the
          * callback is parked, so we keep the burst below that. */
         sent_all = nwk_send(&c);
       }
-      uint64_t after = _ccol_select_test_eventfd_wake_count();
+      uint64_t after = _cselect_test_eventfd_wake_count();
       if (sent_all) wakes = (long)(after - before);
     }
     atomic_store(&c.gate, true);
     *delivered_out = nwk_wait_received(&c, burst + 1, 20000);
     atomic_store(&c.abort_run, true);
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
   }
   atomic_store(&c.gate, true);
-  ccol_event_loop_destroy(loop);
+  ceventloop_destroy(loop);
   nwk_teardown(&c);
   return wakes;
 }
@@ -11987,7 +11789,7 @@ static long nwk_burst_wakes(size_t num_reactor_threads, int kind, long burst,
  * the queue operation itself. If every send wrote the listener's eventfd
  * whatever its state, the burst of 48 sends would cost 48 wakes instead of
  * 1. */
-TEST(ccol_event_loop, a_pending_queue_wake_absorbs_later_sends) {
+TEST(ceventloop, a_pending_queue_wake_absorbs_later_sends) {
   static const size_t thread_counts[] = {1, 3};
   static const int kinds[] = {XQD_CIRCQ, XQD_DYNQ, XQD_CHAN};
   long wakes[2][3];
@@ -12032,12 +11834,11 @@ static bool nwk_stress_listener(size_t num_reactor_threads, int kind,
   if (!nwk_setup(&c, kind)) return false;
   atomic_store(&c.gate, true); /* no callback parks in this scenario */
   bool ok = false;
-  ccol_event_loop loop =
-      ccol_event_loop_create(8, 1, num_reactor_threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_readable = nwk_on_readable};
-    ccol_event_reg reg = ccol_event_loop_add(loop, c.sel, h, &c, NULL);
-    if (reg != CCOL_EVENT_REG_NULL) {
+  ceventloop loop = ceventloop_create(8, 1, num_reactor_threads, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_readable = nwk_on_readable};
+    ceventloop_reg reg = ceventloop_add(loop, c.sel, h, &c, NULL);
+    if (reg != CEVENTLOOP_REG_NULL) {
       nwk_producer_arg pa = {.c = &c, .count = count, .ok = false};
       pthread_t tid;
       if (pthread_create(&tid, NULL, nwk_producer_thread, &pa) == 0) {
@@ -12046,15 +11847,15 @@ static bool nwk_stress_listener(size_t num_reactor_threads, int kind,
         pthread_join(tid, NULL);
         ok = ok && pa.ok;
       }
-      ccol_event_loop_remove(loop, reg);
+      ceventloop_remove(loop, reg);
     }
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   nwk_teardown(&c);
   return ok;
 }
 
-TEST(ccol_event_loop, no_queue_wake_is_lost_while_a_dispatch_clears_it) {
+TEST(ceventloop, no_queue_wake_is_lost_while_a_dispatch_clears_it) {
   static const size_t thread_counts[] = {1, 3};
   static const int kinds[] = {XQD_CIRCQ, XQD_DYNQ, XQD_CHAN};
   bool ok[2][3];
@@ -12068,21 +11869,20 @@ TEST(ccol_event_loop, no_queue_wake_is_lost_while_a_dispatch_clears_it) {
 typedef struct nwk_select_arg {
   nwk_ctx *c;
   long target;
-  int idle_fd; /* -1 for the condvar mode of ccol_select */
+  int idle_fd; /* -1 for the condvar mode of cselect */
   bool timed_out;
 } nwk_select_arg;
 
 static void *nwk_select_consumer_thread(void *arg) {
   nwk_select_arg *a = (nwk_select_arg *)arg;
-  ccol_selectable sels[2];
+  cselectable_t sels[2];
   size_t n = 0;
   sels[n++] = a->c->sel;
-  if (a->idle_fd >= 0)
-    sels[n++] = ccol_selectable_from_fd(a->idle_fd, ccol_select_read);
+  if (a->idle_fd >= 0) sels[n++] = cselectable_fd(a->idle_fd, cselect_read);
   while (atomic_load(&a->c->received) < a->target &&
          !atomic_load(&a->c->abort_run)) {
     size_t idx = 0;
-    ccol_retval_t rv = ccol_select_timed(&idx, n, sels, 10000000);
+    ccol_retval_t rv = cselect_timed(&idx, n, sels, 10000000);
     if (rv == ccol_timed_out) {
       /* Only a timeout with messages still owed is a lost wake. A waiter
        * whose sibling took the last message is allowed to time out. */
@@ -12095,10 +11895,10 @@ static void *nwk_select_consumer_thread(void *arg) {
   return NULL;
 }
 
-/* The same property for ccol_select() waiters, in condvar mode and in epoll
+/* The same property for cselect() waiters, in condvar mode and in epoll
  * mode. Two waiters compete for every message, so a waiter that a notify
  * woke often finds the queue empty again and waits again inside the same
- * call. ccol_select.a_woken_waiter_that_finds_the_queue_empty_waits_again
+ * call. cselect.a_woken_waiter_that_finds_the_queue_empty_waits_again
  * pins that second wait on its own, where no sibling can cover for a waiter
  * that sleeps through its wake. */
 static bool nwk_stress_select(int kind, bool epoll_mode, long count) {
@@ -12126,14 +11926,14 @@ static bool nwk_stress_select(int kind, bool epoll_mode, long count) {
   bool ok = p_started && nwk_wait_received(&c, count, 60000);
   atomic_store(&c.abort_run, true);
   if (p_started) pthread_join(ptid, NULL);
-  /* A waiter that's still inside ccol_select_timed returns on one more
+  /* A waiter that's still inside cselect_timed returns on one more
    * message instead of on its own timeout. */
   for (int i = 0; i < CONSUMERS; i++) {
-    c_message_t wake = {.data = NULL, .size = 0};
+    cmessage_t wake = {.data = NULL, .size = 0};
     if (kind == XQD_DYNQ)
-      (void)ccol_dynmq_send_zc(c.dq, &wake);
+      (void)cdynmq_send(c.dq, &wake);
     else
-      (void)ccol_circq_try_send_zc(c.sel.cq, &wake);
+      (void)ccircq_try_send(c.sel.cq, &wake);
   }
   for (int i = 0; i < CONSUMERS; i++) {
     if (c_started[i]) pthread_join(ctids[i], NULL);
@@ -12146,7 +11946,7 @@ static bool nwk_stress_select(int kind, bool epoll_mode, long count) {
   return ok;
 }
 
-TEST(ccol_select, no_queue_wake_is_lost_while_the_waiter_clears_it) {
+TEST(cselect, no_queue_wake_is_lost_while_the_waiter_clears_it) {
   static const int kinds[] = {XQD_CIRCQ, XQD_DYNQ, XQD_CHAN};
   bool ok[2][3];
   for (size_t m = 0; m < 2; m++)
@@ -12166,18 +11966,17 @@ typedef struct nwk_single_arg {
   bool failed;
 } nwk_single_arg;
 
-/* One waiter that calls ccol_select_timed round after round and takes every
+/* One waiter that calls cselect_timed round after round and takes every
  * message it finds. */
 static void *nwk_single_waiter_thread(void *arg) {
   nwk_single_arg *a = (nwk_single_arg *)arg;
-  ccol_selectable sels[2];
+  cselectable_t sels[2];
   size_t n = 0;
   sels[n++] = a->c->sel;
-  if (a->epoll_mode)
-    sels[n++] = ccol_selectable_from_fd(a->idle_fd, ccol_select_read);
+  if (a->epoll_mode) sels[n++] = cselectable_fd(a->idle_fd, cselect_read);
   while (!atomic_load(&a->stop)) {
     size_t idx = 0;
-    ccol_retval_t rv = ccol_select_timed(&idx, n, sels, 5000000);
+    ccol_retval_t rv = cselect_timed(&idx, n, sels, 5000000);
     if (rv == ccol_timed_out) {
       /* A message that sat in the queue for a whole timeout is a wake this
        * waiter slept through. */
@@ -12199,12 +11998,12 @@ static void *nwk_single_waiter_thread(void *arg) {
 
 static bool nwk_waiter_linked(nwk_ctx *c) {
   if (c->kind == XQD_DYNQ) return true; /* no count hook; the pause covers it */
-  return _ccol_circq_test_sel_read_waiter_count_for_tests(c->sel.cq) >= 1;
+  return _ccircq_test_sel_read_waiter_count_for_tests(c->sel.cq) >= 1;
 }
 
 /* One waiter, and a producer that takes back the message that woke it
  * before the waiter can look, so the waiter finds the queue empty and waits
- * again inside the same ccol_select_timed call. The next message must wake
+ * again inside the same cselect_timed call. The next message must wake
  * it. In epoll mode only the wait loop itself clears the wake the first
  * notify recorded, so without that clear the waiter sleeps through the next
  * message and its call times out with that message sitting in the
@@ -12249,7 +12048,7 @@ static bool nwk_single_waiter_rounds(int kind, bool epoll_mode, int rounds) {
   }
   atomic_store(&a.stop, true);
   if (started) {
-    /* One more message ends the current ccol_select_timed call immediately. */
+    /* One more message ends the current cselect_timed call immediately. */
     nwk_send(&c);
     pthread_join(tid, NULL);
   }
@@ -12260,7 +12059,7 @@ static bool nwk_single_waiter_rounds(int kind, bool epoll_mode, int rounds) {
   return ok;
 }
 
-TEST(ccol_select, a_woken_waiter_that_finds_the_queue_empty_waits_again) {
+TEST(cselect, a_woken_waiter_that_finds_the_queue_empty_waits_again) {
   static const int kinds[] = {XQD_CIRCQ, XQD_DYNQ, XQD_CHAN};
   bool ok[2][3];
   for (size_t m = 0; m < 2; m++)
@@ -12308,15 +12107,15 @@ TEST(ccol_timespec_add_us, saturates_instead_of_wrapping) {
 }
 
 typedef struct tsat_recv_arg {
-  ccol_circular_queue *cq;
+  ccircq *cq;
   _Atomic bool returned;
   ccol_retval_t rv;
 } tsat_recv_arg;
 
 static void *tsat_recv_thread(void *arg) {
   tsat_recv_arg *a = (tsat_recv_arg *)arg;
-  c_message_t m = {.data = NULL, .size = 0};
-  a->rv = ccol_circq_timed_recv_zc(a->cq, &m, UINT64_MAX);
+  cmessage_t m = {.data = NULL, .size = 0};
+  a->rv = ccircq_timed_recv(a->cq, &m, UINT64_MAX);
   atomic_store(&a->returned, true);
   return NULL;
 }
@@ -12325,7 +12124,7 @@ static void *tsat_recv_thread(void *arg) {
  * message instead of timing out at once. With a deadline that wraps, the
  * receive returns ccol_timed_out before the send. */
 TEST(circular_queues, a_timeout_past_the_end_of_time_waits_for_a_message) {
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(4, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(4, NULL, NULL);
   REQUIRE_TRUE(cq != NULL);
   tsat_recv_arg a = {.cq = cq, .returned = false, .rv = ccol_success};
   pthread_t tid;
@@ -12336,15 +12135,15 @@ TEST(circular_queues, a_timeout_past_the_end_of_time_waits_for_a_message) {
       early = atomic_load(&a.returned);
       xqd_nap();
     }
-    c_message_t m = {.data = NULL, .size = 0};
-    bool sent = (ccol_circq_send_zc(cq, &m) == ccol_success);
+    cmessage_t m = {.data = NULL, .size = 0};
+    bool sent = (ccircq_send(cq, &m) == ccol_success);
     (void)sent;
     pthread_join(tid, NULL);
   }
-  c_message_t drained = {.data = NULL, .size = 0};
-  while (ccol_circq_try_recv_zc(cq, &drained) == ccol_success) {
+  cmessage_t drained = {.data = NULL, .size = 0};
+  while (ccircq_try_recv(cq, &drained) == ccol_success) {
   }
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
   REQUIRE_TRUE(started);
   REQUIRE_FALSE(early);
   REQUIRE_EQ(a.rv, ccol_success);
@@ -12352,7 +12151,7 @@ TEST(circular_queues, a_timeout_past_the_end_of_time_waits_for_a_message) {
 
 /* Every other timed call, with the largest timeout and with one just below
  * it, waits for its event instead of timing out at once. UINT64_MAX is the
- * "no time limit" of ccol_select_timed, so UINT64_MAX - 1 is the value that
+ * "no time limit" of cselect_timed, so UINT64_MAX - 1 is the value that
  * reaches a select's saturating deadline. Each case runs on its own thread,
  * and the main thread provides the event only after it has seen the call
  * waiting for a while. A deadline that wraps into the past would make each
@@ -12370,9 +12169,9 @@ typedef enum {
 
 typedef struct huge_arg {
   huge_kind kind;
-  ccol_circular_queue *cq;
-  ccol_dynamic_queue *dq;
-  ccol_channel *ch;
+  ccircq *cq;
+  cdynmq *dq;
+  cchan *ch;
   int fd;
   _Atomic bool returned;
   ccol_retval_t rv;
@@ -12380,35 +12179,32 @@ typedef struct huge_arg {
 
 static void *huge_wait_thread(void *arg) {
   huge_arg *a = (huge_arg *)arg;
-  c_message_t m = {.data = NULL, .size = 0};
+  cmessage_t m = {.data = NULL, .size = 0};
   size_t idx = 99;
   switch (a->kind) {
     case HUGE_CIRCQ_SEND:
-      a->rv = ccol_circq_timed_send_zc(a->cq, &m, UINT64_MAX);
+      a->rv = ccircq_timed_send(a->cq, &m, UINT64_MAX);
       break;
     case HUGE_DYNMQ_RECV:
-      a->rv = ccol_dynmq_timed_recv_zc(a->dq, &m, UINT64_MAX);
+      a->rv = cdynmq_timed_recv(a->dq, &m, UINT64_MAX);
       break;
     case HUGE_CHAN_RECV:
-      a->rv = ccol_chan_timed_recv_zc(a->ch, &m, UINT64_MAX);
+      a->rv = cchan_timed_recv(a->ch, &m, UINT64_MAX);
       break;
     case HUGE_CHAN_SEND:
-      a->rv = ccol_chan_timed_send_zc(a->ch, &m, UINT64_MAX - 1);
+      a->rv = cchan_timed_send(a->ch, &m, UINT64_MAX - 1);
       break;
     case HUGE_SELECT_QUEUE:
-      a->rv = ccol_select_timed_va(
-          &idx, UINT64_MAX - 1,
-          ccol_selectable_from_circq(a->cq, ccol_select_read));
+      a->rv = cselect_timed_va(&idx, UINT64_MAX - 1,
+                               ccircq_selectable(a->cq, cselect_read));
       break;
     case HUGE_SELECT_QUEUE_NO_LIMIT:
-      a->rv = ccol_select_timed_va(
-          &idx, UINT64_MAX,
-          ccol_selectable_from_circq(a->cq, ccol_select_read));
+      a->rv = cselect_timed_va(&idx, UINT64_MAX,
+                               ccircq_selectable(a->cq, cselect_read));
       break;
     case HUGE_SELECT_FD:
-      a->rv = ccol_select_timed_va(
-          &idx, UINT64_MAX - 1,
-          ccol_selectable_from_fd(a->fd, ccol_select_read));
+      a->rv = cselect_timed_va(&idx, UINT64_MAX - 1,
+                               cselectable_fd(a->fd, cselect_read));
       break;
     default:
       break;
@@ -12419,20 +12215,20 @@ static void *huge_wait_thread(void *arg) {
 
 /* A worker of the channel fills the worker-to-owner direction. */
 static void *huge_fill_chan_thread(void *arg) {
-  c_message_t m = {.data = NULL, .size = 0};
-  ccol_chan_try_send_zc((ccol_channel *)arg, &m);
+  cmessage_t m = {.data = NULL, .size = 0};
+  cchan_try_send((cchan *)arg, &m);
   return NULL;
 }
 
 /* A worker of the channel empties the owner-to-worker direction. */
 static void *huge_drain_chan_thread(void *arg) {
-  c_message_t m = {.data = NULL, .size = 0};
-  while (ccol_chan_try_recv_zc((ccol_channel *)arg, &m) == ccol_success) {
+  cmessage_t m = {.data = NULL, .size = 0};
+  while (cchan_try_recv((cchan *)arg, &m) == ccol_success) {
   }
   return NULL;
 }
 
-static void huge_drain_chan_as_worker(ccol_channel *ch) {
+static void huge_drain_chan_as_worker(cchan *ch) {
   pthread_t t;
   if (pthread_create(&t, NULL, huge_drain_chan_thread, ch) == 0)
     pthread_join(t, NULL);
@@ -12448,19 +12244,19 @@ TEST(timed_calls, a_huge_timeout_waits_for_the_event) {
                   .returned = false,
                   .rv = ccol_unexpected_failure};
     int pfd[2] = {-1, -1};
-    c_message_t filler = {.data = NULL, .size = 0};
+    cmessage_t filler = {.data = NULL, .size = 0};
     if (k == HUGE_CIRCQ_SEND) {
-      a.cq = ccol_circular_queue_create_mp(1, NULL, NULL);
-      ccol_circq_send_zc(a.cq, &filler); /* full */
+      a.cq = ccircq_create_mp(1, NULL, NULL);
+      ccircq_send(a.cq, &filler); /* full */
     } else if (k == HUGE_SELECT_QUEUE || k == HUGE_SELECT_QUEUE_NO_LIMIT) {
-      a.cq = ccol_circular_queue_create_mp(1, NULL, NULL);
+      a.cq = ccircq_create_mp(1, NULL, NULL);
     } else if (k == HUGE_DYNMQ_RECV) {
-      a.dq = ccol_dynamic_queue_create_mp(NULL, NULL);
+      a.dq = cdynmq_create_mp(NULL, NULL);
     } else if (k == HUGE_CHAN_RECV || k == HUGE_CHAN_SEND) {
       /* The main thread owns the channel and the waiting thread is a
        * worker, so it receives from and sends to the queues that the owner
        * reaches with the opposite call. */
-      a.ch = ccol_channel_create_mp(1, NULL, NULL);
+      a.ch = cchan_create_mp(1, NULL, NULL);
       if (k == HUGE_CHAN_SEND) {
         /* fill the worker-to-owner direction from a worker thread */
         pthread_t ft;
@@ -12477,24 +12273,24 @@ TEST(timed_calls, a_huge_timeout_waits_for_the_event) {
         early[k] = atomic_load(&a.returned);
         xqd_nap();
       }
-      c_message_t m = {.data = NULL, .size = 0};
+      cmessage_t m = {.data = NULL, .size = 0};
       switch ((huge_kind)k) {
         case HUGE_CIRCQ_SEND:
         case HUGE_SELECT_QUEUE:
         case HUGE_SELECT_QUEUE_NO_LIMIT:
           if (k == HUGE_CIRCQ_SEND)
-            ccol_circq_recv_zc(a.cq, &m);
+            ccircq_recv(a.cq, &m);
           else
-            ccol_circq_send_zc(a.cq, &m);
+            ccircq_send(a.cq, &m);
           break;
         case HUGE_DYNMQ_RECV:
-          ccol_dynmq_send_zc(a.dq, &m);
+          cdynmq_send(a.dq, &m);
           break;
         case HUGE_CHAN_RECV:
-          ccol_chan_send_zc(a.ch, &m);
+          cchan_send(a.ch, &m);
           break;
         case HUGE_CHAN_SEND:
-          ccol_chan_recv_zc(a.ch, &m);
+          cchan_recv(a.ch, &m);
           break;
         case HUGE_SELECT_FD:
           if (pfd[1] >= 0) test_write_retry_eintr(pfd[1], "x", 1);
@@ -12505,22 +12301,22 @@ TEST(timed_calls, a_huge_timeout_waits_for_the_event) {
       pthread_join(tid, NULL);
     }
     rv[k] = a.rv;
-    c_message_t drained = {.data = NULL, .size = 0};
+    cmessage_t drained = {.data = NULL, .size = 0};
     if (a.cq) {
-      while (ccol_circq_try_recv_zc(a.cq, &drained) == ccol_success) {
+      while (ccircq_try_recv(a.cq, &drained) == ccol_success) {
       }
-      ccol_circular_queue_destroy(a.cq);
+      ccircq_destroy(a.cq);
     }
     if (a.dq) {
-      while (ccol_dynmq_try_recv_zc(a.dq, &drained) == ccol_success) {
+      while (cdynmq_try_recv(a.dq, &drained) == ccol_success) {
       }
-      ccol_dynamic_queue_destroy(a.dq);
+      cdynmq_destroy(a.dq);
     }
     if (a.ch) {
-      while (ccol_chan_try_recv_zc(a.ch, &drained) == ccol_success) {
+      while (cchan_try_recv(a.ch, &drained) == ccol_success) {
       }
       huge_drain_chan_as_worker(a.ch);
-      ccol_channel_destroy(a.ch);
+      cchan_destroy(a.ch);
     }
     if (pfd[0] >= 0) close(pfd[0]);
     if (pfd[1] >= 0) close(pfd[1]);
@@ -12533,7 +12329,7 @@ TEST(timed_calls, a_huge_timeout_waits_for_the_event) {
 }
 
 /* ------------------------------------------------------------------------
- * ccol_select_timed on an fd: a short or zero timeout still takes a look.
+ * cselect_timed on an fd: a short or zero timeout still takes a look.
  * ------------------------------------------------------------------------ */
 
 /* A timeout of 0 is a poll that doesn't block and a timeout of 1000 us is a
@@ -12541,23 +12337,23 @@ TEST(timed_calls, a_huge_timeout_waits_for_the_event) {
  * already readable. A wait loop that reports a timeout without making a
  * single epoll_wait call once the remaining time rounds down to 0 ms makes
  * both calls return ccol_timed_out. */
-TEST(ccol_select, timed_zero_and_one_ms_report_an_already_readable_fd) {
+TEST(cselect, timed_zero_and_one_ms_report_an_already_readable_fd) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   test_write_retry_eintr(pfd[1], "x", 1);
-  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  ccircq *cq = ccircq_create(4, NULL);
 
   size_t idx0 = 99, idx1 = 99, idx_mixed = 99;
-  ccol_retval_t r0 = ccol_select_timed_va(
-      &idx0, 0, ccol_selectable_from_fd(pfd[0], ccol_select_read));
-  ccol_retval_t r1 = ccol_select_timed_va(
-      &idx1, 1000, ccol_selectable_from_fd(pfd[0], ccol_select_read));
+  ccol_retval_t r0 =
+      cselect_timed_va(&idx0, 0, cselectable_fd(pfd[0], cselect_read));
+  ccol_retval_t r1 =
+      cselect_timed_va(&idx1, 1000, cselectable_fd(pfd[0], cselect_read));
   /* An empty queue next to the ready fd, which is the second selectable. */
-  ccol_retval_t r_mixed = ccol_select_timed_va(
-      &idx_mixed, 0, ccol_selectable_from_circq(cq, ccol_select_read),
-      ccol_selectable_from_fd(pfd[0], ccol_select_read));
+  ccol_retval_t r_mixed =
+      cselect_timed_va(&idx_mixed, 0, ccircq_selectable(cq, cselect_read),
+                       cselectable_fd(pfd[0], cselect_read));
 
-  ccol_circular_queue_destroy(cq);
+  ccircq_destroy(cq);
   close(pfd[0]);
   close(pfd[1]);
 
@@ -12573,7 +12369,7 @@ TEST(ccol_select, timed_zero_and_one_ms_report_an_already_readable_fd) {
  * time is rounded UP to a whole millisecond. Truncate the remaining time and
  * the wait gives up once less than a millisecond is left, so nearly every
  * round below returns early. */
-TEST(ccol_select, timed_fd_wait_never_ends_before_its_deadline) {
+TEST(cselect, timed_fd_wait_never_ends_before_its_deadline) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   int early = 0;
@@ -12582,8 +12378,7 @@ TEST(ccol_select, timed_fd_wait_never_ends_before_its_deadline) {
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     size_t idx = 99;
-    last = ccol_select_timed_va(
-        &idx, 2000, ccol_selectable_from_fd(pfd[0], ccol_select_read));
+    last = cselect_timed_va(&idx, 2000, cselectable_fd(pfd[0], cselect_read));
     clock_gettime(CLOCK_MONOTONIC, &t1);
     long long elapsed_ns = (long long)(t1.tv_sec - t0.tv_sec) * 1000000000LL +
                            (long long)(t1.tv_nsec - t0.tv_nsec);
@@ -12597,7 +12392,7 @@ TEST(ccol_select, timed_fd_wait_never_ends_before_its_deadline) {
 }
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop_add: an allocation failure after the entry is built.
+ * ceventloop_add: an allocation failure after the entry is built.
  * ------------------------------------------------------------------------ */
 
 /* An allocator that refuses every allocation of an fd add that is large
@@ -12609,7 +12404,7 @@ TEST(ccol_select, timed_fd_wait_never_ends_before_its_deadline) {
  * the poller would wake for it, and on the add that fails it could hold the
  * entry pointer while the add frees the entry, so the poller must stay
  * asleep during every refusal. */
-static ccol_event_loop g_afi_loop = CCOL_EVENT_LOOP_NULL;
+static ceventloop g_afi_loop = CEVENTLOOP_NULL;
 static _Atomic bool g_afi_armed = false;
 static _Atomic int g_afi_refusals = 0;
 static _Atomic uint64_t g_afi_poller_delta = 0;
@@ -12621,10 +12416,10 @@ static void afi_free(void *p) { free(p); }
 static void *afi_calloc(size_t a, size_t b) {
   if (atomic_load(&g_afi_armed) && a * b >= 500) {
     atomic_store(&g_afi_armed, false);
-    uint64_t before = _ccol_event_loop_poller_iterations_for_tests(g_afi_loop);
+    uint64_t before = _ceventloop_poller_iterations_for_tests(g_afi_loop);
     test_write_retry_eintr(g_afi_signal_fd, "x", 1);
     evl_sleep_ms(50);
-    uint64_t after = _ccol_event_loop_poller_iterations_for_tests(g_afi_loop);
+    uint64_t after = _ceventloop_poller_iterations_for_tests(g_afi_loop);
     atomic_fetch_add(&g_afi_poller_delta, after - before);
     atomic_fetch_add(&g_afi_refusals, 1);
     return NULL;
@@ -12633,8 +12428,8 @@ static void *afi_calloc(size_t a, size_t b) {
 }
 
 static _Atomic int g_afi_readable = 0;
-static void afi_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                            ccol_selectable *sel, void *arg) {
+static void afi_on_readable(ceventloop loop, ceventloop_reg reg,
+                            cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)arg;
@@ -12646,25 +12441,25 @@ static void afi_on_readable(ccol_event_loop loop, ccol_event_reg reg,
  * index would wake the poller during the refused allocation, so
  * g_afi_poller_delta wouldn't be 0, and under valgrind the poller would read
  * the entry after the failed add freed it. */
-TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
+TEST(ceventloop, an_fd_index_allocation_failure_publishes_nothing) {
   enum { AFI_MAX_FDS = 64 };
   int rfd[AFI_MAX_FDS], wfd[AFI_MAX_FDS];
-  ccol_event_reg regs[AFI_MAX_FDS];
+  ceventloop_reg regs[AFI_MAX_FDS];
   int n_fds = 0;
   int failed_at = -1;
   int expected_readable = 0;
   bool dispatch_timed_out = false;
   char *fail_err = NULL;
-  ccol_event_reg retry_reg = CCOL_EVENT_REG_NULL;
+  ceventloop_reg retry_reg = CEVENTLOOP_REG_NULL;
   bool dispatched_after_retry = false;
 
   atomic_store(&g_afi_refusals, 0);
   atomic_store(&g_afi_readable, 0);
   atomic_store(&g_afi_poller_delta, 0);
   ccol_memmgmt_procs_t mp = {afi_malloc, afi_free, afi_calloc, afi_realloc};
-  g_afi_loop = ccol_event_loop_create_mp(8, 1, 1, &mp, NULL);
-  bool created = (g_afi_loop != CCOL_EVENT_LOOP_NULL);
-  ccol_event_handlers_t h = {.on_readable = afi_on_readable};
+  g_afi_loop = ceventloop_create_mp(8, 1, 1, &mp, NULL);
+  bool created = (g_afi_loop != CEVENTLOOP_NULL);
+  ceventloop_handlers_t h = {.on_readable = afi_on_readable};
 
   while (created && n_fds < AFI_MAX_FDS && failed_at < 0) {
     int p[2];
@@ -12675,11 +12470,10 @@ TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
     int refusals_before = atomic_load(&g_afi_refusals);
     atomic_store(&g_afi_armed, true);
     char *err = NULL;
-    regs[n_fds] = ccol_event_loop_add(
-        g_afi_loop, ccol_selectable_from_fd(p[0], ccol_select_read), h, NULL,
-        &err);
+    regs[n_fds] = ceventloop_add(g_afi_loop, cselectable_fd(p[0], cselect_read),
+                                 h, NULL, &err);
     atomic_store(&g_afi_armed, false);
-    if (regs[n_fds] == CCOL_EVENT_REG_NULL) {
+    if (regs[n_fds] == CEVENTLOOP_REG_NULL) {
       failed_at = n_fds;
       fail_err = err;
     } else if (atomic_load(&g_afi_refusals) != refusals_before) {
@@ -12702,9 +12496,9 @@ TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
   /* The loop keeps working: the same fd adds cleanly without the refusal,
    * and the byte the allocator wrote gets dispatched. */
   if (failed_at >= 0) {
-    retry_reg = ccol_event_loop_add(
-        g_afi_loop, ccol_selectable_from_fd(rfd[failed_at], ccol_select_read),
-        h, NULL, NULL);
+    retry_reg =
+        ceventloop_add(g_afi_loop, cselectable_fd(rfd[failed_at], cselect_read),
+                       h, NULL, NULL);
     expected_readable++;
     for (int waited = 0; waited < 2000 && !dispatched_after_retry;
          waited += 5) {
@@ -12718,11 +12512,11 @@ TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
       fail_err != NULL && strstr(fail_err, "allocate") != NULL;
   if (created) {
     for (int i = 0; i < n_fds; i++)
-      if (regs[i] != CCOL_EVENT_REG_NULL)
-        ccol_event_loop_remove(g_afi_loop, regs[i]);
-    if (retry_reg != CCOL_EVENT_REG_NULL)
-      ccol_event_loop_remove(g_afi_loop, retry_reg);
-    ccol_event_loop_destroy(g_afi_loop);
+      if (regs[i] != CEVENTLOOP_REG_NULL)
+        ceventloop_remove(g_afi_loop, regs[i]);
+    if (retry_reg != CEVENTLOOP_REG_NULL)
+      ceventloop_remove(g_afi_loop, retry_reg);
+    ceventloop_destroy(g_afi_loop);
   }
   for (int i = 0; i < n_fds; i++) {
     close(rfd[i]);
@@ -12735,68 +12529,66 @@ TEST(ccol_event_loop, an_fd_index_allocation_failure_publishes_nothing) {
   REQUIRE_FALSE(dispatch_timed_out);
   REQUIRE_EQ(atomic_load(&g_afi_poller_delta), (uint64_t)0);
   REQUIRE_TRUE(err_names_allocation);
-  REQUIRE_NE(retry_reg, CCOL_EVENT_REG_NULL);
+  REQUIRE_NE(retry_reg, CEVENTLOOP_REG_NULL);
   REQUIRE_TRUE(dispatched_after_retry);
 }
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop_add: a direction that is already in use is told apart.
+ * ceventloop_add: a direction that is already in use is told apart.
  * ------------------------------------------------------------------------ */
 
-TEST(ccol_event_loop, add_reports_a_direction_already_in_use_by_its_err_str) {
+TEST(ceventloop, add_reports_a_direction_already_in_use_by_its_err_str) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  ccol_event_handlers_t h = {.on_error = evl_on_error};
+  ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+  ceventloop_handlers_t h = {.on_error = evl_on_error};
   char *err1 = NULL, *err2 = NULL;
-  ccol_event_reg r1 = CCOL_EVENT_REG_NULL, r2 = CCOL_EVENT_REG_NULL;
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    r1 = ccol_event_loop_add(loop,
-                             ccol_selectable_from_fd(pfd[0], ccol_select_read),
-                             h, NULL, &err1);
-    r2 = ccol_event_loop_add(loop,
-                             ccol_selectable_from_fd(pfd[0], ccol_select_read),
-                             h, NULL, &err2);
-    if (r1 != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r1);
-    if (r2 != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r2);
-    ccol_event_loop_destroy(loop);
+  ceventloop_reg r1 = CEVENTLOOP_REG_NULL, r2 = CEVENTLOOP_REG_NULL;
+  if (loop != CEVENTLOOP_NULL) {
+    r1 = ceventloop_add(loop, cselectable_fd(pfd[0], cselect_read), h, NULL,
+                        &err1);
+    r2 = ceventloop_add(loop, cselectable_fd(pfd[0], cselect_read), h, NULL,
+                        &err2);
+    if (r1 != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r1);
+    if (r2 != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r2);
+    ceventloop_destroy(loop);
   }
   close(pfd[0]);
   close(pfd[1]);
   bool in_use = err2 != NULL && strstr(err2, "already in use") != NULL;
-  REQUIRE_NE(r1, CCOL_EVENT_REG_NULL);
+  REQUIRE_NE(r1, CEVENTLOOP_REG_NULL);
   REQUIRE_TRUE(err1 == NULL);
-  REQUIRE_EQ(r2, CCOL_EVENT_REG_NULL);
+  REQUIRE_EQ(r2, CEVENTLOOP_REG_NULL);
   REQUIRE_TRUE(in_use);
 }
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop: an event that no handler can take doesn't spin.
+ * ceventloop: an event that no handler can take doesn't spin.
  * ------------------------------------------------------------------------ */
 
 typedef struct {
   _Atomic int error_count;
-  ccol_event_loop loop;
-  _Atomic ccol_event_reg self_reg;
+  ceventloop loop;
+  _Atomic ceventloop_reg self_reg;
 } unh_ctx;
 
-static void unh_on_error_remove_self(ccol_event_loop loop, ccol_event_reg reg,
-                                     ccol_selectable *sel, void *arg) {
+static void unh_on_error_remove_self(ceventloop loop, ceventloop_reg reg,
+                                     cselectable_t *sel, void *arg) {
   (void)reg;
   (void)sel;
   unh_ctx *c = (unh_ctx *)arg;
   atomic_fetch_add(&c->error_count, 1);
-  ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_NULL);
-  if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
+  ceventloop_reg r = atomic_exchange(&c->self_reg, CEVENTLOOP_REG_NULL);
+  if (r != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r);
 }
 
 /* Counts the epoll_wait calls the poller completes in a 150 ms window, after
  * a 50 ms lead-in that gives a runaway loop time to start. */
-static uint64_t unh_poller_iterations_in_window(ccol_event_loop loop) {
+static uint64_t unh_poller_iterations_in_window(ceventloop loop) {
   evl_sleep_ms(50);
-  uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
+  uint64_t before = _ceventloop_poller_iterations_for_tests(loop);
   evl_sleep_ms(150);
-  return _ccol_event_loop_poller_iterations_for_tests(loop) - before;
+  return _ceventloop_poller_iterations_for_tests(loop) - before;
 }
 
 /* A read registration with no handler at all, on a socket whose peer
@@ -12809,23 +12601,22 @@ static void unh_run_no_handler_case(size_t threads, uint64_t *iterations,
   *after_resume = 0;
   int sv[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t none = {0};
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), none, NULL,
-        NULL);
-    if (reg != CCOL_EVENT_REG_NULL) {
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t none = {0};
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), none, NULL, NULL);
+    if (reg != CEVENTLOOP_REG_NULL) {
       close(sv[1]);
       sv[1] = -1;
       *iterations = unh_poller_iterations_in_window(loop);
       /* A resume arms the registration again, and the hang-up mutes it
        * again without any spin. */
-      bool resumed = ccol_event_loop_resume(loop, reg) == ccol_success;
+      bool resumed = ceventloop_resume(loop, reg) == ccol_success;
       *after_resume = unh_poller_iterations_in_window(loop);
-      *ok = resumed && ccol_event_loop_remove(loop, reg) == ccol_success;
+      *ok = resumed && ceventloop_remove(loop, reg) == ccol_success;
     }
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   close(sv[0]);
   if (sv[1] >= 0) close(sv[1]);
@@ -12834,14 +12625,13 @@ static void unh_run_no_handler_case(size_t threads, uint64_t *iterations,
 typedef struct {
   _Atomic int readable_count;
   _Atomic int eof_count;
-  _Atomic ccol_event_reg self_reg;
+  _Atomic ceventloop_reg self_reg;
 } unh_eof_ctx;
 
 /* Reads the fd once, and at end of file removes its own registration, which
  * is what the hang-up contract asks of a handler that reads it. */
-static void unh_on_readable_remove_at_eof(ccol_event_loop loop,
-                                          ccol_event_reg reg,
-                                          ccol_selectable *sel, void *arg) {
+static void unh_on_readable_remove_at_eof(ceventloop loop, ceventloop_reg reg,
+                                          cselectable_t *sel, void *arg) {
   (void)reg;
   unh_eof_ctx *c = (unh_eof_ctx *)arg;
   atomic_fetch_add(&c->readable_count, 1);
@@ -12849,8 +12639,8 @@ static void unh_on_readable_remove_at_eof(ccol_event_loop loop,
   ssize_t n = read(sel->fd, buf, sizeof(buf));
   if (n == 0) {
     atomic_fetch_add(&c->eof_count, 1);
-    ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_NULL);
-    if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
+    ceventloop_reg r = atomic_exchange(&c->self_reg, CEVENTLOOP_REG_NULL);
+    if (r != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r);
   }
 }
 
@@ -12871,13 +12661,13 @@ static void unh_run_reader_without_on_error_case(size_t threads,
   unh_eof_ctx ctx;
   atomic_init(&ctx.readable_count, 0);
   atomic_init(&ctx.eof_count, 0);
-  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_NULL);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_readable = unh_on_readable_remove_at_eof};
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h, &ctx, NULL);
-    if (reg != CCOL_EVENT_REG_NULL) {
+  atomic_init(&ctx.self_reg, CEVENTLOOP_REG_NULL);
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_readable = unh_on_readable_remove_at_eof};
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), h, &ctx, NULL);
+    if (reg != CEVENTLOOP_REG_NULL) {
       atomic_store(&ctx.self_reg, reg);
       close(pfd[1]);
       pfd[1] = -1;
@@ -12887,7 +12677,7 @@ static void unh_run_reader_without_on_error_case(size_t threads,
     /* The destroy joins every thread, so no callback runs with &ctx after
      * this point, and a registration the callback didn't remove goes away
      * with the loop. */
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   *readable = atomic_load(&ctx.readable_count);
   *eofs = atomic_load(&ctx.eof_count);
@@ -12906,28 +12696,26 @@ static void unh_run_sibling_case(size_t threads, uint64_t *iterations,
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return;
   unh_ctx ctx;
   atomic_init(&ctx.error_count, 0);
-  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_NULL);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
+  atomic_init(&ctx.self_reg, CEVENTLOOP_REG_NULL);
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
   ctx.loop = loop;
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t none = {0};
-    ccol_event_handlers_t err_only = {.on_error = unh_on_error_remove_self};
-    ccol_event_reg rreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), none, NULL,
-        NULL);
-    ccol_event_reg wreg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), err_only, &ctx,
-        NULL);
-    if (rreg != CCOL_EVENT_REG_NULL && wreg != CCOL_EVENT_REG_NULL) {
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t none = {0};
+    ceventloop_handlers_t err_only = {.on_error = unh_on_error_remove_self};
+    ceventloop_reg rreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), none, NULL, NULL);
+    ceventloop_reg wreg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), err_only, &ctx, NULL);
+    if (rreg != CEVENTLOOP_REG_NULL && wreg != CEVENTLOOP_REG_NULL) {
       atomic_store(&ctx.self_reg, wreg);
       close(sv[1]);
       sv[1] = -1;
       *iterations = unh_poller_iterations_in_window(loop);
-      *ok = ccol_event_loop_remove(loop, rreg) == ccol_success;
+      *ok = ceventloop_remove(loop, rreg) == ccol_success;
     }
     /* A registration the callback didn't remove goes away with the
      * loop. */
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   *errors = atomic_load(&ctx.error_count);
   close(sv[0]);
@@ -12957,7 +12745,7 @@ static void unh_run_all(size_t threads, unh_results *r) {
  * count thousands of poller iterations instead of a handful. The reader
  * case also fails if the hang-up isn't delivered to on_readable, because
  * the registration is then muted and readable stays 0. */
-TEST(ccol_event_loop, an_event_with_no_handler_does_not_spin_single_thread) {
+TEST(ceventloop, an_event_with_no_handler_does_not_spin_single_thread) {
   unh_results r = {0};
   unh_run_all(1, &r);
   REQUIRE_TRUE(r.ok_none);
@@ -12974,7 +12762,7 @@ TEST(ccol_event_loop, an_event_with_no_handler_does_not_spin_single_thread) {
 
 /* The dispatch-pool counterpart. With EPOLLONESHOT the spin turns into a
  * cycle of collect and re-arm, and the same counter catches it. */
-TEST(ccol_event_loop, an_event_with_no_handler_does_not_spin_multi_thread) {
+TEST(ceventloop, an_event_with_no_handler_does_not_spin_multi_thread) {
   unh_results r = {0};
   unh_run_all(3, &r);
   REQUIRE_TRUE(r.ok_none);
@@ -12990,7 +12778,7 @@ TEST(ccol_event_loop, an_event_with_no_handler_does_not_spin_multi_thread) {
 }
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop: an error with no on_error reaches the direction handler.
+ * ceventloop: an error with no on_error reaches the direction handler.
  * ------------------------------------------------------------------------ */
 
 typedef struct {
@@ -13001,8 +12789,8 @@ typedef struct {
 
 /* Drains a connected UDP socket. A pending ICMP port unreachable comes back
  * as one ECONNREFUSED, and reading it clears it too. */
-static void derr_on_udp_readable(ccol_event_loop loop, ccol_event_reg reg,
-                                 ccol_selectable *sel, void *arg) {
+static void derr_on_udp_readable(ceventloop loop, ceventloop_reg reg,
+                                 cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   derr_udp_ctx *c = (derr_udp_ctx *)arg;
@@ -13089,13 +12877,13 @@ static void derr_run_udp_case(size_t threads, int *refused, int *data,
   atomic_init(&ctx.readable_count, 0);
   atomic_init(&ctx.refused_count, 0);
   atomic_init(&ctx.data_count, 0);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
   int srv = -1;
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_readable = derr_on_udp_readable};
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(cli, ccol_select_read), h, &ctx, NULL);
-    if (reg != CCOL_EVENT_REG_NULL) {
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_readable = derr_on_udp_readable};
+    ceventloop_reg reg =
+        ceventloop_add(loop, cselectable_fd(cli, cselect_read), h, &ctx, NULL);
+    if (reg != CEVENTLOOP_REG_NULL) {
       bool sent = send(cli, "q", 1, 0) == 1;
       bool saw_error =
           sent && derr_wait_count(&ctx.refused_count, 1, EVL_WAIT_MS);
@@ -13108,12 +12896,12 @@ static void derr_run_udp_case(size_t threads, int *refused, int *data,
                          sizeof(cli_addr)) == 5;
       bool got_data =
           replied && derr_wait_count(&ctx.data_count, 3, EVL_WAIT_MS);
-      *ok = saw_error && got_data &&
-            ccol_event_loop_remove(loop, reg) == ccol_success;
+      *ok =
+          saw_error && got_data && ceventloop_remove(loop, reg) == ccol_success;
     }
     /* The destroy joins every thread, so no callback runs with &ctx after
      * this point. */
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   *refused = atomic_load(&ctx.refused_count);
   *data = atomic_load(&ctx.data_count);
@@ -13124,7 +12912,7 @@ static void derr_run_udp_case(size_t threads, int *refused, int *data,
 /* If an error with no on_error muted the registration, neither the
  * ECONNREFUSED nor any of the three datagrams after it would ever reach
  * on_readable. */
-TEST(ccol_event_loop, udp_error_without_on_error_reaches_on_readable_1_thread) {
+TEST(ceventloop, udp_error_without_on_error_reaches_on_readable_1_thread) {
   int refused = 0, data = 0;
   bool ok = false;
   derr_run_udp_case(1, &refused, &data, &ok);
@@ -13133,8 +12921,7 @@ TEST(ccol_event_loop, udp_error_without_on_error_reaches_on_readable_1_thread) {
   REQUIRE_TRUE(ok);
 }
 
-TEST(ccol_event_loop,
-     udp_error_without_on_error_reaches_on_readable_4_threads) {
+TEST(ceventloop, udp_error_without_on_error_reaches_on_readable_4_threads) {
   int refused = 0, data = 0;
   bool ok = false;
   derr_run_udp_case(4, &refused, &data, &ok);
@@ -13145,8 +12932,8 @@ TEST(ccol_event_loop,
 
 /* Counts the errors of an error-only registration and takes the pending
  * error, the way an application that checks SO_ERROR would. */
-static void derr_on_error_count(ccol_event_loop loop, ccol_event_reg reg,
-                                ccol_selectable *sel, void *arg) {
+static void derr_on_error_count(ceventloop loop, ceventloop_reg reg,
+                                cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   int e = 0;
@@ -13168,20 +12955,19 @@ static int derr_run_udp_error_only_case(size_t threads) {
     return -1;
   }
   _Atomic int errors = 0;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_error = derr_on_error_count};
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(cli, ccol_select_read), h,
-        (void *)&errors, NULL);
-    if (reg != CCOL_EVENT_REG_NULL) {
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_error = derr_on_error_count};
+    ceventloop_reg reg = ceventloop_add(loop, cselectable_fd(cli, cselect_read),
+                                        h, (void *)&errors, NULL);
+    if (reg != CEVENTLOOP_REG_NULL) {
       if (send(cli, "q", 1, 0) == 1)
         (void)derr_wait_count(&errors, 1, EVL_WAIT_MS);
-      ccol_event_loop_remove(loop, reg);
+      ceventloop_remove(loop, reg);
     }
     /* The destroy joins every thread, so no callback runs with &errors
      * after this point. */
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   close(cli);
   return atomic_load(&errors);
@@ -13189,11 +12975,11 @@ static int derr_run_udp_error_only_case(size_t threads) {
 
 /* On kqueue this catches a report of the pending error on the error-only
  * read filter that refines to no bit: on_error then never runs. */
-TEST(ccol_event_loop, udp_error_reaches_an_error_only_registration_1_thread) {
+TEST(ceventloop, udp_error_reaches_an_error_only_registration_1_thread) {
   REQUIRE_GE(derr_run_udp_error_only_case(1), 1);
 }
 
-TEST(ccol_event_loop, udp_error_reaches_an_error_only_registration_4_threads) {
+TEST(ceventloop, udp_error_reaches_an_error_only_registration_4_threads) {
   REQUIRE_GE(derr_run_udp_error_only_case(4), 1);
 }
 
@@ -13202,8 +12988,8 @@ typedef struct {
 } derr_byte_reader_ctx;
 
 /* Takes one byte per call, so the rest of the data has to report again. */
-static void derr_read_one_byte(ccol_event_loop loop, ccol_event_reg reg,
-                               ccol_selectable *sel, void *arg) {
+static void derr_read_one_byte(ceventloop loop, ceventloop_reg reg,
+                               cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   char b;
@@ -13226,45 +13012,43 @@ static int derr_run_mode_change_case(size_t threads) {
   derr_byte_reader_ctx ctx;
   atomic_init(&ctx.reads, 0);
   _Atomic int errors = 0;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t wh = {.on_error = derr_on_error_count};
-    ccol_event_reg w = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh,
-        (void *)&errors, NULL);
-    ccol_event_handlers_t rh = {.on_readable = derr_read_one_byte};
-    ccol_event_reg r = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), rh, &ctx, NULL);
-    if (w != CCOL_EVENT_REG_NULL && r != CCOL_EVENT_REG_NULL &&
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t wh = {.on_error = derr_on_error_count};
+    ceventloop_reg w = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), wh, (void *)&errors, NULL);
+    ceventloop_handlers_t rh = {.on_readable = derr_read_one_byte};
+    ceventloop_reg r = ceventloop_add(loop, cselectable_fd(sv[0], cselect_read),
+                                      rh, &ctx, NULL);
+    if (w != CEVENTLOOP_REG_NULL && r != CEVENTLOOP_REG_NULL &&
         send(sv[1], "0123456789", 10, 0) == 10)
       (void)derr_wait_count(&ctx.reads, 10, EVL_WAIT_MS);
-    if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
-    if (w != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, w);
-    ccol_event_loop_destroy(loop);
+    if (r != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r);
+    if (w != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, w);
+    ceventloop_destroy(loop);
   }
   close(sv[0]);
   close(sv[1]);
   return atomic_load(&ctx.reads);
 }
 
-TEST(ccol_event_loop, a_reader_beside_an_error_only_writer_reads_all_1_thread) {
+TEST(ceventloop, a_reader_beside_an_error_only_writer_reads_all_1_thread) {
   REQUIRE_EQ(derr_run_mode_change_case(1), 10);
 }
 
-TEST(ccol_event_loop,
-     a_reader_beside_an_error_only_writer_reads_all_4_threads) {
+TEST(ceventloop, a_reader_beside_an_error_only_writer_reads_all_4_threads) {
   REQUIRE_EQ(derr_run_mode_change_case(4), 10);
 }
 
 /* ---- Stale reports, listeners, and an error-only filter that stays armed */
 
-static _Atomic ccol_event_reg derr_stale_target;
+static _Atomic ceventloop_reg derr_stale_target;
 static _Atomic int derr_stale_paused;
 
 /* Holds the only reactor thread so the next two sends land in one poller
  * batch. */
-static void derr_hold(ccol_event_loop loop, ccol_event_reg reg,
-                      ccol_selectable *sel, void *arg) {
+static void derr_hold(ceventloop loop, ceventloop_reg reg, cselectable_t *sel,
+                      void *arg) {
   (void)loop;
   (void)reg;
   (void)arg;
@@ -13275,18 +13059,18 @@ static void derr_hold(ccol_event_loop loop, ccol_event_reg reg,
 
 /* Pauses the reader of the other socket, whose data report is already in
  * the same batch. */
-static void derr_pause_target(ccol_event_loop loop, ccol_event_reg reg,
-                              ccol_selectable *sel, void *arg) {
+static void derr_pause_target(ceventloop loop, ceventloop_reg reg,
+                              cselectable_t *sel, void *arg) {
   (void)reg;
   (void)arg;
   char b[16];
   (void)recv(sel->fd, b, sizeof(b), MSG_DONTWAIT);
-  ccol_event_loop_pause(loop, atomic_load(&derr_stale_target));
+  ceventloop_pause(loop, atomic_load(&derr_stale_target));
   atomic_fetch_add(&derr_stale_paused, 1);
 }
 
-static void derr_count_reads(ccol_event_loop loop, ccol_event_reg reg,
-                             ccol_selectable *sel, void *arg) {
+static void derr_count_reads(ceventloop loop, ceventloop_reg reg,
+                             cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   (void)sel;
@@ -13305,27 +13089,21 @@ TEST(fd_stale_report, a_data_report_after_a_pause_is_no_error) {
                socketpair(AF_UNIX, SOCK_STREAM, 0, target) == 0;
   atomic_store(&derr_stale_paused, 0);
   _Atomic int reads = 0, writer_errors = 0;
-  ccol_event_loop loop =
-      pairs ? ccol_event_loop_create(64, 1, 1, NULL) : CCOL_EVENT_LOOP_NULL;
+  ceventloop loop = pairs ? ceventloop_create(64, 1, 1, NULL) : CEVENTLOOP_NULL;
   bool sent = false;
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t hh = {.on_readable = derr_hold};
-    ccol_event_loop_add(loop,
-                        ccol_selectable_from_fd(hold[0], ccol_select_read), hh,
-                        NULL, NULL);
-    ccol_event_handlers_t hp = {.on_readable = derr_pause_target};
-    ccol_event_loop_add(loop,
-                        ccol_selectable_from_fd(pauser[0], ccol_select_read),
-                        hp, NULL, NULL);
-    ccol_event_handlers_t hr = {.on_readable = derr_count_reads};
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t hh = {.on_readable = derr_hold};
+    ceventloop_add(loop, cselectable_fd(hold[0], cselect_read), hh, NULL, NULL);
+    ceventloop_handlers_t hp = {.on_readable = derr_pause_target};
+    ceventloop_add(loop, cselectable_fd(pauser[0], cselect_read), hp, NULL,
+                   NULL);
+    ceventloop_handlers_t hr = {.on_readable = derr_count_reads};
     atomic_store(&derr_stale_target,
-                 ccol_event_loop_add(
-                     loop, ccol_selectable_from_fd(target[0], ccol_select_read),
-                     hr, (void *)&reads, NULL));
-    ccol_event_handlers_t hw = {.on_error = derr_on_error_count};
-    ccol_event_loop_add(loop,
-                        ccol_selectable_from_fd(target[0], ccol_select_write),
-                        hw, (void *)&writer_errors, NULL);
+                 ceventloop_add(loop, cselectable_fd(target[0], cselect_read),
+                                hr, (void *)&reads, NULL));
+    ceventloop_handlers_t hw = {.on_error = derr_on_error_count};
+    ceventloop_add(loop, cselectable_fd(target[0], cselect_write), hw,
+                   (void *)&writer_errors, NULL);
     evl_sleep_ms(30);
     sent = send(hold[1], "h", 1, 0) == 1;
     evl_sleep_ms(30);
@@ -13333,7 +13111,7 @@ TEST(fd_stale_report, a_data_report_after_a_pause_is_no_error) {
            send(target[1], "t", 1, 0) == 1;
     (void)derr_wait_count(&derr_stale_paused, 1, EVL_WAIT_MS);
     evl_sleep_ms(100);
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   for (int i = 0; i < 2; i++) {
     if (hold[i] >= 0) close(hold[i]);
@@ -13352,26 +13130,25 @@ TEST(fd_stale_report, a_data_report_after_a_pause_is_no_error) {
  * ignores its low-water mark, sends every pending connection to on_error,
  * and a loop with a dispatch pool reports it again on every re-arm. */
 typedef struct {
-  ccol_event_loop loop;
+  ceventloop loop;
   int ls;
   _Atomic int *errs;
-  _Atomic ccol_event_reg reg;
+  _Atomic ceventloop_reg reg;
   atomic_bool listened;
   atomic_bool done;
 } derr_late_listen_ctx;
 
-static void derr_late_listen_cb(ccol_event_loop loop, ccol_event_reg self,
-                                ccol_selectable *sel, void *arg) {
+static void derr_late_listen_cb(ceventloop loop, ceventloop_reg self,
+                                cselectable_t *sel, void *arg) {
   (void)sel;
   derr_late_listen_ctx *c = (derr_late_listen_ctx *)arg;
   if (atomic_load(&c->done)) return;
-  ccol_event_handlers_t h = {.on_error = derr_on_error_count};
+  ceventloop_handlers_t h = {.on_error = derr_on_error_count};
   atomic_store(&c->reg,
-               ccol_event_loop_add(
-                   loop, ccol_selectable_from_fd(c->ls, ccol_select_read), h,
-                   (void *)c->errs, NULL));
+               ceventloop_add(loop, cselectable_fd(c->ls, cselect_read), h,
+                              (void *)c->errs, NULL));
   atomic_store(&c->listened, listen(c->ls, 8) == 0);
-  ccol_event_loop_pause(loop, self);
+  ceventloop_pause(loop, self);
   atomic_store(&c->done, true);
 }
 
@@ -13392,38 +13169,37 @@ static void derr_run_listener_case(size_t threads, bool listen_late,
   }
   _Atomic int errs = 0;
   int cs[3] = {-1, -1, -1};
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_error = derr_on_error_count};
-    ccol_event_reg reg = CCOL_EVENT_REG_NULL;
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_error = derr_on_error_count};
+    ceventloop_reg reg = CEVENTLOOP_REG_NULL;
     if (listen_late) {
       derr_late_listen_ctx c = {.loop = loop, .ls = ls, .errs = &errs};
       int trig[2] = {-1, -1};
       bool ok = pipe(trig) == 0;
-      ccol_event_reg treg = CCOL_EVENT_REG_NULL;
+      ceventloop_reg treg = CEVENTLOOP_REG_NULL;
       if (ok)
-        treg = ccol_event_loop_add(
-            loop, ccol_selectable_from_fd(trig[0], ccol_select_read),
-            (ccol_event_handlers_t){.on_readable = derr_late_listen_cb}, &c,
+        treg = ceventloop_add(
+            loop, cselectable_fd(trig[0], cselect_read),
+            (ceventloop_handlers_t){.on_readable = derr_late_listen_cb}, &c,
             NULL);
-      ok = ok && treg != CCOL_EVENT_REG_NULL && write(trig[1], "x", 1) == 1;
+      ok = ok && treg != CEVENTLOOP_REG_NULL && write(trig[1], "x", 1) == 1;
       long long end = mono_now_us() + (long long)EVL_WAIT_MS * 1000;
       while (ok && !atomic_load(&c.done) && mono_now_us() < end)
         evl_sleep_ms(1);
-      if (treg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, treg);
+      if (treg != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, treg);
       if (trig[0] >= 0) close(trig[0]);
       if (trig[1] >= 0) close(trig[1]);
       reg = atomic_load(&c.reg);
       if (!atomic_load(&c.listened)) {
-        if (reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, reg);
-        ccol_event_loop_destroy(loop);
+        if (reg != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, reg);
+        ceventloop_destroy(loop);
         close(ls);
         return;
       }
     } else {
-      reg = ccol_event_loop_add(loop,
-                                ccol_selectable_from_fd(ls, ccol_select_read),
-                                h, (void *)&errs, NULL);
+      reg = ceventloop_add(loop, cselectable_fd(ls, cselect_read), h,
+                           (void *)&errs, NULL);
     }
     for (int i = 0; i < 3; i++) {
       cs[i] = socket(AF_INET, SOCK_STREAM, 0);
@@ -13431,11 +13207,11 @@ static void derr_run_listener_case(size_t threads, bool listen_late,
         (void)test_connect(cs[i], (struct sockaddr *)&a, sizeof(a));
     }
     evl_sleep_ms(50);
-    uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
+    uint64_t before = _ceventloop_poller_iterations_for_tests(loop);
     evl_sleep_ms(150);
-    *iterations = _ccol_event_loop_poller_iterations_for_tests(loop) - before;
-    if (reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, reg);
-    ccol_event_loop_destroy(loop);
+    *iterations = _ceventloop_poller_iterations_for_tests(loop) - before;
+    if (reg != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, reg);
+    ceventloop_destroy(loop);
     *errors = atomic_load(&errs);
   }
   for (int i = 0; i < 3; i++)
@@ -13483,20 +13259,18 @@ static int derr_run_close_after_half_close(bool with_reader) {
   int sv[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return -1;
   _Atomic int errors = 0, reads = 0;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 4, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_reg r = CCOL_EVENT_REG_NULL;
+  ceventloop loop = ceventloop_create(8, 1, 4, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_reg r = CEVENTLOOP_REG_NULL;
     if (with_reader) {
-      ccol_event_handlers_t rh = {.on_readable = derr_count_reads};
-      r = ccol_event_loop_add(loop,
-                              ccol_selectable_from_fd(sv[0], ccol_select_read),
-                              rh, (void *)&reads, NULL);
+      ceventloop_handlers_t rh = {.on_readable = derr_count_reads};
+      r = ceventloop_add(loop, cselectable_fd(sv[0], cselect_read), rh,
+                         (void *)&reads, NULL);
     }
-    ccol_event_handlers_t wh = {.on_error = derr_on_error_count};
-    ccol_event_reg w = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_write), wh,
-        (void *)&errors, NULL);
-    if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_pause(loop, r);
+    ceventloop_handlers_t wh = {.on_error = derr_on_error_count};
+    ceventloop_reg w = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_write), wh, (void *)&errors, NULL);
+    if (r != CEVENTLOOP_REG_NULL) ceventloop_pause(loop, r);
     evl_sleep_ms(30);
     if (shutdown(sv[1], SHUT_WR) == 0) {
       evl_sleep_ms(100);
@@ -13504,9 +13278,9 @@ static int derr_run_close_after_half_close(bool with_reader) {
       sv[1] = -1;
       (void)derr_wait_count(&errors, 1, EVL_WAIT_MS);
     }
-    if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
-    if (w != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, w);
-    ccol_event_loop_destroy(loop);
+    if (r != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r);
+    if (w != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, w);
+    ceventloop_destroy(loop);
   }
   close(sv[0]);
   if (sv[1] >= 0) close(sv[1]);
@@ -13522,35 +13296,35 @@ TEST(fd_error_only, a_close_after_a_paused_reader_reaches_on_error) {
 }
 
 typedef struct {
-  ccol_event_loop loop;
-  ccol_dynamic_queue *dq;
+  ceventloop loop;
+  cdynmq *dq;
   _Atomic int fd_calls;
   _Atomic int fd_marked;
   _Atomic int queue_calls;
   _Atomic int queue_marked;
 } mark_probe_ctx;
 
-static void mark_probe_on_fd(ccol_event_loop loop, ccol_event_reg reg,
-                             ccol_selectable *sel, void *arg) {
+static void mark_probe_on_fd(ceventloop loop, ceventloop_reg reg,
+                             cselectable_t *sel, void *arg) {
   (void)reg;
   mark_probe_ctx *c = (mark_probe_ctx *)arg;
   char byte;
   if (read(sel->fd, &byte, 1) != 1) return;
-  if (_ccol_event_loop_test_runs_on_loop_thread(loop))
+  if (_ceventloop_test_runs_on_loop_thread(loop))
     atomic_fetch_add(&c->fd_marked, 1);
   atomic_fetch_add(&c->fd_calls, 1);
 }
 
-static void mark_probe_on_queue(ccol_event_loop loop, ccol_event_reg reg,
-                                ccol_selectable *sel, void *arg) {
+static void mark_probe_on_queue(ceventloop loop, ceventloop_reg reg,
+                                cselectable_t *sel, void *arg) {
   (void)reg;
   (void)sel;
   mark_probe_ctx *c = (mark_probe_ctx *)arg;
-  c_message_t out;
-  while (ccol_dynmq_try_recv_zc(c->dq, &out) == ccol_success) {
+  cmessage_t out;
+  while (cdynmq_try_recv(c->dq, &out) == ccol_success) {
   }
-  if (_ccol_event_loop_test_runs_on_loop_thread(loop) &&
-      _ccol_event_loop_test_dispatches_queue(c->dq))
+  if (_ceventloop_test_runs_on_loop_thread(loop) &&
+      _ceventloop_test_dispatches_queue(c->dq))
     atomic_fetch_add(&c->queue_marked, 1);
   atomic_fetch_add(&c->queue_calls, 1);
 }
@@ -13564,42 +13338,40 @@ static void mark_probe_run(size_t threads, int *fd_calls, int *fd_marked,
   int pfd[2];
   if (pipe(pfd) != 0) return;
   mark_probe_ctx ctx;
-  ctx.dq = ccol_dynamic_queue_create(NULL);
+  ctx.dq = cdynmq_create(NULL);
   atomic_init(&ctx.fd_calls, 0);
   atomic_init(&ctx.fd_marked, 0);
   atomic_init(&ctx.queue_calls, 0);
   atomic_init(&ctx.queue_marked, 0);
-  _ccol_event_loop_test_fail_next_marks(UINT32_MAX);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
+  _ceventloop_test_fail_next_marks(UINT32_MAX);
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
   ctx.loop = loop;
-  if (loop != CCOL_EVENT_LOOP_NULL && ctx.dq) {
-    ccol_event_handlers_t fh = {.on_readable = mark_probe_on_fd};
-    ccol_event_handlers_t qh = {.on_readable = mark_probe_on_queue};
-    ccol_event_reg fr = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), fh, &ctx,
-        NULL);
-    ccol_event_reg qr = ccol_event_loop_add(
-        loop, ccol_selectable_from_dynq(ctx.dq, ccol_select_read), qh, &ctx,
-        NULL);
+  if (loop != CEVENTLOOP_NULL && ctx.dq) {
+    ceventloop_handlers_t fh = {.on_readable = mark_probe_on_fd};
+    ceventloop_handlers_t qh = {.on_readable = mark_probe_on_queue};
+    ceventloop_reg fr = ceventloop_add(
+        loop, cselectable_fd(pfd[0], cselect_read), fh, &ctx, NULL);
+    ceventloop_reg qr = ceventloop_add(
+        loop, cdynmq_selectable(ctx.dq, cselect_read), qh, &ctx, NULL);
     static int payload = 3;
-    c_message_t m = {.data = &payload, .size = sizeof(int)};
+    cmessage_t m = {.data = &payload, .size = sizeof(int)};
     char byte = 'x';
-    if (fr != CCOL_EVENT_REG_NULL && qr != CCOL_EVENT_REG_NULL &&
+    if (fr != CEVENTLOOP_REG_NULL && qr != CEVENTLOOP_REG_NULL &&
         write(pfd[1], &byte, 1) == 1 &&
-        ccol_dynmq_send_zc(ctx.dq, &m) == ccol_success) {
+        cdynmq_send(ctx.dq, &m) == ccol_success) {
       (void)derr_wait_count(&ctx.fd_calls, 1, EVL_WAIT_MS);
       (void)derr_wait_count(&ctx.queue_calls, 1, EVL_WAIT_MS);
     }
-    if (fr != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, fr);
-    if (qr != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, qr);
+    if (fr != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, fr);
+    if (qr != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, qr);
   }
-  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
-  _ccol_event_loop_test_fail_next_marks(0);
+  if (loop != CEVENTLOOP_NULL) ceventloop_destroy(loop);
+  _ceventloop_test_fail_next_marks(0);
   if (ctx.dq) {
-    c_message_t out;
-    while (ccol_dynmq_try_recv_zc(ctx.dq, &out) == ccol_success) {
+    cmessage_t out;
+    while (cdynmq_try_recv(ctx.dq, &out) == ccol_success) {
     }
-    ccol_dynamic_queue_destroy(ctx.dq);
+    cdynmq_destroy(ctx.dq);
   }
   close(pfd[0]);
   close(pfd[1]);
@@ -13613,7 +13385,7 @@ static void mark_probe_run(size_t threads, int *fd_calls, int *fd_marked,
  * self-destroy and self-shutdown guards see a callback of the loop and of
  * the queue. A failed store that left the thread unmarked would mean no
  * callback sees its mark. */
-TEST(ccol_event_loop, a_mark_that_the_key_cannot_store_still_holds) {
+TEST(ceventloop, a_mark_that_the_key_cannot_store_still_holds) {
   int fc1, fm1, qc1, qm1, fc4, fm4, qc4, qm4;
   mark_probe_run(1, &fc1, &fm1, &qc1, &qm1);
   mark_probe_run(4, &fc4, &fm4, &qc4, &qm4);
@@ -13629,19 +13401,19 @@ TEST(ccol_event_loop, a_mark_that_the_key_cannot_store_still_holds) {
 
 typedef struct {
   _Atomic int errors;
-  _Atomic ccol_event_reg self_reg;
+  _Atomic ceventloop_reg self_reg;
 } derr_pipe_ctx;
 
 /* Counts an error dispatch and removes its own registration, because a
  * hang-up stays true and would be reported over and over. */
-static void derr_pipe_on_error(ccol_event_loop loop, ccol_event_reg reg,
-                               ccol_selectable *sel, void *arg) {
+static void derr_pipe_on_error(ceventloop loop, ceventloop_reg reg,
+                               cselectable_t *sel, void *arg) {
   (void)reg;
   (void)sel;
   derr_pipe_ctx *c = (derr_pipe_ctx *)arg;
   atomic_fetch_add(&c->errors, 1);
-  ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_NULL);
-  if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
+  ceventloop_reg r = atomic_exchange(&c->self_reg, CEVENTLOOP_REG_NULL);
+  if (r != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r);
 }
 
 /* An error-only registration on one end of a pipe whose other end closes.
@@ -13661,17 +13433,15 @@ static void derr_run_pipe_case(bool read_end, size_t threads,
   if (pipe(pfd) != 0) return;
   derr_pipe_ctx ctx;
   atomic_init(&ctx.errors, 0);
-  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_NULL);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_error = derr_pipe_on_error};
+  atomic_init(&ctx.self_reg, CEVENTLOOP_REG_NULL);
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_error = derr_pipe_on_error};
     int watched = read_end ? pfd[0] : pfd[1];
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop,
-        ccol_selectable_from_fd(
-            watched, read_end ? ccol_select_read : ccol_select_write),
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(watched, read_end ? cselect_read : cselect_write),
         h, &ctx, NULL);
-    if (reg != CCOL_EVENT_REG_NULL) {
+    if (reg != CEVENTLOOP_REG_NULL) {
       atomic_store(&ctx.self_reg, reg);
       bool wrote = true;
       for (int k = 0; k < 3 && wrote; k++) {
@@ -13686,10 +13456,10 @@ static void derr_run_pipe_case(bool read_end, size_t threads,
       (void)derr_wait_count(&ctx.errors, 1, EVL_WAIT_MS);
       /* A second dispatch would show up here. */
       evl_sleep_ms(50);
-      ccol_event_reg r = atomic_exchange(&ctx.self_reg, CCOL_EVENT_REG_NULL);
-      if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
+      ceventloop_reg r = atomic_exchange(&ctx.self_reg, CEVENTLOOP_REG_NULL);
+      if (r != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r);
     }
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
     *errors = atomic_load(&ctx.errors);
   }
   if (pfd[0] >= 0) close(pfd[0]);
@@ -13730,20 +13500,19 @@ TEST(fd_error_only, a_pipe_writer_hears_the_close_of_the_reader) {
 
 typedef struct {
   _Atomic int writable_count;
-  _Atomic ccol_event_reg self_reg;
+  _Atomic ceventloop_reg self_reg;
 } derr_writer_ctx;
 
 /* Counts the dispatch and removes its own registration. It never writes, so
  * the broken pipe raises no SIGPIPE. */
-static void derr_on_writable_remove_self(ccol_event_loop loop,
-                                         ccol_event_reg reg,
-                                         ccol_selectable *sel, void *arg) {
+static void derr_on_writable_remove_self(ceventloop loop, ceventloop_reg reg,
+                                         cselectable_t *sel, void *arg) {
   (void)reg;
   (void)sel;
   derr_writer_ctx *c = (derr_writer_ctx *)arg;
   atomic_fetch_add(&c->writable_count, 1);
-  ccol_event_reg r = atomic_exchange(&c->self_reg, CCOL_EVENT_REG_NULL);
-  if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, r);
+  ceventloop_reg r = atomic_exchange(&c->self_reg, CEVENTLOOP_REG_NULL);
+  if (r != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, r);
 }
 
 /* A write registration with on_writable and no on_error, on a full pipe
@@ -13767,14 +13536,13 @@ static void derr_run_writer_case(size_t threads, int *writable,
   }
   derr_writer_ctx ctx;
   atomic_init(&ctx.writable_count, 0);
-  atomic_init(&ctx.self_reg, CCOL_EVENT_REG_NULL);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_writable = derr_on_writable_remove_self};
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[1], ccol_select_write), h, &ctx,
-        NULL);
-    if (reg != CCOL_EVENT_REG_NULL) {
+  atomic_init(&ctx.self_reg, CEVENTLOOP_REG_NULL);
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_writable = derr_on_writable_remove_self};
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(pfd[1], cselect_write), h, &ctx, NULL);
+    if (reg != CEVENTLOOP_REG_NULL) {
       atomic_store(&ctx.self_reg, reg);
       close(pfd[0]);
       pfd[0] = -1;
@@ -13782,7 +13550,7 @@ static void derr_run_writer_case(size_t threads, int *writable,
       *iterations = unh_poller_iterations_in_window(loop);
       *ok = delivered;
     }
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   *writable = atomic_load(&ctx.writable_count);
   if (pfd[0] >= 0) close(pfd[0]);
@@ -13791,7 +13559,7 @@ static void derr_run_writer_case(size_t threads, int *writable,
 
 /* If an error with no on_error muted the registration, on_writable would
  * never run. */
-TEST(ccol_event_loop, error_without_on_error_reaches_on_writable) {
+TEST(ceventloop, error_without_on_error_reaches_on_writable) {
   int w1 = 0, w3 = 0;
   uint64_t it1 = 0, it3 = 0;
   bool ok1 = false, ok3 = false;
@@ -13806,15 +13574,15 @@ TEST(ccol_event_loop, error_without_on_error_reaches_on_writable) {
 }
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop: the reclaim epoch crosses a 32-bit boundary.
+ * ceventloop: the reclaim epoch crosses a 32-bit boundary.
  * ------------------------------------------------------------------------ */
 
 static void bgen_on_removed(void *arg) {
   atomic_fetch_add((_Atomic int *)arg, 1);
 }
 
-static void bgen_on_error(ccol_event_loop loop, ccol_event_reg reg,
-                          ccol_selectable *sel, void *arg) {
+static void bgen_on_error(ceventloop loop, ceventloop_reg reg,
+                          cselectable_t *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)sel;
@@ -13828,36 +13596,33 @@ static void bgen_on_error(ccol_event_loop loop, ccol_event_reg reg,
  * loop's life. On a target with a 32-bit size_t this shows up directly:
  * with a size_t epoch the window below counts about ten iterations instead
  * of none. */
-TEST(ccol_event_loop,
-     reclaim_epoch_crossing_32_bits_does_not_keep_poller_awake) {
+TEST(ceventloop, reclaim_epoch_crossing_32_bits_does_not_keep_poller_awake) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   _Atomic int removed_calls = 0;
   uint64_t idle_iterations = UINT64_MAX;
   bool added = false, removed = false, notified = false;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_error = bgen_on_error,
+  ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_error = bgen_on_error,
                                .on_removed = bgen_on_removed};
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h,
-        (void *)&removed_calls, NULL);
-    added = reg != CCOL_EVENT_REG_NULL;
+    ceventloop_reg reg =
+        ceventloop_add(loop, cselectable_fd(pfd[0], cselect_read), h,
+                       (void *)&removed_calls, NULL);
+    added = reg != CEVENTLOOP_REG_NULL;
     if (added) {
       /* Let the poller settle in an epoll_wait with no timeout, so the value
        * below is the one the removal stamps. */
       evl_sleep_ms(50);
-      _ccol_event_loop_set_poller_batch_gen_for_tests(loop,
-                                                      (uint64_t)UINT32_MAX);
-      removed = ccol_event_loop_remove(loop, reg) == ccol_success;
+      _ceventloop_set_poller_batch_gen_for_tests(loop, (uint64_t)UINT32_MAX);
+      removed = ceventloop_remove(loop, reg) == ccol_success;
       notified = derr_wait_count(&removed_calls, 1, EVL_WAIT_MS);
       evl_sleep_ms(100);
-      uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
+      uint64_t before = _ceventloop_poller_iterations_for_tests(loop);
       evl_sleep_ms(500);
-      idle_iterations =
-          _ccol_event_loop_poller_iterations_for_tests(loop) - before;
+      idle_iterations = _ceventloop_poller_iterations_for_tests(loop) - before;
     }
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   close(pfd[0]);
   close(pfd[1]);
@@ -13868,7 +13633,7 @@ TEST(ccol_event_loop,
 }
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop_destroy drains with a live handle
+ * ceventloop_destroy drains with a live handle
  * ------------------------------------------------------------------------ */
 
 /* One connection with two registrations on the same fd, one per direction.
@@ -13877,10 +13642,10 @@ TEST(ccol_event_loop,
  * The test keeps owning the state, so a callback that runs after the close
  * gets counted instead of reading freed memory. */
 typedef struct {
-  ccol_event_loop loop;
+  ceventloop loop;
   int fd;
-  ccol_event_reg rreg;
-  ccol_event_reg wreg;
+  ceventloop_reg rreg;
+  ceventloop_reg wreg;
   _Atomic int closed;
   _Atomic int in_callback;
   _Atomic int destroy_called;
@@ -13889,7 +13654,7 @@ typedef struct {
   _Atomic int remove_w_rv;
 } ddrain_conn;
 
-static void ddrain_cb(ccol_event_loop l, ccol_event_reg reg, ccol_selectable *s,
+static void ddrain_cb(ceventloop l, ceventloop_reg reg, cselectable_t *s,
                       void *arg) {
   (void)reg;
   (void)l;
@@ -13900,17 +13665,17 @@ static void ddrain_cb(ccol_event_loop l, ccol_event_reg reg, ccol_selectable *s,
     return;
   }
   atomic_store(&c->in_callback, 1);
-  /* The main thread calls ccol_event_loop_destroy while this callback runs,
+  /* The main thread calls ceventloop_destroy while this callback runs,
    * so the close below happens inside that destroy's drain. */
   for (int i = 0; i < 5000 && !atomic_load(&c->destroy_called); i++)
     evl_sleep_ms(1);
   /* A destroy that makes the handle stop resolving right at its start shows
    * up here within this window. One that keeps the handle live for its drain
    * never does, and the window just runs out. */
-  for (int i = 0; i < 200 && _ccol_event_loop_resolve_for_tests(c->loop); i++)
+  for (int i = 0; i < 200 && _ceventloop_resolve_for_tests(c->loop); i++)
     evl_sleep_ms(1);
-  atomic_store(&c->remove_r_rv, (int)ccol_event_loop_remove(c->loop, c->rreg));
-  atomic_store(&c->remove_w_rv, (int)ccol_event_loop_remove(c->loop, c->wreg));
+  atomic_store(&c->remove_r_rv, (int)ceventloop_remove(c->loop, c->rreg));
+  atomic_store(&c->remove_w_rv, (int)ceventloop_remove(c->loop, c->wreg));
   close(c->fd);
   atomic_store(&c->closed, 1);
 }
@@ -13923,32 +13688,32 @@ static void ddrain_run(size_t threads, ddrain_conn *c, bool *entered) {
   atomic_store(&c->remove_r_rv, -1000);
   atomic_store(&c->remove_w_rv, -1000);
   c->fd = sv[0];
-  c->loop = ccol_event_loop_create(16, 1, threads, NULL);
-  ccol_event_handlers_t hr = {.on_readable = ddrain_cb};
-  ccol_event_handlers_t hw = {.on_writable = ddrain_cb};
+  c->loop = ceventloop_create(16, 1, threads, NULL);
+  ceventloop_handlers_t hr = {.on_readable = ddrain_cb};
+  ceventloop_handlers_t hw = {.on_writable = ddrain_cb};
   /* Data is waiting and the socket is writable, so both directions are
    * ready at the same time. */
   test_write_retry_eintr(sv[1], "hello", 5);
-  c->rreg = ccol_event_loop_add(
-      c->loop, ccol_selectable_from_fd(sv[0], ccol_select_read), hr, c, NULL);
-  c->wreg = ccol_event_loop_add(
-      c->loop, ccol_selectable_from_fd(sv[0], ccol_select_write), hw, c, NULL);
+  c->rreg =
+      ceventloop_add(c->loop, cselectable_fd(sv[0], cselect_read), hr, c, NULL);
+  c->wreg = ceventloop_add(c->loop, cselectable_fd(sv[0], cselect_write), hw, c,
+                           NULL);
   for (int i = 0; i < 5000 && !atomic_load(&c->in_callback); i++)
     evl_sleep_ms(1);
   *entered = atomic_load(&c->in_callback) != 0;
   atomic_store(&c->destroy_called, 1);
-  ccol_event_loop_destroy(c->loop);
+  ceventloop_destroy(c->loop);
   if (!atomic_load(&c->closed)) close(sv[0]);
   close(sv[1]);
 }
 
-/* A callback that runs during the drain of ccol_event_loop_destroy calls
- * back into the loop exactly as it would during ccol_event_loop_shutdown.
- * Its ccol_event_loop_remove calls succeed, and no callback of the removed
+/* A callback that runs during the drain of ceventloop_destroy calls
+ * back into the loop exactly as it would during ceventloop_shutdown.
+ * Its ceventloop_remove calls succeed, and no callback of the removed
  * registrations runs after it closed the connection. A destroy that makes
  * the handle stop resolving before its drain fails both removals with
  * ccol_invalid_args. */
-TEST(ccol_event_loop, destroy_drain_callback_removes_its_registrations_1) {
+TEST(ceventloop, destroy_drain_callback_removes_its_registrations_1) {
   ddrain_conn c;
   bool entered;
   ddrain_run(1, &c, &entered);
@@ -13958,7 +13723,7 @@ TEST(ccol_event_loop, destroy_drain_callback_removes_its_registrations_1) {
   REQUIRE_EQ(atomic_load(&c.callbacks_after_close), 0);
 }
 
-TEST(ccol_event_loop, destroy_drain_callback_removes_its_registrations_4) {
+TEST(ceventloop, destroy_drain_callback_removes_its_registrations_4) {
   ddrain_conn c;
   bool entered;
   ddrain_run(4, &c, &entered);
@@ -14013,8 +13778,8 @@ static void fa_count_removed(void *arg) {
   atomic_fetch_add((_Atomic int *)arg, 1);
 }
 
-static void fa_noop_readable(ccol_event_loop l, ccol_event_reg reg,
-                             ccol_selectable *s, void *arg) {
+static void fa_noop_readable(ceventloop l, ceventloop_reg reg, cselectable_t *s,
+                             void *arg) {
   (void)l;
   (void)reg;
   (void)s;
@@ -14023,31 +13788,30 @@ static void fa_noop_readable(ccol_event_loop l, ccol_event_reg reg,
 
 /*
  * A destroy that can't allocate frees every fd registration anyway and calls
- * its on_removed, which is what ccol_event_loop_destroy() promises for a
+ * its on_removed, which is what ceventloop_destroy() promises for a
  * registration that is live at the destroy.
  *
  * A teardown that walks the fd registrations with an iterator that
  * allocates walks nothing when that allocation fails, so on_removed never
  * runs and the registrations leak.
  */
-TEST(ccol_event_loop, a_destroy_without_memory_still_calls_on_removed) {
+TEST(ceventloop, a_destroy_without_memory_still_calls_on_removed) {
   fa_reset();
   char *err = NULL;
-  ccol_event_loop loop = ccol_event_loop_create_mp(8, 4, 1, &fa_procs, &err);
-  bool created = loop != CCOL_EVENT_LOOP_NULL;
+  ceventloop loop = ceventloop_create_mp(8, 4, 1, &fa_procs, &err);
+  bool created = loop != CEVENTLOOP_NULL;
   int sv[2] = {-1, -1};
   bool have_pair = socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0;
   _Atomic int removed = 0;
-  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
+  ceventloop_reg reg = CEVENTLOOP_REG_NULL;
   if (created && have_pair) {
-    ccol_event_handlers_t h = {.on_readable = fa_noop_readable,
+    ceventloop_handlers_t h = {.on_readable = fa_noop_readable,
                                .on_removed = fa_count_removed};
-    reg = ccol_event_loop_add(loop,
-                              ccol_selectable_from_fd(sv[0], ccol_select_read),
-                              h, (void *)&removed, &err);
+    reg = ceventloop_add(loop, cselectable_fd(sv[0], cselect_read), h,
+                         (void *)&removed, &err);
   }
   atomic_store(&fa_fail_all, 1);
-  if (created) ccol_event_loop_destroy(loop);
+  if (created) ceventloop_destroy(loop);
   fa_reset();
   if (have_pair) {
     close(sv[0]);
@@ -14056,12 +13820,12 @@ TEST(ccol_event_loop, a_destroy_without_memory_still_calls_on_removed) {
   int removed_calls = atomic_load(&removed);
   REQUIRE_TRUE(created);
   REQUIRE_TRUE(have_pair);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
   REQUIRE_EQ(removed_calls, 1);
 }
 
-static void fa_on_readable(ccol_event_loop l, ccol_event_reg reg,
-                           ccol_selectable *s, void *arg) {
+static void fa_on_readable(ceventloop l, ceventloop_reg reg, cselectable_t *s,
+                           void *arg) {
   (void)reg;
   (void)l;
   uint64_t v;
@@ -14086,74 +13850,72 @@ static int fa_wake_pipe(int *wfd) {
 
 /* Tells whether l dispatches a readable fd within a bounded time while every
  * allocation succeeds. */
-static bool fa_loop_dispatches(ccol_event_loop l) {
+static bool fa_loop_dispatches(ceventloop l) {
   int wfd = -1;
   int efd = fa_wake_pipe(&wfd);
   if (efd < 0) return false;
   _Atomic int got = 0;
-  ccol_event_handlers_t h = {.on_readable = fa_on_readable};
-  ccol_event_reg r = ccol_event_loop_add(
-      l, ccol_selectable_from_fd(efd, ccol_select_read), h, (void *)&got, NULL);
+  ceventloop_handlers_t h = {.on_readable = fa_on_readable};
+  ceventloop_reg r = ceventloop_add(l, cselectable_fd(efd, cselect_read), h,
+                                    (void *)&got, NULL);
   bool ok = false;
-  if (r != CCOL_EVENT_REG_NULL) {
+  if (r != CEVENTLOOP_REG_NULL) {
     uint64_t one = 1;
     test_write_retry_eintr(wfd, &one, sizeof(one));
     ok = derr_wait_count(&got, 1, 5000);
-    ccol_event_loop_remove(l, r);
+    ceventloop_remove(l, r);
   }
   /* The shutdown joins every thread that could still be holding &got. */
-  ccol_event_loop_shutdown(l);
+  ceventloop_shutdown(l);
   close(efd);
   if (wfd >= 0) close(wfd);
   return ok;
 }
 
-/* Every handle ccol_event_loop_create_mp returns names a loop that
+/* Every handle ceventloop_create_mp returns names a loop that
  * dispatches, whichever allocation fails. The first part fails every
  * allocation of the epoll_wait buffer's size and keeps failing them for a
  * while after create returns. A poller thread that allocated that buffer
  * itself would exit on the failure, and the loop that create returned would
  * never dispatch. */
-TEST(ccol_event_loop, create_under_allocation_failure_never_returns_dead_loop) {
+TEST(ceventloop, create_under_allocation_failure_never_returns_dead_loop) {
   int dead = 0, created = 0, refused = 0;
   for (size_t threads = 1; threads <= 3; threads += 2) {
     fa_reset();
     atomic_store(&fa_fail_size, (size_t)37 * sizeof(ccol_poll_event));
     char *err = NULL;
-    ccol_event_loop l =
-        ccol_event_loop_create_mp(37, 2, threads, &fa_procs, &err);
+    ceventloop l = ceventloop_create_mp(37, 2, threads, &fa_procs, &err);
     evl_sleep_ms(50);
     fa_reset();
-    if (l == CCOL_EVENT_LOOP_NULL) {
+    if (l == CEVENTLOOP_NULL) {
       refused++;
       if (err == NULL) dead++;
       continue;
     }
     created++;
     if (!fa_loop_dispatches(l)) dead++;
-    ccol_event_loop_destroy(l);
+    ceventloop_destroy(l);
   }
 
   /* The sweep. One clean create counts the allocations it makes. */
   fa_reset();
-  ccol_event_loop probe = ccol_event_loop_create_mp(16, 2, 3, &fa_procs, NULL);
+  ceventloop probe = ceventloop_create_mp(16, 2, 3, &fa_procs, NULL);
   long total = atomic_load(&fa_count);
-  if (probe != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(probe);
+  if (probe != CEVENTLOOP_NULL) ceventloop_destroy(probe);
   for (size_t threads = 1; threads <= 3; threads += 2) {
     for (long n = 1; n <= total + 4; n++) {
       fa_reset();
       atomic_store(&fa_fail_at, n);
       char *err = NULL;
-      ccol_event_loop l =
-          ccol_event_loop_create_mp(16, 2, threads, &fa_procs, &err);
+      ceventloop l = ceventloop_create_mp(16, 2, threads, &fa_procs, &err);
       evl_sleep_ms(5);
       fa_reset();
-      if (l == CCOL_EVENT_LOOP_NULL) {
+      if (l == CEVENTLOOP_NULL) {
         if (err == NULL) dead++;
         continue;
       }
       if (!fa_loop_dispatches(l)) dead++;
-      ccol_event_loop_destroy(l);
+      ceventloop_destroy(l);
     }
   }
   fa_reset();
@@ -14166,50 +13928,48 @@ TEST(ccol_event_loop, create_under_allocation_failure_never_returns_dead_loop) {
  * (1-based, counted from the start of the call) fails, and sorts the
  * outcome: 1 for a registration (removed again immediately), 0 for a refusal
  * whose message names a failed allocation and -1 for any other refusal. */
-static int fa_add_outcome(ccol_event_loop l, ccol_selectable sel,
-                          long fail_at) {
+static int fa_add_outcome(ceventloop l, cselectable_t sel, long fail_at) {
   fa_reset();
   atomic_store(&fa_fail_at, fail_at);
   char *err = NULL;
-  ccol_event_handlers_t h = {.on_readable = fa_noop_readable};
-  ccol_event_reg r = ccol_event_loop_add(l, sel, h, NULL, &err);
+  ceventloop_handlers_t h = {.on_readable = fa_noop_readable};
+  ceventloop_reg r = ceventloop_add(l, sel, h, NULL, &err);
   fa_reset();
-  if (r != CCOL_EVENT_REG_NULL) {
-    ccol_event_loop_remove(l, r);
+  if (r != CEVENTLOOP_REG_NULL) {
+    ceventloop_remove(l, r);
     return 1;
   }
   return (err && strstr(err, "failed to allocate")) ? 0 : -1;
 }
 
-/* Failing each allocation ccol_event_loop_add makes in turn gives a message
- * that contains "failed to allocate", as ccol_event_loop_add(3) documents,
+/* Failing each allocation ceventloop_add makes in turn gives a message
+ * that contains "failed to allocate", as ceventloop_add(3) documents,
  * for an fd and for a queue selectable, while a failed initialisation of a
  * queue registration's wait mutex, which no allocator reaches, gives "a
  * system call failed" instead. The test fails if a message doesn't contain
  * the documented text, or if a failed mutex initialisation is reported as
  * an allocation failure. */
-TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
+TEST(ceventloop, add_reports_each_failure_class_with_its_message) {
   fa_reset();
-  ccol_event_loop l = ccol_event_loop_create_mp(8, 1, 1, &fa_procs, NULL);
-  REQUIRE_NE(l, CCOL_EVENT_LOOP_NULL);
+  ceventloop l = ceventloop_create_mp(8, 1, 1, &fa_procs, NULL);
+  REQUIRE_NE(l, CEVENTLOOP_NULL);
   int sv[2] = {-1, -1};
   bool have_pair = socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0;
-  ccol_circular_queue *cq = ccol_circular_queue_create_mp(8, NULL, NULL);
+  ccircq *cq = ccircq_create_mp(8, NULL, NULL);
   bool have_cq = cq != NULL;
 
   int wrong_messages = 0, refusals = 0, total_fd = 0, total_q = 0;
   if (have_pair && have_cq) {
-    ccol_selectable sels[2] = {
-        ccol_selectable_from_fd(sv[0], ccol_select_read),
-        ccol_selectable_from_circq(cq, ccol_select_read)};
+    cselectable_t sels[2] = {cselectable_fd(sv[0], cselect_read),
+                             ccircq_selectable(cq, cselect_read)};
     for (int k = 0; k < 2; k++) {
       /* One clean add counts the allocations the call makes. */
       fa_reset();
-      ccol_event_handlers_t h = {.on_readable = fa_noop_readable};
-      ccol_event_reg r = ccol_event_loop_add(l, sels[k], h, NULL, NULL);
+      ceventloop_handlers_t h = {.on_readable = fa_noop_readable};
+      ceventloop_reg r = ceventloop_add(l, sels[k], h, NULL, NULL);
       long total = atomic_load(&fa_count);
       fa_reset();
-      if (r != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(l, r);
+      if (r != CEVENTLOOP_REG_NULL) ceventloop_remove(l, r);
       if (k == 0)
         total_fd = (int)total;
       else
@@ -14223,14 +13983,13 @@ TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
   }
 
   char *sync_err = NULL;
-  ccol_event_reg sync_reg = CCOL_EVENT_REG_NULL;
+  ceventloop_reg sync_reg = CEVENTLOOP_REG_NULL;
   if (have_cq) {
-    _ccol_event_loop_test_fail_next_reg_sync_init();
-    ccol_event_handlers_t h = {.on_readable = fa_noop_readable};
-    sync_reg =
-        ccol_event_loop_add(l, ccol_selectable_from_circq(cq, ccol_select_read),
-                            h, NULL, &sync_err);
-    if (sync_reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(l, sync_reg);
+    _ceventloop_test_fail_next_reg_sync_init();
+    ceventloop_handlers_t h = {.on_readable = fa_noop_readable};
+    sync_reg = ceventloop_add(l, ccircq_selectable(cq, cselect_read), h, NULL,
+                              &sync_err);
+    if (sync_reg != CEVENTLOOP_REG_NULL) ceventloop_remove(l, sync_reg);
   }
   bool sync_message_ok =
       sync_err && strstr(sync_err, "a system call failed") != NULL;
@@ -14238,20 +13997,19 @@ TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
   /* The handle slot table grows when the loop is created, so only the hook
    * can reach the failure of that growth. */
   char *slot_err = NULL;
-  ccol_event_reg slot_reg = CCOL_EVENT_REG_NULL;
+  ceventloop_reg slot_reg = CEVENTLOOP_REG_NULL;
   if (have_pair) {
-    _ccol_event_loop_test_force_next_reg_slot_acquire_failure();
-    ccol_event_handlers_t h = {.on_readable = fa_noop_readable};
-    slot_reg =
-        ccol_event_loop_add(l, ccol_selectable_from_fd(sv[0], ccol_select_read),
-                            h, NULL, &slot_err);
-    if (slot_reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(l, slot_reg);
+    _ceventloop_test_force_next_reg_slot_acquire_failure();
+    ceventloop_handlers_t h = {.on_readable = fa_noop_readable};
+    slot_reg = ceventloop_add(l, cselectable_fd(sv[0], cselect_read), h, NULL,
+                              &slot_err);
+    if (slot_reg != CEVENTLOOP_REG_NULL) ceventloop_remove(l, slot_reg);
   }
   bool slot_message_ok =
       slot_err && strstr(slot_err, "failed to allocate") != NULL;
 
-  ccol_event_loop_destroy(l);
-  if (have_cq) ccol_circular_queue_destroy(cq);
+  ceventloop_destroy(l);
+  if (have_cq) ccircq_destroy(cq);
   if (have_pair) {
     close(sv[0]);
     close(sv[1]);
@@ -14263,9 +14021,9 @@ TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
   REQUIRE_GT(total_q, 0);
   REQUIRE_GT(refusals, 0);
   REQUIRE_EQ(wrong_messages, 0);
-  REQUIRE_EQ(sync_reg, CCOL_EVENT_REG_NULL);
+  REQUIRE_EQ(sync_reg, CEVENTLOOP_REG_NULL);
   REQUIRE_TRUE(sync_message_ok);
-  REQUIRE_EQ(slot_reg, CCOL_EVENT_REG_NULL);
+  REQUIRE_EQ(slot_reg, CEVENTLOOP_REG_NULL);
   REQUIRE_TRUE(slot_message_ok);
 }
 
@@ -14275,17 +14033,17 @@ TEST(ccol_event_loop, add_reports_each_failure_class_with_its_message) {
  * We count completed epoll_wait calls here rather than time. Without the
  * backoff the poller re-arms and collects the same event again right away,
  * and the counter races into the thousands inside the window. */
-TEST(ccol_event_loop, failed_dispatch_submit_backs_off_instead_of_spinning) {
+TEST(ceventloop, failed_dispatch_submit_backs_off_instead_of_spinning) {
   fa_reset();
-  ccol_event_loop l = ccol_event_loop_create_mp(8, 1, 3, &fa_procs, NULL);
-  REQUIRE_NE(l, CCOL_EVENT_LOOP_NULL);
+  ceventloop l = ceventloop_create_mp(8, 1, 3, &fa_procs, NULL);
+  REQUIRE_NE(l, CEVENTLOOP_NULL);
   int wfd = -1;
   int efd = fa_wake_pipe(&wfd);
   _Atomic int got = 0;
-  ccol_event_handlers_t h = {.on_readable = fa_on_readable};
-  ccol_event_reg r = ccol_event_loop_add(
-      l, ccol_selectable_from_fd(efd, ccol_select_read), h, (void *)&got, NULL);
-  bool added = r != CCOL_EVENT_REG_NULL;
+  ceventloop_handlers_t h = {.on_readable = fa_on_readable};
+  ceventloop_reg r = ceventloop_add(l, cselectable_fd(efd, cselect_read), h,
+                                    (void *)&got, NULL);
+  bool added = r != CEVENTLOOP_REG_NULL;
   uint64_t spins = 0;
   int got_while_failing = 0;
   bool recovered = false;
@@ -14295,15 +14053,15 @@ TEST(ccol_event_loop, failed_dispatch_submit_backs_off_instead_of_spinning) {
     uint64_t one = 1;
     test_write_retry_eintr(wfd, &one, sizeof(one));
     evl_sleep_ms(100);
-    uint64_t before = _ccol_event_loop_poller_iterations_for_tests(l);
+    uint64_t before = _ceventloop_poller_iterations_for_tests(l);
     evl_sleep_ms(300);
-    spins = _ccol_event_loop_poller_iterations_for_tests(l) - before;
+    spins = _ceventloop_poller_iterations_for_tests(l) - before;
     got_while_failing = atomic_load(&got);
     atomic_store(&fa_fail_all, 0);
     recovered = derr_wait_count(&got, 1, 5000);
-    ccol_event_loop_remove(l, r);
+    ceventloop_remove(l, r);
   }
-  ccol_event_loop_destroy(l);
+  ceventloop_destroy(l);
   close(efd);
   if (wfd >= 0) close(wfd);
   fa_reset();
@@ -14314,12 +14072,12 @@ TEST(ccol_event_loop, failed_dispatch_submit_backs_off_instead_of_spinning) {
 }
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop: the self-call guards identify the poller thread by a
+ * ceventloop: the self-call guards identify the poller thread by a
  * thread-local mark, never by its thread ID.
  * ------------------------------------------------------------------------ */
 
 typedef struct {
-  ccol_event_loop loop;
+  ceventloop loop;
   bool created;
   pthread_t poller;
   _Atomic bool matched;
@@ -14333,11 +14091,11 @@ static void *tidr_thread(void *arg) {
   tidr_ctx *c = (tidr_ctx *)arg;
   if (!pthread_equal(pthread_self(), c->poller)) return NULL;
   atomic_store(&c->matched, true);
-  int rv = (int)ccol_event_loop_shutdown(c->loop);
+  int rv = (int)ceventloop_shutdown(c->loop);
   atomic_store(&c->shutdown_rv, rv);
   if (rv == (int)ccol_success) {
-    ccol_event_loop l = c->loop;
-    ccol_event_loop_destroy(l);
+    ceventloop l = c->loop;
+    ceventloop_destroy(l);
     atomic_store(&c->destroyed, true);
   }
   return NULL;
@@ -14398,11 +14156,11 @@ static void tidr_run_body(size_t threads, tidr_ctx *c) {
   enum { TIDR_LOOPS = 8, TIDR_ROUNDS = 64, TIDR_BATCH = 16 };
   for (int attempt = 0; attempt < TIDR_LOOPS && !atomic_load(&c->matched);
        attempt++) {
-    c->loop = ccol_event_loop_create(8, 1, threads, NULL);
-    c->created = c->loop != CCOL_EVENT_LOOP_NULL;
+    c->loop = ceventloop_create(8, 1, threads, NULL);
+    c->created = c->loop != CEVENTLOOP_NULL;
     if (!c->created) return;
-    c->poller = _ccol_event_loop_poller_thread_for_tests(c->loop);
-    if (ccol_event_loop_shutdown(c->loop) == ccol_success) {
+    c->poller = _ceventloop_poller_thread_for_tests(c->loop);
+    if (ceventloop_shutdown(c->loop) == ccol_success) {
       for (int round = 0; round < TIDR_ROUNDS && !atomic_load(&c->matched);
            round++) {
         pthread_t tids[TIDR_BATCH];
@@ -14415,8 +14173,8 @@ static void tidr_run_body(size_t threads, tidr_ctx *c) {
       }
     }
     if (!atomic_load(&c->destroyed)) {
-      ccol_event_loop l = c->loop;
-      ccol_event_loop_destroy(l);
+      ceventloop l = c->loop;
+      ceventloop_destroy(l);
     }
   }
 }
@@ -14426,7 +14184,7 @@ static void tidr_run_body(size_t threads, tidr_ctx *c) {
  * inherits that ID, and a destroy from it would end the process as a
  * self-destroy. The test fails loudly when no thread got the ID, so the
  * case never goes unexamined. */
-TEST(ccol_event_loop, a_thread_that_inherits_the_poller_id_may_destroy_1) {
+TEST(ceventloop, a_thread_that_inherits_the_poller_id_may_destroy_1) {
   tidr_ctx c;
   tidr_run(1, &c);
   REQUIRE_TRUE(c.created);
@@ -14435,7 +14193,7 @@ TEST(ccol_event_loop, a_thread_that_inherits_the_poller_id_may_destroy_1) {
   REQUIRE_TRUE(atomic_load(&c.destroyed));
 }
 
-TEST(ccol_event_loop, a_thread_that_inherits_the_poller_id_may_destroy_4) {
+TEST(ceventloop, a_thread_that_inherits_the_poller_id_may_destroy_4) {
   tidr_ctx c;
   tidr_run(4, &c);
   REQUIRE_TRUE(c.created);
@@ -14445,14 +14203,14 @@ TEST(ccol_event_loop, a_thread_that_inherits_the_poller_id_may_destroy_4) {
 }
 
 typedef struct {
-  ccol_event_loop loop;
+  ceventloop loop;
   _Atomic int rv;
   _Atomic bool done;
 } orsd_ctx;
 
 static void orsd_on_removed(void *arg) {
   orsd_ctx *c = (orsd_ctx *)arg;
-  atomic_store(&c->rv, (int)ccol_event_loop_shutdown(c->loop));
+  atomic_store(&c->rv, (int)ceventloop_shutdown(c->loop));
   atomic_store(&c->done, true);
 }
 
@@ -14464,22 +14222,22 @@ static void orsd_run(size_t threads, orsd_ctx *c) {
   atomic_init(&c->done, false);
   int pfd[2];
   if (pipe(pfd) != 0) return;
-  c->loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (c->loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_removed = orsd_on_removed};
-    ccol_event_reg reg = ccol_event_loop_add(
-        c->loop, ccol_selectable_from_fd(pfd[0], ccol_select_read), h, c, NULL);
-    if (reg != CCOL_EVENT_REG_NULL &&
-        ccol_event_loop_remove(c->loop, reg) == ccol_success) {
+  c->loop = ceventloop_create(8, 1, threads, NULL);
+  if (c->loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_removed = orsd_on_removed};
+    ceventloop_reg reg = ceventloop_add(
+        c->loop, cselectable_fd(pfd[0], cselect_read), h, c, NULL);
+    if (reg != CEVENTLOOP_REG_NULL &&
+        ceventloop_remove(c->loop, reg) == ccol_success) {
       for (int i = 0; i < 5000 && !atomic_load(&c->done); i++) evl_sleep_ms(1);
     }
-    ccol_event_loop_destroy(c->loop);
+    ceventloop_destroy(c->loop);
   }
   close(pfd[0]);
   close(pfd[1]);
 }
 
-TEST(ccol_event_loop, shutdown_from_on_removed_on_the_poller_is_refused) {
+TEST(ceventloop, shutdown_from_on_removed_on_the_poller_is_refused) {
   orsd_ctx c1, c4;
   orsd_run(1, &c1);
   orsd_run(4, &c4);
@@ -14490,7 +14248,7 @@ TEST(ccol_event_loop, shutdown_from_on_removed_on_the_poller_is_refused) {
 }
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop: a queue listener that moves one message per callback
+ * ceventloop: a queue listener that moves one message per callback
  * drains a backlog, and one that moves nothing doesn't spin.
  * ------------------------------------------------------------------------ */
 
@@ -14504,29 +14262,29 @@ typedef struct {
   _Atomic long moved;
 } bkl_ctx;
 
-static void bkl_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                            ccol_selectable *sel, void *arg) {
+static void bkl_on_readable(ceventloop loop, ceventloop_reg reg,
+                            cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   bkl_ctx *c = (bkl_ctx *)arg;
   atomic_fetch_add(&c->dispatches, 1);
   if (c->mode != BKL_RECV_ONE) return;
-  c_message_t m = {.data = NULL, .size = 0};
-  ccol_retval_t rv = (sel->type == ccol_selectable_circq)
-                         ? ccol_circq_try_recv_zc(sel->cq, &m)
-                         : ccol_dynmq_try_recv_zc(sel->dq, &m);
+  cmessage_t m = {.data = NULL, .size = 0};
+  ccol_retval_t rv = (sel->type == cselectable_type_ccircq)
+                         ? ccircq_try_recv(sel->cq, &m)
+                         : cdynmq_try_recv(sel->dq, &m);
   if (rv == ccol_success) atomic_fetch_add(&c->moved, 1);
 }
 
-static void bkl_on_writable(ccol_event_loop loop, ccol_event_reg reg,
-                            ccol_selectable *sel, void *arg) {
+static void bkl_on_writable(ceventloop loop, ceventloop_reg reg,
+                            cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   bkl_ctx *c = (bkl_ctx *)arg;
   atomic_fetch_add(&c->dispatches, 1);
   if (c->mode != BKL_SEND_ONE) return;
-  c_message_t m = {.data = &bkl_token, .size = 1};
-  if (ccol_circq_try_send_zc(sel->cq, &m) == ccol_success)
+  cmessage_t m = {.data = &bkl_token, .size = 1};
+  if (ccircq_try_send(sel->cq, &m) == ccol_success)
     atomic_fetch_add(&c->moved, 1);
 }
 
@@ -14564,30 +14322,28 @@ static void bkl_run_read(size_t threads, bool dynq, int mode, long count,
   bkl_ctx c = {.mode = mode};
   atomic_init(&c.dispatches, 0);
   atomic_init(&c.moved, 0);
-  ccol_circular_queue *cq = NULL;
-  ccol_dynamic_queue *dq = NULL;
+  ccircq *cq = NULL;
+  cdynmq *dq = NULL;
   if (dynq)
-    dq = ccol_dynamic_queue_create(NULL);
+    dq = cdynmq_create(NULL);
   else
-    cq = ccol_circular_queue_create((size_t)count, NULL);
+    cq = ccircq_create((size_t)count, NULL);
   if (!cq && !dq) return;
   bool filled = true;
   for (long i = 0; i < count && filled; i++) {
-    c_message_t m = {.data = &bkl_token, .size = 1};
-    filled = (dynq ? ccol_dynmq_send_zc(dq, &m) : ccol_circq_send_zc(cq, &m)) ==
-             ccol_success;
+    cmessage_t m = {.data = &bkl_token, .size = 1};
+    filled = (dynq ? cdynmq_send(dq, &m) : ccircq_send(cq, &m)) == ccol_success;
   }
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  ccol_event_reg regs[4] = {CCOL_EVENT_REG_NULL, CCOL_EVENT_REG_NULL,
-                            CCOL_EVENT_REG_NULL, CCOL_EVENT_REG_NULL};
-  bool added = filled && loop != CCOL_EVENT_LOOP_NULL;
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  ceventloop_reg regs[4] = {CEVENTLOOP_REG_NULL, CEVENTLOOP_REG_NULL,
+                            CEVENTLOOP_REG_NULL, CEVENTLOOP_REG_NULL};
+  bool added = filled && loop != CEVENTLOOP_NULL;
   for (int i = 0; i < nregs && added; i++) {
-    ccol_selectable sel =
-        dynq ? ccol_selectable_from_dynq(dq, ccol_select_read)
-             : ccol_selectable_from_circq(cq, ccol_select_read);
-    ccol_event_handlers_t h = {.on_readable = bkl_on_readable};
-    regs[i] = ccol_event_loop_add(loop, sel, h, &c, NULL);
-    added = regs[i] != CCOL_EVENT_REG_NULL;
+    cselectable_t sel = dynq ? cdynmq_selectable(dq, cselect_read)
+                             : ccircq_selectable(cq, cselect_read);
+    ceventloop_handlers_t h = {.on_readable = bkl_on_readable};
+    regs[i] = ceventloop_add(loop, sel, h, &c, NULL);
+    added = regs[i] != CEVENTLOOP_REG_NULL;
   }
   if (added) {
     if (mode == BKL_RECV_ONE) bkl_wait_moved(&c, count);
@@ -14598,19 +14354,19 @@ static void bkl_run_read(size_t threads, bool dynq, int mode, long count,
     r->dispatches_later = atomic_load(&c.dispatches);
   }
   for (int i = 0; i < nregs; i++)
-    if (regs[i] != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, regs[i]);
-  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
+    if (regs[i] != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, regs[i]);
+  if (loop != CEVENTLOOP_NULL) ceventloop_destroy(loop);
   r->moved = atomic_load(&c.moved);
-  r->left_in_queue = dynq ? ccol_dynmq_msg_count(dq) : ccol_circq_msg_count(cq);
-  c_message_t m;
+  r->left_in_queue = dynq ? cdynmq_msg_count(dq) : ccircq_msg_count(cq);
+  cmessage_t m;
   if (dynq) {
-    while (ccol_dynmq_try_recv_zc(dq, &m) == ccol_success) {
+    while (cdynmq_try_recv(dq, &m) == ccol_success) {
     }
-    ccol_dynamic_queue_destroy(dq);
+    cdynmq_destroy(dq);
   } else {
-    while (ccol_circq_try_recv_zc(cq, &m) == ccol_success) {
+    while (ccircq_try_recv(cq, &m) == ccol_success) {
     }
-    ccol_circular_queue_destroy(cq);
+    ccircq_destroy(cq);
   }
   r->ok = added;
 }
@@ -14619,7 +14375,7 @@ static void bkl_run_read(size_t threads, bool dynq, int mode, long count,
  * one eventfd wake would cover the whole backlog, each callback would take
  * one message, and the listeners would stop after one or two messages with
  * the rest stuck in the queue. */
-TEST(ccol_event_loop, a_one_message_listener_drains_a_backlog) {
+TEST(ceventloop, a_one_message_listener_drains_a_backlog) {
   static const size_t thread_counts[] = {1, 4};
   bkl_result r[2][2][2];
   for (int t = 0; t < 2; t++)
@@ -14642,7 +14398,7 @@ TEST(ccol_event_loop, a_one_message_listener_drains_a_backlog) {
 /* A listener that ignores a ready queue isn't dispatched again for the same
  * wake. With one listener that's exactly one dispatch, and with two the wake
  * reaches each of them at most twice before the count stops growing. */
-TEST(ccol_event_loop, a_listener_that_moves_nothing_does_not_spin) {
+TEST(ceventloop, a_listener_that_moves_nothing_does_not_spin) {
   static const size_t thread_counts[] = {1, 4};
   bkl_result one[2], two[2];
   for (int t = 0; t < 2; t++) {
@@ -14671,37 +14427,37 @@ static void bkl_run_write(size_t threads, int mode, long capacity,
   bkl_ctx c = {.mode = mode};
   atomic_init(&c.dispatches, 0);
   atomic_init(&c.moved, 0);
-  ccol_circular_queue *cq = ccol_circular_queue_create((size_t)capacity, NULL);
+  ccircq *cq = ccircq_create((size_t)capacity, NULL);
   if (!cq) return;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_writable = bkl_on_writable};
-    reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_circq(cq, ccol_select_write), h, &c, NULL);
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  ceventloop_reg reg = CEVENTLOOP_REG_NULL;
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_writable = bkl_on_writable};
+    reg =
+        ceventloop_add(loop, ccircq_selectable(cq, cselect_write), h, &c, NULL);
   }
-  if (reg != CCOL_EVENT_REG_NULL) {
+  if (reg != CEVENTLOOP_REG_NULL) {
     if (mode == BKL_SEND_ONE) bkl_wait_moved(&c, capacity);
     if (mode == BKL_NOTHING) bkl_wait_dispatches(&c, 1);
     evl_sleep_ms(200);
     r->dispatches_settled = atomic_load(&c.dispatches);
     evl_sleep_ms(200);
     r->dispatches_later = atomic_load(&c.dispatches);
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
   }
-  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
+  if (loop != CEVENTLOOP_NULL) ceventloop_destroy(loop);
   r->moved = atomic_load(&c.moved);
-  r->left_in_queue = ccol_circq_msg_count(cq);
-  c_message_t m;
-  while (ccol_circq_try_recv_zc(cq, &m) == ccol_success) {
+  r->left_in_queue = ccircq_msg_count(cq);
+  cmessage_t m;
+  while (ccircq_try_recv(cq, &m) == ccol_success) {
   }
-  ccol_circular_queue_destroy(cq);
-  r->ok = reg != CCOL_EVENT_REG_NULL;
+  ccircq_destroy(cq);
+  r->ok = reg != CEVENTLOOP_REG_NULL;
 }
 
 /* Without the re-wake after a dispatch that sent a message, the listener
  * sends one message and never gets dispatched again. */
-TEST(ccol_event_loop, a_one_message_writer_fills_the_queue_and_stops) {
+TEST(ceventloop, a_one_message_writer_fills_the_queue_and_stops) {
   static const size_t thread_counts[] = {1, 4};
   bkl_result fill[2], idle[2];
   for (int t = 0; t < 2; t++) {
@@ -14732,14 +14488,14 @@ typedef struct {
   _Atomic long refused;
 } dsw_ctx;
 
-static void dsw_on_writable(ccol_event_loop loop, ccol_event_reg reg,
-                            ccol_selectable *sel, void *arg) {
+static void dsw_on_writable(ceventloop loop, ceventloop_reg reg,
+                            cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   dsw_ctx *c = (dsw_ctx *)arg;
   atomic_fetch_add(&c->dispatches, 1);
-  c_message_t m = {.data = &bkl_token, .size = 1};
-  if (ccol_circq_try_send_zc(sel->cq, &m) == ccol_not_permitted)
+  cmessage_t m = {.data = &bkl_token, .size = 1};
+  if (ccircq_try_send(sel->cq, &m) == ccol_not_permitted)
     atomic_fetch_add(&c->refused, 1);
 }
 
@@ -14757,22 +14513,21 @@ static void dsw_run(size_t threads, bool add_after_disable, dsw_result *r) {
   dsw_ctx c;
   atomic_init(&c.dispatches, 0);
   atomic_init(&c.refused, 0);
-  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+  ccircq *cq = ccircq_create(1, NULL);
   if (!cq) return;
-  c_message_t fill = {.data = &bkl_token, .size = 1};
-  bool filled = ccol_circq_try_send_zc(cq, &fill) == ccol_success;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
-  ccol_event_handlers_t h = {.on_writable = dsw_on_writable};
-  ccol_selectable sel = ccol_selectable_from_circq(cq, ccol_select_write);
-  if (add_after_disable) ccol_circq_disable_sending(cq);
-  if (loop != CCOL_EVENT_LOOP_NULL)
-    reg = ccol_event_loop_add(loop, sel, h, &c, NULL);
-  if (reg != CCOL_EVENT_REG_NULL) {
+  cmessage_t fill = {.data = &bkl_token, .size = 1};
+  bool filled = ccircq_try_send(cq, &fill) == ccol_success;
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  ceventloop_reg reg = CEVENTLOOP_REG_NULL;
+  ceventloop_handlers_t h = {.on_writable = dsw_on_writable};
+  cselectable_t sel = ccircq_selectable(cq, cselect_write);
+  if (add_after_disable) ccircq_disable_sending(cq);
+  if (loop != CEVENTLOOP_NULL) reg = ceventloop_add(loop, sel, h, &c, NULL);
+  if (reg != CEVENTLOOP_REG_NULL) {
     if (!add_after_disable) {
       evl_sleep_ms(100);
       r->before_disable = atomic_load(&c.dispatches);
-      ccol_circq_disable_sending(cq);
+      ccircq_disable_sending(cq);
     }
     for (int i = 0; i < 10000 && atomic_load(&c.dispatches) < 1; i++)
       evl_sleep_ms(1);
@@ -14780,21 +14535,21 @@ static void dsw_run(size_t threads, bool add_after_disable, dsw_result *r) {
     r->settled = atomic_load(&c.dispatches);
     evl_sleep_ms(200);
     r->later = atomic_load(&c.dispatches);
-    ccol_event_loop_remove(loop, reg);
+    ceventloop_remove(loop, reg);
   }
-  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
+  if (loop != CEVENTLOOP_NULL) ceventloop_destroy(loop);
   r->refused = atomic_load(&c.refused);
-  r->left_in_queue = ccol_circq_msg_count(cq);
-  c_message_t m;
-  while (ccol_circq_try_recv_zc(cq, &m) == ccol_success) {
+  r->left_in_queue = ccircq_msg_count(cq);
+  cmessage_t m;
+  while (ccircq_try_recv(cq, &m) == ccol_success) {
   }
-  ccol_circular_queue_destroy(cq);
-  r->ok = filled && reg != CCOL_EVENT_REG_NULL;
+  ccircq_destroy(cq);
+  r->ok = filled && reg != CEVENTLOOP_REG_NULL;
 }
 
 /* A queue with sends off has to count as ready for the write direction;
  * otherwise a registration added after the disable gets no call at all. */
-TEST(ccol_event_loop, a_write_registration_hears_once_that_sends_are_off) {
+TEST(ceventloop, a_write_registration_hears_once_that_sends_are_off) {
   static const size_t thread_counts[] = {1, 4};
   dsw_result before[2], after[2];
   for (int t = 0; t < 2; t++) {
@@ -14817,27 +14572,26 @@ TEST(ccol_event_loop, a_write_registration_hears_once_that_sends_are_off) {
 }
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop_add and ccol_event_loop_modify: the documented outputs.
+ * ceventloop_add and ceventloop_modify: the documented outputs.
  * ------------------------------------------------------------------------ */
 
-TEST(ccol_event_loop, add_sets_err_str_to_null_on_success) {
+TEST(ceventloop, add_sets_err_str_to_null_on_success) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  bool created = loop != CCOL_EVENT_LOOP_NULL;
+  ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+  bool created = loop != CEVENTLOOP_NULL;
   char *err = (char *)"poison";
-  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
+  ceventloop_reg reg = CEVENTLOOP_REG_NULL;
   if (created) {
-    ccol_event_handlers_t none = {0};
-    reg = ccol_event_loop_add(loop,
-                              ccol_selectable_from_fd(pfd[0], ccol_select_read),
-                              none, NULL, &err);
-    ccol_event_loop_destroy(loop);
+    ceventloop_handlers_t none = {0};
+    reg = ceventloop_add(loop, cselectable_fd(pfd[0], cselect_read), none, NULL,
+                         &err);
+    ceventloop_destroy(loop);
   }
   close(pfd[0]);
   close(pfd[1]);
   REQUIRE_TRUE(created);
-  REQUIRE_NE(reg, CCOL_EVENT_REG_NULL);
+  REQUIRE_NE(reg, CEVENTLOOP_REG_NULL);
   REQUIRE_EQ((void *)err, NULL);
 }
 
@@ -14852,29 +14606,28 @@ static void msd_run(size_t threads, uint64_t *advanced, uint64_t *window,
   *window = 0;
   int sv[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return;
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t none = {0};
-    ccol_event_reg reg = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(sv[0], ccol_select_read), none, NULL,
-        NULL);
-    if (reg != CCOL_EVENT_REG_NULL) {
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t none = {0};
+    ceventloop_reg reg = ceventloop_add(
+        loop, cselectable_fd(sv[0], cselect_read), none, NULL, NULL);
+    if (reg != CEVENTLOOP_REG_NULL) {
       close(sv[1]);
       sv[1] = -1;
       /* Gives the hang-up time to arrive and mute the registration. */
       evl_sleep_ms(100);
-      uint64_t before = _ccol_event_loop_poller_iterations_for_tests(loop);
+      uint64_t before = _ceventloop_poller_iterations_for_tests(loop);
       bool modified =
-          ccol_event_loop_modify(loop, reg, ccol_select_read) == ccol_success;
+          ceventloop_modify(loop, reg, cselect_read) == ccol_success;
       for (int i = 0; i < 2000; i++) {
-        if (_ccol_event_loop_poller_iterations_for_tests(loop) > before) break;
+        if (_ceventloop_poller_iterations_for_tests(loop) > before) break;
         evl_sleep_ms(1);
       }
-      *advanced = _ccol_event_loop_poller_iterations_for_tests(loop) - before;
+      *advanced = _ceventloop_poller_iterations_for_tests(loop) - before;
       *window = unh_poller_iterations_in_window(loop);
-      *ok = modified && ccol_event_loop_remove(loop, reg) == ccol_success;
+      *ok = modified && ceventloop_remove(loop, reg) == ccol_success;
     }
-    ccol_event_loop_destroy(loop);
+    ceventloop_destroy(loop);
   }
   close(sv[0]);
   if (sv[1] >= 0) close(sv[1]);
@@ -14883,7 +14636,7 @@ static void msd_run(size_t threads, uint64_t *advanced, uint64_t *window,
 /* A modify to the current direction that returns without arming the muted
  * registration again leaves nothing to wake the poller, and the iteration
  * count doesn't move. */
-TEST(ccol_event_loop, a_modify_to_the_same_direction_unmutes) {
+TEST(ceventloop, a_modify_to_the_same_direction_unmutes) {
   uint64_t adv1, win1, adv4, win4;
   bool ok1, ok4;
   msd_run(1, &adv1, &win1, &ok1);
@@ -14916,9 +14669,8 @@ TEST(queue_mutex_registry, a_remove_is_constant_time_and_keeps_every_index) {
   int created = 0;
   for (; created < QMR_N; created++) {
     is_dyn[created] = (created % 3) == 0;
-    queues[created] = is_dyn[created]
-                          ? (void *)ccol_dynamic_queue_create(NULL)
-                          : (void *)ccol_circular_queue_create(4, NULL);
+    queues[created] = is_dyn[created] ? (void *)cdynmq_create(NULL)
+                                      : (void *)ccircq_create(4, NULL);
     if (!queues[created]) break;
   }
   size_t full_count = 0;
@@ -14938,11 +14690,11 @@ TEST(queue_mutex_registry, a_remove_is_constant_time_and_keeps_every_index) {
   bool every_step_ok = true;
   for (int i = 0; i < created; i++) {
     if (is_dyn[i]) {
-      ccol_dynamic_queue *dq = (ccol_dynamic_queue *)queues[i];
-      ccol_dynamic_queue_destroy(dq);
+      cdynmq *dq = (cdynmq *)queues[i];
+      cdynmq_destroy(dq);
     } else {
-      ccol_circular_queue *cq = (ccol_circular_queue *)queues[i];
-      ccol_circular_queue_destroy(cq);
+      ccircq *cq = (ccircq *)queues[i];
+      ccircq_destroy(cq);
     }
     if (!_ccol_queue_mutex_registry_check_for_tests(NULL, NULL))
       every_step_ok = false;
@@ -14963,7 +14715,7 @@ TEST(queue_mutex_registry, a_remove_is_constant_time_and_keeps_every_index) {
 #endif
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop: a queue listener that moves messages keeps its own
+ * ceventloop: a queue listener that moves messages keeps its own
  * dispatches going wherever an idle sibling sits in the list.
  * ------------------------------------------------------------------------ */
 
@@ -14974,34 +14726,34 @@ typedef struct {
   _Atomic long moved;
 } sib_ctx;
 
-static void sib_on_writable(ccol_event_loop loop, ccol_event_reg reg,
-                            ccol_selectable *sel, void *arg) {
+static void sib_on_writable(ceventloop loop, ceventloop_reg reg,
+                            cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   sib_ctx *c = (sib_ctx *)arg;
   atomic_fetch_add(&c->dispatches, 1);
   if (!c->active || atomic_load(&c->budget) <= 0) return;
-  c_message_t m = {.data = &bkl_token, .size = 1};
-  ccol_retval_t rv = (sel->type == ccol_selectable_circq)
-                         ? ccol_circq_try_send_zc(sel->cq, &m)
-                         : ccol_dynmq_send_zc(sel->dq, &m);
+  cmessage_t m = {.data = &bkl_token, .size = 1};
+  ccol_retval_t rv = (sel->type == cselectable_type_ccircq)
+                         ? ccircq_try_send(sel->cq, &m)
+                         : cdynmq_send(sel->dq, &m);
   if (rv == ccol_success) {
     atomic_fetch_sub(&c->budget, 1);
     atomic_fetch_add(&c->moved, 1);
   }
 }
 
-static void sib_on_readable(ccol_event_loop loop, ccol_event_reg reg,
-                            ccol_selectable *sel, void *arg) {
+static void sib_on_readable(ceventloop loop, ceventloop_reg reg,
+                            cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   sib_ctx *c = (sib_ctx *)arg;
   atomic_fetch_add(&c->dispatches, 1);
   if (!c->active) return;
-  c_message_t m = {.data = NULL, .size = 0};
-  ccol_retval_t rv = (sel->type == ccol_selectable_circq)
-                         ? ccol_circq_try_recv_zc(sel->cq, &m)
-                         : ccol_dynmq_try_recv_zc(sel->dq, &m);
+  cmessage_t m = {.data = NULL, .size = 0};
+  ccol_retval_t rv = (sel->type == cselectable_type_ccircq)
+                         ? ccircq_try_recv(sel->cq, &m)
+                         : cdynmq_try_recv(sel->dq, &m);
   if (rv == ccol_success) atomic_fetch_add(&c->moved, 1);
 }
 
@@ -15019,7 +14771,7 @@ typedef struct {
  * direction the queue already holds `count` messages before the listeners
  * exist and the active reader takes one per callback. Nothing else touches
  * the queue. */
-static void sib_run(size_t threads, bool dynq, ccol_select_dir dir,
+static void sib_run(size_t threads, bool dynq, cselect_dir_t dir,
                     bool idle_first, long count, sib_result *r) {
   memset(r, 0, sizeof(*r));
   sib_ctx idle_c = {.active = false};
@@ -15027,37 +14779,35 @@ static void sib_run(size_t threads, bool dynq, ccol_select_dir dir,
   atomic_init(&idle_c.budget, 0);
   atomic_init(&idle_c.dispatches, 0);
   atomic_init(&idle_c.moved, 0);
-  atomic_init(&act_c.budget, dir == ccol_select_write ? count : 0);
+  atomic_init(&act_c.budget, dir == cselect_write ? count : 0);
   atomic_init(&act_c.dispatches, 0);
   atomic_init(&act_c.moved, 0);
-  ccol_circular_queue *cq = NULL;
-  ccol_dynamic_queue *dq = NULL;
+  ccircq *cq = NULL;
+  cdynmq *dq = NULL;
   if (dynq)
-    dq = ccol_dynamic_queue_create(NULL);
+    dq = cdynmq_create(NULL);
   else
-    cq = ccol_circular_queue_create((size_t)count, NULL);
+    cq = ccircq_create((size_t)count, NULL);
   if (!cq && !dq) return;
   bool filled = true;
-  for (long i = 0; dir == ccol_select_read && i < count && filled; i++) {
-    c_message_t m = {.data = &bkl_token, .size = 1};
-    filled = (dynq ? ccol_dynmq_send_zc(dq, &m) : ccol_circq_send_zc(cq, &m)) ==
-             ccol_success;
+  for (long i = 0; dir == cselect_read && i < count && filled; i++) {
+    cmessage_t m = {.data = &bkl_token, .size = 1};
+    filled = (dynq ? cdynmq_send(dq, &m) : ccircq_send(cq, &m)) == ccol_success;
   }
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, threads, NULL);
-  ccol_event_reg regs[2] = {CCOL_EVENT_REG_NULL, CCOL_EVENT_REG_NULL};
-  bool added = filled && loop != CCOL_EVENT_LOOP_NULL;
+  ceventloop loop = ceventloop_create(8, 1, threads, NULL);
+  ceventloop_reg regs[2] = {CEVENTLOOP_REG_NULL, CEVENTLOOP_REG_NULL};
+  bool added = filled && loop != CEVENTLOOP_NULL;
   for (int i = 0; i < 2 && added; i++) {
     bool idle_now = (i == 0) == idle_first;
-    ccol_selectable sel = dynq ? ccol_selectable_from_dynq(dq, dir)
-                               : ccol_selectable_from_circq(cq, dir);
-    ccol_event_handlers_t h = {0};
-    if (dir == ccol_select_read)
+    cselectable_t sel =
+        dynq ? cdynmq_selectable(dq, dir) : ccircq_selectable(cq, dir);
+    ceventloop_handlers_t h = {0};
+    if (dir == cselect_read)
       h.on_readable = sib_on_readable;
     else
       h.on_writable = sib_on_writable;
-    regs[i] =
-        ccol_event_loop_add(loop, sel, h, idle_now ? &idle_c : &act_c, NULL);
-    added = regs[i] != CCOL_EVENT_REG_NULL;
+    regs[i] = ceventloop_add(loop, sel, h, idle_now ? &idle_c : &act_c, NULL);
+    added = regs[i] != CEVENTLOOP_REG_NULL;
   }
   if (added) {
     for (int i = 0; i < 10000 && atomic_load(&act_c.moved) < count; i++)
@@ -15068,19 +14818,19 @@ static void sib_run(size_t threads, bool dynq, ccol_select_dir dir,
     r->idle_later = atomic_load(&idle_c.dispatches);
   }
   for (int i = 0; i < 2; i++)
-    if (regs[i] != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, regs[i]);
-  if (loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(loop);
+    if (regs[i] != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, regs[i]);
+  if (loop != CEVENTLOOP_NULL) ceventloop_destroy(loop);
   r->active_moved = atomic_load(&act_c.moved);
-  r->left_in_queue = dynq ? ccol_dynmq_msg_count(dq) : ccol_circq_msg_count(cq);
-  c_message_t m;
+  r->left_in_queue = dynq ? cdynmq_msg_count(dq) : ccircq_msg_count(cq);
+  cmessage_t m;
   if (dynq) {
-    while (ccol_dynmq_try_recv_zc(dq, &m) == ccol_success) {
+    while (cdynmq_try_recv(dq, &m) == ccol_success) {
     }
-    ccol_dynamic_queue_destroy(dq);
+    cdynmq_destroy(dq);
   } else {
-    while (ccol_circq_try_recv_zc(cq, &m) == ccol_success) {
+    while (ccircq_try_recv(cq, &m) == ccol_success) {
     }
-    ccol_circular_queue_destroy(cq);
+    ccircq_destroy(cq);
   }
   r->ok = added;
 }
@@ -15090,8 +14840,7 @@ static void sib_run(size_t threads, bool dynq, ccol_select_dir dir,
  * after an idle one is the head of the list, its progress only reaches the
  * idle tail and the idle tail ends the chain, so the active writer sends one
  * message and the active reader takes one, which this test catches. */
-TEST(ccol_event_loop,
-     an_idle_older_sibling_does_not_strand_an_active_listener) {
+TEST(ceventloop, an_idle_older_sibling_does_not_strand_an_active_listener) {
   static const size_t thread_counts[] = {1, 4};
   sib_result r[2][2][2][2]; /* threads, kind, direction, order */
   for (int t = 0; t < 2; t++)
@@ -15099,7 +14848,7 @@ TEST(ccol_event_loop,
       for (int d = 0; d < 2; d++)
         for (int o = 0; o < 2; o++)
           sib_run(thread_counts[t], k == 1,
-                  d == 0 ? ccol_select_read : ccol_select_write, o == 0, 100,
+                  d == 0 ? cselect_read : cselect_write, o == 0, 100,
                   &r[t][k][d][o]);
   for (int t = 0; t < 2; t++) {
     for (int k = 0; k < 2; k++) {
@@ -15124,7 +14873,7 @@ TEST(ccol_event_loop,
 
 /* Three listeners that all decline a ready queue pass a wake between them a
  * bounded number of times and then stop. */
-TEST(ccol_event_loop, three_listeners_that_move_nothing_do_not_spin) {
+TEST(ceventloop, three_listeners_that_move_nothing_do_not_spin) {
   static const size_t thread_counts[] = {1, 4};
   bkl_result r[2];
   for (int t = 0; t < 2; t++)
@@ -15139,7 +14888,7 @@ TEST(ccol_event_loop, three_listeners_that_move_nothing_do_not_spin) {
 }
 
 /* ------------------------------------------------------------------------
- * ccol_event_loop: a listener that leaves a queue hands on the wake it
+ * ceventloop: a listener that leaves a queue hands on the wake it
  * holds, so the queue's other listeners hear about the message anyway.
  * ------------------------------------------------------------------------ */
 
@@ -15149,14 +14898,14 @@ typedef struct {
   _Atomic bool blocker_release;
   _Atomic long leaving_calls;
   _Atomic long staying_received;
-  ccol_circular_queue *cq;
-  ccol_event_loop l1;
+  ccircq *cq;
+  ceventloop l1;
   size_t sel_idx;
   ccol_retval_t sel_rv;
 } rlw_ctx;
 
-static void rlw_on_block(ccol_event_loop loop, ccol_event_reg reg,
-                         ccol_selectable *sel, void *arg) {
+static void rlw_on_block(ceventloop loop, ceventloop_reg reg,
+                         cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   rlw_ctx *c = (rlw_ctx *)arg;
@@ -15168,42 +14917,42 @@ static void rlw_on_block(ccol_event_loop loop, ccol_event_reg reg,
     evl_sleep_ms(1);
 }
 
-static void rlw_on_leaving(ccol_event_loop loop, ccol_event_reg reg,
-                           ccol_selectable *sel, void *arg) {
+static void rlw_on_leaving(ceventloop loop, ceventloop_reg reg,
+                           cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   (void)sel;
   atomic_fetch_add(&((rlw_ctx *)arg)->leaving_calls, 1);
 }
 
-static void rlw_on_staying(ccol_event_loop loop, ccol_event_reg reg,
-                           ccol_selectable *sel, void *arg) {
+static void rlw_on_staying(ceventloop loop, ceventloop_reg reg,
+                           cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
-  c_message_t m;
-  if (ccol_circq_try_recv_zc(sel->cq, &m) == ccol_success)
+  cmessage_t m;
+  if (ccircq_try_recv(sel->cq, &m) == ccol_success)
     atomic_fetch_add(&((rlw_ctx *)arg)->staying_received, 1);
 }
 
 static void *rlw_select_thread(void *arg) {
   rlw_ctx *c = (rlw_ctx *)arg;
-  ccol_selectable s = ccol_selectable_from_circq(c->cq, ccol_select_read);
-  c->sel_rv = ccol_select_timed(&c->sel_idx, 1, &s, 5000000);
+  cselectable_t s = ccircq_selectable(c->cq, cselect_read);
+  c->sel_rv = cselect_timed(&c->sel_idx, 1, &s, 5000000);
   return NULL;
 }
 
 static void *rlw_destroy_thread(void *arg) {
   rlw_ctx *c = (rlw_ctx *)arg;
-  ccol_event_loop_destroy(c->l1);
+  ceventloop_destroy(c->l1);
   return NULL;
 }
 
 /* The listener that stays is a registration of a second loop (use_select
- * false) or a ccol_select_timed() caller. The one that leaves is a
+ * false) or a cselect_timed() caller. The one that leaves is a
  * registration of loop L1 linked after it, so it's the head of the list and
  * a send wakes it. L1's poller is held in a pipe callback, so the leaving
  * registration can't dispatch before it leaves, either by
- * ccol_event_loop_remove (by_destroy false) or by the destroy of L1. Returns
+ * ceventloop_remove (by_destroy false) or by the destroy of L1. Returns
  * true when the staying listener got the message. */
 static bool rlw_run(bool use_select, bool by_destroy, bool *setup_ok) {
   *setup_ok = false;
@@ -15215,41 +14964,40 @@ static bool rlw_run(bool use_select, bool by_destroy, bool *setup_ok) {
   atomic_init(&c.staying_received, 0);
   c.sel_rv = ccol_unexpected_failure;
   if (pipe(c.pfd) != 0) return false;
-  c.cq = ccol_circular_queue_create(8, NULL);
-  c.l1 = ccol_event_loop_create(8, 1, 1, NULL);
-  ccol_event_loop l2 = CCOL_EVENT_LOOP_NULL;
-  ccol_event_reg r2 = CCOL_EVENT_REG_NULL;
-  bool ok = c.cq && c.l1 != CCOL_EVENT_LOOP_NULL;
+  c.cq = ccircq_create(8, NULL);
+  c.l1 = ceventloop_create(8, 1, 1, NULL);
+  ceventloop l2 = CEVENTLOOP_NULL;
+  ceventloop_reg r2 = CEVENTLOOP_REG_NULL;
+  bool ok = c.cq && c.l1 != CEVENTLOOP_NULL;
   pthread_t st;
   bool st_started = false;
   if (ok && !use_select) {
-    l2 = ccol_event_loop_create(8, 1, 1, NULL);
-    ok = l2 != CCOL_EVENT_LOOP_NULL;
+    l2 = ceventloop_create(8, 1, 1, NULL);
+    ok = l2 != CEVENTLOOP_NULL;
     if (ok) {
-      ccol_event_handlers_t h = {.on_readable = rlw_on_staying};
-      r2 = ccol_event_loop_add(
-          l2, ccol_selectable_from_circq(c.cq, ccol_select_read), h, &c, NULL);
-      ok = r2 != CCOL_EVENT_REG_NULL;
+      ceventloop_handlers_t h = {.on_readable = rlw_on_staying};
+      r2 = ceventloop_add(l2, ccircq_selectable(c.cq, cselect_read), h, &c,
+                          NULL);
+      ok = r2 != CEVENTLOOP_REG_NULL;
     }
   } else if (ok) {
     st_started = pthread_create(&st, NULL, rlw_select_thread, &c) == 0;
     ok = st_started;
-    for (int i = 0; ok && i < 5000 &&
-                    !_ccol_circq_test_has_sel_read_waiter_for_tests(c.cq);
+    for (int i = 0;
+         ok && i < 5000 && !_ccircq_test_has_sel_read_waiter_for_tests(c.cq);
          i++)
       evl_sleep_ms(1);
-    ok = ok && _ccol_circq_test_has_sel_read_waiter_for_tests(c.cq);
+    ok = ok && _ccircq_test_has_sel_read_waiter_for_tests(c.cq);
   }
-  ccol_event_reg rb = CCOL_EVENT_REG_NULL, r1 = CCOL_EVENT_REG_NULL;
+  ceventloop_reg rb = CEVENTLOOP_REG_NULL, r1 = CEVENTLOOP_REG_NULL;
   if (ok) {
-    ccol_event_handlers_t hb = {.on_readable = rlw_on_block};
-    rb = ccol_event_loop_add(
-        c.l1, ccol_selectable_from_fd(c.pfd[0], ccol_select_read), hb, &c,
-        NULL);
-    ccol_event_handlers_t h1 = {.on_readable = rlw_on_leaving};
-    r1 = ccol_event_loop_add(
-        c.l1, ccol_selectable_from_circq(c.cq, ccol_select_read), h1, &c, NULL);
-    ok = rb != CCOL_EVENT_REG_NULL && r1 != CCOL_EVENT_REG_NULL;
+    ceventloop_handlers_t hb = {.on_readable = rlw_on_block};
+    rb = ceventloop_add(c.l1, cselectable_fd(c.pfd[0], cselect_read), hb, &c,
+                        NULL);
+    ceventloop_handlers_t h1 = {.on_readable = rlw_on_leaving};
+    r1 = ceventloop_add(c.l1, ccircq_selectable(c.cq, cselect_read), h1, &c,
+                        NULL);
+    ok = rb != CEVENTLOOP_REG_NULL && r1 != CEVENTLOOP_REG_NULL;
   }
   if (ok) {
     ssize_t wr = write(c.pfd[1], "x", 1);
@@ -15260,8 +15008,8 @@ static bool rlw_run(bool use_select, bool by_destroy, bool *setup_ok) {
   }
   bool sent = false;
   if (ok) {
-    c_message_t m = {.data = &bkl_token, .size = 1};
-    sent = ccol_circq_send_zc(c.cq, &m) == ccol_success;
+    cmessage_t m = {.data = &bkl_token, .size = 1};
+    sent = ccircq_send(c.cq, &m) == ccol_success;
   }
   pthread_t dt;
   bool dt_started = false;
@@ -15272,7 +15020,7 @@ static bool rlw_run(bool use_select, bool by_destroy, bool *setup_ok) {
        * before the poller leaves the blocking callback. */
       evl_sleep_ms(100);
     } else {
-      ccol_event_loop_remove(c.l1, r1);
+      ceventloop_remove(c.l1, r1);
     }
   }
   atomic_store(&c.blocker_release, true);
@@ -15290,17 +15038,17 @@ static bool rlw_run(bool use_select, bool by_destroy, bool *setup_ok) {
     }
   }
   if (st_started) pthread_join(st, NULL);
-  if (r2 != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(l2, r2);
-  if (l2 != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(l2);
-  if (c.l1 != CCOL_EVENT_LOOP_NULL && !(by_destroy && dt_started)) {
-    if (rb != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(c.l1, rb);
-    ccol_event_loop_destroy(c.l1);
+  if (r2 != CEVENTLOOP_REG_NULL) ceventloop_remove(l2, r2);
+  if (l2 != CEVENTLOOP_NULL) ceventloop_destroy(l2);
+  if (c.l1 != CEVENTLOOP_NULL && !(by_destroy && dt_started)) {
+    if (rb != CEVENTLOOP_REG_NULL) ceventloop_remove(c.l1, rb);
+    ceventloop_destroy(c.l1);
   }
   if (c.cq) {
-    c_message_t x;
-    while (ccol_circq_try_recv_zc(c.cq, &x) == ccol_success) {
+    cmessage_t x;
+    while (ccircq_try_recv(c.cq, &x) == ccol_success) {
     }
-    ccol_circular_queue_destroy(c.cq);
+    ccircq_destroy(c.cq);
   }
   close(c.pfd[0]);
   close(c.pfd[1]);
@@ -15313,9 +15061,9 @@ static bool rlw_run(bool use_select, bool by_destroy, bool *setup_ok) {
 
 /* A registration that holds the only wake of a send and leaves without
  * handing it on means nobody wakes the queue's other listener, so the second
- * loop's registration never gets the message and the ccol_select_timed()
+ * loop's registration never gets the message and the cselect_timed()
  * caller times out with the message sitting in the queue. */
-TEST(ccol_event_loop, a_departing_listener_hands_its_wake_on) {
+TEST(ceventloop, a_departing_listener_hands_its_wake_on) {
   bool setup[2][2], got[2][2];
   for (int s = 0; s < 2; s++)
     for (int d = 0; d < 2; d++)
@@ -15338,18 +15086,18 @@ typedef struct {
   _Atomic bool gate;
 } ifs_ctx;
 
-static void ifs_on_writable(ccol_event_loop loop, ccol_event_reg reg,
-                            ccol_selectable *sel, void *arg) {
+static void ifs_on_writable(ceventloop loop, ceventloop_reg reg,
+                            cselectable_t *sel, void *arg) {
   (void)loop;
   (void)reg;
   ifs_ctx *c = (ifs_ctx *)arg;
   if (atomic_exchange(&c->entered, true)) return;
   for (int i = 0; i < 20000 && !atomic_load(&c->gate); i++) evl_sleep_ms(1);
-  c_message_t m = {.data = &bkl_token, .size = 1};
-  if (sel->type == ccol_selectable_circq)
-    (void)ccol_circq_try_send_zc(sel->cq, &m);
+  cmessage_t m = {.data = &bkl_token, .size = 1};
+  if (sel->type == cselectable_type_ccircq)
+    (void)ccircq_try_send(sel->cq, &m);
   else
-    (void)ccol_dynmq_send_zc(sel->dq, &m);
+    (void)cdynmq_send(sel->dq, &m);
 }
 
 static void *ifs_open_gate(void *arg) {
@@ -15373,28 +15121,27 @@ static __attribute__((noreturn)) void ifs_child(bool dynq) {
   ifs_ctx c;
   atomic_init(&c.entered, false);
   atomic_init(&c.gate, false);
-  ccol_circular_queue *cq = dynq ? NULL : ccol_circular_queue_create(4, NULL);
-  ccol_dynamic_queue *dq = dynq ? ccol_dynamic_queue_create(NULL) : NULL;
+  ccircq *cq = dynq ? NULL : ccircq_create(4, NULL);
+  cdynmq *dq = dynq ? cdynmq_create(NULL) : NULL;
   if (!cq && !dq) test_child_exit(2);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  if (loop == CCOL_EVENT_LOOP_NULL) test_child_exit(2);
-  ccol_event_handlers_t h = {.on_writable = ifs_on_writable};
-  ccol_selectable sel = dynq
-                            ? ccol_selectable_from_dynq(dq, ccol_select_write)
-                            : ccol_selectable_from_circq(cq, ccol_select_write);
-  ccol_event_reg reg = ccol_event_loop_add(loop, sel, h, &c, NULL);
-  if (reg == CCOL_EVENT_REG_NULL) test_child_exit(2);
+  ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+  if (loop == CEVENTLOOP_NULL) test_child_exit(2);
+  ceventloop_handlers_t h = {.on_writable = ifs_on_writable};
+  cselectable_t sel = dynq ? cdynmq_selectable(dq, cselect_write)
+                           : ccircq_selectable(cq, cselect_write);
+  ceventloop_reg reg = ceventloop_add(loop, sel, h, &c, NULL);
+  if (reg == CEVENTLOOP_REG_NULL) test_child_exit(2);
   for (int i = 0; i < 5000 && !atomic_load(&c.entered); i++) evl_sleep_ms(1);
   if (!atomic_load(&c.entered)) test_child_exit(2);
-  if (ccol_event_loop_remove(loop, reg) != ccol_success) test_child_exit(2);
+  if (ceventloop_remove(loop, reg) != ccol_success) test_child_exit(2);
   pthread_t gt;
   if (pthread_create(&gt, NULL, ifs_open_gate, &c) != 0) test_child_exit(2);
   /* The queue is empty at this point, and the running callback sends one
    * message before this destroy is allowed to free the queue. */
   if (dynq)
-    ccol_dynamic_queue_destroy(dq);
+    cdynmq_destroy(dq);
   else
-    ccol_circular_queue_destroy(cq);
+    ccircq_destroy(cq);
   test_child_exit(0);
 }
 
@@ -15426,19 +15173,19 @@ TEST(circular_queues, destroy_counts_a_message_sent_by_a_running_callback) {
  * ------------------------------------------------------------------------ */
 
 TEST(dynamic_queues, send_refuses_a_message_whose_data_and_size_disagree) {
-  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+  cdynmq *dq = cdynmq_create(NULL);
   REQUIRE_NE((void *)dq, NULL);
-  c_message_t no_data = {.data = NULL, .size = 1};
-  ccol_retval_t rv_no_data = ccol_dynmq_send_zc(dq, &no_data);
-  c_message_t no_size = {.data = &bkl_token, .size = 0};
-  ccol_retval_t rv_no_size = ccol_dynmq_send_zc(dq, &no_size);
-  c_message_t sentinel = {.data = NULL, .size = 0};
-  ccol_retval_t rv_sentinel = ccol_dynmq_send_zc(dq, &sentinel);
-  size_t count = ccol_dynmq_msg_count(dq);
-  c_message_t m;
-  while (ccol_dynmq_try_recv_zc(dq, &m) == ccol_success) {
+  cmessage_t no_data = {.data = NULL, .size = 1};
+  ccol_retval_t rv_no_data = cdynmq_send(dq, &no_data);
+  cmessage_t no_size = {.data = &bkl_token, .size = 0};
+  ccol_retval_t rv_no_size = cdynmq_send(dq, &no_size);
+  cmessage_t sentinel = {.data = NULL, .size = 0};
+  ccol_retval_t rv_sentinel = cdynmq_send(dq, &sentinel);
+  size_t count = cdynmq_msg_count(dq);
+  cmessage_t m;
+  while (cdynmq_try_recv(dq, &m) == ccol_success) {
   }
-  ccol_dynamic_queue_destroy(dq);
+  cdynmq_destroy(dq);
   REQUIRE_EQ(rv_no_data, ccol_invalid_args);
   REQUIRE_EQ(rv_no_size, ccol_invalid_args);
   REQUIRE_EQ((void *)no_size.data, (void *)&bkl_token);
@@ -15453,32 +15200,32 @@ TEST(dynamic_queues, send_refuses_a_message_whose_data_and_size_disagree) {
  * owner-to-workers queue. */
 TEST(circular_queues,
      every_send_refuses_a_message_whose_data_and_size_disagree) {
-  ccol_circular_queue *cq = ccol_circular_queue_create(8, NULL);
-  ccol_channel *ch = ccol_channel_create(8, NULL);
+  ccircq *cq = ccircq_create(8, NULL);
+  cchan *ch = cchan_create(8, NULL);
   REQUIRE_NE((void *)cq, NULL);
   REQUIRE_NE((void *)ch, NULL);
-  c_message_t bad[2] = {{.data = &bkl_token, .size = 0},
-                        {.data = NULL, .size = 1}};
+  cmessage_t bad[2] = {{.data = &bkl_token, .size = 0},
+                       {.data = NULL, .size = 1}};
   ccol_retval_t rv[2][6];
   bool unchanged = true;
   for (int k = 0; k < 2; k++) {
-    c_message_t m = bad[k];
-    rv[k][0] = ccol_circq_send_zc(cq, &m);
-    rv[k][1] = ccol_circq_try_send_zc(cq, &m);
-    rv[k][2] = ccol_circq_timed_send_zc(cq, &m, 1000);
-    rv[k][3] = ccol_chan_send_zc(ch, &m);
-    rv[k][4] = ccol_chan_try_send_zc(ch, &m);
-    rv[k][5] = ccol_chan_timed_send_zc(ch, &m, 1000);
+    cmessage_t m = bad[k];
+    rv[k][0] = ccircq_send(cq, &m);
+    rv[k][1] = ccircq_try_send(cq, &m);
+    rv[k][2] = ccircq_timed_send(cq, &m, 1000);
+    rv[k][3] = cchan_send(ch, &m);
+    rv[k][4] = cchan_try_send(ch, &m);
+    rv[k][5] = cchan_timed_send(ch, &m, 1000);
     if (m.data != bad[k].data || m.size != bad[k].size) unchanged = false;
   }
-  size_t cq_count = ccol_circq_msg_count(cq);
-  c_message_t sentinel = {.data = NULL, .size = 0};
-  ccol_retval_t rv_sentinel = ccol_circq_try_send_zc(cq, &sentinel);
-  c_message_t out;
-  while (ccol_circq_try_recv_zc(cq, &out) == ccol_success) {
+  size_t cq_count = ccircq_msg_count(cq);
+  cmessage_t sentinel = {.data = NULL, .size = 0};
+  ccol_retval_t rv_sentinel = ccircq_try_send(cq, &sentinel);
+  cmessage_t out;
+  while (ccircq_try_recv(cq, &out) == ccol_success) {
   }
-  ccol_circular_queue_destroy(cq);
-  ccol_channel_destroy(ch);
+  ccircq_destroy(cq);
+  cchan_destroy(ch);
 
   for (int k = 0; k < 2; k++)
     for (int j = 0; j < 6; j++) REQUIRE_EQ(rv[k][j], ccol_invalid_args);
@@ -15487,32 +15234,32 @@ TEST(circular_queues,
   REQUIRE_EQ(rv_sentinel, ccol_success);
 }
 
-/* epoll(7) refuses a regular file, so ccol_select reports it as
- * ccol_unexpected_failure and ccol_event_loop_add refuses the fd as a failed
+/* epoll(7) refuses a regular file, so cselect reports it as
+ * ccol_unexpected_failure and ceventloop_add refuses the fd as a failed
  * system call. */
-TEST(ccol_select, a_regular_file_fd_is_refused) {
-  char path[] = "ccol_select_regular_file_XXXXXX";
+TEST(cselect, a_regular_file_fd_is_refused) {
+  char path[] = "cselect_regular_file_XXXXXX";
   int fd = mkstemp(path);
   REQUIRE_GE(fd, 0);
   unlink(path);
   size_t idx = 12345;
-  ccol_selectable sel = ccol_selectable_from_fd(fd, ccol_select_read);
-  ccol_retval_t rv_select = ccol_select_timed(&idx, 1, &sel, 0);
-  ccol_retval_t rv_select_block = ccol_select(&idx, 1, &sel);
-  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
-  ccol_event_reg reg = CCOL_EVENT_REG_NULL;
+  cselectable_t sel = cselectable_fd(fd, cselect_read);
+  ccol_retval_t rv_select = cselect_timed(&idx, 1, &sel, 0);
+  ccol_retval_t rv_select_block = cselect(&idx, 1, &sel);
+  ceventloop loop = ceventloop_create(8, 1, 1, NULL);
+  ceventloop_reg reg = CEVENTLOOP_REG_NULL;
   char *err = NULL;
-  if (loop != CCOL_EVENT_LOOP_NULL) {
-    ccol_event_handlers_t h = {.on_readable = rlw_on_leaving};
-    reg = ccol_event_loop_add(loop, sel, h, NULL, &err);
-    if (reg != CCOL_EVENT_REG_NULL) ccol_event_loop_remove(loop, reg);
-    ccol_event_loop_destroy(loop);
+  if (loop != CEVENTLOOP_NULL) {
+    ceventloop_handlers_t h = {.on_readable = rlw_on_leaving};
+    reg = ceventloop_add(loop, sel, h, NULL, &err);
+    if (reg != CEVENTLOOP_REG_NULL) ceventloop_remove(loop, reg);
+    ceventloop_destroy(loop);
   }
   close(fd);
   REQUIRE_EQ(rv_select, ccol_unexpected_failure);
   REQUIRE_EQ(rv_select_block, ccol_unexpected_failure);
   REQUIRE_EQ(idx, (size_t)12345);
-  REQUIRE_EQ(reg, CCOL_EVENT_REG_NULL);
+  REQUIRE_EQ(reg, CEVENTLOOP_REG_NULL);
   REQUIRE_NE((void *)err, NULL);
   if (err) REQUIRE_NE((void *)strstr(err, "a system call failed"), NULL);
 }

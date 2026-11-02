@@ -8,7 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/chttpclient.h>
 
 ccol_retval_t chttp_delete(const char *url,
-                           chttpcli_response **resp_out);
+                           chttpcli_response_t **resp_out);
 .fi
 .SH DESCRIPTION
 .nf
@@ -16,7 +16,7 @@ This is a convenience wrapper that sends an HTTP DELETE.
 .fi
 .SH RETURN VALUE
 .nf
-The same codes as chttpclient_do.
+The same codes as chttpcli_do.
 .fi
 .SH "SEE ALSO"
 .BR chttp_get (3),

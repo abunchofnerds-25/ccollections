@@ -131,13 +131,14 @@ static bool _bounded_join(pthread_t tid, void **retval) {
 /*                         ROUTE HANDLER FUNCTIONS                            */
 /* ========================================================================== */
 
-static void _hello_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _hello_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                           void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_write_str(resp, "Hello, world!");
 }
 
-static void _echo_body_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _echo_body_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                void *ctx) {
   (void)ctx;
   size_t len = 0;
@@ -149,7 +150,7 @@ static void _echo_body_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   }
 }
 
-static void _echo_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _echo_param_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)ctx;
   const char *id = chttpsvr_req_param(req, "id");
@@ -164,7 +165,7 @@ static void _echo_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 /* Writes ctx, a literal string the caller owns, as it is. The per-router
    segment-decode cache tests below use it to tell which route matched, out of
    several routes that share one decoded prefix. */
-static void _cache_literal_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _cache_literal_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                    void *ctx) {
   (void)req;
   chttpsvr_resp_write_str(resp, (const char *)ctx);
@@ -174,7 +175,7 @@ static void _cache_literal_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    use it: several OTHER candidate routes try this param's position first and
    each fails at a LATER segment, and the tests show that the captured param
    reads back correctly for the route that matches. */
-static void _cache_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _cache_param_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                  void *ctx) {
   const char *id = chttpsvr_req_param(req, "id");
   char buf[256];
@@ -184,7 +185,7 @@ static void _cache_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write(resp, buf, (size_t)n);
 }
 
-static void _echo_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _echo_query_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)ctx;
   size_t n = 0;
@@ -207,14 +208,14 @@ static void _echo_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, buf);
 }
 
-static void _echo_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _echo_header_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                  void *ctx) {
   (void)ctx;
   const char *val = chttpsvr_req_header(req, "x-test-header");
   chttpsvr_resp_write_str(resp, val ? val : "(none)");
 }
 
-static void _set_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _set_header_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -222,14 +223,16 @@ static void _set_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "ok");
 }
 
-static void _status_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _status_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                            void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_set_status(resp, CHTTP_STATUS_CREATED);
   chttpsvr_resp_write_str(resp, "created");
 }
 
-static void _json_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _json_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                          void *ctx) {
   (void)req;
   (void)ctx;
   const char *body = "{\"ok\":true}";
@@ -237,7 +240,7 @@ static void _json_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 }
 
 /* Sub-router handlers. */
-static void _api_items_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _api_items_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                void *ctx) {
   (void)ctx;
   const char *id = chttpsvr_req_param(req, "id");
@@ -246,7 +249,7 @@ static void _api_items_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, buf);
 }
 
-static void _api_root_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _api_root_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                               void *ctx) {
   (void)req;
   (void)ctx;
@@ -258,8 +261,8 @@ static void _api_root_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 static _Atomic int g_global_mw_count = 0;
 static _Atomic int g_router_mw_count = 0;
 
-static void _global_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                       chttpsvr_next_fn next) {
+static void _global_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                       chttpsvr_next_fn_t next) {
   (void)ctx;
   g_global_mw_count++;
   /* Add a response header to show that the middleware ran. */
@@ -267,8 +270,8 @@ static void _global_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
   next(req, resp);
 }
 
-static void _router_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                       chttpsvr_next_fn next) {
+static void _router_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                       chttpsvr_next_fn_t next) {
   (void)ctx;
   g_router_mw_count++;
   chttpsvr_resp_set_header(resp, "x-router-mw", "1");
@@ -276,8 +279,8 @@ static void _router_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
 }
 
 /* Middleware that short-circuits, it doesn't call next. */
-static void _blocking_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                         chttpsvr_next_fn next) {
+static void _blocking_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                         chttpsvr_next_fn_t next) {
   (void)req;
   (void)ctx;
   (void)next;
@@ -290,16 +293,16 @@ static void _blocking_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
 static _Atomic int g_mw_a_count = 0;
 static _Atomic int g_mw_b_count = 0;
 
-static void _mw_a(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                  chttpsvr_next_fn next) {
+static void _mw_a(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                  chttpsvr_next_fn_t next) {
   (void)ctx;
   g_mw_a_count++;
   chttpsvr_resp_set_header(resp, "x-mw-a", "1");
   next(req, resp);
 }
 
-static void _mw_b(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                  chttpsvr_next_fn next) {
+static void _mw_b(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                  chttpsvr_next_fn_t next) {
   (void)ctx;
   g_mw_b_count++;
   chttpsvr_resp_set_header(resp, "x-mw-b", "1");
@@ -307,7 +310,7 @@ static void _mw_b(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
 }
 
 /* Streaming handler. */
-static void _stream_echo_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _stream_echo_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                  void *ctx) {
   (void)ctx;
   char buf[256];
@@ -322,8 +325,8 @@ static void _stream_echo_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    that the server delivers the body in separate batches as the bytes arrive on
    the wire, and doesn't buffer the whole body before the handler to hand it
    over as one blob. */
-static void _stream_batch_count_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                        void *ctx) {
+static void _stream_batch_count_handler(chttpsvr_req_t *req,
+                                        chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   char buf[8];
   ssize_t n;
@@ -339,8 +342,8 @@ static void _stream_batch_count_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    the final chttpsvr_req_read() call returned -1, if it did. This tests
    stream_read_timeout_us and the report of an abort in the middle of the
    stream. */
-static void _stream_error_report_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                         void *ctx) {
+static void _stream_error_report_handler(chttpsvr_req_t *req,
+                                         chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   char buf[64];
   ssize_t n;
@@ -360,8 +363,8 @@ static void _stream_error_report_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    with its trailers, so this is the strongest form of the check: the parser has
    read the trailer before the first statement here runs, and the trailer is
    still not readable. */
-static void _buffered_trailer_echo_handler(chttpsvr_req *req,
-                                           chttpsvr_resp *resp, void *ctx) {
+static void _buffered_trailer_echo_handler(chttpsvr_req_t *req,
+                                           chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   const char *val = chttpsvr_req_header(req, "X-Trailer");
   chttpsvr_resp_set_header(resp, "x-trailer-value", val ? val : "(absent)");
@@ -374,8 +377,9 @@ static void _buffered_trailer_echo_handler(chttpsvr_req *req,
    "absent". A streaming route drives the parse of the trailer itself through
    its own chttpsvr_req_read calls, so this check covers both sides of the point
    where the parser reads the trailer. */
-static void _stream_trailer_visibility_handler(chttpsvr_req *req,
-                                               chttpsvr_resp *resp, void *ctx) {
+static void _stream_trailer_visibility_handler(chttpsvr_req_t *req,
+                                               chttpsvr_resp_t *resp,
+                                               void *ctx) {
   (void)ctx;
   const char *before = chttpsvr_req_header(req, "X-Trailer");
   chttpsvr_resp_set_header(resp, "x-trailer-before",
@@ -393,8 +397,8 @@ static void _stream_trailer_visibility_handler(chttpsvr_req *req,
    pins that the trailer fields of a chunked body can't push them aside: the
    client sends both names twice, once as a real header and once as a trailer
    with a different value, and the handler reports the header's value. */
-static void _identity_header_echo_handler(chttpsvr_req *req,
-                                          chttpsvr_resp *resp, void *ctx) {
+static void _identity_header_echo_handler(chttpsvr_req_t *req,
+                                          chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   const char *xff = chttpsvr_req_header(req, "X-Forwarded-For");
   const char *who = chttpsvr_req_header(req, "X-Authenticated-User");
@@ -425,7 +429,7 @@ static void _identity_header_echo_handler(chttpsvr_req *req,
 /* How many times _large_response_handler has started. */
 static atomic_int g_large_response_runs = 0;
 
-static void _large_response_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _large_response_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                     void *ctx) {
   (void)req;
   (void)ctx;
@@ -447,8 +451,8 @@ static void _large_response_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    request as soon as it runs. That's the case Expect: 100-continue (RFC 7231
    SS5.1.1) exists for, a server that rejects a request and never wants its
    body. */
-static void _stream_reject_without_reading_handler(chttpsvr_req *req,
-                                                   chttpsvr_resp *resp,
+static void _stream_reject_without_reading_handler(chttpsvr_req_t *req,
+                                                   chttpsvr_resp_t *resp,
                                                    void *ctx) {
   (void)req;
   (void)ctx;
@@ -461,8 +465,8 @@ static void _stream_reject_without_reading_handler(chttpsvr_req *req,
    next request when the handler leaves part of the body unread, because
    chttp1_stream_release throws the unread remainder away instead of
    keeping it. */
-static void _stream_read_once_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                      void *ctx) {
+static void _stream_read_once_handler(chttpsvr_req_t *req,
+                                      chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   char buf[8];
   chttpsvr_req_read(req, buf, sizeof(buf));
@@ -470,7 +474,7 @@ static void _stream_read_once_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* Echoes the raw query. */
-static void _raw_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _raw_query_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                void *ctx) {
   (void)ctx;
   const char *rq = chttpsvr_req_raw_query(req);
@@ -478,13 +482,14 @@ static void _raw_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* Echoes path + method, for quick checks. */
-static void _path_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _path_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                          void *ctx) {
   (void)ctx;
   chttpsvr_resp_write_str(resp, chttpsvr_req_path(req));
 }
 
 /* Handler that calls chttpsvr_req_query_one directly. */
-static void _query_one_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _query_one_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                void *ctx) {
   (void)ctx;
   const char *val = NULL;
@@ -502,7 +507,7 @@ static void _query_one_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 /* Streaming handler that echoes a request header. It tests the pre-extracted
    header array path that chttpsvr_req_header uses on streaming routes. */
-static void _stream_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _stream_header_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                    void *ctx) {
   (void)ctx;
   const char *val = chttpsvr_req_header(req, "x-stream-test");
@@ -511,7 +516,7 @@ static void _stream_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 /* Handler that calls chttpsvr_resp_write_str three times, to check that several
    writes add up into one response body. */
-static void _multi_write_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _multi_write_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                  void *ctx) {
   (void)req;
   (void)ctx;
@@ -525,7 +530,8 @@ static void _multi_write_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    formatted output is bigger than that stack buffer, so the function has to
    take the heap fallback path. Both calls have to add to the same body, the
    same way chttpsvr_resp_write_str does. */
-static void _printf_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _printf_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                            void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_printf(resp, "n=%d s=%s f=%.2f ", 42, "hi", 3.5);
@@ -536,7 +542,7 @@ static void _printf_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 
 /* Handler that queries two different keys in one request, to check that the
    _qresult scratch array is reused correctly across calls. */
-static void _multi_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _multi_query_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                  void *ctx) {
   (void)ctx;
   size_t na = 0, nb = 0;
@@ -553,8 +559,8 @@ static void _multi_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 /* Handler that calls chttpsvr_req_read() on a buffered (non-streaming) route,
    where chttpsvr_req_read() must return -1 because is_streaming is false. */
-static void _read_on_buffered_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                      void *ctx) {
+static void _read_on_buffered_handler(chttpsvr_req_t *req,
+                                      chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   char buf[16];
   ssize_t n = chttpsvr_req_read(req, buf, sizeof(buf));
@@ -568,8 +574,8 @@ static void _read_on_buffered_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    with chttpsvr_req_read(), and the documentation of chttpsvr_req_body() says
    it works only for a buffered route, so here it needs to return NULL and 0 and
    not some body the handler never asked the server to read. */
-static void _stream_body_check_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                       void *ctx) {
+static void _stream_body_check_handler(chttpsvr_req_t *req,
+                                       chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   size_t len = 0;
   const void *body = chttpsvr_req_body(req, &len);
@@ -590,8 +596,8 @@ static void _stream_body_check_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    state holds bytes the server has already delivered and a length that reflects
    internal bookkeeping, which is neither the real total nor the real number of
    bytes still unread. */
-static void _stream_body_after_read_handler(chttpsvr_req *req,
-                                            chttpsvr_resp *resp, void *ctx) {
+static void _stream_body_after_read_handler(chttpsvr_req_t *req,
+                                            chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   char buf[8];
   ssize_t n = chttpsvr_req_read(req, buf, sizeof(buf));
@@ -605,8 +611,8 @@ static void _stream_body_after_read_handler(chttpsvr_req *req,
 
 /* Streaming handler that calls chttpsvr_req_read with buflen == 0. A read of
    zero length must return 0 (a no-op) and not -1 (an error). */
-static void _stream_zero_buflen_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                        void *ctx) {
+static void _stream_zero_buflen_handler(chttpsvr_req_t *req,
+                                        chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   char buf[4];
   ssize_t n = chttpsvr_req_read(req, buf, 0);
@@ -617,8 +623,8 @@ static void _stream_zero_buflen_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 /* Streaming handler on a route with no request body. The first call to
    chttpsvr_req_read has to return 0 (EOF) immediately. */
-static void _stream_read_empty_body_handler(chttpsvr_req *req,
-                                            chttpsvr_resp *resp, void *ctx) {
+static void _stream_read_empty_body_handler(chttpsvr_req_t *req,
+                                            chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   char buf[16];
   ssize_t n = chttpsvr_req_read(req, buf, sizeof(buf));
@@ -630,7 +636,7 @@ static void _stream_read_empty_body_handler(chttpsvr_req *req,
 /* Handler that sets the same response header twice, and the second value has to
    win.
  */
-static void _dup_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _dup_header_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -642,7 +648,7 @@ static void _dup_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 /* Handler that sets a status code outside the valid range. The server has to
    turn it into 500 (see the [100,999] range check in _send_response) instead of
    writing the raw out-of-range value onto the wire. */
-static void _bad_status_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _bad_status_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -650,8 +656,8 @@ static void _bad_status_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "bad");
 }
 
-static void _query_one_null_key_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                        void *ctx) {
+static void _query_one_null_key_handler(chttpsvr_req_t *req,
+                                        chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   const char *val = NULL;
   /* A NULL key should return ccol_invalid_args and not crash. */
@@ -664,8 +670,8 @@ static void _query_one_null_key_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 /* Handler that calls chttpsvr_req_query_one with a NULL val_out for a key that
    is present. The function must still return ccol_success (it has a value to
    report, the caller just chose not to take it) and must not crash. */
-static void _query_one_null_val_out_handler(chttpsvr_req *req,
-                                            chttpsvr_resp *resp, void *ctx) {
+static void _query_one_null_val_out_handler(chttpsvr_req_t *req,
+                                            chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   ccol_retval_t rv = chttpsvr_req_query_one(req, "q", NULL);
   chttpsvr_resp_write_str(resp, rv == ccol_success ? "ok" : "fail");
@@ -674,7 +680,7 @@ static void _query_one_null_val_out_handler(chttpsvr_req *req,
 /* Streaming handler that calls chttpsvr_req_read with a NULL buffer. The NULL
    buffer guard should fire before the is_streaming check and return -1.
  */
-static void _stream_null_buf_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _stream_null_buf_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                      void *ctx) {
   (void)ctx;
   ssize_t n = chttpsvr_req_read(req, NULL, 4);
@@ -686,8 +692,9 @@ static void _stream_null_buf_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 /* Streaming handler that calls chttpsvr_req_read(req, NULL, 0). When buf is
    NULL and buflen is 0 at the same time, the buflen==0 guard must win and
    return 0, not the -1 the NULL buf guard would give. */
-static void _stream_null_buf_zero_len_handler(chttpsvr_req *req,
-                                              chttpsvr_resp *resp, void *ctx) {
+static void _stream_null_buf_zero_len_handler(chttpsvr_req_t *req,
+                                              chttpsvr_resp_t *resp,
+                                              void *ctx) {
   (void)ctx;
   ssize_t n = chttpsvr_req_read(req, NULL, 0);
   char s[32];
@@ -698,7 +705,7 @@ static void _stream_null_buf_zero_len_handler(chttpsvr_req *req,
 /* Handler for the headers-only response test. It sets a status code and a
    response header but writes NO body bytes, so we can check that _send_response
    writes the head alone, with no body, when the body buffer is empty. */
-static void _headers_only_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _headers_only_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                   void *ctx) {
   (void)req;
   (void)ctx;
@@ -713,8 +720,8 @@ static void _headers_only_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    a status code that must never carry one, and for a 204 also the automatic
    Content-Length, whatever the handler itself wrote. When the request has
    "x-force-cl", the handler also sets that value as its own Content-Length. */
-static void _forced_status_with_body_handler(chttpsvr_req *req,
-                                             chttpsvr_resp *resp, void *ctx) {
+static void _forced_status_with_body_handler(chttpsvr_req_t *req,
+                                             chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   chttpsvr_resp_write_str(resp, "this-body-must-never-reach-the-wire");
   const char *forced = chttpsvr_req_header(req, "x-force-status");
@@ -726,7 +733,7 @@ static void _forced_status_with_body_handler(chttpsvr_req *req,
 /* A route registered for HEAD itself, which writes no body. When the request
    has "x-force-cl" it sets that value as the representation's Content-Length.
  */
-static void _bodyless_head_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _bodyless_head_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                    void *ctx) {
   (void)ctx;
   const char *cl = chttpsvr_req_header(req, "x-force-cl");
@@ -738,8 +745,9 @@ static void _bodyless_head_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    with one character for each, 'y' for ccol_success and 'n' for
    ccol_invalid_args. Whatever value the last accepted call left behind gets
    dropped again, because the handler writes a body. */
-static void _content_length_validation_handler(chttpsvr_req *req,
-                                               chttpsvr_resp *resp, void *ctx) {
+static void _content_length_validation_handler(chttpsvr_req_t *req,
+                                               chttpsvr_resp_t *resp,
+                                               void *ctx) {
   (void)req;
   (void)ctx;
   static const char *const values[] = {"0",
@@ -775,7 +783,7 @@ static void _content_length_validation_handler(chttpsvr_req *req,
    chttpsvr_resp_set_header (see resp_add_header_keeps_every_field_in_order).
    The handler reports every return value that isn't ccol_success in the body.
  */
-static void _add_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _add_header_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -810,8 +818,8 @@ static void _add_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    handler can't make the Connection header on the wire disagree with what the
    server really does after the response (keep-alive or close); see the doc
    comment of _send_response on this. */
-static void _explicit_connection_header_handler(chttpsvr_req *req,
-                                                chttpsvr_resp *resp,
+static void _explicit_connection_header_handler(chttpsvr_req_t *req,
+                                                chttpsvr_resp_t *resp,
                                                 void *ctx) {
   (void)ctx;
   const char *forced = chttpsvr_req_header(req, "x-force-connection");
@@ -826,8 +834,8 @@ static void _explicit_connection_header_handler(chttpsvr_req *req,
    headers alone go past that size, without even a graceful 500: the server
    closes the connection, writes zero bytes and logs nothing. This call has to
    succeed with every header intact, whatever the size. */
-static void _large_response_headers_handler(chttpsvr_req *req,
-                                            chttpsvr_resp *resp, void *ctx) {
+static void _large_response_headers_handler(chttpsvr_req_t *req,
+                                            chttpsvr_resp_t *resp, void *ctx) {
   (void)req;
   (void)ctx;
   char value[300];
@@ -844,7 +852,7 @@ static void _large_response_headers_handler(chttpsvr_req *req,
 /* Handler for the SECOND registration of the same path and method, which checks
    that the server accepts a duplicate registration without complaining. Only
    the FIRST handler ever runs, because the first one wins. */
-static void _dup_second_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _dup_second_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -853,9 +861,9 @@ static void _dup_second_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 /* Handler that calls chttpsvr_req_header(req, NULL) and writes "null" if the
    result is NULL and "non-null" otherwise. It exercises the !name guard through
-   an HTTP round trip, since chttpsvr_req is opaque in the public API. */
-static void _null_name_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                      void *ctx) {
+   an HTTP round trip, since chttpsvr_req_t is opaque in the public API. */
+static void _null_name_header_handler(chttpsvr_req_t *req,
+                                      chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   const char *v = chttpsvr_req_header(req, NULL);
   chttpsvr_resp_write_str(resp, v == NULL ? "null" : "non-null");
@@ -863,7 +871,7 @@ static void _null_name_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 /* Handler that calls chttpsvr_req_query(req, NULL, &n) and writes "null" if the
    result is NULL and "non-null" otherwise. */
-static void _null_key_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _null_key_query_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                     void *ctx) {
   (void)ctx;
   size_t n = 99;
@@ -903,7 +911,7 @@ static _Atomic int
 /*       HANDLER FUNCTIONS FOR ROUTES REGISTERED IN _setup                   */
 /* ========================================================================== */
 
-static void _null_guard_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _null_guard_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   _Atomic int *results = (_Atomic int *)ctx;
@@ -912,8 +920,8 @@ static void _null_guard_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "ok");
 }
 
-static void _resp_write_null_guard_handler(chttpsvr_req *req,
-                                           chttpsvr_resp *resp, void *ctx) {
+static void _resp_write_null_guard_handler(chttpsvr_req_t *req,
+                                           chttpsvr_resp_t *resp, void *ctx) {
   (void)req;
   _Atomic int *results = (_Atomic int *)ctx;
   results[0] = (int)chttpsvr_resp_write(resp, NULL, 5);
@@ -921,8 +929,8 @@ static void _resp_write_null_guard_handler(chttpsvr_req *req,
   chttpsvr_resp_write_str(resp, "ok");
 }
 
-static void _set_header_null_guards_handler(chttpsvr_req *req,
-                                            chttpsvr_resp *resp, void *ctx) {
+static void _set_header_null_guards_handler(chttpsvr_req_t *req,
+                                            chttpsvr_resp_t *resp, void *ctx) {
   (void)req;
   _Atomic int *results = (_Atomic int *)ctx;
   results[0] = (int)chttpsvr_resp_set_header(resp, NULL, "v");
@@ -930,8 +938,8 @@ static void _set_header_null_guards_handler(chttpsvr_req *req,
   chttpsvr_resp_write_str(resp, "ok");
 }
 
-static void _set_header_crlf_guards_handler(chttpsvr_req *req,
-                                            chttpsvr_resp *resp, void *ctx) {
+static void _set_header_crlf_guards_handler(chttpsvr_req_t *req,
+                                            chttpsvr_resp_t *resp, void *ctx) {
   (void)req;
   _Atomic int *results = (_Atomic int *)ctx;
   /* A CRLF inside the NAME, trying to inject a second header line ("x-injected:
@@ -948,8 +956,8 @@ static void _set_header_crlf_guards_handler(chttpsvr_req *req,
   chttpsvr_resp_write_str(resp, "ok");
 }
 
-static void _set_header_bare_cr_lf_guards_handler(chttpsvr_req *req,
-                                                  chttpsvr_resp *resp,
+static void _set_header_bare_cr_lf_guards_handler(chttpsvr_req_t *req,
+                                                  chttpsvr_resp_t *resp,
                                                   void *ctx) {
   (void)req;
   _Atomic int *results = (_Atomic int *)ctx;
@@ -966,8 +974,8 @@ static void _set_header_bare_cr_lf_guards_handler(chttpsvr_req *req,
   chttpsvr_resp_write_str(resp, "ok");
 }
 
-static void _set_header_disallowed_name_guards_handler(chttpsvr_req *req,
-                                                       chttpsvr_resp *resp,
+static void _set_header_disallowed_name_guards_handler(chttpsvr_req_t *req,
+                                                       chttpsvr_resp_t *resp,
                                                        void *ctx) {
   (void)req;
   _Atomic int *results = (_Atomic int *)ctx;
@@ -985,8 +993,8 @@ static void _set_header_disallowed_name_guards_handler(chttpsvr_req *req,
   chttpsvr_resp_write_str(resp, "ok");
 }
 
-static void _set_header_non_tchar_name_guards_handler(chttpsvr_req *req,
-                                                      chttpsvr_resp *resp,
+static void _set_header_non_tchar_name_guards_handler(chttpsvr_req_t *req,
+                                                      chttpsvr_resp_t *resp,
                                                       void *ctx) {
   (void)req;
   _Atomic int *results = (_Atomic int *)ctx;
@@ -1012,7 +1020,7 @@ static void _set_header_non_tchar_name_guards_handler(chttpsvr_req *req,
   chttpsvr_resp_write_str(resp, "ok");
 }
 
-static void _json_zero_len_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _json_zero_len_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                    void *ctx) {
   (void)req;
   _Atomic int *result = (_Atomic int *)ctx;
@@ -1020,14 +1028,14 @@ static void _json_zero_len_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "done");
 }
 
-static void _root_subrouter_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _root_subrouter_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                     void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_write_str(resp, "root_subrouter");
 }
 
-static void _empty_query_key_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _empty_query_key_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                      void *ctx) {
   (void)ctx;
   size_t n = 0;
@@ -1042,8 +1050,8 @@ static void _empty_query_key_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    separated by commas. It checks that the parser skips a stray '&' in the raw
    query string, and two '&' characters in a row, instead of reading them as a
    bogus entry with an empty key and an empty value. */
-static void _query_stray_amp_counts_handler(chttpsvr_req *req,
-                                            chttpsvr_resp *resp, void *ctx) {
+static void _query_stray_amp_counts_handler(chttpsvr_req_t *req,
+                                            chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   size_t na = 0, nb = 0, nempty = 0;
   chttpsvr_req_query(req, "a", &na);
@@ -1052,8 +1060,8 @@ static void _query_stray_amp_counts_handler(chttpsvr_req *req,
   chttpsvr_resp_printf(resp, "%zu,%zu,%zu", na, nb, nempty);
 }
 
-static void _stream_read_eof_twice_handler(chttpsvr_req *req,
-                                           chttpsvr_resp *resp, void *ctx) {
+static void _stream_read_eof_twice_handler(chttpsvr_req_t *req,
+                                           chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   char buf[16];
   ssize_t n1 = chttpsvr_req_read(req, buf, sizeof(buf));
@@ -1063,7 +1071,7 @@ static void _stream_read_eof_twice_handler(chttpsvr_req *req,
   chttpsvr_resp_write_str(resp, s);
 }
 
-static void _param_null_name_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _param_null_name_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                      void *ctx) {
   (void)ctx;
   const char *v = chttpsvr_req_param(req, NULL);
@@ -1072,8 +1080,8 @@ static void _param_null_name_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 /* Streaming GET handler that reads the body with chttpsvr_req_body(). For a GET
    without a body the function must return NULL and len=0. */
-static void _stream_get_body_check_handler(chttpsvr_req *req,
-                                           chttpsvr_resp *resp, void *ctx) {
+static void _stream_get_body_check_handler(chttpsvr_req_t *req,
+                                           chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   size_t len = 0;
   const void *body = chttpsvr_req_body(req, &len);
@@ -1089,7 +1097,7 @@ static void _stream_get_body_check_handler(chttpsvr_req *req,
    /shadow-test sub-router that the server checks second and never gets to. */
 /* Marks its response so that a test can tell which of the two routes registered
    for /head-pref (a CHTTP_GET one and a CHTTP_HEAD one) really ran. */
-static void _explicit_head_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _explicit_head_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                    void *ctx) {
   (void)req;
   (void)ctx;
@@ -1097,13 +1105,13 @@ static void _explicit_head_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "head-route");
 }
 
-static void _shadow_root_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _shadow_root_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                  void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_write_str(resp, "root-wins");
 }
-static void _shadow_sub_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _shadow_sub_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -1114,15 +1122,15 @@ static void _shadow_sub_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 /* Echoes the request's method name, so tests can check which method was
    dispatched when a CHTTP_ANY route matches. */
-static void _any_method_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _any_method_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)ctx;
   chttpsvr_resp_write_str(resp, chttp_method_str(chttpsvr_req_method(req)));
 }
 
 /* Echoes "<METHOD>:<id-param>" for CHTTP_ANY routes with a path parameter. */
-static void _any_method_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                      void *ctx) {
+static void _any_method_param_handler(chttpsvr_req_t *req,
+                                      chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   const char *id = chttpsvr_req_param(req, "id");
   char buf[64];
@@ -1136,9 +1144,9 @@ static void _any_method_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 /* ========================================================================== */
 
 /* A dedicated server started by _setup, with a bounded pool of 1 thread and
-   queue_capacity=1. It checks that a full ctpool makes ctpool_try_submit return
-   ccol_container_full and that the server then answers with a 503. It listens
-   on TEST_PORT+2. */
+   queue_capacity=1. It checks that a full cthrpool makes cthrpool_try_submit
+   return ccol_container_full and that the server then answers with a 503. It
+   listens on TEST_PORT+2. */
 static chttpsvr g_bounded_srv = CHTTPSVR_NULL;
 
 /* A dedicated server with a small max_body_size (64 bytes) for the boundary
@@ -1156,7 +1164,7 @@ static pthread_cond_t g_blk_cv = PTHREAD_COND_INITIALIZER;
 static _Atomic int g_blk_count = 0; /* handlers that are blocking right now */
 static bool g_blk_go = false;
 
-static void _bounded_blk_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _bounded_blk_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                  void *ctx) {
   (void)req;
   (void)ctx;
@@ -1175,12 +1183,12 @@ static void _bounded_blk_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 static chttpcli g_bounded_cli = CHTTPCLI_NULL;
 
 /* Sends one GET /bounded-503 to g_bounded_srv through g_bounded_cli. */
-static chttpcli_response *_bounded_get(void) {
+static chttpcli_response_t *_bounded_get(void) {
   char url[128];
   snprintf(url, sizeof(url), "http://127.0.0.1:%d/bounded-503", TEST_PORT + 2);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
-  chttpcli_response *resp = NULL;
-  if (req) chttpclient_do(g_bounded_cli, req, &resp);
+  chttpcli_response_t *resp = NULL;
+  if (req) chttpcli_do(g_bounded_cli, req, &resp);
   chttp_request_free(req);
   return resp;
 }
@@ -1189,8 +1197,8 @@ static chttpcli_response *_bounded_get(void) {
    response away. We use it to fill pool slots from background threads. */
 static void *_send_bounded_req(void *arg) {
   (void)arg;
-  chttpcli_response *resp = _bounded_get();
-  if (resp) chttpclient_resp_free(resp);
+  chttpcli_response_t *resp = _bounded_get();
+  if (resp) chttpcli_resp_free(resp);
   return NULL;
 }
 
@@ -1199,10 +1207,10 @@ static void *_send_bounded_req(void *arg) {
    use it to fire a concurrent burst of route rejections; see
    concurrent_route_rejections_do_not_starve_other_requests. */
 static void *_send_unmatched_route_req(void *arg) {
-  chttpcli_response *resp = NULL;
+  chttpcli_response_t *resp = NULL;
   chttp_get(BASE_URL "/definitely-not-a-registered-route-xyz", &resp);
   *(int *)arg = resp ? resp->status_code : -1;
-  if (resp) chttpclient_resp_free(resp);
+  if (resp) chttpcli_resp_free(resp);
   return NULL;
 }
 
@@ -1226,7 +1234,7 @@ static void _teardown(void) {
 
   /* Destroy each server. Each destroy drains the in-flight requests and frees
    * that server's single shared-engine reference. chttpserver's shared
-   * ccol_event_loop reactor stops asynchronously, on a joinable reaper thread
+   * ceventloop reactor stops asynchronously, on a joinable reaper thread
    * that has nothing to do with chttpclient's engine, and the last destroy
    * doesn't join that thread inline. This function is an atexit handler, so
    * chttpsvr_engine_wait() below has to block until the reactor has really
@@ -1528,7 +1536,7 @@ __attribute__((constructor)) static void _setup(void) {
                                       _stream_read_once_handler, NULL);
 
   /* A sub-router for /api/v1 with its own middleware. */
-  chttpsvr_router *api = chttpsvr_subrouter(g_srv, "/api/v1");
+  chttpsvr_router_t *api = chttpsvr_subrouter(g_srv, "/api/v1");
   if (!api) {
     fprintf(stderr, "FATAL: could not create subrouter\n");
     exit(1);
@@ -1540,7 +1548,7 @@ __attribute__((constructor)) static void _setup(void) {
                             _stream_echo_handler, NULL);
 
   /* A sub-router with blocking middleware. */
-  chttpsvr_router *blocked_r = chttpsvr_subrouter(g_srv, "/blocked-area");
+  chttpsvr_router_t *blocked_r = chttpsvr_subrouter(g_srv, "/blocked-area");
   if (!blocked_r) {
     fprintf(stderr, "FATAL: could not create blocked subrouter\n");
     exit(1);
@@ -1550,7 +1558,7 @@ __attribute__((constructor)) static void _setup(void) {
 
   /* A sub-router with two chained middlewares, to check that both run in order.
    */
-  chttpsvr_router *mw_chain = chttpsvr_subrouter(g_srv, "/mw-chain");
+  chttpsvr_router_t *mw_chain = chttpsvr_subrouter(g_srv, "/mw-chain");
   if (!mw_chain) {
     fprintf(stderr, "FATAL: could not create mw-chain subrouter\n");
     exit(1);
@@ -1561,7 +1569,7 @@ __attribute__((constructor)) static void _setup(void) {
 
   /* A sub-router registered with a trailing-slash prefix. The server normalises
      it to "/api/v3", so routing behaves exactly like with a clean prefix. */
-  chttpsvr_router *api_v3 = chttpsvr_subrouter(g_srv, "/api/v3/");
+  chttpsvr_router_t *api_v3 = chttpsvr_subrouter(g_srv, "/api/v3/");
   if (!api_v3) {
     fprintf(stderr, "FATAL: could not create /api/v3/ subrouter\n");
     exit(1);
@@ -1606,7 +1614,7 @@ __attribute__((constructor)) static void _setup(void) {
 
   /* A "/" sub-router, which matches only the exact root path "/". The IMPORTANT
    * edge-case note in chttpserver.h explains the routing mechanics. */
-  chttpsvr_router *root_r = chttpsvr_subrouter(g_srv, "/");
+  chttpsvr_router_t *root_r = chttpsvr_subrouter(g_srv, "/");
   if (!root_r) {
     fprintf(stderr, "FATAL: could not create / subrouter\n");
     exit(1);
@@ -1628,7 +1636,7 @@ __attribute__((constructor)) static void _setup(void) {
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/shadow-test/ping",
                             _shadow_root_handler, NULL);
   {
-    chttpsvr_router *shadow_r = chttpsvr_subrouter(g_srv, "/shadow-test");
+    chttpsvr_router_t *shadow_r = chttpsvr_subrouter(g_srv, "/shadow-test");
     if (!shadow_r) {
       fprintf(stderr, "FATAL: could not create /shadow-test subrouter\n");
       exit(1);
@@ -1641,7 +1649,7 @@ __attribute__((constructor)) static void _setup(void) {
    * router brings the combined count at dispatch time to 33 > _CHTTPSVR_MAX_MW
    * (32), so every request to /mw-overflow-live/<any> must get a 500. */
   {
-    chttpsvr_router *ov_live = chttpsvr_subrouter(g_srv, "/mw-overflow-live");
+    chttpsvr_router_t *ov_live = chttpsvr_subrouter(g_srv, "/mw-overflow-live");
     if (!ov_live) {
       fprintf(stderr, "FATAL: could not create /mw-overflow-live subrouter\n");
       exit(1);
@@ -1691,7 +1699,7 @@ __attribute__((constructor)) static void _setup(void) {
 
   /* Start the main test server, with 4 worker threads and the default
    * (unbounded) queue, so that both streaming and buffered handlers run on the
-   * server's ctpool.
+   * server's cthrpool.
    */
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -1739,34 +1747,34 @@ static void _raw_request_to_test_server(const char *req, char *buf,
 /*                         HELPER: MAKE GET/POST REQUESTS                    */
 /* ========================================================================== */
 
-static chttpcli_response *_get(const char *path) {
+static chttpcli_response_t *_get(const char *path) {
   char url[256];
   snprintf(url, sizeof(url), BASE_URL "%s", path);
-  chttpcli_response *resp = NULL;
+  chttpcli_response_t *resp = NULL;
   chttp_get(url, &resp);
   return resp;
 }
 
-static chttpcli_response *_post(const char *path, const char *body,
-                                const char *ct) {
+static chttpcli_response_t *_post(const char *path, const char *body,
+                                  const char *ct) {
   char url[256];
   snprintf(url, sizeof(url), BASE_URL "%s", path);
   chttp_request_body_t b = {body, body ? strlen(body) : 0, ct};
-  chttpcli_response *resp = NULL;
+  chttpcli_response_t *resp = NULL;
   chttp_post(url, &b, &resp);
   return resp;
 }
 
 /* GET with a custom header. */
-static chttpcli_response *_get_with_header(const char *path, const char *name,
-                                           const char *value) {
+static chttpcli_response_t *_get_with_header(const char *path, const char *name,
+                                             const char *value) {
   char url[256];
   snprintf(url, sizeof(url), BASE_URL "%s", path);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   if (!req) return NULL;
   chttp_request_set_header(req, name, value);
-  chttpcli_response *resp = NULL;
-  chttpclient_do(chttp_default_client(), req, &resp);
+  chttpcli_response_t *resp = NULL;
+  chttpcli_do(chttp_default_client(), req, &resp);
   chttp_request_free(req);
   return resp;
 }
@@ -1776,48 +1784,48 @@ static chttpcli_response *_get_with_header(const char *path, const char *name,
 /* ========================================================================== */
 
 TEST(chttpserver, get_hello) {
-  chttpcli_response *resp = _get("/hello");
+  chttpcli_response_t *resp = _get("/hello");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "Hello, world!");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, post_echo_body) {
-  chttpcli_response *resp = _post("/echo-body", "ping", "text/plain");
+  chttpcli_response_t *resp = _post("/echo-body", "ping", "text/plain");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "ping");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, post_echo_body_empty) {
-  chttpcli_response *resp = _post("/echo-body", NULL, NULL);
+  chttpcli_response_t *resp = _post("/echo-body", NULL, NULL);
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "(empty)");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, path_params) {
-  chttpcli_response *resp = _get("/params/42/hello");
+  chttpcli_response_t *resp = _get("/params/42/hello");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "id=42 sub=hello");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, path_params_url_encoded) {
-  chttpcli_response *resp = _get("/params/hello%20world/foo%2Fbar");
+  chttpcli_response_t *resp = _get("/params/hello%20world/foo%2Fbar");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "id=hello world sub=foo/bar");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, path_param_plus_literal) {
@@ -1828,135 +1836,135 @@ TEST(chttpserver, path_param_plus_literal) {
    * parameter capture decode with _decode_path_unsafe, never with
    * _decode_url_unsafe, which follows the query-string rules, turns '+' into '
    * ' and would give values that disagree with chttpsvr_req_path. */
-  chttpcli_response *resp = _get("/params/hello+world/foo");
+  chttpcli_response_t *resp = _get("/params/hello+world/foo");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "id=hello+world sub=foo");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, query_single_value) {
-  chttpcli_response *resp = _get("/query?q=hello");
+  chttpcli_response_t *resp = _get("/query?q=hello");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "hello");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, query_multi_value) {
-  chttpcli_response *resp = _get("/query?q=one&q=two&q=three");
+  chttpcli_response_t *resp = _get("/query?q=one&q=two&q=three");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "one,two,three");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, query_no_value) {
-  chttpcli_response *resp = _get("/query");
+  chttpcli_response_t *resp = _get("/query");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "no_q");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, request_header_read) {
-  chttpcli_response *resp =
+  chttpcli_response_t *resp =
       _get_with_header("/header", "x-test-header", "myvalue");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "myvalue");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, missing_request_header) {
-  chttpcli_response *resp = _get("/header");
+  chttpcli_response_t *resp = _get("/header");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "(none)");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, custom_response_header) {
-  chttpcli_response *resp = _get("/set-header");
+  chttpcli_response_t *resp = _get("/set-header");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  const char *v = chttpclient_resp_header(resp, "x-custom");
+  const char *v = chttpcli_resp_header(resp, "x-custom");
   REQUIRE_TRUE(v != NULL);
   REQUIRE_STREQ(v, "my-value");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, custom_status_code) {
-  chttpcli_response *resp = _get("/status");
+  chttpcli_response_t *resp = _get("/status");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 201);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "created");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, json_response) {
-  chttpcli_response *resp = _get("/json");
+  chttpcli_response_t *resp = _get("/json");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  const char *ct = chttpclient_resp_header(resp, "content-type");
+  const char *ct = chttpcli_resp_header(resp, "content-type");
   REQUIRE_TRUE(ct != NULL);
   REQUIRE_TRUE(strstr(ct, "application/json") != NULL);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "{\"ok\":true}");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, not_found) {
-  chttpcli_response *resp = _get("/does/not/exist");
+  chttpcli_response_t *resp = _get("/does/not/exist");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 404);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, method_not_allowed) {
   /* /hello is registered only for GET, so a POST should get 405. */
-  chttpcli_response *resp = _post("/hello", NULL, NULL);
+  chttpcli_response_t *resp = _post("/hello", NULL, NULL);
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 405);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, global_middleware_runs) {
   int before = g_global_mw_count;
-  chttpcli_response *resp = _get("/hello");
+  chttpcli_response_t *resp = _get("/hello");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   /* _global_mw adds the x-global-mw header. */
-  const char *v = chttpclient_resp_header(resp, "x-global-mw");
+  const char *v = chttpcli_resp_header(resp, "x-global-mw");
   REQUIRE_TRUE(v != NULL);
   REQUIRE_STREQ(v, "1");
   REQUIRE_GT(g_global_mw_count, before);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, subrouter_get_root) {
-  chttpcli_response *resp = _get("/api/v1/");
+  chttpcli_response_t *resp = _get("/api/v1/");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "api_root");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, subrouter_with_param) {
-  chttpcli_response *resp = _get("/api/v1/items/99");
+  chttpcli_response_t *resp = _get("/api/v1/items/99");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "item:99");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, subrouter_percent_encoded_prefix_segment_matches) {
@@ -1967,88 +1975,88 @@ TEST(chttpserver, subrouter_percent_encoded_prefix_segment_matches) {
      segments of a route pattern before comparing them, and a sub-router's
      prefix needs to be encoding-aware in the same way instead of being a raw
      byte-for-byte comparison. */
-  chttpcli_response *resp = _get("/%61pi/v1/items/99");
+  chttpcli_response_t *resp = _get("/%61pi/v1/items/99");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "item:99");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, subrouter_percent_encoded_prefix_root_matches) {
   /* The same as above for the path that is only the prefix (no route segments
      after it): /api/v1/ against /%61pi/v1/. */
-  chttpcli_response *resp = _get("/%61pi/v1/");
+  chttpcli_response_t *resp = _get("/%61pi/v1/");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "api_root");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, subrouter_middleware_runs) {
   int before = g_router_mw_count;
-  chttpcli_response *resp = _get("/api/v1/items/1");
+  chttpcli_response_t *resp = _get("/api/v1/items/1");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   /* Both the global and the router middleware should have run. */
-  const char *gv = chttpclient_resp_header(resp, "x-global-mw");
-  const char *rv = chttpclient_resp_header(resp, "x-router-mw");
+  const char *gv = chttpcli_resp_header(resp, "x-global-mw");
+  const char *rv = chttpcli_resp_header(resp, "x-router-mw");
   REQUIRE_TRUE(gv != NULL);
   REQUIRE_TRUE(rv != NULL);
   REQUIRE_STREQ(gv, "1");
   REQUIRE_STREQ(rv, "1");
   REQUIRE_GT(g_router_mw_count, before);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, global_mw_not_for_unrelated) {
   /* Requests outside the sub-router should NOT have x-router-mw. */
-  chttpcli_response *resp = _get("/hello");
+  chttpcli_response_t *resp = _get("/hello");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  const char *rv = chttpclient_resp_header(resp, "x-router-mw");
+  const char *rv = chttpcli_resp_header(resp, "x-router-mw");
   REQUIRE_TRUE(rv == NULL);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, middleware_short_circuit) {
   /* /blocked-area/secret uses _blocking_mw, which doesn't call next. */
-  chttpcli_response *resp = _get("/blocked-area/secret");
+  chttpcli_response_t *resp = _get("/blocked-area/secret");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 403);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "blocked");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, streaming_echo) {
   const char *payload = "streaming payload data";
-  chttpcli_response *resp = _post("/stream-echo", payload, "text/plain");
+  chttpcli_response_t *resp = _post("/stream-echo", payload, "text/plain");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, payload);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, raw_query_string) {
-  chttpcli_response *resp = _get("/raw-query?foo=bar&baz=1");
+  chttpcli_response_t *resp = _get("/raw-query?foo=bar&baz=1");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   /* The raw query is the query string before any decoding. */
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_TRUE(strstr(resp->body, "foo=bar") != NULL);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, path_accessor) {
-  chttpcli_response *resp = _get("/path");
+  chttpcli_response_t *resp = _get("/path");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "/path");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, serve_double_start) {
@@ -2095,14 +2103,14 @@ TEST(chttpserver, multi_server_start_stop) {
     /* The request to srv2 needs to succeed. */
     char url[128];
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/ping-srv2", TEST_PORT + 1);
-    chttpcli_response *resp = NULL;
+    chttpcli_response_t *resp = NULL;
     chttp_get(url, &resp);
     resp1_ok = resp != NULL;
     if (resp1_ok) {
       status1 = resp->status_code;
       body1_ok = resp->body != NULL;
       if (body1_ok) snprintf(body1_copy, sizeof(body1_copy), "%s", resp->body);
-      chttpclient_resp_free(resp);
+      chttpcli_resp_free(resp);
     }
 
     /* Make sure g_srv (on TEST_PORT) isn't affected. */
@@ -2110,7 +2118,7 @@ TEST(chttpserver, multi_server_start_stop) {
     resp2_ok = resp != NULL;
     if (resp2_ok) {
       status2 = resp->status_code;
-      chttpclient_resp_free(resp);
+      chttpcli_resp_free(resp);
     }
   }
 
@@ -2127,20 +2135,20 @@ TEST(chttpserver, multi_server_start_stop) {
 
 TEST(chttpserver, query_one_single) {
   /* chttpsvr_req_query_one returns the value when there is exactly one pair. */
-  chttpcli_response *resp = _get("/query-one?q=only");
+  chttpcli_response_t *resp = _get("/query-one?q=only");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "only");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, subrouter_404_outside_prefix) {
   /* /api/v2/ isn't registered, so it should be 404. */
-  chttpcli_response *resp = _get("/api/v2/items/1");
+  chttpcli_response_t *resp = _get("/api/v2/items/1");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 404);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, large_body_post) {
@@ -2151,14 +2159,14 @@ TEST(chttpserver, large_body_post) {
   for (size_t i = 0; i < sz; i++) big[i] = (char)('A' + (int)(i % 26));
   big[sz] = '\0';
 
-  chttpcli_response *resp =
+  chttpcli_response_t *resp =
       _post("/echo-body", big, "application/octet-stream");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_EQ(resp->body_len, sz);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_EQ(memcmp(resp->body, big, sz), 0);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
   free(big);
 }
 
@@ -2169,74 +2177,74 @@ TEST(chttpserver, large_body_post) {
 TEST(chttpserver, query_one_multi_rejected) {
   /* chttpsvr_req_query_one reports ccol_key_already_present for a key
    * with several values. */
-  chttpcli_response *resp = _get("/query-one?q=a&q=b");
+  chttpcli_response_t *resp = _get("/query-one?q=a&q=b");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "multi_value");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, query_one_missing) {
   /* chttpsvr_req_query_one needs to report ccol_key_not_found when the key is
      missing.
    */
-  chttpcli_response *resp = _get("/query-one");
+  chttpcli_response_t *resp = _get("/query-one");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "not_found");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, query_plus_decoded_to_space) {
   /* A '+' in a query value has to decode to a space. */
-  chttpcli_response *resp = _get("/query?q=hello+world");
+  chttpcli_response_t *resp = _get("/query?q=hello+world");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "hello world");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, query_percent_decoded) {
   /* Percent-encoded characters in a query value are decoded. */
-  chttpcli_response *resp = _get("/query?q=hello%20world");
+  chttpcli_response_t *resp = _get("/query?q=hello%20world");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "hello world");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, streaming_header_present) {
   /* chttpsvr_req_header reads conn->hdr_names/hdr_values, the same flat header
      array filled for every request whatever the kind of route, and this checks
      that it works the same way for a streaming route. */
-  chttpcli_response *resp =
+  chttpcli_response_t *resp =
       _get_with_header("/stream-header", "x-stream-test", "stream-val");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "stream-val");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, streaming_header_absent) {
   /* A missing header on a streaming route gives NULL from chttpsvr_req_header.
    */
-  chttpcli_response *resp = _get("/stream-header");
+  chttpcli_response_t *resp = _get("/stream-header");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "(none)");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, stream_handler_registration_accepted) {
   /* chttpsvr_register_streaming_handler should accept a valid registration on a
-     server that isn't started. The server owns its ctpool, so the caller passes
-     no pool. */
+     server that isn't started. The server owns its cthrpool, so the caller
+     passes no pool. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       g_srv2, CHTTP_POST, "/noop", _hello_handler, NULL);
@@ -2247,43 +2255,44 @@ TEST(chttpserver, subrouter_stream_route) {
   /* A streaming route registered on a sub-router must get the body, go
      through the global and the router middleware, and echo the response. */
   const char *payload = "api-stream-payload";
-  chttpcli_response *resp = _post("/api/v1/stream-echo", payload, "text/plain");
+  chttpcli_response_t *resp =
+      _post("/api/v1/stream-echo", payload, "text/plain");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, payload);
   /* The global middleware still runs on streaming sub-router routes. */
-  const char *gv = chttpclient_resp_header(resp, "x-global-mw");
+  const char *gv = chttpcli_resp_header(resp, "x-global-mw");
   REQUIRE_TRUE(gv != NULL);
   REQUIRE_STREQ(gv, "1");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, subrouter_method_not_allowed) {
   /* A method that matches no registered route on a sub-router whose path does
      match has to return 405, not 404. */
-  chttpcli_response *resp = _post("/api/v1/items/1", NULL, NULL);
+  chttpcli_response_t *resp = _post("/api/v1/items/1", NULL, NULL);
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 405);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, multi_mw_in_chain_runs_both) {
   /* Two middlewares registered one after the other on the same sub-router both
      need to run, in registration order (x-mw-a first, x-mw-b second). */
   int ba = g_mw_a_count, bb = g_mw_b_count;
-  chttpcli_response *resp = _get("/mw-chain/ping");
+  chttpcli_response_t *resp = _get("/mw-chain/ping");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  const char *va = chttpclient_resp_header(resp, "x-mw-a");
-  const char *vb = chttpclient_resp_header(resp, "x-mw-b");
+  const char *va = chttpcli_resp_header(resp, "x-mw-a");
+  const char *vb = chttpcli_resp_header(resp, "x-mw-b");
   REQUIRE_TRUE(va != NULL);
   REQUIRE_TRUE(vb != NULL);
   REQUIRE_STREQ(va, "1");
   REQUIRE_STREQ(vb, "1");
   REQUIRE_GT(g_mw_a_count, ba);
   REQUIRE_GT(g_mw_b_count, bb);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, invalid_param_pattern_rejected) {
@@ -2351,7 +2360,7 @@ TEST(chttpserver, duplicate_param_name_in_pattern_rejected) {
       g_srv2, CHTTP_POST, "/dup-stream/{id}/b/{id}", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 
-  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/dup-router");
+  chttpsvr_router_t *r = chttpsvr_subrouter(g_srv2, "/dup-router");
   REQUIRE_TRUE(r != NULL);
   rv = chttpsvr_router_on(r, CHTTP_GET, "/{id}/b/{id}", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -2372,12 +2381,12 @@ TEST(chttpserver, multi_method_get) {
      too. _find_route matches on the path AND the method together, so this holds
      whatever order the two registrations come in, it doesn't depend on that
      order by luck. */
-  chttpcli_response *resp = _get("/dual");
+  chttpcli_response_t *resp = _get("/dual");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "Hello, world!");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, multi_method_post) {
@@ -2386,12 +2395,12 @@ TEST(chttpserver, multi_method_post) {
      break this: the GET route matches the path, the method check fails and the
      search ends there, so the client would get a 405 instead of the POST
      handler's response. */
-  chttpcli_response *resp = _post("/dual", "dual-body", "text/plain");
+  chttpcli_response_t *resp = _post("/dual", "dual-body", "text/plain");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "dual-body");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, multi_method_unregistered_405) {
@@ -2461,19 +2470,19 @@ TEST(chttpserver, double_slash_pattern_rejected) {
 TEST(chttpserver, multi_write_accumulates) {
   /* Several chttpsvr_resp_write_str calls on the same response need to add up
      into a single body. */
-  chttpcli_response *resp = _get("/multi-write");
+  chttpcli_response_t *resp = _get("/multi-write");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "foobarbaz");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, printf_accumulates) {
   /* chttpsvr_resp_printf has to format like printf and add to the body across
      several calls. One of the calls produces output long enough to force the
      heap fallback path inside chttpsvr_resp_printf. */
-  chttpcli_response *resp = _get("/printf");
+  chttpcli_response_t *resp = _get("/printf");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
 
@@ -2485,18 +2494,18 @@ TEST(chttpserver, printf_accumulates) {
   }
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, expected);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, path_url_decoded) {
   /* chttpsvr_req_path() needs to return the URL-decoded path, not the raw
      percent-encoded form the client sent. */
-  chttpcli_response *resp = _get("/echo-path/hello%20world");
+  chttpcli_response_t *resp = _get("/echo-path/hello%20world");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "/echo-path/hello world");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, percent_encoded_nul_in_literal_segment_is_route_mismatch) {
@@ -2509,10 +2518,10 @@ TEST(chttpserver, percent_encoded_nul_in_literal_segment_is_route_mismatch) {
    * with "hello" through strcmp, which stops at the first NUL of either operand
    * and reports a match. A suffix of the attacker's choice could then hide
    * behind a route match that the caller expects to cover the whole segment. */
-  chttpcli_response *resp = _get("/hello%00xyz");
+  chttpcli_response_t *resp = _get("/hello%00xyz");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 404);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, percent_encoded_nul_in_param_segment_is_route_mismatch) {
@@ -2520,10 +2529,10 @@ TEST(chttpserver, percent_encoded_nul_in_param_segment_is_route_mismatch) {
    * _seg_cache_get should treat an embedded NUL in the decoded value as a
    * decode failure, the same as a malformed %XX escape, instead of handing a
    * truncated value to a match. */
-  chttpcli_response *resp = _get("/echo-path/hello%00world");
+  chttpcli_response_t *resp = _get("/echo-path/hello%00world");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 404);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, percent_encoded_nul_in_query_key_does_not_alias) {
@@ -2532,35 +2541,35 @@ TEST(chttpserver, percent_encoded_nul_in_query_key_does_not_alias) {
    * the guard, _parse_qparams stores the fully decoded "q\0x", and the
    * strcmp(qp->keys[i], "q") of chttpsvr_req_query_one stops at the embedded
    * NUL and reports a match that isn't one. */
-  chttpcli_response *resp = _get("/query-one?q%00x=hello");
+  chttpcli_response_t *resp = _get("/query-one?q%00x=hello");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "not_found");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, multi_key_query) {
   /* Calling chttpsvr_req_query for two different keys in one request has to
      give the right values for both, even though the two calls share and reuse
      the _qresult scratch array. */
-  chttpcli_response *resp = _get("/multi-query?a=hello&b=world");
+  chttpcli_response_t *resp = _get("/multi-query?a=hello&b=world");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "a=hello b=world");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, multi_key_query_missing) {
   /* Missing keys must give the nil sentinel whatever the order of the calls.
    */
-  chttpcli_response *resp = _get("/multi-query?a=only");
+  chttpcli_response_t *resp = _get("/multi-query?a=only");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "a=only b=nil");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* A pass-through allocator that counts its calls. It exercises
@@ -2619,7 +2628,7 @@ TEST(chttpserver, custom_allocator_lifecycle) {
                                            _stream_echo_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 
-  chttpsvr_router *r = chttpsvr_subrouter(srv, "/sub");
+  chttpsvr_router_t *r = chttpsvr_subrouter(srv, "/sub");
   REQUIRE_TRUE(r != NULL);
   rv = chttpsvr_router_on(r, CHTTP_GET, "/x", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -2642,12 +2651,12 @@ TEST(chttpserver, subrouter_root_no_trailing_slash) {
   /* /api/v1 without a trailing slash must match the "/" route of the /api/v1
      sub-router. _find_route turns the empty sub-path into "/" before matching,
      so both /api/v1 and /api/v1/ reach _api_root_handler. */
-  chttpcli_response *resp = _get("/api/v1");
+  chttpcli_response_t *resp = _get("/api/v1");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "api_root");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, long_path_heap_alloc) {
@@ -2665,7 +2674,7 @@ TEST(chttpserver, long_path_heap_alloc) {
   REQUIRE_TRUE(url != NULL);
   snprintf(url, url_sz, BASE_URL "/echo-path/%s", param);
 
-  chttpcli_response *resp = NULL;
+  chttpcli_response_t *resp = NULL;
   chttp_get(url, &resp);
   free(url);
 
@@ -2676,7 +2685,7 @@ TEST(chttpserver, long_path_heap_alloc) {
   snprintf(expected, sizeof(expected), "/echo-path/%s", param);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, expected);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* A reject_pool thread increments g_reject_task_run_count_for_tests AFTER the
@@ -2836,8 +2845,8 @@ static bool _first_date_value(const char *buf, char *out, size_t out_sz) {
 }
 
 TEST(chttpserver, bounded_pool_full_returns_503) {
-  /* ctpool_try_submit returns ccol_container_full when the server's ctpool is
-   * full, and the server then must answer with a 503.
+  /* cthrpool_try_submit returns ccol_container_full when the server's cthrpool
+   * is full, and the server then must answer with a 503.
    *
    * g_bounded_srv has 1 worker thread and queue_capacity=1, so its total
    * capacity is 2, one running task and one queued task. The test sends two
@@ -2866,11 +2875,11 @@ TEST(chttpserver, bounded_pool_full_returns_503) {
   /* The request timeout turns a wrong outcome into a failure instead of a hang.
    * If request 3 got a queue slot instead of a 503, it would wait for g_blk_go,
    * which this test sets only after request 3 returns. */
-  g_bounded_cli = chttpclient_create(NULL);
+  g_bounded_cli = chttpcli_create(NULL);
   bool cli_ok =
       g_bounded_cli != CHTTPCLI_NULL &&
-      chttpclient_set_pool_size(g_bounded_cli, 8) == ccol_success &&
-      chttpclient_set_request_timeout(g_bounded_cli, 30000000) == ccol_success;
+      chttpcli_set_pool_size(g_bounded_cli, 8) == ccol_success &&
+      chttpcli_set_request_timeout(g_bounded_cli, 30000000) == ccol_success;
 
   /* Reset whatever an earlier run of this test left behind. */
   pthread_mutex_lock(&g_blk_mtx);
@@ -2944,15 +2953,15 @@ TEST(chttpserver, bounded_pool_full_returns_503) {
   bool date_ok = false;
   size_t reject_count_after = reject_count_before;
   if (worker_blocked && request2_queued) {
-    chttpcli_response *resp = _bounded_get();
+    chttpcli_response_t *resp = _bounded_get();
     if (resp) {
       got_resp = true;
       status = resp->status_code;
-      const char *d = chttpclient_resp_header(resp, "date");
+      const char *d = chttpcli_resp_header(resp, "date");
       time_t t;
       date_ok = d && _parse_imf_fixdate(d, strlen(d), &t) &&
                 labs((long)(t - time(NULL))) <= 5;
-      chttpclient_resp_free(resp);
+      chttpcli_resp_free(resp);
     }
     reject_count_after =
         _wait_for_reject_pool_task_count(reject_count_before + 1);
@@ -2968,7 +2977,7 @@ TEST(chttpserver, bounded_pool_full_returns_503) {
 
   if (t1_created) pthread_join(t1, NULL);
   if (t2_created) pthread_join(t2, NULL);
-  if (g_bounded_cli != CHTTPCLI_NULL) chttpclient_destroy(g_bounded_cli);
+  if (g_bounded_cli != CHTTPCLI_NULL) chttpcli_destroy(g_bounded_cli);
   g_bounded_cli = CHTTPCLI_NULL;
 
   /* Reset g_blk_go in case of a rerun, for example the safety broadcast of
@@ -3411,13 +3420,13 @@ TEST(chttpserver, req_read_on_buffered_returns_minus_one) {
   /* chttpsvr_req_read() returns -1 on buffered (non-streaming) routes,
      because req->is_streaming is false and a body that was buffered up front
      has no stream position. */
-  chttpcli_response *resp =
+  chttpcli_response_t *resp =
       _post("/req-read-buffered", "payload", "text/plain");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "-1");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, req_body_via_api_on_streaming_route) {
@@ -3427,12 +3436,12 @@ TEST(chttpserver, req_body_via_api_on_streaming_route) {
      chttpsvr_req_body() on such a route must return NULL and 0 instead of
      handing back a buffered copy. */
   const char *payload = "body-via-api";
-  chttpcli_response *resp = _post("/stream-body-api", payload, "text/plain");
+  chttpcli_response_t *resp = _post("/stream-body-api", payload, "text/plain");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "(empty)");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, req_body_via_api_after_req_read_on_streaming_route) {
@@ -3449,7 +3458,7 @@ TEST(chttpserver, req_body_via_api_after_req_read_on_streaming_route) {
      already delivered and left in the buffer) instead of the documented NULL
      and 0. */
   const char *payload = "12345678-more-than-eight-bytes";
-  chttpcli_response *resp =
+  chttpcli_response_t *resp =
       _post("/stream-body-after-read", payload, "text/plain");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -3459,7 +3468,7 @@ TEST(chttpserver, req_body_via_api_after_req_read_on_streaming_route) {
      covers the case after a real read and not a request without a body. */
   REQUIRE_TRUE(strncmp(resp->body, "read=0 ", 7) != 0);
   REQUIRE_TRUE(strstr(resp->body, "body=null len=0") != NULL);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, streaming_repeated_header) {
@@ -3541,10 +3550,10 @@ TEST(chttpserver, unmatched_route_rejection_routed_through_reject_pool) {
   _wait_for_reject_counter_to_settle();
   size_t before = _chttpsvr_reject_pool_task_count_for_tests();
 
-  chttpcli_response *resp = _get("/definitely-not-a-registered-route-xyz");
+  chttpcli_response_t *resp = _get("/definitely-not-a-registered-route-xyz");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 404);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 
   REQUIRE_EQ(_wait_for_reject_pool_task_count(before + 1), before + 1);
 }
@@ -3597,10 +3606,10 @@ TEST(chttpserver, concurrent_route_rejections_do_not_starve_other_requests) {
      asserts exactly is that every rejection of the burst ran on reject_pool. */
   struct timespec t0, t1;
   clock_gettime(CLOCK_MONOTONIC, &t0);
-  chttpcli_response *resp = _get("/hello");
+  chttpcli_response_t *resp = _get("/hello");
   clock_gettime(CLOCK_MONOTONIC, &t1);
   int status_code = resp ? resp->status_code : -1;
-  if (resp) chttpclient_resp_free(resp);
+  if (resp) chttpcli_resp_free(resp);
 
   long elapsed_ms =
       (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
@@ -4747,16 +4756,16 @@ static void *_conc_stream_thread(void *arg) {
   conc_stream_arg_t *a = (conc_stream_arg_t *)arg;
   char payload[64];
   snprintf(payload, sizeof(payload), "concurrent-%d", a->id);
-  chttpcli_response *resp = _post("/stream-echo", payload, "text/plain");
+  chttpcli_response_t *resp = _post("/stream-echo", payload, "text/plain");
   a->ok = (resp != NULL && resp->status_code == 200 && resp->body != NULL &&
            strcmp(resp->body, payload) == 0);
   /* The global middleware has to add x-global-mw to every streaming response.
    */
   if (a->ok && resp) {
-    const char *gv = chttpclient_resp_header(resp, "x-global-mw");
+    const char *gv = chttpcli_resp_header(resp, "x-global-mw");
     a->ok = (gv != NULL && strcmp(gv, "1") == 0);
   }
-  if (resp) chttpclient_resp_free(resp);
+  if (resp) chttpcli_resp_free(resp);
   return NULL;
 }
 
@@ -4798,12 +4807,12 @@ TEST(chttpserver, subrouter_trailing_slash_prefix) {
      "/api/v3/", and it should behave exactly like one without it, "/api/v3":
      the library strips that slash from the stored prefix, so a request to
      /api/v3/ping must route correctly. */
-  chttpcli_response *resp = _get("/api/v3/ping");
+  chttpcli_response_t *resp = _get("/api/v3/ping");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "Hello, world!");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* ========================================================================== */
@@ -4836,12 +4845,12 @@ TEST(chttpserver, resp_write_str_null_guard) {
      _setup, and g_null_guard_results is reset before each call so the test can
      be repeated. */
   g_null_guard_results[0] = g_null_guard_results[1] = -1;
-  chttpcli_response *resp = _get("/null-guard");
+  chttpcli_response_t *resp = _get("/null-guard");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "ok");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
   REQUIRE_EQ(g_null_guard_results[0], (int)ccol_invalid_args);
   REQUIRE_EQ(g_null_guard_results[1], (int)ccol_invalid_args);
 }
@@ -4854,10 +4863,10 @@ TEST(chttpserver, trailing_slash_not_matched) {
   /* A path with a trailing slash must NOT match a route whose pattern has none,
    * so /api/v1/items/99/ has to give 404 even though /api/v1/items/{id} is
    * registered. */
-  chttpcli_response *resp = _get("/api/v1/items/99/");
+  chttpcli_response_t *resp = _get("/api/v1/items/99/");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 404);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* ========================================================================== */
@@ -4902,12 +4911,12 @@ TEST(chttpserver, cache_shared_literal_prefix_segment_multiple_candidates) {
                  _cache_literal_handler, (void *)"alpha-three"),
              (int)ccol_success);
 
-  chttpcli_response *resp = _get("/cache-share/%61lpha/three");
+  chttpcli_response_t *resp = _get("/cache-share/%61lpha/three");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "alpha-three");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver,
@@ -4931,12 +4940,12 @@ TEST(chttpserver,
                  _cache_param_handler, (void *)"second"),
              (int)ccol_success);
 
-  chttpcli_response *resp = _get("/cache-param/x%79z/second");
+  chttpcli_response_t *resp = _get("/cache-param/x%79z/second");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "second:xyz");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, cache_malformed_segment_rejects_every_sharing_candidate) {
@@ -4995,9 +5004,9 @@ TEST(chttpserver, subrouter_prefix_cache_shared_across_candidates) {
      entry. A corrupt entry (freed, stale or never computed again) would make
      this test crash or route to the wrong handler. */
   REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
-  chttpsvr_router *r1 = chttpsvr_subrouter(g_srv, "/pfx-share/alpha");
-  chttpsvr_router *r2 = chttpsvr_subrouter(g_srv, "/pfx-share/beta");
-  chttpsvr_router *r3 = chttpsvr_subrouter(g_srv, "/pfx-share/gamma");
+  chttpsvr_router_t *r1 = chttpsvr_subrouter(g_srv, "/pfx-share/alpha");
+  chttpsvr_router_t *r2 = chttpsvr_subrouter(g_srv, "/pfx-share/beta");
+  chttpsvr_router_t *r3 = chttpsvr_subrouter(g_srv, "/pfx-share/gamma");
   REQUIRE_TRUE(r1 != NULL);
   REQUIRE_TRUE(r2 != NULL);
   REQUIRE_TRUE(r3 != NULL);
@@ -5014,12 +5023,12 @@ TEST(chttpserver, subrouter_prefix_cache_shared_across_candidates) {
                               (void *)"gamma-leaf"),
       (int)ccol_success);
 
-  chttpcli_response *resp = _get("/pfx-sh%61re/gamma/leaf");
+  chttpcli_response_t *resp = _get("/pfx-sh%61re/gamma/leaf");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "gamma-leaf");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver,
@@ -5031,8 +5040,8 @@ TEST(chttpserver,
      segment (it can never match), and it doesn't depend on which sub-router
      prefix asks. */
   REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
-  chttpsvr_router *r1 = chttpsvr_subrouter(g_srv, "/pfx-bad/one");
-  chttpsvr_router *r2 = chttpsvr_subrouter(g_srv, "/pfx-bad/two");
+  chttpsvr_router_t *r1 = chttpsvr_subrouter(g_srv, "/pfx-bad/one");
+  chttpsvr_router_t *r2 = chttpsvr_subrouter(g_srv, "/pfx-bad/two");
   REQUIRE_TRUE(r1 != NULL);
   REQUIRE_TRUE(r2 != NULL);
   REQUIRE_EQ(
@@ -5072,7 +5081,7 @@ TEST(chttpserver, router_use_null_fn_rejected) {
   /* chttpsvr_router_use has to return ccol_invalid_args when fn is NULL, so
    * that no NULL middleware can be appended to the chain. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
-  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-mw-test");
+  chttpsvr_router_t *r = chttpsvr_subrouter(g_srv2, "/null-mw-test");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv = chttpsvr_router_use(r, NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -5114,7 +5123,7 @@ TEST(chttpserver, router_on_null_pattern_rejected) {
   /* chttpsvr_router_on must guard against a NULL pattern too, the same way as
    * chttpsvr_register_handler. Uses a sub-router on g_srv2. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
-  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-pat-rt");
+  chttpsvr_router_t *r = chttpsvr_subrouter(g_srv2, "/null-pat-rt");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv =
       chttpsvr_router_on(r, CHTTP_GET, NULL, _hello_handler, NULL);
@@ -5126,7 +5135,7 @@ TEST(chttpserver, router_on_stream_null_pattern_rejected) {
    * the public API boundary, the same way as chttpsvr_router_on and
    * chttpsvr_register_streaming_handler. Uses a sub-router on g_srv2. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
-  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-pat-stream");
+  chttpsvr_router_t *r = chttpsvr_subrouter(g_srv2, "/null-pat-stream");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv =
       chttpsvr_router_on_stream(r, CHTTP_POST, NULL, _hello_handler, NULL);
@@ -5154,13 +5163,13 @@ TEST(chttpserver, resp_header_duplicate_last_wins) {
   /* When chttpsvr_resp_set_header is called twice with the same header name,
    * the second call must overwrite the first value and not add a second
    * entry. The /dup-header route sets x-dup twice. */
-  chttpcli_response *resp = _get("/dup-header");
+  chttpcli_response_t *resp = _get("/dup-header");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  const char *v = chttpclient_resp_header(resp, "x-dup");
+  const char *v = chttpcli_resp_header(resp, "x-dup");
   REQUIRE_TRUE(v != NULL);
   REQUIRE_STREQ(v, "second");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* ========================================================================== */
@@ -5172,24 +5181,24 @@ TEST(chttpserver, invalid_status_code_clamped_to_500) {
    * _send_response needs to turn it into 500 (its own [100,999] range check)
    * instead of writing the raw out-of-range value onto the wire. The
    * /bad-status route exercises this. */
-  chttpcli_response *resp = _get("/bad-status");
+  chttpcli_response_t *resp = _get("/bad-status");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 500);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, query_one_null_key_returns_invalid_args) {
   /* chttpsvr_req_query_one has to return ccol_invalid_args when the key
    * argument is NULL. The handler calls it with key=NULL and writes the numeric
    * return value as the response body, so we can assert on it here. */
-  chttpcli_response *resp = _get("/query-one-null-key?q=val");
+  chttpcli_response_t *resp = _get("/query-one-null-key?q=val");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   char expected[16];
   snprintf(expected, sizeof(expected), "%d", (int)ccol_invalid_args);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, expected);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* ========================================================================== */
@@ -5200,24 +5209,24 @@ TEST(chttpserver, req_read_zero_buflen_returns_zero) {
   /* On a streaming route chttpsvr_req_read(req, buf, 0) should return 0 (a
    * no-op) and not -1 (an error). Lumping the buflen == 0 check together with
    * the hard-error guards would wrongly return -1. */
-  chttpcli_response *resp = _get("/stream-zero-buflen");
+  chttpcli_response_t *resp = _get("/stream-zero-buflen");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "0");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, req_read_empty_body_streaming_returns_zero) {
   /* The server can call a streaming handler for a request without a body, and
    * the first chttpsvr_req_read call should then return 0 for EOF at once,
    * not a negative value and not hang. */
-  chttpcli_response *resp = _get("/stream-empty-read");
+  chttpcli_response_t *resp = _get("/stream-empty-read");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "0");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, query_one_null_req_returns_invalid_args) {
@@ -5283,12 +5292,12 @@ TEST(chttpserver, req_read_null_buf_returns_minus_one) {
   /* chttpsvr_req_read needs to return -1 when buf is NULL (and len > 0). The
    * /stream-null-buf route calls req_read(req, NULL, 4) and echoes the return
    * value as a decimal string, so we can assert on it here. */
-  chttpcli_response *resp = _get("/stream-null-buf");
+  chttpcli_response_t *resp = _get("/stream-null-buf");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "-1");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* ========================================================================== */
@@ -5300,7 +5309,7 @@ TEST(chttpserver, subrouter_null_prefix_rejected) {
    * never dereferences the prefix later when it matches paths. Uses g_srv2
    * (never started) so that g_srv's routing tables stay clean. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
-  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, NULL);
+  chttpsvr_router_t *r = chttpsvr_subrouter(g_srv2, NULL);
   REQUIRE_TRUE(r == NULL);
 }
 
@@ -5309,7 +5318,7 @@ TEST(chttpserver, subrouter_no_leading_slash_rejected) {
    * '/', since every valid HTTP path does. Uses g_srv2 (never started) so that
    * g_srv's routing tables stay clean. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
-  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "api/v1");
+  chttpsvr_router_t *r = chttpsvr_subrouter(g_srv2, "api/v1");
   REQUIRE_TRUE(r == NULL);
 }
 
@@ -5320,7 +5329,7 @@ TEST(chttpserver, subrouter_double_slash_at_start_rejected) {
    * returning NULL. Uses g_srv2 (never started) so that g_srv's routing tables
    * stay clean. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
-  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "//api");
+  chttpsvr_router_t *r = chttpsvr_subrouter(g_srv2, "//api");
   REQUIRE_TRUE(r == NULL);
 }
 
@@ -5329,7 +5338,7 @@ TEST(chttpserver, subrouter_double_slash_in_middle_rejected) {
    * can't be reached either, so the server rejects it too. The test uses
    * g_srv2, which is never started. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
-  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/api//v1");
+  chttpsvr_router_t *r = chttpsvr_subrouter(g_srv2, "/api//v1");
   REQUIRE_TRUE(r == NULL);
 }
 
@@ -5340,8 +5349,8 @@ TEST(chttpserver, subrouter_double_slash_in_middle_rejected) {
 TEST(chttpserver, on_stream_null_fn_rejected) {
   /* chttpsvr_register_streaming_handler has to return ccol_invalid_args when fn
    * is NULL, just like chttpsvr_register_handler rejects a NULL handler. A NULL
-   * streaming handler would crash when the ctpool tries to call it. Uses g_srv2
-   * (never started). */
+   * streaming handler would crash when the cthrpool tries to call it. Uses
+   * g_srv2 (never started). */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       g_srv2, CHTTP_POST, "/noop-fn", NULL, NULL);
@@ -5353,7 +5362,7 @@ TEST(chttpserver, router_on_stream_null_fn_rejected) {
    * just like chttpsvr_register_streaming_handler and chttpsvr_router_on. Uses
    * a sub-router on g_srv2 (never started). */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
-  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-stream-fn");
+  chttpsvr_router_t *r = chttpsvr_subrouter(g_srv2, "/null-stream-fn");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv = chttpsvr_router_on_stream(r, CHTTP_POST, "/x", NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -5369,12 +5378,12 @@ TEST(chttpserver, resp_write_null_data_edge_cases) {
    *   - return ccol_success when data is NULL and len == 0 (a no-op).
    * The /resp-write-null-guard route is registered in _setup. */
   g_null_data_results[0] = g_null_data_results[1] = -1;
-  chttpcli_response *resp = _get("/resp-write-null-guard");
+  chttpcli_response_t *resp = _get("/resp-write-null-guard");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "ok");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
   REQUIRE_EQ(g_null_data_results[0], (int)ccol_invalid_args);
   REQUIRE_EQ(g_null_data_results[1], (int)ccol_success);
 }
@@ -5387,12 +5396,12 @@ TEST(chttpserver, req_read_null_buf_zero_buflen_returns_zero) {
   /* chttpsvr_req_read(req, NULL, 0) needs to return 0, not -1. The buflen==0
    * guard has to run before the NULL buf guard, so a NULL buffer with a zero
    * length is a harmless no-op and not a hard error. */
-  chttpcli_response *resp = _get("/stream-null-buf-zero-len");
+  chttpcli_response_t *resp = _get("/stream-null-buf-zero-len");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "0");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* ========================================================================== */
@@ -5403,12 +5412,12 @@ TEST(chttpserver, resp_write_json_zero_len_rejected) {
   /* chttpsvr_resp_write_json must return ccol_invalid_args when len == 0. The
    * /json-zero-len route is registered in _setup. */
   g_json_zero_len_result = -1;
-  chttpcli_response *resp = _get("/json-zero-len");
+  chttpcli_response_t *resp = _get("/json-zero-len");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "done");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
   REQUIRE_EQ(g_json_zero_len_result, (int)ccol_invalid_args);
 }
 
@@ -5472,15 +5481,15 @@ TEST(chttpserver, req_header_null_req_returns_null) {
 
 TEST(chttpserver, req_header_null_name_returns_null) {
   /* chttpsvr_req_header(req, NULL) has to return NULL without crashing.
-   * chttpsvr_req is opaque, so the test reaches the guard through a full HTTP
+   * chttpsvr_req_t is opaque, so the test reaches the guard through a full HTTP
    * round trip: _null_name_header_handler calls chttpsvr_req_header(req, NULL)
    * on a real live request and writes "null" only when the result is NULL. */
-  chttpcli_response *resp = _get("/null-name-header");
+  chttpcli_response_t *resp = _get("/null-name-header");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "null");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, req_query_null_req_returns_null_and_zero_count) {
@@ -5522,12 +5531,12 @@ TEST(chttpserver, req_query_one_null_val_out_with_hit_returns_success) {
   /* chttpsvr_req_query_one(req, key, NULL) returns ccol_success when the
    * key is present even though the caller passed NULL for val_out (a pure
    * existence check), and it must not crash. */
-  chttpcli_response *resp = _get("/query-one-null-val-out?q=present");
+  chttpcli_response_t *resp = _get("/query-one-null-val-out?q=present");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "ok");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, req_query_oom_null_req_returns_false) {
@@ -5538,16 +5547,16 @@ TEST(chttpserver, req_query_oom_null_req_returns_false) {
 
 TEST(chttpserver, req_query_null_key_returns_null_and_zero_count) {
   /* chttpsvr_req_query(req, NULL, &n) should return NULL and write 0 into the
-   * count without crashing. chttpsvr_req is opaque, so the test reaches the
+   * count without crashing. chttpsvr_req_t is opaque, so the test reaches the
    * guard through a full HTTP round trip: _null_key_query_handler calls
    * chttpsvr_req_query(req, NULL, &n) on a real live request and writes "null"
    * only when the result is NULL and the count is 0. */
-  chttpcli_response *resp = _get("/null-key-query");
+  chttpcli_response_t *resp = _get("/null-key-query");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "null");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, resp_set_status_null_is_noop) {
@@ -5585,12 +5594,12 @@ TEST(chttpserver, stop_null_is_noop) {
 TEST(chttpserver, raw_query_absent) {
   /* When the request URL has no query string, chttpsvr_req_raw_query returns
    * NULL and _raw_query_handler writes the literal "(none)". */
-  chttpcli_response *resp = _get("/raw-query");
+  chttpcli_response_t *resp = _get("/raw-query");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "(none)");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* ========================================================================== */
@@ -5602,13 +5611,13 @@ TEST(chttpserver, headers_only_response) {
    * chttpsvr_resp_write* function, and the server must still deliver the
    * right status code and header to the client: _send_response has to write the
    * head alone, with no body. */
-  chttpcli_response *resp = _get("/headers-only");
+  chttpcli_response_t *resp = _get("/headers-only");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 204);
-  const char *v = chttpclient_resp_header(resp, "x-no-body");
+  const char *v = chttpcli_resp_header(resp, "x-no-body");
   REQUIRE_TRUE(v != NULL);
   REQUIRE_STREQ(v, "1");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* ========================================================================== */
@@ -5630,12 +5639,12 @@ TEST(chttpserver, duplicate_route_first_wins) {
    * _hello_handler answers "Hello, world!" and _dup_second_handler answers
    * "second". The expected body is "Hello, world!", since the first
    * registration wins. */
-  chttpcli_response *resp = _get("/dup-first-wins");
+  chttpcli_response_t *resp = _get("/dup-first-wins");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "Hello, world!");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* ========================================================================== */
@@ -5648,7 +5657,7 @@ TEST(chttpserver, router_on_null_fn_rejected) {
    * chttpsvr_router_on_stream, which have their own tests for it. Uses a
    * sub-router on g_srv2 (never started). */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
-  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-fn-rt");
+  chttpsvr_router_t *r = chttpsvr_subrouter(g_srv2, "/null-fn-rt");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv = chttpsvr_router_on(r, CHTTP_GET, "/x", NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -5668,15 +5677,15 @@ TEST(chttpserver, resp_null_resp_set_status_no_crash_and_dual_null_header) {
 
 TEST(chttpserver, resp_set_header_null_name_value_live) {
   /* Exercise the NULL name and NULL value guards of chttpsvr_resp_set_header
-   * with a real, live chttpsvr_resp, which only exists inside a handler. The
+   * with a real, live chttpsvr_resp_t, which only exists inside a handler. The
    * /set-header-null-guards route is registered in _setup. */
   g_null_hdr_results[0] = g_null_hdr_results[1] = -1;
-  chttpcli_response *resp = _get("/set-header-null-guards");
+  chttpcli_response_t *resp = _get("/set-header-null-guards");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "ok");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
   REQUIRE_EQ(g_null_hdr_results[0], (int)ccol_invalid_args); /* NULL name */
   REQUIRE_EQ(g_null_hdr_results[1], (int)ccol_invalid_args); /* NULL value */
 }
@@ -5804,19 +5813,19 @@ TEST(chttpserver, subrouter_null_srv_rejected) {
    * back-pointer in the new router can't cause crashes at routing time. The
    * NULL prefix and the no-leading-slash cases have their own tests, and this
    * one completes the guard coverage. */
-  chttpsvr_router *r = chttpsvr_subrouter(CHTTPSVR_NULL, "/any");
+  chttpsvr_router_t *r = chttpsvr_subrouter(CHTTPSVR_NULL, "/any");
   REQUIRE_TRUE(r == NULL);
 }
 
 TEST(chttpserver, req_param_null_name_returns_null) {
   /* chttpsvr_req_param(req, NULL) returns NULL instead of crashing. The
    * /param-null-name route is registered in _setup. */
-  chttpcli_response *resp = _get("/param-null-name");
+  chttpcli_response_t *resp = _get("/param-null-name");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "null");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* ========================================================================== */
@@ -5840,12 +5849,12 @@ TEST(chttpserver, query_empty_key) {
   /* A query string like "?=hello" has an empty key, which the server has to
    * parse correctly so that chttpsvr_req_query(req, "", &n) reads it back.
    * _setup registers the /query-empty-key route. */
-  chttpcli_response *resp = _get("/query-empty-key?=hello");
+  chttpcli_response_t *resp = _get("/query-empty-key?=hello");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "hello");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, query_stray_ampersand_does_not_produce_phantom_empty_key) {
@@ -5855,12 +5864,12 @@ TEST(chttpserver, query_stray_ampersand_does_not_produce_phantom_empty_key) {
      the real "a" and "b" pairs. That's a different case from "?=hello" above,
      which is a non-empty pair whose key half is empty, and that case has to
      stay as it is. */
-  chttpcli_response *resp = _get("/query-stray-amp-counts?a=1&&b=2");
+  chttpcli_response_t *resp = _get("/query-stray-amp-counts?a=1&&b=2");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "1,1,0");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver,
@@ -5868,12 +5877,12 @@ TEST(chttpserver,
   /* "&a=1" has an empty pair before the first real pair, and "b=2&" one after
      the last pair. The parser skips both the same way instead of counting
      either as a bogus "" key. */
-  chttpcli_response *resp = _get("/query-stray-amp-counts?&a=1&b=2&");
+  chttpcli_response_t *resp = _get("/query-stray-amp-counts?&a=1&b=2&");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "1,1,0");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* 3. chttpsvr_req_read after EOF keeps returning 0 */
@@ -5881,12 +5890,12 @@ TEST(chttpserver,
 TEST(chttpserver, req_read_eof_is_idempotent) {
   /* Once chttpsvr_req_read has returned 0 (EOF), calling it again must keep
    * returning 0. The /stream-read-eof-twice route is registered in _setup. */
-  chttpcli_response *resp = _get("/stream-read-eof-twice");
+  chttpcli_response_t *resp = _get("/stream-read-eof-twice");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "0 0");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 /* 4. The chttpsvr_subrouter("/") edge case */
@@ -5899,18 +5908,18 @@ TEST(chttpserver, subrouter_slash_prefix_matches_only_root) {
    * registered in _setup. */
 
   /* The sub-router must handle the exact path "/". */
-  chttpcli_response *resp_root = _get("/");
+  chttpcli_response_t *resp_root = _get("/");
   REQUIRE_TRUE(resp_root != NULL);
   REQUIRE_EQ(resp_root->status_code, 200);
   REQUIRE_TRUE(resp_root->body != NULL);
   REQUIRE_STREQ(resp_root->body, "root_subrouter");
-  chttpclient_resp_free(resp_root);
+  chttpcli_resp_free(resp_root);
 
   /* A path that starts with "/" but isn't exactly "/" must NOT match. */
-  chttpcli_response *resp_foo = _get("/nonexistent-path-xyz");
+  chttpcli_response_t *resp_foo = _get("/nonexistent-path-xyz");
   REQUIRE_TRUE(resp_foo != NULL);
   REQUIRE_EQ(resp_foo->status_code, 404);
-  chttpclient_resp_free(resp_foo);
+  chttpcli_resp_free(resp_foo);
 }
 
 TEST(chttpserver, subrouter_slash_prefix_rejects_doubled_leading_slash) {
@@ -6036,12 +6045,12 @@ TEST(chttpserver, streaming_get_no_body_via_req_body) {
    * "(empty)" response instead of crashing or returning garbage. This covers
    * the else branch of (body && len > 0) in a streaming route. */
   REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
-  chttpcli_response *resp = _get("/stream-body-get-no-body");
+  chttpcli_response_t *resp = _get("/stream-body-get-no-body");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "(empty)");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, dynamic_route_registration_while_running) {
@@ -6053,12 +6062,12 @@ TEST(chttpserver, dynamic_route_registration_while_running) {
   ccol_retval_t rv = chttpsvr_register_handler(
       g_srv, CHTTP_GET, "/late-dynamic-route", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
-  chttpcli_response *resp = _get("/late-dynamic-route");
+  chttpcli_response_t *resp = _get("/late-dynamic-route");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "Hello, world!");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, subrouter_wins_over_root_route_at_same_path) {
@@ -6075,12 +6084,12 @@ TEST(chttpserver, subrouter_wins_over_root_route_at_same_path) {
    *   2. Sub-router  /shadow-test  with /ping -> _shadow_sub_handler
    * Request: GET /shadow-test/ping -> has to return "sub-wins". */
   REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
-  chttpcli_response *resp = _get("/shadow-test/ping");
+  chttpcli_response_t *resp = _get("/shadow-test/ping");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "sub-wins");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, middleware_overflow_registration_rejected) {
@@ -6091,7 +6100,7 @@ TEST(chttpserver, middleware_overflow_registration_rejected) {
    * router from ever building a chain that overflows, so the public API can't
    * reach the quiet 500 path at dispatch time this way. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
-  chttpsvr_router *ov_r = chttpsvr_subrouter(g_srv2, "/overflow-mw-test");
+  chttpsvr_router_t *ov_r = chttpsvr_subrouter(g_srv2, "/overflow-mw-test");
   REQUIRE_TRUE(ov_r != NULL);
 
   for (int i = 0; i < 32; i++) {
@@ -6117,10 +6126,10 @@ TEST(chttpserver, middleware_overflow_produces_500) {
    * trips the overflow guard in _on_request before the route handler is called.
    */
   REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
-  chttpcli_response *resp = _get("/mw-overflow-live/ping");
+  chttpcli_response_t *resp = _get("/mw-overflow-live/ping");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 500);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, middleware_overflow_streaming_produces_500) {
@@ -6135,11 +6144,11 @@ TEST(chttpserver, middleware_overflow_streaming_produces_500) {
    * has to get the same 500 response as the buffered /mw-overflow-live/ping
    * route. */
   REQUIRE_TRUE(g_srv != CHTTPSVR_NULL);
-  chttpcli_response *resp =
+  chttpcli_response_t *resp =
       _post("/mw-overflow-live/stream-ping", "payload", "text/plain");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 500);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, malformed_encoding_in_param_correct_method_returns_404) {
@@ -6288,23 +6297,23 @@ TEST(chttpserver, serve_null_cfg_uses_default) {
 TEST(chttpserver, any_method_get) {
   /* A CHTTP_ANY route dispatches a GET request, and the handler can read
      CHTTP_GET back from chttpsvr_req_method(). */
-  chttpcli_response *resp = _get("/any-method");
+  chttpcli_response_t *resp = _get("/any-method");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "GET");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, any_method_post) {
   /* A CHTTP_ANY route dispatches a POST request, and the handler sees
      CHTTP_POST. */
-  chttpcli_response *resp = _post("/any-method", NULL, NULL);
+  chttpcli_response_t *resp = _post("/any-method", NULL, NULL);
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "POST");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, any_method_put) {
@@ -6330,23 +6339,23 @@ TEST(chttpserver, any_method_delete) {
 TEST(chttpserver, any_method_with_path_param) {
   /* A CHTTP_ANY route with a path parameter captures the param correctly, and
      the handler sees the real method. */
-  chttpcli_response *resp = _get("/any-method/42");
+  chttpcli_response_t *resp = _get("/any-method/42");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "GET:42");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, any_method_specific_wins_for_registered_method) {
   /* A method-specific route registered BEFORE CHTTP_ANY on the same pattern
      wins for its own method (the first one wins). */
-  chttpcli_response *resp = _get("/any-with-specific");
+  chttpcli_response_t *resp = _get("/any-with-specific");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "Hello, world!");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, any_method_catches_unregistered_method) {
@@ -6364,12 +6373,12 @@ TEST(chttpserver, any_method_catches_unregistered_method) {
 TEST(chttpserver, any_method_first_wins_over_specific) {
   /* A CHTTP_ANY registered BEFORE a specific GET on the same pattern wins for
      every method, GET included (the usual first-wins rule). */
-  chttpcli_response *resp = _get("/any-first");
+  chttpcli_response_t *resp = _get("/any-first");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "GET");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, unrecognized_method_rejected_with_501_not_dispatched) {
@@ -7442,7 +7451,7 @@ TEST(chttpserver, empty_elements_do_not_weaken_the_chunked_refusals) {
 /* ========================================================================== */
 
 /* Connects to `port` and sends a POST whose body goes out one byte at a time,
-   50ms apart, so a ctpool worker stays blocked inside chttpsvr_req_read and
+   50ms apart, so a cthrpool worker stays blocked inside chttpsvr_req_read and
    chttp1_stream_read the whole time. It then drains and throws away whatever
    response it gets, or the abrupt close. It's background traffic while the main
    thread destroys the server under it. */
@@ -7541,7 +7550,7 @@ static void *_destroy_hang_thread_fn(void *arg) {
 }
 
 TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
-  /* A ctpool worker can still hold state owned by the server, for example
+  /* A cthrpool worker can still hold state owned by the server, for example
    * srv->max_body_size, which chttpsvr_req_read reads, and __chttpsvr_destroy
    * must not free that state while the worker is blocked reading a slow body on
    * another connection. chttpsvr_stop's _drain_and_close_all_connections waits
@@ -7606,7 +7615,7 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
   }
 
   /* Polls until the server has accepted the background connection, parsed its
-     headers and dispatched it to a ctpool worker, so in_flight_requests goes
+     headers and dispatched it to a cthrpool worker, so in_flight_requests goes
      above 0, which means the worker is blocked inside chttpsvr_req_read in the
      middle of the drip, and only then destroys the server under it, instead of
      guessing with a fixed sleep. The 5s bound is well clear of this test's drip
@@ -7760,9 +7769,9 @@ static void *_stall_forever_bg_thread(void *arg) {
 /* chttpsvr_config_t.stream_read_timeout_us and max_body_read_duration_us both
    document 0 as "wait indefinitely", a real, supported configuration, for a
    slow but legitimate upload for example. chttpsvr_destroy(), through
-   _quiesce_server_once, always calls ctpool_shutdown_drain() on the worker pool
-   shortly after its own careful 30s wait for the in-flight requests, and
-   ctpool_shutdown_drain() has no timeout of its own at all: it blocks until
+   _quiesce_server_once, always calls cthrpool_shutdown_drain() on the worker
+   pool shortly after its own careful 30s wait for the in-flight requests, and
+   cthrpool_shutdown_drain() has no timeout of its own at all: it blocks until
    every queued and active task is done. With this configuration a single peer
    can stall in the middle of a body: it sends part of the body, declares much
    more in the Content-Length, then never sends the rest and never closes.
@@ -7860,7 +7869,7 @@ TEST(chttpserver,
   }
 
   /* Polls until the server has accepted the background connection, parsed its
-     headers and diverted it to a ctpool worker, so in_flight_requests goes
+     headers and diverted it to a cthrpool worker, so in_flight_requests goes
      above 0: the worker is then blocked inside chttp1_stream_read, and without
      this guard it would stay blocked forever. Only then does the test destroy
      the server, instead of guessing with a fixed sleep. The 5s bound is well
@@ -7990,7 +7999,7 @@ TEST(chttpserver, restart_races_live_keep_alive_connection_is_safe) {
    * under srv->mutex and hands the old ones to a drain thread of their own,
    * which lets every task already on them finish before destroying them, so no
    * _conn_start_diverted call can be in flight with a stale copy of the pointer
-   * that goes to ctpool_destroy.
+   * that goes to cthrpool_destroy.
    *
    * The test also covers a close relative of that data race on the same restart
    * path: srv->max_header_bytes and srv->max_body_size must be _Atomic, like
@@ -8477,13 +8486,13 @@ TEST(chttpserver, create_with_null_logger_uses_internal_fatal_only_logger) {
   char url[256];
   snprintf(url, sizeof(url), "http://127.0.0.1:%d/null-logger-hello",
            TEST_PORT + 7);
-  chttpcli_response *resp = NULL;
+  chttpcli_response_t *resp = NULL;
   chttp_get(url, &resp);
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "Hello, world!");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 
   chttpsvr_destroy(srv);
 }
@@ -8514,13 +8523,13 @@ TEST(chttpserver, create_with_logger_derives_and_leaves_parent_open) {
   char url[256];
   snprintf(url, sizeof(url), "http://127.0.0.1:%d/derived-logger-hello",
            TEST_PORT + 8);
-  chttpcli_response *resp = NULL;
+  chttpcli_response_t *resp = NULL;
   chttp_get(url, &resp);
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "Hello, world!");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 
   chttpsvr_destroy(srv);
 
@@ -8937,7 +8946,7 @@ static void *_backoff_test_realloc(void *p, size_t s) { return realloc(p, s); }
 
 /* Waits, for at most 5 s, until the process-wide count of listener pauses for
    resource pressure goes above `before`, and reports whether it did. The count
-   only goes up after ccol_event_loop_pause() succeeded and the pause flag was
+   only goes up after ceventloop_pause() succeeded and the pause flag was
    stored, and the idle-timeout sweep never takes it back, so a late poll can't
    miss a pause. */
 static bool _wait_for_listener_resource_pause(size_t before) {
@@ -9202,11 +9211,11 @@ TEST(chttpserver, max_header_bytes_within_limit_succeeds) {
   char url[128];
   snprintf(url, sizeof(url), "http://127.0.0.1:%d/hdrcap-hello",
            TEST_PORT + 10);
-  chttpcli_response *resp = NULL;
+  chttpcli_response_t *resp = NULL;
   chttp_get(url, &resp);
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 
   chttpsvr_destroy(srv);
 }
@@ -9384,7 +9393,7 @@ TEST(chttpserver, max_header_bytes_exact_boundary) {
 /*                    RESPONSE_WRITE_TIMEOUT_MS TEST                          */
 /* ========================================================================== */
 
-static void _large_body_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _large_body_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -9852,11 +9861,11 @@ TEST(chttpserver, enable_keepalive_does_not_break_normal_requests) {
   char url[128];
   snprintf(url, sizeof(url), "http://127.0.0.1:%d/keepalive-opt-hello",
            TEST_PORT + 14);
-  chttpcli_response *resp = NULL;
+  chttpcli_response_t *resp = NULL;
   chttp_get(url, &resp);
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 
   chttpsvr_destroy(srv);
 }
@@ -9912,11 +9921,11 @@ TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
     chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
     REQUIRE_NE((void *)req, NULL);
     chttp_request_set_header(req, "Connection", "close");
-    chttpcli_response *resp = NULL;
+    chttpcli_response_t *resp = NULL;
     chttp_do(req, &resp);
     chttp_request_free(req);
     if (resp && resp->status_code == 200) got_200 = true;
-    if (resp) chttpclient_resp_free(resp);
+    if (resp) chttpcli_resp_free(resp);
   }
   REQUIRE_TRUE(got_200);
 
@@ -10614,7 +10623,7 @@ static _Atomic bool g_query_oom_failed_call_result_is_null = false;
 
 #define QUERY_OOM_REPEATED_KEY_COUNT 91 /* distinctive result-array size */
 
-static void _query_oom_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _query_oom_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                void *ctx) {
   (void)ctx;
   /* Warm up: make _ensure_qparams parse the whole query string BEFORE the
@@ -10740,7 +10749,7 @@ TEST(chttpserver, req_query_oom_latches_true_across_later_successful_calls) {
 
 static _Atomic int g_query_one_oom_rv = -999;
 
-static void _query_one_oom_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _query_one_oom_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                    void *ctx) {
   (void)ctx;
   /* chttpsvr_req_query_one is the very first query accessor this request calls,
@@ -11053,20 +11062,20 @@ TEST(chttpserver, resp_add_header_fields_reach_the_client_one_by_one) {
      add_header that replaced would leave one Set-Cookie, and a set_header that
      replaced only the first match would leave x-single with three fields.
  */
-  chttpcli_response *resp = _get("/add-header");
+  chttpcli_response_t *resp = _get("/add-header");
   REQUIRE_TRUE(resp != NULL);
   int status = resp->status_code;
-  size_t cookies = chttpclient_resp_header_count(resp, "set-cookie");
-  const char *c0 = chttpclient_resp_header_at(resp, "set-cookie", 0);
-  const char *c1 = chttpclient_resp_header_at(resp, "set-cookie", 1);
-  const char *c2 = chttpclient_resp_header_at(resp, "set-cookie", 2);
+  size_t cookies = chttpcli_resp_header_count(resp, "set-cookie");
+  const char *c0 = chttpcli_resp_header_at(resp, "set-cookie", 0);
+  const char *c1 = chttpcli_resp_header_at(resp, "set-cookie", 1);
+  const char *c2 = chttpcli_resp_header_at(resp, "set-cookie", 2);
   bool order = c0 && c1 && c2 && strcmp(c0, "a=1") == 0 &&
                strcmp(c1, "b=2") == 0 && strcmp(c2, "c=3") == 0;
-  size_t singles = chttpclient_resp_header_count(resp, "x-single");
-  const char *single = chttpclient_resp_header(resp, "x-single");
+  size_t singles = chttpcli_resp_header_count(resp, "x-single");
+  const char *single = chttpcli_resp_header(resp, "x-single");
   bool single_final = single && strcmp(single, "final") == 0;
-  size_t dates = chttpclient_resp_header_count(resp, "date");
-  chttpclient_resp_free(resp);
+  size_t dates = chttpcli_resp_header_count(resp, "date");
+  chttpcli_resp_free(resp);
   REQUIRE_EQ(status, 200);
   REQUIRE_EQ(cookies, (size_t)3);
   REQUIRE_TRUE(order);
@@ -11080,12 +11089,12 @@ TEST(chttpserver, resp_header_content_length_accepts_only_a_number) {
      signed 64-bit integer, leading zeros included, and refuse every other value
      with ccol_invalid_args. Without the check, both calls would accept every
      value of the list. */
-  chttpcli_response *resp = _get("/content-length-validation");
+  chttpcli_response_t *resp = _get("/content-length-validation");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_TRUE(resp->body != NULL);
   REQUIRE_STREQ(resp->body, "yyyyyyyynnnnnnnnnnnnnnnnyy");
-  chttpclient_resp_free(resp);
+  chttpcli_resp_free(resp);
 }
 
 TEST(chttpserver, resp_add_header_keeps_every_field_in_order) {
@@ -11265,9 +11274,10 @@ TEST(chttpserver,
  * either one is a real double free. This section tests that design directly.
  */
 
-static void _noop_middleware_for_lifecycle_tests(chttpsvr_req *req,
-                                                 chttpsvr_resp *resp, void *ctx,
-                                                 chttpsvr_next_fn next) {
+static void _noop_middleware_for_lifecycle_tests(chttpsvr_req_t *req,
+                                                 chttpsvr_resp_t *resp,
+                                                 void *ctx,
+                                                 chttpsvr_next_fn_t next) {
   (void)ctx;
   if (next) next(req, resp);
 }
@@ -11290,9 +11300,9 @@ TEST(chttpserver, stream_error_of_no_request_is_invalid_args) {
 /* The library never hands a server's root router to a caller, so its shell goes
    away with the server, and a create and destroy cycle leaves no router shell
    behind. Every sub-router keeps its small shell for the life of the process,
-   so that a stale chttpsvr_router pointer stays safe to pass. A root shell that
-   stayed allocated would add one entry to the shell registry for every server
-   ever created. */
+   so that a stale chttpsvr_router_t pointer stays safe to pass. A root shell
+   that stayed allocated would add one entry to the shell registry for every
+   server ever created. */
 /* A parent logger that's already closed is a caller error, and the create call
  * reports it through err_str. clog_derive() would end the process for the same
  * handle, so without the checked derive this test would die with clog_derive's
@@ -11494,7 +11504,7 @@ TEST(chttpsvr_handle_lifecycle, destroy_from_within_own_handler_is_fatal) {
 /* A request handler, or a middleware, can block in chttpsvr_engine_wait(), and
  * that must be a fatal error too, for the same underlying reason as a handler
  * that destroys its own server from inside itself (see the previous test). The
- * ctpool_shutdown_drain of _engine_force_stop_quiesce_all has no timeout and
+ * cthrpool_shutdown_drain of _engine_force_stop_quiesce_all has no timeout and
  * could never finish draining this very worker's pool, because this call stack
  * is what would finally let the task return, so the shared engine could never
  * finish its teardown and this call could never wake up: a permanent deadlock
@@ -11541,8 +11551,8 @@ TEST(chttpsvr_handle_lifecycle, engine_wait_from_within_own_handler_is_fatal) {
 static chttpsvr g_self_restart_srv_for_lifecycle_test = CHTTPSVR_NULL;
 static _Atomic int g_self_restart_result_for_lifecycle_test = -1;
 
-static void _self_restarting_handler_for_lifecycle_test(chttpsvr_req *req,
-                                                        chttpsvr_resp *resp,
+static void _self_restarting_handler_for_lifecycle_test(chttpsvr_req_t *req,
+                                                        chttpsvr_resp_t *resp,
                                                         void *ctx) {
   (void)req;
   (void)ctx;
@@ -11762,7 +11772,7 @@ TEST(chttpsvr_handle_lifecycle, resolve_unpin_race_stress) {
 }
 
 typedef struct {
-  chttpsvr_router *router;
+  chttpsvr_router_t *router;
 } router_use_setter_arg_t;
 
 static void *router_use_setter_thread(void *arg) {
@@ -11801,7 +11811,7 @@ TEST(chttpsvr_handle_lifecycle, router_resolve_unpin_race_stress) {
   for (int i = 0; i < ITERATIONS; i++) {
     chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
     if (srv == CHTTPSVR_NULL) REQUIRE_NE(srv, CHTTPSVR_NULL);
-    chttpsvr_router *router = chttpsvr_subrouter(srv, "/race-router");
+    chttpsvr_router_t *router = chttpsvr_subrouter(srv, "/race-router");
     if (!router) {
       chttpsvr_destroy(srv);
       REQUIRE_TRUE(router != NULL);
@@ -11879,12 +11889,12 @@ static void *fork_feeder_thread(void *arg) {
  * moment of the fork. Without the protection the child inherits such a lock
  * locked, for good, since no thread survives in the child that could ever
  * unlock it, and any later chttpsvr_* call in the child hangs forever. The
- * fork_does_not_inherit_a_locked_ctpool_mutex test of tests/cthreadpool has the
- * same shape. A feeder thread calling chttpsvr_use, throttled with a yield,
+ * fork_does_not_inherit_a_locked_cthrpool_mutex test of tests/cthreadpool has
+ * the same shape. A feeder thread calling chttpsvr_use, throttled with a yield,
  * runs against one shared, long-lived server, keeping chttpsvr_slot_table.mutex
  * and that server's routes_lock under realistic contention that doesn't spin,
  * while this test forks over and over. A small, fixed-size, synchronous burst
- * of real create and destroy cycles runs right before each fork (the ctpool
+ * of real create and destroy cycles runs right before each fork (the cthrpool
  * sibling test uses the same shape for its burst of submits before a fork), and
  * that burst also drives chttpsvr_router_shell_registry.mutex and the mutex,
  * idle_mutex, diverted_mutex and routes_lock of a fresh instance, without a
@@ -11898,7 +11908,7 @@ static void *fork_feeder_thread(void *arg) {
  *
  * The burst before the fork below is synchronous and bounded, instead of a
  * second background thread that creates and destroys throwaway servers
- * continuously without any throttle, the way the ctpool sibling test's churn
+ * continuously without any throttle, the way the cthrpool sibling test's churn
  * thread does, where it's confirmed cheap. Unthrottled churn here doesn't
  * finish a single one of its 60 trials in ten minutes under valgrind, although
  * natively it passes in well under a second. A standalone reproduction outside
@@ -11910,7 +11920,7 @@ static void *fork_feeder_thread(void *arg) {
  * slowly. The reason is the cost of each chttpsvr_create_mp iteration, which
  * covers a full root router, several mutexes and condition variables, and a
  * derived logger that itself registers into, and unregisters from, clogger's
- * separate global slot table, which is far heavier than ctpool's minimal pool
+ * separate global slot table, which is far heavier than cthrpool's minimal pool
  * creation. memcheck also gives threads no real parallelism across cores at
  * all, since it time-slices every thread through a single instrumented
  * execution engine, so an unthrottled loop over this much heavier work doesn't
@@ -11918,7 +11928,7 @@ static void *fork_feeder_thread(void *arg) {
  * astronomically larger total of instrumented instructions to simulate for the
  * same wall-clock duration of the test. The burst's cost scales with TRIALS and
  * not with how much work a background thread crams into an unbounded window of
- * wall-clock time. TRIALS is deliberately smaller than the 60 of the ctpool
+ * wall-clock time. TRIALS is deliberately smaller than the 60 of the cthrpool
  * sibling test, because fork() itself already has a large, roughly fixed cost
  * per call under valgrind whatever the number of trials. The test also covers
  * the hazard where routes_lock tracks a TID (see the doc comment of
@@ -12044,7 +12054,7 @@ TEST(chttpsvr_handle_lifecycle,
 
   /* Deterministic: this returns only once stop_th's _chttpsvr_stop_internal()
      call has entered CHTTPSVR_LC_STOPPING and is paused right there, strictly
-     before its ccol_event_loop_remove()/close() call for the listener. */
+     before its ceventloop_remove()/close() call for the listener. */
   _chttpsvr_wait_stop_race_hook_entered_for_tests();
 
   pid_t pid = fork();
@@ -12258,12 +12268,12 @@ TEST(chttpsvr_handle_lifecycle,
 }
 #endif /* CCOL_FORK_SAFETY_REQUIRED */
 
-/* _listener_on_readable() gets srv as the bare void* arg of a ccol_event_loop
+/* _listener_on_readable() gets srv as the bare void* arg of a ceventloop
    callback, completely outside the ordinary resolve and pin mechanism of a
    chttpsvr handle that every other entry point into this server goes through.
-   The documented promise of ccol_event_loop_remove(), that a caller may free
+   The documented promise of ceventloop_remove(), that a caller may free
    the registration's arg as soon as the call returns, doesn't cover a callback
-   already in progress at the moment of the call (ccol_event_loop never waits on
+   already in progress at the moment of the call (ceventloop never waits on
    the registration's dispatch_lock during a removal), so without a pin of its
    own chttpsvr_destroy() could free srv while a listener dispatch that's still
    running keeps reading its fields. The window is normally a handful of
@@ -12541,8 +12551,8 @@ TEST(chttpsvr_handle_lifecycle,
 static _Atomic bool g_route_lifetime_handler_entered = false;
 static _Atomic bool g_route_lifetime_handler_release = false;
 
-static void _route_lifetime_slow_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                         void *ctx) {
+static void _route_lifetime_slow_handler(chttpsvr_req_t *req,
+                                         chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   (void)chttpsvr_req_param(req, "id");
   atomic_store(&g_route_lifetime_handler_entered, true);
@@ -13068,8 +13078,8 @@ static int _raw_request_on_port(uint16_t port, const char *method,
 
 /* A sub-router middleware that answers 401 and doesn't call next, which is the
    real shape of an authenticator mounted on a prefix. */
-static void _prec_auth_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                          chttpsvr_next_fn next) {
+static void _prec_auth_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                          chttpsvr_next_fn_t next) {
   (void)ctx;
   (void)next;
   (void)req;
@@ -13077,14 +13087,14 @@ static void _prec_auth_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
   chttpsvr_resp_write_str(resp, "auth-required");
 }
 
-static void _prec_root_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _prec_root_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_write_str(resp, "root-catch-all");
 }
 
-static void _prec_secret_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _prec_secret_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                  void *ctx) {
   (void)req;
   (void)ctx;
@@ -13107,7 +13117,7 @@ TEST(chttpserver, subrouter_middleware_not_bypassed_by_broad_root_pattern) {
       chttpsvr_create(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
-  chttpsvr_router *admin = chttpsvr_subrouter(srv, "/admin");
+  chttpsvr_router_t *admin = chttpsvr_subrouter(srv, "/admin");
   REQUIRE_TRUE(admin != NULL);
   REQUIRE_EQ((int)chttpsvr_router_use(admin, _prec_auth_mw, NULL),
              (int)ccol_success);
@@ -13153,8 +13163,8 @@ TEST(chttpserver, more_specific_mount_wins_over_less_specific_one) {
       chttpsvr_create(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
-  chttpsvr_router *shallow = chttpsvr_subrouter(srv, "/api");
-  chttpsvr_router *deep = chttpsvr_subrouter(srv, "/api/v1");
+  chttpsvr_router_t *shallow = chttpsvr_subrouter(srv, "/api");
+  chttpsvr_router_t *deep = chttpsvr_subrouter(srv, "/api/v1");
   REQUIRE_TRUE(shallow != NULL);
   REQUIRE_TRUE(deep != NULL);
   REQUIRE_EQ((int)chttpsvr_router_on(shallow, CHTTP_GET, "/v1/thing",
@@ -13242,8 +13252,8 @@ static _Atomic int g_mount_mw_runs = 0;
 static char g_rej_mw_path[256];
 static chttp_method_t g_rej_mw_method;
 
-static void _rej_global_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                           chttpsvr_next_fn next) {
+static void _rej_global_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                           void *ctx, chttpsvr_next_fn_t next) {
   (void)ctx;
   const char *path = chttpsvr_req_path(req);
   snprintf(g_rej_mw_path, sizeof(g_rej_mw_path), "%s", path ? path : "(nil)");
@@ -13261,8 +13271,8 @@ static void _rej_global_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
   next(req, resp);
 }
 
-static void _rej_mount_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                          chttpsvr_next_fn next) {
+static void _rej_mount_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                          chttpsvr_next_fn_t next) {
   (void)ctx;
   chttpsvr_resp_set_header(resp, "x-mount-mw", "1");
   atomic_fetch_add(&g_mount_mw_runs, 1);
@@ -13281,7 +13291,7 @@ static chttpsvr _rej_srv_start(void) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
   if (!srv) return CHTTPSVR_NULL;
   bool ok = false;
-  chttpsvr_router *mounted = NULL;
+  chttpsvr_router_t *mounted = NULL;
   if (chttpsvr_use(srv, _rej_global_mw, NULL) != ccol_success) goto done;
   if (chttpsvr_register_handler(srv, CHTTP_GET, "/ok", _hello_handler, NULL) !=
       ccol_success)
@@ -13455,8 +13465,8 @@ static _Atomic bool g_rej_oom_mw_saw_null_path = false;
 /* Records what it got instead of dereferencing it, so a regression shows up as
    a failed assertion here and not as a SIGSEGV that would take every other test
    result of this binary down with it. */
-static void _rej_oom_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                        chttpsvr_next_fn next) {
+static void _rej_oom_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                        chttpsvr_next_fn_t next) {
   (void)ctx;
   if (chttpsvr_req_path(req) == NULL)
     atomic_store(&g_rej_oom_mw_saw_null_path, true);
@@ -13814,8 +13824,8 @@ TEST(chttpsvr_handle_lifecycle, slot_table_counts_a_mid_teardown_server_live) {
 
 /* A middleware that guards a path prefix the way an application would write
    one: it reads chttpsvr_req_path() and refuses everything under "/admin". */
-static void _admin_guard_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                            chttpsvr_next_fn next) {
+static void _admin_guard_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                            void *ctx, chttpsvr_next_fn_t next) {
   (void)ctx;
   const char *path = chttpsvr_req_path(req);
   if (path && strncmp(path, "/admin", 6) == 0) {
@@ -13826,8 +13836,8 @@ static void _admin_guard_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
   next(req, resp);
 }
 
-static void _target_path_echo_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                      void *ctx) {
+static void _target_path_echo_handler(chttpsvr_req_t *req,
+                                      chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   const char *path = chttpsvr_req_path(req);
   chttpsvr_resp_write_str(resp, path ? path : "(null)");
@@ -13934,14 +13944,14 @@ TEST(chttpserver, http_1_0_request_with_transfer_encoding_gets_400_and_close) {
 static _Atomic int g_star_mw_calls = 0;
 static _Atomic int g_star_handler_calls = 0;
 
-static void _star_counting_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                              chttpsvr_next_fn next) {
+static void _star_counting_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                              void *ctx, chttpsvr_next_fn_t next) {
   (void)ctx;
   atomic_fetch_add(&g_star_mw_calls, 1);
   next(req, resp);
 }
 
-static void _star_counting_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _star_counting_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                    void *ctx) {
   (void)req;
   (void)ctx;
@@ -14102,7 +14112,7 @@ TEST(chttpserver, options_star_is_answered_by_the_server) {
 /*                     THE DATE RESPONSE HEADER                               */
 /* ========================================================================== */
 
-static void _date_own_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _date_own_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                               void *ctx) {
   (void)req;
   (void)ctx;
@@ -14262,7 +14272,7 @@ TEST(chttpserver, unknown_method_with_asterisk_target_gets_400) {
   REQUIRE_EQ(strncmp(b3, "HTTP/1.1 501", 12), 0);
 }
 
-static void _status_103_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _status_103_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -14482,7 +14492,8 @@ static size_t _sc_stream_active(chttpsvr h, void *arg) {
 }
 
 /* Answers with the length of the body it got. */
-static void _sc_len_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _sc_len_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                            void *ctx) {
   (void)ctx;
   size_t n = 0;
   chttpsvr_req_body(req, &n);
@@ -14491,7 +14502,8 @@ static void _sc_len_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 
 /* Answers with _SC_BIG_RESPONSE bytes, far more than the socket buffers of a
  * client that doesn't read can hold. */
-static void _sc_big_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _sc_big_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                            void *ctx) {
   (void)req;
   (void)ctx;
   char chunk[65536];
@@ -14500,7 +14512,7 @@ static void _sc_big_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     chttpsvr_resp_write(resp, chunk, sizeof(chunk));
 }
 
-static void _sc_hello_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _sc_hello_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                               void *ctx) {
   (void)req;
   (void)ctx;
@@ -14508,7 +14520,7 @@ static void _sc_hello_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* Answers with 100 bytes of known text. */
-static void _sc_text_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _sc_text_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                              void *ctx) {
   (void)req;
   (void)ctx;
@@ -14518,7 +14530,8 @@ static void _sc_text_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, text);
 }
 
-static void _sc_204_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _sc_204_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                            void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_set_status(resp, 204);
@@ -14537,7 +14550,7 @@ static void _sc_gate_open(bool open) {
   pthread_cond_broadcast(&g_sc_gate_cv);
   pthread_mutex_unlock(&g_sc_gate_mtx);
 }
-static void _sc_gate_stream_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _sc_gate_stream_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                     void *ctx) {
   (void)req;
   (void)ctx;
@@ -14555,7 +14568,7 @@ static void _sc_gate_stream_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* The same gate for a buffered route, which runs on the worker pool. */
-static void _sc_gate_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _sc_gate_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                              void *ctx) {
   _sc_gate_stream_handler(req, resp, ctx);
 }
@@ -16031,7 +16044,7 @@ TEST(slow_clients,
 static _Atomic int g_own_root_runs = 0;
 static _Atomic int g_own_guard_runs = 0;
 
-static void _own_text_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _own_text_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                               void *ctx) {
   (void)req;
   if (strncmp((const char *)ctx, "root", 4) == 0)
@@ -16040,8 +16053,8 @@ static void _own_text_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* Lets a request through only with "x-key: ok" and answers 403 otherwise. */
-static void _own_guard_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                          chttpsvr_next_fn next) {
+static void _own_guard_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                          chttpsvr_next_fn_t next) {
   (void)ctx;
   atomic_fetch_add(&g_own_guard_runs, 1);
   const char *k = chttpsvr_req_header(req, "x-key");
@@ -16061,8 +16074,8 @@ static chttpsvr _own_server(void) {
                             "root2");
   chttpsvr_register_handler(srv, CHTTP_ANY, "/{a}/{b}/{c}", _own_text_handler,
                             "root3");
-  chttpsvr_router *adm = chttpsvr_subrouter(srv, "/admin");
-  chttpsvr_router *deep = chttpsvr_subrouter(srv, "/admin/deep");
+  chttpsvr_router_t *adm = chttpsvr_subrouter(srv, "/admin");
+  chttpsvr_router_t *deep = chttpsvr_subrouter(srv, "/admin/deep");
   if (!adm || !deep) {
     chttpsvr_destroy(srv);
     return CHTTPSVR_NULL;
@@ -16313,7 +16326,7 @@ TEST(slow_clients, the_sweep_queries_the_kernel_outside_its_lock) {
 TEST(slow_clients, keep_alive_requests_make_no_direction_change) {
   /* A keep-alive connection waits for its next request in the read direction,
      which is the direction its registration already has, so the server makes no
-     ccol_event_loop_modify call for it between requests. A tail that set the
+     ceventloop_modify call for it between requests. A tail that set the
      direction on every request would make at least one such call for each
      request after the first. */
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -17768,7 +17781,7 @@ TEST(listener_host, a_host_that_does_not_resolve_is_logged_with_its_reason) {
 
 /* ----- query keys ----- */
 
-static void _rx_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _rx_query_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                               void *ctx) {
   (void)ctx;
   size_t n_plain = 0, n_encoded = 0;
@@ -18399,7 +18412,7 @@ TEST(restart, queued_streaming_requests_move_to_the_new_streaming_pool) {
   for (int i = 0; i < 3; i++) REQUIRE_EQ(status[i], 200);
 }
 
-static void _rx_quick_stream_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _rx_quick_stream_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                      void *ctx) {
   (void)req;
   (void)ctx;
@@ -18531,8 +18544,8 @@ TEST(restart, a_queued_streaming_request_starts_on_the_new_run_at_once) {
 #define _FX_PORT (TEST_PORT + 260)
 
 /* Reads the body and answers with _SC_BIG_RESPONSE bytes. */
-static void _fx_body_then_big_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                      void *ctx) {
+static void _fx_body_then_big_handler(chttpsvr_req_t *req,
+                                      chttpsvr_resp_t *resp, void *ctx) {
   size_t n = 0;
   (void)chttpsvr_req_body(req, &n);
   _sc_big_handler(req, resp, ctx);
@@ -18746,8 +18759,8 @@ TEST(body_memory, a_chunked_body_reserves_all_that_its_buffer_holds) {
 /* Answers every request under /big-reject itself with a 404 far bigger than the
    socket buffers, whose bytes ctx holds, and passes every other request on. It
    runs for a rejected request, on reject_pool. */
-static void _fx_big_reject_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                              chttpsvr_next_fn next) {
+static void _fx_big_reject_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                              void *ctx, chttpsvr_next_fn_t next) {
   const char *path = chttpsvr_req_path(req);
   if (path && strncmp(path, "/big-reject", 11) == 0) {
     chttpsvr_resp_set_status(resp, 404);
@@ -18927,7 +18940,7 @@ TEST(internal_writes, an_interim_line_on_a_full_socket_parks_and_completes) {
 
 /* ----- the identity of a client over plaintext ----- */
 
-static void _fx_identity_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _fx_identity_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                  void *ctx) {
   (void)ctx;
   size_t len = 7;
@@ -19172,7 +19185,7 @@ static _Atomic size_t g_bm_charged = 0;
 static _Atomic size_t g_bm_held = 0;
 static _Atomic size_t g_bm_in_use = 0;
 
-static void _bm_probe_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _bm_probe_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                               void *ctx) {
   (void)ctx;
   size_t n = 0;
@@ -19188,7 +19201,7 @@ static void _bm_probe_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 /* Reads the body, then holds on to its thread at the gate of the slow-client
    tests. */
-static void _bm_hold_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _bm_hold_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                              void *ctx) {
   size_t n = 0;
   (void)chttpsvr_req_body(req, &n);
@@ -19570,7 +19583,7 @@ static _Atomic bool g_queued_drain_release = false;
 
 /* The first request waits here until the test releases it, and any later one
  * returns at once. */
-static void _queued_drain_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _queued_drain_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                   void *ctx) {
   (void)req;
   (void)ctx;
@@ -19712,7 +19725,7 @@ static _Atomic int g_drain_handler_entries = 0;
  * its handler a moment after it, and the margin allows for that. */
 static _Atomic int g_drain_entries_after_destroy = 0;
 
-static void _drain_slow_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _drain_slow_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -20012,7 +20025,7 @@ TEST(locale_folding, the_parser_matches_field_names_in_any_case) {
 
 static _Atomic int g_locale_set_te_rv = 1;
 
-static void _locale_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _locale_header_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                    void *ctx) {
   (void)ctx;
   const char *v = chttpsvr_req_header(req, "x-client-id");
@@ -20107,7 +20120,7 @@ TEST(chttpserver, a_method_outside_the_enum_is_refused_by_every_registration) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(CLOG_NULL, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_NULL);
-  chttpsvr_router *sub = chttpsvr_subrouter(srv, "/sub");
+  chttpsvr_router_t *sub = chttpsvr_subrouter(srv, "/sub");
   REQUIRE_TRUE(sub != NULL);
   const int bad[] = {(int)CHTTP_ANY + 1, 8, 31, 32, 100, -1};
   for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
@@ -20132,7 +20145,7 @@ TEST(chttpserver, a_method_outside_the_enum_is_refused_by_every_registration) {
       (int)ccol_success);
 }
 
-static void _reset_content_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _reset_content_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                    void *ctx) {
   (void)req;
   (void)ctx;
@@ -20140,8 +20153,8 @@ static void _reset_content_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "this body must not be sent");
 }
 
-static void _status_from_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                       void *ctx) {
+static void _status_from_query_handler(chttpsvr_req_t *req,
+                                       chttpsvr_resp_t *resp, void *ctx) {
   (void)ctx;
   const char *code = NULL;
   chttpsvr_req_query_one(req, "code", &code);
@@ -20202,8 +20215,8 @@ TEST(chttpserver, every_registered_status_code_has_its_reason_phrase) {
   }
 }
 
-static void _control_byte_value_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                        void *ctx) {
+static void _control_byte_value_handler(chttpsvr_req_t *req,
+                                        chttpsvr_resp_t *resp, void *ctx) {
   (void)req;
   _Atomic int *results = (_Atomic int *)ctx;
   results[0] = (int)chttpsvr_resp_set_header(resp, "x-ctl", "a\x01z");
@@ -20228,9 +20241,9 @@ TEST(chttpserver, a_header_value_with_a_control_byte_is_refused) {
                                             _control_byte_value_handler,
                                             (void *)results),
              (int)ccol_success);
-  chttpcli_response *resp = _get("/ctl-value");
+  chttpcli_response_t *resp = _get("/ctl-value");
   int status = resp ? resp->status_code : -1;
-  if (resp) chttpclient_resp_free(resp);
+  if (resp) chttpcli_resp_free(resp);
   REQUIRE_EQ(status, 200);
   for (int i = 0; i < 5; i++)
     REQUIRE_EQ(atomic_load(&results[i]), (int)ccol_invalid_args);
@@ -20453,12 +20466,12 @@ typedef struct {
   _Atomic int calls_after_next;
 } _ctx_probe_t;
 
-static bool _ctx_skip(const chttpsvr_req *req) {
+static bool _ctx_skip(const chttpsvr_req_t *req) {
   return chttpsvr_req_header(req, "x-ctx-skip") != NULL;
 }
 
-static void _ctx_global_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                           chttpsvr_next_fn next) {
+static void _ctx_global_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                           void *ctx, chttpsvr_next_fn_t next) {
   _ctx_probe_t *probe = (_ctx_probe_t *)ctx;
   if (!_ctx_skip(req))
     chttpsvr_req_set_context(req, &g_ctx_key_a, g_ctx_val_global_a);
@@ -20476,8 +20489,8 @@ static void _ctx_global_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
   }
 }
 
-static void _ctx_sub_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                        chttpsvr_next_fn next) {
+static void _ctx_sub_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                        chttpsvr_next_fn_t next) {
   (void)ctx;
   if (!_ctx_skip(req)) {
     /* The inline value gets replaced, and C is replaced inside the block that
@@ -20494,12 +20507,12 @@ static void _ctx_sub_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
   next(req, resp);
 }
 
-static const char *_ctx_text(const chttpsvr_req *req, const void *key) {
+static const char *_ctx_text(const chttpsvr_req_t *req, const void *key) {
   const char *v = (const char *)chttpsvr_req_context(req, key);
   return v ? v : "(null)";
 }
 
-static void _ctx_report(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _ctx_report(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                         const char *kind) {
   chttpsvr_resp_printf(
       resp, "%s a=%s b=%s c=%s d=%s e=%s unset=%s", kind,
@@ -20509,12 +20522,13 @@ static void _ctx_report(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_req_set_context(req, &g_ctx_key_handler, g_ctx_val_handler);
 }
 
-static void _ctx_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _ctx_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                         void *ctx) {
   (void)ctx;
   _ctx_report(req, resp, "buffered");
 }
 
-static void _ctx_stream_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _ctx_stream_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                 void *ctx) {
   (void)ctx;
   char buf[256];
@@ -20532,7 +20546,7 @@ TEST(req_context, middleware_values_reach_the_handler_through_a_subrouter) {
       chttpsvr_create(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ((int)chttpsvr_use(srv, _ctx_global_mw, &probe), (int)ccol_success);
-  chttpsvr_router *sub = chttpsvr_subrouter(srv, "/ctx");
+  chttpsvr_router_t *sub = chttpsvr_subrouter(srv, "/ctx");
   REQUIRE_TRUE(sub != NULL);
   REQUIRE_EQ((int)chttpsvr_router_use(sub, _ctx_sub_mw, NULL),
              (int)ccol_success);
@@ -20596,8 +20610,8 @@ static void *_ctx_fail_realloc(void *p, size_t n) {
 
 static _Atomic int g_ctx_oom_results[6];
 
-static void _ctx_oom_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
-                        chttpsvr_next_fn next) {
+static void _ctx_oom_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
+                        chttpsvr_next_fn_t next) {
   (void)ctx;
   static const char key_null = 0;
   atomic_store(
@@ -20658,7 +20672,8 @@ TEST(req_context, a_failed_allocation_keeps_the_earlier_values) {
 
 /* Sets the status that the query parameter s names, so one route can answer
    with any code. */
-static void _reason_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _reason_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                            void *ctx) {
   (void)ctx;
   const char *s = NULL;
   if (chttpsvr_req_query_one(req, "s", &s) != ccol_success) {
@@ -20754,7 +20769,7 @@ TEST(status_line, every_code_carries_the_reason_phrase_of_the_registry) {
 static char g_long_printf_fill[LONG_PRINTF_FILL + 1];
 static _Atomic int g_long_printf_rv = -100;
 
-static void _long_printf_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _long_printf_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                                  void *ctx) {
   (void)req;
   (void)ctx;
@@ -20979,7 +20994,7 @@ static long _sw_wait_for_no_live_blocks(void) {
   return live;
 }
 
-static void _sw_plain_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+static void _sw_plain_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
                               void *ctx) {
   (void)req;
   (void)ctx;
@@ -21023,7 +21038,7 @@ TEST(oom_sweep, every_failed_allocation_of_a_server_setup_is_reported) {
       route_fails++;
       if (rv != ccol_not_enough_memory) bad++;
     }
-    chttpsvr_router *sub = NULL;
+    chttpsvr_router_t *sub = NULL;
     if (!stopped) {
       sub = chttpsvr_subrouter(srv, "/api/v1");
       if (!sub) {
@@ -21111,7 +21126,8 @@ static bool _rsw_rv_allowed(int rv) {
    push the response head past its stack buffer, and formats a body past the
    stack buffer of chttpsvr_resp_printf. When any of it ran out of memory it
    answers 500 itself; every result goes to the globals above. */
-static void _rsw_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _rsw_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+                         void *ctx) {
   (void)ctx;
   atomic_fetch_add(&g_rsw_ran, 1);
   const char *id = chttpsvr_req_param(req, "id");
@@ -21199,7 +21215,7 @@ TEST(oom_sweep, every_failed_allocation_of_a_request_ends_in_a_whole_answer) {
   atomic_store(&g_sw_live, 0);
   chttpsvr srv = chttpsvr_create_mp(&mp, g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_NULL);
-  chttpsvr_router *sub = chttpsvr_subrouter(srv, "/api");
+  chttpsvr_router_t *sub = chttpsvr_subrouter(srv, "/api");
   bool setup_ok =
       sub &&
       chttpsvr_router_on(sub, CHTTP_GET, "/items/{id}/parts/{part}",

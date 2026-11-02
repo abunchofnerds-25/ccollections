@@ -1,0 +1,91 @@
+.TH CEVENTLOOP_MODIFY 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ceventloop_modify \- change an existing fd registration's direction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ceventloop_modify(ceventloop loop, ceventloop_reg reg,
+                        cselect_dir_t new_dir);
+.fi
+.SH DESCRIPTION
+.nf
+Changes the direction of reg in place, with no moment where its fd is
+unregistered. Only fd registrations can be modified. A registration
+made from a queue or a cchan selectable gives ccol_invalid_args,
+because the direction of a queue selectable is part of its identity;
+remove such a registration and add it again instead.
+
+On success:
+  - reg->sel.dir is updated, so a callback dispatched after this call
+    returns sees the new direction in its sel parameter. The dispatch
+    path copies reg->sel under its own internal lock at the moment it
+    collects each dispatch and keeps no live pointer into reg->sel, so
+    a callback that is already in flight keeps the direction that was
+    current when it was collected and never races with this update.
+  - reg moves to the other slot on the shared epoll entry of its fd.
+  - The fd's combined epoll interest mask is recomputed from the live
+    state of both directions, normally with a single EPOLL_CTL_MOD
+    call. reg may be paused at the time of the call (see
+    ceventloop_pause(3)); if it is and the fd has no other
+    direction that is not paused, the mask carries no real interest.
+    The pause has already put the fd outside the kernel's epoll
+    interest set, the fd stays there, and no epoll_ctl call is needed
+    at all. A reg that the loop stopped watching because an event
+    reached it that none of its handlers can take (see
+    ceventloop_add(3)) is watched again in its new direction.
+
+When new_dir is already reg's direction nothing else changes and the
+call returns ccol_success, but a reg that the loop stopped watching as
+described above is watched again.
+
+The call only works when no other registration on the same fd holds the
+slot of the target direction. A typical use is a non-blocking connect,
+which starts with interest in writing and switches to reading once the
+connect finishes, without a second ceventloop_add() call.
+.fi
+.SH PARAMETERS
+.nf
+loop     ceventloop the registration belongs to.
+reg      Registration to modify.
+new_dir  cselect_read or cselect_write.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        The direction is changed.
+ccol_invalid_args   loop is CEVENTLOOP_NULL, a stale handle,
+                    or a handle that has already been destroyed; or
+                    reg is CEVENTLOOP_REG_NULL or fails to resolve
+                    for another reason; or reg is a registration for a
+                    queue or a cchan; or new_dir is neither
+                    cselect_read nor cselect_write. A reg that
+                    fails to resolve can be plainly invalid, or it can
+                    have been removed after the caller got it, by
+                    another thread or by reg's own callback removing
+                    itself. Both cases are caught through reg's
+                    registration table and refused cleanly, never with
+                    a use-after-free.
+ccol_not_permitted  A different registration on the same fd already
+                    holds the target direction.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call at the same time as ceventloop_remove(), and from a
+callback running on one of the reactor threads.
+.fi
+.SH EXAMPLES
+.nf
+ceventloop_handlers_t handlers = { .on_writable = on_connected, .on_readable = on_data };
+ceventloop_reg reg = ceventloop_add(loop, cselectable_fd(sock, cselect_write),
+                                    handlers, ctx, NULL);
+/* ... inside on_connected, after the non-blocking connect finishes ... */
+ceventloop_modify(loop, reg, cselect_read);
+.fi
+.SH "SEE ALSO"
+.BR ceventloop_add (3),
+.BR ceventloop_remove (3),
+.BR ceventloop_pause (3),
+.BR ceventloop_resume (3),
+.BR ceventloop_reg_generation (3)

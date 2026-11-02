@@ -119,13 +119,13 @@ cat > "$tmp/probe.c" <<'PROBE'
 /* This probe reaches the pool with dlsym and does not link against it. The
  * only reference that this process holds to the library is therefore the one
  * that dlclose() drops. */
-typedef ctpool (*create_fn)(size_t, size_t, ccol_memmgmt_procs_t *, char **);
-typedef void (*destroy_fn)(ctpool);
-typedef ccol_mempool *(*mp_create_fn)(size_t, size_t, bool, bool,
+typedef cthrpool (*create_fn)(size_t, size_t, ccol_memmgmt_procs_t *, char **);
+typedef void (*destroy_fn)(cthrpool);
+typedef cmempool *(*mp_create_fn)(size_t, size_t, bool, bool,
                                       ccol_memmgmt_procs_t *, char **);
-typedef void *(*mp_alloc_fn)(ccol_mempool *);
-typedef void (*mp_free_fn)(ccol_mempool *, void *);
-typedef void (*mp_destroy_fn)(ccol_mempool *);
+typedef void *(*mp_alloc_fn)(cmempool *);
+typedef void (*mp_free_fn)(cmempool *, void *);
+typedef void (*mp_destroy_fn)(cmempool *);
 
 /* The number of keys that this process can still create. It creates keys until
  * the C library refuses, and deletes them all again. */
@@ -141,7 +141,7 @@ static int free_key_count(void) {
 
 static mp_alloc_fn mp_alloc;
 static mp_free_fn mp_free;
-static ccol_mempool *mp_pool;
+static cmempool *mp_pool;
 /* Two pipes carry the two signals between the threads. macOS has no unnamed
  * POSIX semaphores (sem_init fails with ENOSYS there). */
 static int pool_used[2], lib_unloaded[2];
@@ -230,7 +230,7 @@ int main(int argc, char **argv) {
   for (i = 0; i < cycles; i++) {
     void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     char *err = NULL;
-    ctpool p;
+    cthrpool p;
     create_fn create;
     destroy_fn destroy;
 
@@ -238,8 +238,8 @@ int main(int argc, char **argv) {
       fprintf(stderr, "dlopen(%s) failed: %s\n", path, dlerror());
       return 2;
     }
-    create = (create_fn)(unsigned long)dlsym(h, "ctpool_create_mp");
-    destroy = (destroy_fn)(unsigned long)dlsym(h, "__ctpool_destroy");
+    create = (create_fn)(unsigned long)dlsym(h, "cthrpool_create_mp");
+    destroy = (destroy_fn)(unsigned long)dlsym(h, "__cthrpool_destroy");
     if (!create || !destroy) {
       fprintf(stderr, "dlsym failed: %s\n", dlerror());
       return 2;
@@ -247,7 +247,7 @@ int main(int argc, char **argv) {
     /* The module registers its atfork handlers when it creates a pool. An
      * unload with no handler registered would prove nothing. */
     p = create(2, 0, NULL, &err);
-    if (p == CTPOOL_NULL) {
+    if (p == CTHRPOOL_NULL) {
       fprintf(stderr, "pool creation failed: %s\n", err ? err : "(no detail)");
       return 2;
     }
@@ -271,10 +271,10 @@ int main(int argc, char **argv) {
       fprintf(stderr, "dlopen(%s) failed: %s\n", path, dlerror());
       return 2;
     }
-    mp_create = (mp_create_fn)(unsigned long)dlsym(h, "ccol_mempool_create");
-    mp_alloc = (mp_alloc_fn)(unsigned long)dlsym(h, "ccol_mempool_alloc_entry");
-    mp_free = (mp_free_fn)(unsigned long)dlsym(h, "_ccol_mempool_free_entry");
-    mp_destroy = (mp_destroy_fn)(unsigned long)dlsym(h, "_ccol_mempool_destroy");
+    mp_create = (mp_create_fn)(unsigned long)dlsym(h, "cmempool_create_mp");
+    mp_alloc = (mp_alloc_fn)(unsigned long)dlsym(h, "cmempool_alloc_entry");
+    mp_free = (mp_free_fn)(unsigned long)dlsym(h, "_cmempool_free_entry");
+    mp_destroy = (mp_destroy_fn)(unsigned long)dlsym(h, "_cmempool_destroy");
     if (!mp_create || !mp_alloc || !mp_free || !mp_destroy) {
       fprintf(stderr, "dlsym failed: %s\n", dlerror());
       return 2;

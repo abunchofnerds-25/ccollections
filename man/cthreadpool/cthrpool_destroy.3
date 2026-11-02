@@ -1,0 +1,56 @@
+.TH CTHRPOOL_DESTROY 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cthrpool_destroy \- destroy a thread pool and invalidate the handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadpool.h>
+
+cthrpool_destroy(pool);
+.fi
+.SH DESCRIPTION
+.nf
+Drains or cancels every task that is still pending, joins every worker
+thread, waits until every resolved use of the handle that is still in
+flight has stopped, and frees every resource of the pool. Then it sets
+the pool handle to CTHRPOOL_NULL.
+
+If the caller called neither cthrpool_shutdown_drain() nor
+cthrpool_shutdown_immediate() before, the macro runs a drain shutdown
+itself, so every task in the queue finishes before the pool is freed.
+.fi
+.SH PARAMETERS
+.nf
+pool  Thread pool variable to destroy (set to CTHRPOOL_NULL after
+      destruction).
+.fi
+.SH NOTES
+.nf
+Calling it when pool is CTHRPOOL_NULL is safe, and the macro then does
+nothing.
+
+A call on a stale handle (one that an earlier call already destroyed,
+or that another thread destroys at the same time) is a FATAL ERROR,
+which means abort() and SIGABRT, and never a silent double free. The
+handle carries a generation tag that the library checks before it
+touches the pool, so such a value is always detected and never
+dereferenced.
+
+A call on pool from inside a task running on one of pool's worker
+threads, or from the on_complete callback of that task, is a FATAL
+ERROR as well, for a related reason: that worker is still on its way
+back through its own dispatch loop, and it would touch the pool's
+mutex, condition variables and struct right after this call freed
+them. Leave the destroy to another thread, or run it after the task
+returns.
+
+The macro evaluates pool exactly once. It must be a modifiable lvalue,
+such as a variable or an element of an array, so with an expression
+that has a side effect, such as handles[i++], it destroys and clears
+one element.
+.fi
+.SH "SEE ALSO"
+.BR cthrpool_construct (3),
+.BR cthrpool_shutdown_drain (3),
+.BR cthrpool_shutdown_immediate (3)

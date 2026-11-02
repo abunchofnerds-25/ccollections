@@ -106,7 +106,7 @@ matters most for the install, because `sudo` doesn't pass your variables
 on:
 
 ```bash
-make CC=clang EXTRA_CFLAGS="-DCCOL_MEMPOOL_COMPACT_LAYOUT=1"
+make CC=clang EXTRA_CFLAGS="-DCMEMPOOL_COMPACT_LAYOUT=1"
 sudo make install     # installs that build; nothing is compiled again
 ```
 
@@ -357,7 +357,7 @@ close-on-exec, and that wait stays with the switch off, because it is there
 for a child that calls `exec()` (see
 [Concurrency](concurrency.md#descriptors-and-exec)).
 
-### CCOL_MEMPOOL_COMPACT_LAYOUT
+### CMEMPOOL_COMPACT_LAYOUT
 
 The default is `0`. This switch sets the distance between the entries of
 a `cmempool` pool. By default the distance is rounded up to the next power
@@ -373,7 +373,7 @@ saves memory when your element sizes are a little above a power of two:
 | 5000 | 8192 | 5008 |
 
 ```bash
-make EXTRA_CFLAGS="-DCCOL_MEMPOOL_COMPACT_LAYOUT=1"
+make EXTRA_CFLAGS="-DCMEMPOOL_COMPACT_LAYOUT=1"
 ```
 
 The setting is for the whole build on purpose, because a choice per pool
@@ -381,24 +381,24 @@ would make every allocation slower, even in pools where both layouts come
 out the same.
 
 No function and no type changes with it. The only thing that changes is
-one macro, `CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER`, which sizes an array
+one macro, `CMEMPOOL_DECLARE_PREALLOCATED_BUFFER`, which sizes an array
 in your code, so a file that uses this macro has to be compiled with the
 same setting as the library. If they don't match you won't get a pool of
 the wrong size; the link fails with an undefined reference that names the
 layout your code expected, for example:
 
 ```
-undefined reference to `_ccol_mempool_built_with_compact_layout'
+undefined reference to `_cmempool_built_with_compact_layout'
 ```
 
 Rebuild whichever side is wrong. A file that declares no such buffer
 needs nothing, and the setting doesn't affect
-`CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER`.
+`CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER`.
 
 A compact build has a different ABI from the default build, so
 `make check_abi` skips it and `make update_abi_baseline` won't record it.
 
-### CCOL_MEMPOOL_DYNAMIC_TLS
+### CMEMPOOL_DYNAMIC_TLS
 
 This switch picks the thread-local storage model of the library's
 per-thread fast paths. If you don't set it, it's `0` (initial-exec, the fast
@@ -409,7 +409,7 @@ library with `dlopen()` and can't give the loader the space that the fast
 model needs.
 
 ```bash
-make EXTRA_CFLAGS="-DCCOL_MEMPOOL_DYNAMIC_TLS=1"
+make EXTRA_CFLAGS="-DCMEMPOOL_DYNAMIC_TLS=1"
 ```
 
 [Platforms](platforms.md#loading-the-library-with-dlopen) explains when
@@ -474,8 +474,8 @@ install of a reduced build, and such an install should go to a `PREFIX` or
 
 [ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html) (compile-time switches, allocators,
 return codes),
-[CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER.3.html),
-[ccol_mempool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_create.3.html)
+[CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/CMEMPOOL_DECLARE_PREALLOCATED_BUFFER.3.html),
+[cmempool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/cmempool_create_mp.3.html)
 
 Related guides:
 [How the library works](design.md),

@@ -1,0 +1,59 @@
+.TH CCHAN_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cchan_create \- create a two-way communication cchan
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+cchan_create(max_size, err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a two-way cchan. The channel is made of two circular
+queues that carry messages between an owner thread and the worker
+threads, one queue per direction, and both have the same capacity.
+Memory comes from the standard malloc and free.
+
+It is the same as calling cchan_create_mp() with NULL memory
+management procedures.
+.fi
+.SH PARAMETERS
+.nf
+max_size   Maximum number of messages that each direction can hold.
+           Because one circular queue holds each direction, the same
+           SIZE_MAX / sizeof(cmessage_t) bound that
+           ccircq_create(3) documents applies here.
+err_str    Optional pointer for an error string
+.fi
+.SH RETURN VALUE
+.nf
+A pointer to the new cchan, or NULL on failure.
+.fi
+.SH NOTES
+.nf
+All operations are thread-safe. When you are done with the channel,
+destroy it with cchan_destroy().
+
+Each call picks its direction from the ID of the calling thread. The
+owner is the thread that called cchan_create(), and it must stay
+alive for as long as the cchan is in use: the channel routes a
+message by comparing the caller's thread ID with the one it took at
+creation. Once the owner exits, the OS can hand the same ID to a new,
+unrelated thread, and the channel would then treat that thread as the
+owner too without reporting anything.
+
+fork(2) and a cchan can be combined in two supported ways: call
+fork(2) before you create the cchan, or create it and then call
+fork(2) followed at once by exec(3). A program that keeps running with
+no exec(3) after the fork while a cchan from before the fork is
+live is not supported. As a defense in depth beyond that rule, the
+child never inherits a lock that another thread held, in the locked
+state, at the instant of the fork. Neither queue below the channel owns
+a thread of its own, so a cchan that a child inherits this way
+stays fully usable.
+.fi
+.SH "SEE ALSO"
+.BR cchan_create_mp (3),
+.BR cchan_destroy (3)

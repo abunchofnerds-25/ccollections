@@ -1,0 +1,88 @@
+.TH CCHAN_CREATE_MP 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cchan_create_mp \- create a two-way cchan with custom memory management
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+cchan *cchan_create_mp(size_t max_size,
+                       ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a cchan made of two circular queues, one for each
+direction: cchan_owner_to_workers and cchan_workers_to_owner. Both are
+created with the same max_size, so the two directions have the same
+capacity.
+
+The calling thread becomes the owner of the channel, and its ID is
+stored. Every later cchan_ call compares the ID of its own thread
+with that one and routes itself from the result: the owner sends to
+cchan_owner_to_workers and receives from cchan_workers_to_owner, and
+every other thread does the opposite. That's why those calls take no
+direction argument.
+
+The two queues and the cchan struct itself are allocated through
+mmgmt_procs. The channel keeps its own copy of the procedures and frees
+itself through them, so the caller's ccol_memmgmt_procs_t doesn't have
+to outlive this call. NULL selects the default malloc and free, which
+is what the cchan_create() macro passes.
+.fi
+.SH PARAMETERS
+.nf
+max_size     Maximum number of messages that each direction can hold.
+             Because one circular queue holds each direction, the bound
+             of ccircq_create_mp(3) applies: at
+             least 1, no larger than ccol_max_elem_count, and no larger
+             than SIZE_MAX / sizeof(cmessage_t).
+mmgmt_procs  Custom memory management procedures, or NULL to use the
+             default malloc and free. If the value is not NULL, all of
+             malloc, calloc, realloc and free must be set.
+err_str      Optional pointer that gets an error string on failure. Pass
+             NULL to ignore it.
+.fi
+.SH RETURN VALUE
+.nf
+On success, a pointer to the new cchan, and *err_str is set to
+NULL when err_str is not NULL.
+
+On failure, NULL, and *err_str describes the reason when err_str is not
+NULL. A failure has one of three causes:
+mmgmt_procs is malformed because it sets some but not all of malloc,
+calloc, realloc and free; an allocation failed; or the function could
+not create one of the two circular queues below the channel, for any of
+the reasons in ccircq_create_mp(3), such as a
+max_size that is out of range. When the first queue is created and the
+second one fails, the first one is freed before the call returns, so
+no failure path leaves anything allocated.
+.fi
+.SH NOTES
+.nf
+All operations are thread-safe. When you are done with the channel,
+destroy it with cchan_destroy().
+
+The owner thread, the one that called this function, must stay alive
+for as long as the cchan is in use, because the channel routes a
+message by comparing the caller's thread ID with the one it took here.
+Once the owner exits, the OS can hand the same ID to a new, unrelated
+thread, and the channel would then treat that thread as the owner too
+without reporting anything.
+
+fork(2) and a cchan can be combined in two supported ways: call
+fork(2) before you create the cchan, or create it and then call
+fork(2) followed at once by exec(3). A program that keeps running with
+no exec(3) after the fork while a cchan from before the fork is
+live is not supported. As a defense in depth beyond that rule, the
+child never inherits a lock that another thread held, in the locked
+state, at the instant of the fork. Neither queue below the channel owns
+a thread of its own, so a cchan that a child inherits this way
+stays fully usable.
+.fi
+.SH "SEE ALSO"
+.BR cchan_create (3),
+.BR cchan_destroy (3),
+.BR ccircq_create_mp (3),
+.BR cchan_send (3),
+.BR cchan_recv (3)

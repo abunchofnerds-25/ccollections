@@ -430,7 +430,7 @@ size_t _chttpsvr_mem_holders_for_tests(chttpsvr h, bool *exempt_out);
 
 /* For the request that a buffered route's handler holds: the body memory
  * reservation of its connection and the capacity of its body buffer. */
-void _chttpsvr_req_body_memory_for_tests(chttpsvr_req *req, size_t *charged,
+void _chttpsvr_req_body_memory_for_tests(chttpsvr_req_t *req, size_t *charged,
                                          size_t *held);
 
 size_t _chttpsvr_mem_waiting_for_tests(chttpsvr h);

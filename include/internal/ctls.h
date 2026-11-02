@@ -95,7 +95,7 @@ SOFTWARE.
  *   has no such queue and doesn't need one. For the caller,
  *   ctls_conn_handshake_step is a synchronous call anyway, from a blocking
  *   loop as well as from an on_readable or on_writable callback of a
- *   ccol_event_loop. So this is a simplification that loses no
+ *   ceventloop. So this is a simplification that loses no
  *   functionality, since the caller learns the selected protocol at the
  *   same logical point either way, and no application code in this codebase
  *   drives ALPN selection asynchronously.

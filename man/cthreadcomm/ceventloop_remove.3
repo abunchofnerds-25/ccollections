@@ -1,0 +1,128 @@
+.TH CEVENTLOOP_REMOVE 3 "2026-09-21" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ceventloop_remove \- deregister a selectable from an event loop
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ceventloop_remove(ceventloop loop, ceventloop_reg reg);
+.fi
+.SH DESCRIPTION
+.nf
+Unregisters reg. You can call it from a callback of the registration
+being removed (removing itself on an error is a common pattern), from
+any other thread, and while a dispatch of the same registration is in
+flight.
+
+Once this call returns, no further callback of the registration runs.
+That includes a callback the loop has collected but not started yet,
+such as one waiting in a dispatch worker's queue when
+num_reactor_threads > 1. The call does not wait, though, for a dispatch
+that is already in flight when it is made.
+
+A dispatch in flight can use whatever arg points to, so a caller that
+has no other way to know when that memory is safe to free needs
+handlers.on_removed (see ceventloop_add(3)). It fires exactly
+once, asynchronously, and only when no dispatch of this registration
+and no other ceventloop call that resolves it can be in progress.
+A caller that is sure no dispatch can be in flight at the moment of the
+removal may free arg at once, without on_removed. Removing a
+registration from its own callback is one such case, and a registration
+that the loop never dispatched is another.
+
+The call doesn't close an fd and doesn't affect the lifetime of a
+queue; it only releases the ceventloop's own bookkeeping for the
+registration, in line with the "the caller owns the fd" contract of
+cselectable_fd.
+
+Remove every registration of an fd before you close it, as libevent and
+libuv require too. When the last one is removed, the loop has stopped
+watching the fd by the time this call returns, and the fd number is
+free. A new registration of the same fd, or of a new descriptor that
+reuses the number, is independent of the removed one: nothing the loop
+does later for the removed registration (a dispatch in flight, or the
+later release of its bookkeeping) changes how the new one is watched.
+A registration whose fd is closed first holds on to the number until it
+is removed. Until then, a ceventloop_add(3) of a descriptor that
+reuses the number fails with ccol_not_permitted for the direction the
+stale registration holds, and can fail with ccol_unexpected_failure for
+the other direction.
+
+For a queue or a cchan selectable, the loop finishes its own
+bookkeeping for the queue before this call returns: it unlinks the
+registration's waiter from the queue and releases the registration.
+A dispatch already in flight is a different matter, because its
+callback holds the selectable the loop gave it and reaches the queue
+through it. Unlike arg above, the queue needs no on_removed handshake
+for that, because destroying the queue waits until every such callback
+is done with it (see ccircq_destroy(3)). The usual order
+of drain, remove and destroy is therefore safe from any thread, as long
+as that thread is not itself running one of this registration's
+callbacks.
+
+Calling this function several times on the same reg is safe, whether
+the calls come one after another or really run at the same time on
+different threads. After a removal, reg is also still safe to pass to
+ceventloop_modify(), ceventloop_pause()/_resume(),
+ceventloop_reg_generation() or ceventloop_remove(). reg is
+resolved against its loop's registration table before anything is
+dereferenced, so a stale or removed handle is always caught and there
+is no risk of a use-after-free.
+
+The two kinds of repeated call return different values. A call made
+strictly after an earlier ceventloop_remove() on the same reg has
+returned finds that reg_h doesn't resolve at all, because the earlier
+call released reg's slot before returning, so it gets
+ccol_invalid_args, the same result that ceventloop_modify(),
+_pause(), _resume() and ceventloop_reg_generation() give for a
+removed reg. A call that really races another ceventloop_remove()
+on the same reg can resolve it, in the narrow window before the other
+call has released reg's slot; it then sees that reg is already marked
+as removed, returns ccol_success and does nothing.
+.fi
+.SH PARAMETERS
+.nf
+loop  ceventloop the registration belongs to.
+reg   Registration to remove.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        The registration is removed, by this call or by
+                    another call on the same reg running at the same
+                    time (see DESCRIPTION).
+ccol_invalid_args   loop is CEVENTLOOP_NULL, a stale handle,
+                    or a handle that has already been destroyed; or
+                    reg is CEVENTLOOP_REG_NULL or fails to resolve
+                    for another reason, such as an earlier
+                    ceventloop_remove() call that has already
+                    returned.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call from any thread, including while a dispatch of the same
+registration runs and from that registration's own callback.
+.fi
+.SH EXAMPLES
+.nf
+void on_readable(ceventloop loop, ceventloop_reg reg,
+                 cselectable_t *sel, void *arg) {
+    conn_ctx_t *ctx = (conn_ctx_t *)arg;
+    char buf[512];
+    ssize_t n = read(sel->fd, buf, sizeof(buf));
+    if (n <= 0) {
+        ceventloop_remove(loop, reg);  /* self-removal, safe */
+        close(sel->fd);
+        free(ctx);
+        return;
+    }
+    /* ... */
+}
+.fi
+.SH "SEE ALSO"
+.BR ceventloop_add (3),
+.BR ceventloop_modify (3),
+.BR ceventloop_pause (3),
+.BR ceventloop_resume (3),
+.BR ceventloop_destroy (3)

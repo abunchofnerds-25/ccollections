@@ -10,7 +10,7 @@ C Collections (libccollections, \-lccollections)
 ccol_retval_t chttp_run_query(chttp_method_t method, const char *url,
                               const chttp_request_body_t *body,
                               chmap headers,
-                              chttpcli_response **resp_out);
+                              chttpcli_response_t **resp_out);
 .fi
 .SH DESCRIPTION
 .nf
@@ -62,7 +62,7 @@ it on a request that carries a body (POST, PUT or PATCH). A valid
 value is a plain unsigned string of decimal digits, with no
 leading '+' or '-' and no whitespace in it, and it must also match the
 real length of the body that the client sends. A bad value gives
-ccol_invalid_args once the request reaches the wire. chttpclient_do(3)
+ccol_invalid_args once the request reaches the wire. chttpcli_do(3)
 and chttp_request_set_header(3) describe the same check, which exists
 for the same reason: the declared framing and the wire must not
 disagree.
@@ -85,7 +85,7 @@ resp_out   It must not be NULL. The function sets it to NULL first,
 .fi
 .SH RETURN VALUE
 .nf
-The same codes as chttpclient_do. It also returns
+The same codes as chttpcli_do. It also returns
 ccol_not_enough_memory when the internal request object cannot be
 allocated, and ccol_invalid_args when url or resp_out is NULL, when
 method names no HTTP method (CHTTP_ANY included), when body has a NULL
@@ -100,4 +100,4 @@ a token or a value with a control byte other than a horizontal tab
 .BR chttp_post (3),
 .BR chttp_request_create (3),
 .BR chttp_request_set_header (3),
-.BR chttpclient_do (3)
+.BR chttpcli_do (3)

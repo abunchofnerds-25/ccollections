@@ -2,10 +2,10 @@ INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = cthreadcomm
 # chashmap.c is pulled in indirectly because the internal fd registry of
-# ccol_event_loop (int fd -> event_entry*) is a chmap. cthreadpool.c comes in
-# the same way, since the dispatch_pool of ccol_event_loop
-# (num_reactor_threads > 1) is a ctpool. cvector.c is needed as well, because
-# ccol_event_loop has its own generation-tagged handle slot table, a cvec of
+# ceventloop (int fd -> event_entry*) is a chmap. cthreadpool.c comes in
+# the same way, since the dispatch_pool of ceventloop
+# (num_reactor_threads > 1) is a cthrpool. cvector.c is needed as well, because
+# ceventloop has its own generation-tagged handle slot table, a cvec of
 # slots plus a cvec free-index stack. csort.c comes in through cvector.c, whose
 # sort is the mergesort of csort.
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c \
@@ -24,7 +24,7 @@ COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 LFLAGS = -lpthread $(CCOL_PLATFORM_LIBS)
 
 # tests_keys uses up every thread-specific key of the process before the
-# first ccol_event_loop call, so it needs a process of its own too.
+# first ceventloop call, so it needs a process of its own too.
 # tests_exit_order runs in a process of its own because it checks the exit-time
 # destructor order of a whole process: an application destructor that runs
 # after the destructors of cthreadcomm and still owns live queues and a live
@@ -52,10 +52,10 @@ test: build
 	./tests_exit_order
 	./tests_keys
 
-# die_after_fork=0: the ccol_event_loop_handle_lifecycle tests of this suite
+# die_after_fork=0: the ceventloop_handle_lifecycle tests of this suite
 # fork and create new pthreads in the child; the test_tsan target of
 # tests/chttpclient/Makefile explains the exact TSan mechanism at more length.
-# This module destroys its ccol_event_loop instances between tests, so the
+# This module destroys its ceventloop instances between tests, so the
 # parent is single-threaded when it calls fork() and the option doesn't carry
 # any weight here, while it does for the persistent, process-wide reactors of
 # chttpclient and chttpserver. We set it anyway so the three suites that fork

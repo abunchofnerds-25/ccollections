@@ -1,0 +1,47 @@
+.TH CHTTPCLI_SET_POOL_SIZE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpcli_set_pool_size \- set the connection pool size
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpclient.h>
+
+ccol_retval_t chttpcli_set_pool_size(chttpcli cli, size_t n);
+.fi
+.SH DESCRIPTION
+.nf
+This function sets how many requests can be in flight at the same
+time. When the client is at that limit, a caller of chttpcli_do
+blocks until a slot is free.
+
+The cap applies only to Tier 1 (chttpcli_do and
+chttpcli_do_streaming), and neither to Tier 2 (chttpcli_do_async
+and chttpcli_do_async_streaming) nor to Tier 3
+(chttpcli_do_pooled and chttpcli_do_pooled_streaming). You can
+submit any number of those requests at once, the shared async engine
+handles all of them, and a submit never blocks.
+
+An n of 0 selects the CPU count, which is the default.
+
+You can call this function before or after the client's first request,
+and it takes effect at once. When the limit grows, the client wakes
+every waiting caller with a broadcast. This is purely a concurrency
+cap and has nothing to do with the keep-alive cache of idle
+connections, which has its own fixed internal caps per origin and in
+total.
+.fi
+.SH PARAMETERS
+.nf
+cli   The client handle. It must not be CHTTPCLI_NULL.
+n     The pool size. 0 means the CPU count.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success            The client has the new pool size.
+ccol_invalid_args       cli is CHTTPCLI_NULL, or a stale handle
+                        of a client that has been destroyed.
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_create (3),
+.BR chttpcli_do (3)

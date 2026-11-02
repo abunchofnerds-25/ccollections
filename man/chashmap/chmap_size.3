@@ -1,0 +1,26 @@
+.TH CHMAP_SIZE 3 "2026-10-31" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_size \- get the number of entries in a hash map (type-inferred wrapper)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_size(chm);
+.fi
+.SH DESCRIPTION
+.nf
+Type-inferred wrapper for chashmap_elem_count(). It takes the same arguments
+and gives the same result; chashmap_elem_count(3) has the full contract.
+.fi
+.SH PARAMETERS
+.nf
+chm    Hash map to query
+.fi
+.SH RETURN VALUE
+.nf
+The number of entries in the map.
+.fi
+.SH "SEE ALSO"
+.BR chashmap_elem_count (3)

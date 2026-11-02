@@ -85,12 +85,12 @@ int main(void) {
     chmap_construct(map, char *, int);
     counts = map;
 
-    ctpool_construct(pool, 4, 0);          /* 4 workers, unbounded queue */
+    cthrpool_construct(pool, 4, 0);          /* 4 workers, unbounded queue */
     int failed = 0;
     for (size_t i = 0; i < sizeof(jobs) / sizeof(jobs[0]) && !failed; i++)
-        failed = ctpool_submit(pool, count_line, &jobs[i], NULL) != ccol_success;
-    ctpool_wait(pool);                     /* every submitted task has run */
-    ctpool_destroy(pool);
+        failed = cthrpool_submit(pool, count_line, &jobs[i], NULL) != ccol_success;
+    cthrpool_wait(pool);                     /* every submitted task has run */
+    cthrpool_destroy(pool);
     if (failed) {
         chmap_destroy(map);
         return 1;
@@ -118,10 +118,10 @@ own:
 
 | Component | How it synchronises |
 |---|---|
-| `ccol_mempool`, `ccol_r_mempool` | an internal mutex (one for each size tier of the ranged pool) and a per-thread cache; neither exists when you create the pool for a single thread |
-| `ccol_circular_queue`, `ccol_dynamic_queue` | an internal mutex and condition variables |
-| `ccol_channel` | two internal queues, one for each direction |
-| `ccol_event_loop` | its own poller thread; see its man pages for each call |
+| `cmempool`, `crmempool` | an internal mutex (one for each size tier of the ranged pool) and a per-thread cache; neither exists when you create the pool for a single thread |
+| `ccircq`, `cdynmq` | an internal mutex and condition variables |
+| `cchan` | two internal queues, one for each direction |
+| `ceventloop` | its own poller thread; see its man pages for each call |
 | `clrucache` | segments that lock independently, and a condition variable for each entry |
 | `clogger` | one mutex for each output target, shared by all loggers that you derive from it |
 | `cthreadpool` | an internal mutex and condition variables |
@@ -143,7 +143,7 @@ receiver, so the threads don't share any other data:
 #define PRODUCERS 3
 #define PER_PRODUCER 5
 
-static ccol_circular_queue *queue;   /* thread-safe: no lock needed */
+static ccircq *queue;   /* thread-safe: no lock needed */
 
 static void *producer(void *arg) {
     int id = (int)(long)arg;
@@ -151,15 +151,15 @@ static void *producer(void *arg) {
         char *text = malloc(32);
         if (!text) abort();
         snprintf(text, 32, "producer %d item %d", id, i);
-        c_message_t msg = { text, strlen(text) + 1 };
-        if (ccol_circq_send_zc(queue, &msg) != ccol_success)
+        cmessage_t msg = { text, strlen(text) + 1 };
+        if (ccircq_send(queue, &msg) != ccol_success)
             free(text);                  /* after a failed send, we own it */
     }
     return NULL;
 }
 
 int main(void) {
-    queue = ccol_circular_queue_create(4, NULL);
+    queue = ccircq_create(4, NULL);
     if (!queue) return 1;
 
     pthread_t tids[PRODUCERS];
@@ -169,15 +169,15 @@ int main(void) {
             started++;
 
     for (int got = 0; got < started * PER_PRODUCER; got++) {
-        c_message_t msg;
-        if (ccol_circq_recv_zc(queue, &msg) != ccol_success) break;
+        cmessage_t msg;
+        if (ccircq_recv(queue, &msg) != ccol_success) break;
         puts((char *)msg.data);
         free(msg.data);                  /* the receiver owns the data */
     }
     for (int i = 0; i < started; i++)
         pthread_join(tids[i], NULL);
 
-    ccol_circular_queue_destroy(queue);  /* the queue is empty here */
+    ccircq_destroy(queue);  /* the queue is empty here */
     return 0;
 }
 ```
@@ -189,20 +189,20 @@ call states them. These are the ones people break most often.
 
 The destroy is the last call, and only one thread makes it. The destroy
 macro sets its variable to the `_NULL` value, so a second destroy through
-the same variable does nothing, but destroying a `ctpool` or `chttpclient`
+the same variable does nothing, but destroying a `cthrpool` or `chttpclient`
 handle that's already destroyed is a fatal error, whether it happens through
 a copy of the handle or through two destroys that race.
-`chttpclient_destroy` waits for the requests in progress, so you can call it
+`chttpcli_destroy` waits for the requests in progress, so you can call it
 while other threads are inside a request.
 
-You can shut a pool down from anywhere. `ctpool_shutdown_drain` and
-`ctpool_shutdown_immediate` can be called more than once and from many
+You can shut a pool down from anywhere. `cthrpool_shutdown_drain` and
+`cthrpool_shutdown_immediate` can be called more than once and from many
 threads, and each call only returns once the workers have stopped. An
 immediate shutdown that comes in during a drain discards the rest of the
 queue.
 
 A task must not destroy its own pool. Inside a task or its completion
-callback, `ctpool_destroy` on the same pool is fatal, while `ctpool_wait`
+callback, `cthrpool_destroy` on the same pool is fatal, while `cthrpool_wait`
 returns at once and the shutdown calls do nothing.
 
 The LRU eviction callback runs while the cache holds a lock, so it must not
@@ -253,11 +253,11 @@ static void work(void *arg) { (void)arg; atomic_fetch_add(&done, 1); }
 
 /* Pattern 1: fork first, then create handles in each process. */
 static int run_worker(int id) {
-    ctpool_construct(pool, 2, 0);       /* the pool of this process */
+    cthrpool_construct(pool, 2, 0);       /* the pool of this process */
     int failed = 0;
     for (int i = 0; i < 10 && !failed; i++)
-        failed = ctpool_submit(pool, work, NULL, NULL) != ccol_success;
-    ctpool_destroy(pool);                /* runs all queued tasks first */
+        failed = cthrpool_submit(pool, work, NULL, NULL) != ccol_success;
+    cthrpool_destroy(pool);                /* runs all queued tasks first */
     if (failed) return 1;
     printf("worker %d ran %d tasks\n", id, atomic_load(&done));
     fflush(stdout);                      /* _exit() does not flush */
@@ -273,7 +273,7 @@ int main(void) {
     while (wait(NULL) > 0) {}
 
     /* Pattern 2: a handle exists, so the child must exec at once. */
-    ctpool_construct(pool, 2, 0);
+    cthrpool_construct(pool, 2, 0);
     fflush(stdout);
     pid_t pid = fork();
     if (pid == 0) {
@@ -281,7 +281,7 @@ int main(void) {
         _exit(127);                      /* exec failed: exit; use nothing */
     }
     if (pid > 0) waitpid(pid, NULL, 0);
-    ctpool_destroy(pool);
+    cthrpool_destroy(pool);
     return 0;
 }
 ```
@@ -318,7 +318,7 @@ which the HTTP client reads once per process through such a descriptor. The
 one exception is a system with no default CA file. There the client trusts
 OpenSSL's hashed certificate directory, and OpenSSL opens the files in it
 during a handshake with descriptors that an `exec()` keeps (see
-[chttpclient_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_tls.3.html)).
+[chttpcli_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_tls.3.html)).
 
 On macOS a socket, an accepted socket and a pipe each take two calls to
 become closed on exec, and a `fork()` from another thread waits until both
@@ -357,16 +357,16 @@ static int spawn_clean(pid_t *pid, char *const argv[]) {
 [ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html) (thread-safety classes, fork
 policy,
 CCOL_FORK_SAFETY_REQUIRED),
-[ctpool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_destroy.3.html),
-[ctpool_wait(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_wait.3.html),
-[ctpool_shutdown_drain(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_shutdown_drain.3.html),
-[ctpool_shutdown_immediate(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_shutdown_immediate.3.html),
-[chttpclient_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_destroy.3.html),
+[cthrpool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_destroy.3.html),
+[cthrpool_wait(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_wait.3.html),
+[cthrpool_shutdown_drain(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_shutdown_drain.3.html),
+[cthrpool_shutdown_immediate(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthrpool_shutdown_immediate.3.html),
+[chttpcli_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_destroy.3.html),
 [clrucache_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_create_full.3.html),
 [clog_derive(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_derive.3.html),
 [clog_set_level(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_set_level.3.html),
-[ccol_circq_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_send_zc.3.html),
-[ccol_circq_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_recv_zc.3.html),
+[ccircq_send(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_send.3.html),
+[ccircq_recv(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccircq_recv.3.html),
 [cjson_parse_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_parse_mp.3.html)
 
 Related guides:

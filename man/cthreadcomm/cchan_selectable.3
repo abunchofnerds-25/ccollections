@@ -1,0 +1,99 @@
+.TH CCHAN_SELECTABLE 3 "2026-09-26" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cchan_selectable \- resolve a cchan into a cselectable_t for the calling thread and requested direction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+cselectable_t cchan_selectable(cchan *ch, cselect_dir_t dir);
+.fi
+.SH DESCRIPTION
+.nf
+A cchan is made of two circular queues. This function looks at
+the ID of the calling thread and at the direction you ask for, and
+picks which of the two queues to wrap:
+
+  cselect_read; owner <- workers_to_owner_cq  (same as cchan_recv)
+                    worker <- owner_to_workers_cq
+  cselect_write; owner -> owner_to_workers_cq  (same as cchan_send)
+                    worker -> workers_to_owner_cq
+
+The queue is picked here, at the call site, so cselect() never
+needs to look inside the opaque cchan struct. The cchan
+pointer is not kept: the returned cselectable_t holds only the
+ccircq pointer that was picked and the dir value, and it
+watches that one queue whichever thread later waits on it or runs a
+callback for it.
+
+cselect() and ceventloop only report that the queue is ready,
+and the caller does the receive or the send itself.
+
+When cselect() returns on the thread that built the selectable,
+cchan_try_recv() and cchan_try_send() pick the same
+queue, and so do ccircq_try_recv() and ccircq_try_send()
+on sel.cq.
+
+Inside a ceventloop callback, use ccircq_try_recv() and
+ccircq_try_send() on sel->cq and never a cchan_* call. The
+callback runs on a thread of the loop, which the channel treats as a
+worker no matter which thread built the selectable, so when the owner
+built it, a cchan_* call in the callback reaches the other queue.
+Take a selectable that the owner built for cselect_read, which
+watches workers_to_owner_cq: a cchan_try_recv() inside
+on_readable receives from owner_to_workers_cq instead. It takes a
+message that the owner meant for its workers, and leaves the message
+that triggered the callback in its queue.
+.fi
+.SH PARAMETERS
+.nf
+ch   Channel to resolve.  Must not be NULL.
+dir  cselect_read or cselect_write.
+.fi
+.SH RETURN VALUE
+.nf
+A cselectable_t of type cselectable_type_ccircq that wraps the right
+ccircq for the calling thread and for the direction.
+
+If ch is NULL, the result is a cselectable_type_ccircq with a NULL
+queue pointer, which cselect() refuses with ccol_invalid_args.
+.fi
+.SH NOTES
+.nf
+The direction is decided once, when this function is called, and not
+again on each pass of cselect(). If the calling thread's role
+changes between building the selectable and the actual cselect()
+call, build the selectable again.
+.fi
+.SH THREAD SAFETY
+.nf
+The function reads ch->owner_tid and two pointer fields, which are
+written once when the cchan is created and never change after
+that, so it is safe to call from any thread at the same time as any
+other call.
+.fi
+.SH EXAMPLES
+.nf
+/* The owner watches the replies of its workers on a ceventloop. */
+static void on_reply(ceventloop loop, ceventloop_reg reg,
+                     cselectable_t *sel, void *arg) {
+    (void)loop; (void)reg;
+    cmessage_t msg;
+    /* sel->cq, and not cchan_try_recv(): this runs on a thread of
+       the loop, which the channel counts as a worker. */
+    while (ccircq_try_recv(sel->cq, &msg) == ccol_success)
+        handle_reply(arg, &msg);
+}
+
+ceventloop_handlers_t h = { .on_readable = on_reply };
+ceventloop_reg reg = ceventloop_add(
+    loop, cchan_selectable(ch, cselect_read), h, ctx, NULL);
+.fi
+.SH "SEE ALSO"
+.BR cselect (3),
+.BR ceventloop_add (3),
+.BR ccircq_try_recv (3),
+.BR ccircq_try_send (3),
+.BR cchan_recv (3),
+.BR cchan_send (3)

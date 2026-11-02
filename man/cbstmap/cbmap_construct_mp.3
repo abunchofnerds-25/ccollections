@@ -52,7 +52,7 @@ allocates later comes from them, and everything the map frees goes back to
 them.
 
 The allocator doesn't affect the order. key_t decides it, as
-cbmap_create_full(3) describes, and a walk goes in ascending key order.
+cbstmap_create_full(3) describes, and a walk goes in ascending key order.
 
 Destroy the map with cbmap_destroy(3). The companion type variables follow
 the scope of the handle, so a function that receives the handle needs
@@ -84,5 +84,5 @@ cbmap_destroy(sorted);
 .BR cbmap_init_mp (3),
 .BR cbmap_declare (3),
 .BR cbmap_redeclare (3),
-.BR cbmap_create_full (3),
+.BR cbstmap_create_full (3),
 .BR cbmap_destroy (3)

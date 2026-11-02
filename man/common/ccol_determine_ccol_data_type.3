@@ -33,10 +33,10 @@ ccol_data_type ccol_determine_ccol_data_type(data);
 .SH DESCRIPTION
 .nf
 ccol_data_type names the type of the keys or the values of a map or a
-cache. chmap_create(3), chmap_create_mp(3), chmap_create_ch(3) and
-chmap_create_full(3) take one for the keys (key_type) and one for the
-values (val_type). cbmap_create(3), cbmap_create_mp(3),
-cbmap_create_ch(3) and cbmap_create_full(3) take one for the keys, and
+cache. chashmap_create(3), chashmap_create_mp(3), chashmap_create_ch(3) and
+chashmap_create_full(3) take one for the keys (key_type) and one for the
+values (val_type). cbstmap_create(3), cbstmap_create_mp(3),
+cbstmap_create_ch(3) and cbstmap_create_full(3) take one for the keys, and
 clrucache_create_full(3) takes one for the keys and one for the values.
 The enumerator decides how the container stores, compares and hashes an
 element, and which width a cmap_pair of a fixed-width type must carry
@@ -119,10 +119,10 @@ int main(void) {
   char *err = NULL;
   uint64_t key_sample = 0;
   const char *val_sample = NULL;
-  chmap m = chmap_create(16,
-                         ccol_determine_ccol_data_type(key_sample),
-                         ccol_determine_ccol_data_type(val_sample),
-                         &err);
+  chmap m = chashmap_create(16,
+                            ccol_determine_ccol_data_type(key_sample),
+                            ccol_determine_ccol_data_type(val_sample),
+                            &err);
   if (!m)
     return 1;
   chmap_destroy(m);
@@ -131,9 +131,9 @@ int main(void) {
 .fi
 .SH "SEE ALSO"
 .BR ccol_fixed_width_data_type_size (3),
-.BR chmap_create (3),
-.BR chmap_create_full (3),
-.BR cbmap_create (3),
-.BR cbmap_create_full (3),
+.BR chashmap_create (3),
+.BR chashmap_create_full (3),
+.BR cbstmap_create (3),
+.BR cbstmap_create_full (3),
 .BR clrucache_create_full (3),
 .BR ccollections (7)

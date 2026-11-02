@@ -7,8 +7,8 @@ INCLUDES = -I.. -I../../include
 # are what let us diagnose another such hang.
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64 -DCDEBUGLOG_ENABLED
 SRC_FILE_PREFIX = cthreadpool
-# ctpool needs cvector.c for its generation-tagged handle slot table, the
-# same mechanism that chttpcli, chttpsvr, ccol_event_loop and clru_cache use.
+# cthrpool needs cvector.c for its generation-tagged handle slot table, the
+# same mechanism that chttpcli, chttpsvr, ceventloop and ccache use.
 # cdebuglog.c is an opt-in diagnostic log buffer that only a
 # RUNNING_UNIT_TESTS build has, and the root Makefile's default library build
 # leaves it out (see its doc comment in include/internal/cdebuglog.h).
@@ -92,7 +92,7 @@ test: build
 	./tests
 	./tests_keys
 
-# die_after_fork=0 is set because several ctpool_handle_lifecycle tests in
+# die_after_fork=0 is set because several cthrpool_handle_lifecycle tests in
 # this suite fork and then create new pthreads in the child. One of them,
 # destroy_from_within_own_task_is_fatal_even_after_forking_first, forks again
 # from inside the pool's worker thread, so at that inner fork() call the

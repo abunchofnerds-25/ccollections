@@ -67,7 +67,7 @@ fails. It needs GCC or Clang because of the cleanup attribute, and it uses
 the default allocator.
 
 A walk visits the elements in ascending key order, by the order of this
-procedure; cbmap_begin_iter(3) describes that contract.
+procedure; cbstmap_begin_iter(3) describes that contract.
 
 When the scope exits the map is destroyed and the handle cleared, so an
 earlier cbmap_destroy(3) inside the scope is also fine.
@@ -109,5 +109,5 @@ void summarize(version *v, size_t n) {
 .BR cbmap_declare_scoped (3),
 .BR cbmap_init_cc (3),
 .BR cbmap_redeclare (3),
-.BR cbmap_begin_iter (3),
+.BR cbstmap_begin_iter (3),
 .BR cbmap_destroy (3)

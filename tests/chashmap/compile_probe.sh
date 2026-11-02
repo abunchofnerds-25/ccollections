@@ -1,9 +1,9 @@
 #!/bin/sh
 # Compile-time probe for the rule behind every cmap_pair accessor that the
-# map hands out: the callback argument of chmap_destroy_with_dtor(), the
+# map hands out: the callback argument of chashmap_destroy_with_dtor(), the
 # key_pair/val_pair an iterator carries, and the stored char* that
 # chmap_get_ptr() reaches for a map with string values. It also pins the
-# signature of chmap_get_elem_ref(), which fills a cmap_pair that the caller
+# signature of chashmap_get_elem_ref(), which fills a cmap_pair that the caller
 # owns and hands out no accessor.
 #
 # The map keeps one {ptr, size} accessor per entry and gives its address out
@@ -138,7 +138,7 @@ EOF
 }
 
 # -------------------------------------------------------------------------
-# chmap_get_elem_ref()
+# chashmap_get_elem_ref()
 #
 # The function fills a cmap_pair that the caller owns. It's the caller's own
 # copy, so changing its fields changes nothing in the map, and the bytes that
@@ -149,11 +149,11 @@ probe 'the address of a const cmap_pair * out-parameter' reject \
 "incompatible pointer type|discards qualifiers" '
   const cmap_pair *vp = NULL;
   (void)vp;
-  (void)chmap_get_elem_ref(m, kp, &vp);'
+  (void)chashmap_get_elem_ref(m, kp, &vp);'
 
 probe 'reading the filled pair and its bytes' accept - '
   cmap_pair vp;
-  if (chmap_get_elem_ref(m, kp, &vp) == ccol_success) {
+  if (chashmap_get_elem_ref(m, kp, &vp) == ccol_success) {
     unsigned char first = *(const unsigned char *)vp.ptr;
     size_t stored = vp.size;
     (void)first;
@@ -162,14 +162,14 @@ probe 'reading the filled pair and its bytes' accept - '
 
 probe 'writing the bytes the filled pair describes' accept - '
   cmap_pair vp;
-  if (chmap_get_elem_ref(m, kp, &vp) == ccol_success) {
+  if (chashmap_get_elem_ref(m, kp, &vp) == ccol_success) {
     memset(vp.ptr, 0, vp.size);
     *(unsigned char *)vp.ptr = 7u;
   }'
 
 probe 'changing the fields of the caller own pair' accept - '
   cmap_pair vp;
-  if (chmap_get_elem_ref(m, kp, &vp) == ccol_success) {
+  if (chashmap_get_elem_ref(m, kp, &vp) == ccol_success) {
     vp.ptr = replacement;
     vp.size = 1;
   }'
@@ -194,7 +194,7 @@ probe 'in-place update through chmap_get_ptr' accept - '
   if (slot) *slot = 2;'
 
 # -------------------------------------------------------------------------
-# chmap_destroy_with_dtor()
+# chashmap_destroy_with_dtor()
 #
 # On the separate-chaining backend the callback gets the live node's own
 # accessor instead of a copy, so what the callback sees is the map's
@@ -203,7 +203,7 @@ probe 'in-place update through chmap_get_ptr' accept - '
 
 probe 'a destructor assigning to the accessor pointer' reject "$ASSIGN_PTR" '
   (void)m;
-  chmap_destroy_with_dtor(m, ccol_probe_dtor, NULL);' \
+  chashmap_destroy_with_dtor(m, ccol_probe_dtor, NULL);' \
 'static void ccol_probe_dtor(const cmap_pair *val_pair, void *dtor_ctx) {
   (void)dtor_ctx;
   val_pair->ptr = NULL;
@@ -212,7 +212,7 @@ probe 'a destructor assigning to the accessor pointer' reject "$ASSIGN_PTR" '
 probe 'a destructor with a plain cmap_pair * parameter' reject \
 "incompatible pointer type|incompatible function pointer types" '
   (void)m;
-  chmap_destroy_with_dtor(m, ccol_probe_dtor, NULL);' \
+  chashmap_destroy_with_dtor(m, ccol_probe_dtor, NULL);' \
 'static void ccol_probe_dtor(cmap_pair *val_pair, void *dtor_ctx) {
   (void)val_pair;
   (void)dtor_ctx;
@@ -220,7 +220,7 @@ probe 'a destructor with a plain cmap_pair * parameter' reject \
 
 probe 'a destructor freeing what the value points at' accept - '
   (void)m;
-  chmap_destroy_with_dtor(m, ccol_probe_dtor, NULL);' \
+  chashmap_destroy_with_dtor(m, ccol_probe_dtor, NULL);' \
 'static void ccol_probe_dtor(const cmap_pair *val_pair, void *dtor_ctx) {
   void *owned = NULL;
   (void)dtor_ctx;

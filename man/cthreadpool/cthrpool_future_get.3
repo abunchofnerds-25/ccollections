@@ -1,0 +1,49 @@
+.TH CTHRPOOL_FUTURE_GET 3 "2026-09-21" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cthrpool_future_get \- block until the future has a result
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadpool.h>
+
+void *cthrpool_future_get(cthrpool_future_t *f);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks until the task of this future stops, and then returns the void*
+value that the task function returned. If cthrpool_shutdown_immediate
+cancelled the task, the return value is NULL and
+cthrpool_future_cancelled(f) returns true.
+
+The call doesn't free the future; the caller must call
+cthrpool_future_free after reading the result.
+
+Any number of threads can be inside this call on one future at the
+same time, and all of them get the same result. Each one holds its own
+reference for the length of its call, so the future outlives every
+waiter inside it, whatever order the other references go in. The
+task's reference goes when the task stops, the caller's goes with
+cthrpool_future_free, and whichever thread leaves the future last
+destroys it.
+
+Result ownership: the pool never allocates, copies or frees the void*
+that comes back, it only carries the pointer that the task function
+returned. cthrpool_future_free releases the future's handle, never the
+result. Once this function returns the caller owns the result, and
+must free it the same way the task function allocated it.
+.fi
+.SH PARAMETERS
+.nf
+f   Future handle (NULL is a no-op that returns NULL)
+.fi
+.SH RETURN VALUE
+.nf
+The void* value returned by the task function, or NULL if the future
+was cancelled or f is NULL.
+.fi
+.SH "SEE ALSO"
+.BR cthrpool_submit_future (3),
+.BR cthrpool_future_done (3),
+.BR cthrpool_future_cancelled (3),
+.BR cthrpool_future_free (3)

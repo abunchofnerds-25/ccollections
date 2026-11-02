@@ -8,7 +8,7 @@ include platform.mk
 # every later run of this Makefile reads them back, so a later command works
 # on the library that the last build made without repeating any option:
 #
-#   make WITH_CJSON=0 EXTRA_CFLAGS=-DCCOL_MEMPOOL_COMPACT_LAYOUT=1
+#   make WITH_CJSON=0 EXTRA_CFLAGS=-DCMEMPOOL_COMPACT_LAYOUT=1
 #   sudo make install ALLOW_REDUCED_INSTALL=1
 #
 # Without the file the install would see settings that differ from the stamps
@@ -160,7 +160,7 @@ endif
 SOURCE_DIR = src
 INCLUDE_DIR = include
 # The HTTP/1.1 response parser of chttpclient (src/chttp1_parser.c) and the
-# rest of the HTTP stack (ctls, ccol_event_loop, chttpserver, chttpclient) are
+# rest of the HTTP stack (ctls, ceventloop, chttpserver, chttpclient) are
 # all our own code, so they need no third-party build rules: the SOURCE_FILES
 # wildcard over $(SOURCE_DIR)/*.c below finds them like any other module.
 # The library holds no third-party source and builds only its own .c files.
@@ -691,7 +691,7 @@ coverage_site: generate_coverage_report
 # with an ordinary prerequisite list a build with different flags links the
 # objects of the build before it. You end up with a sanitizer that is only
 # half applied, or with objects for the wrong architecture after a CC=
-# change, and a switch like CCOL_MEMPOOL_COMPACT_LAYOUT looks ignored because
+# change, and a switch like CMEMPOOL_COMPACT_LAYOUT looks ignored because
 # the object that holds it was never recompiled. The stamp holds the current
 # compiler and flags and is rewritten only when one of them changes, so
 # nothing is rebuilt without need and everything is rebuilt when it must be.

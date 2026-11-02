@@ -62,15 +62,15 @@ built-in comparison. It must agree with custom_hashing_proc, so two keys
 that it reports as equal must get the same hash. A key equality
 procedure without a hashing procedure makes the creation fail, and this
 macro then stops the program. A struct key with padding bytes needs both
-procedures; see chmap_create_full(3).
+procedures; see chashmap_create_full(3).
 .fi
 .SH NOTES
 .nf
 Stops the program through _ccol_fatal_err() if the creation fails; call
-chmap_create_full(3) directly when a failure has to be handled instead
+chashmap_create_full(3) directly when a failure has to be handled instead
 of being fatal
-Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets; call
-chmap_create_full(3) for a different initial bucket count
+Uses CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets; call
+chashmap_create_full(3) for a different initial bucket count
 The macro copies the memory management procedures into the map, so your
 own ccol_memmgmt_procs_t doesn't need to outlive the call. Those
 procedures, the hashing procedure and the key equality procedure must
@@ -100,5 +100,5 @@ chmap_destroy(scores);
 .BR chmap_declare (3),
 .BR chmap_construct_full (3),
 .BR chmap_construct_full_scoped (3),
-.BR chmap_create_full (3),
+.BR chashmap_create_full (3),
 .BR chmap_destroy (3)

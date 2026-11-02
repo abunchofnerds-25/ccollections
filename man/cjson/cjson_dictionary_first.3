@@ -7,13 +7,13 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cjson.h>
 
-typedef struct cjson_dictionary_iter {
+typedef struct cjson_dictionary_iter_t {
     const char *key;
     cjson       value;
     /* private fields, whose names begin with an underscore */
-} cjson_dictionary_iter;
+} cjson_dictionary_iter_t;
 
-bool cjson_dictionary_first(cjson dict, cjson_dictionary_iter *it);
+bool cjson_dictionary_first(cjson dict, cjson_dictionary_iter_t *it);
 .fi
 .SH DESCRIPTION
 .nf
@@ -90,7 +90,7 @@ changes the object.
 .SH EXAMPLES
 .nf
 cjson doc = cjson_parse("{\\"b\\":1,\\"a\\":2}", NULL);
-cjson_dictionary_iter it;
+cjson_dictionary_iter_t it;
 for (bool ok = cjson_dictionary_first(doc, &it); ok;
      ok = cjson_dictionary_next(&it)) {
     printf("%s = %lld\\n", it.key, cjson_int_val(it.value));

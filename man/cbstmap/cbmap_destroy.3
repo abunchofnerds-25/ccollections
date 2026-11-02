@@ -13,6 +13,9 @@ cbmap_destroy(cbm);
 .nf
 Frees everything the BST map owns, its nodes, keys and values included,
 and then sets the map pointer to NULL.
+
+This is the name the type-inferred macro layer uses for cbstmap_destroy(3). It
+behaves the same way.
 .fi
 .SH PARAMETERS
 .nf
@@ -28,4 +31,5 @@ as a variable or an array element, so an expression with a side effect
 like handles[i++] destroys and clears exactly one element.
 .fi
 .SH "SEE ALSO"
-.BR cbmap_create (3)
+.BR cbstmap_destroy (3),
+.BR cbstmap_create (3)

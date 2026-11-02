@@ -75,35 +75,31 @@ static void dm_reset(void) {
 }
 
 /* Stubs that record their calls, with the library functions' signatures. */
-void __chmap_destroy(chmap h) { dm_record((uintptr_t)h); }
-void __cbmap_destroy(cbmap h) { dm_record((uintptr_t)h); }
-void __chttpclient_destroy(chttpcli h) { dm_record((uintptr_t)h); }
+void __chashmap_destroy(chmap h) { dm_record((uintptr_t)h); }
+void __cbstmap_destroy(cbmap h) { dm_record((uintptr_t)h); }
+void __chttpcli_destroy(chttpcli h) { dm_record((uintptr_t)h); }
 void __chttpsvr_destroy(chttpsvr h) { dm_record((uintptr_t)h); }
 void __cjson_destroy(cjson h) { dm_record((uintptr_t)h); }
 void __cyaml_destroy(cyaml h) { dm_record((uintptr_t)h); }
-void __clrucache_destroy(clru_cache h) { dm_record((uintptr_t)h); }
-void _ccol_mempool_destroy(ccol_mempool *h) { dm_record((uintptr_t)h); }
-void _ccol_r_mempool_destroy(ccol_r_mempool *h) { dm_record((uintptr_t)h); }
-void __ccol_circular_queue_destroy(ccol_circular_queue *h) {
-  dm_record((uintptr_t)h);
-}
-void __ccol_dynamic_queue_destroy(ccol_dynamic_queue *h) {
-  dm_record((uintptr_t)h);
-}
-void __ccol_channel_destroy(ccol_channel *h) { dm_record((uintptr_t)h); }
-void __ccol_event_loop_destroy(ccol_event_loop h) { dm_record((uintptr_t)h); }
-void __ctpool_destroy(ctpool h) { dm_record((uintptr_t)h); }
+void __clrucache_destroy(ccache h) { dm_record((uintptr_t)h); }
+void _cmempool_destroy(cmempool *h) { dm_record((uintptr_t)h); }
+void _crmempool_destroy(crmempool *h) { dm_record((uintptr_t)h); }
+void __ccircq_destroy(ccircq *h) { dm_record((uintptr_t)h); }
+void __cdynmq_destroy(cdynmq *h) { dm_record((uintptr_t)h); }
+void __cchan_destroy(cchan *h) { dm_record((uintptr_t)h); }
+void __ceventloop_destroy(ceventloop h) { dm_record((uintptr_t)h); }
+void __cthrpool_destroy(cthrpool h) { dm_record((uintptr_t)h); }
 void __cvector_destroy(cvec h) { dm_record((uintptr_t)h); }
 void __cstring_destroy(cstr h) { dm_record((uintptr_t)h); }
 
 /* We record the pool argument of a free_entry macro too, so a case can
  * check that the pool reached the call unchanged. */
 static uintptr_t dm_pool_seen;
-void _ccol_mempool_free_entry(ccol_mempool *mp, void *entry) {
+void _cmempool_free_entry(cmempool *mp, void *entry) {
   dm_pool_seen = (uintptr_t)mp;
   dm_record((uintptr_t)entry);
 }
-void _ccol_r_mempool_free_entry(ccol_r_mempool *rmp, void *entry) {
+void _crmempool_free_entry(crmempool *rmp, void *entry) {
   dm_pool_seen = (uintptr_t)rmp;
   dm_record((uintptr_t)entry);
 }
@@ -162,49 +158,47 @@ TEST(destroy_macros, cvec_destroy) { DM_CASE(cvec_destroy, cvec, NULL); }
 TEST(destroy_macros, cvector_destroy) { DM_CASE(cvector_destroy, cvec, NULL); }
 TEST(destroy_macros, cstr_destroy) { DM_CASE(cstr_destroy, cstr, NULL); }
 TEST(destroy_macros, cstring_destroy) { DM_CASE(cstring_destroy, cstr, NULL); }
-TEST(destroy_macros, chttpclient_destroy) {
-  DM_CASE(chttpclient_destroy, chttpcli, CHTTPCLI_NULL);
+TEST(destroy_macros, chttpcli_destroy) {
+  DM_CASE(chttpcli_destroy, chttpcli, CHTTPCLI_NULL);
 }
 TEST(destroy_macros, chttpsvr_destroy) {
   DM_CASE(chttpsvr_destroy, chttpsvr, CHTTPSVR_NULL);
 }
-TEST(destroy_macros, clru_destroy) {
-  DM_CASE(clru_destroy, clru_cache, CLRU_CACHE_NULL);
+TEST(destroy_macros, ccache_destroy) {
+  DM_CASE(ccache_destroy, ccache, CCACHE_NULL);
 }
-TEST(destroy_macros, ctpool_destroy) {
-  DM_CASE(ctpool_destroy, ctpool, CTPOOL_NULL);
+TEST(destroy_macros, cthrpool_destroy) {
+  DM_CASE(cthrpool_destroy, cthrpool, CTHRPOOL_NULL);
 }
-TEST(destroy_macros, ccol_event_loop_destroy) {
-  DM_CASE(ccol_event_loop_destroy, ccol_event_loop, CCOL_EVENT_LOOP_NULL);
+TEST(destroy_macros, ceventloop_destroy) {
+  DM_CASE(ceventloop_destroy, ceventloop, CEVENTLOOP_NULL);
 }
-TEST(destroy_macros, ccol_mempool_destroy) {
-  DM_CASE(ccol_mempool_destroy, ccol_mempool *, NULL);
+TEST(destroy_macros, cmempool_destroy) {
+  DM_CASE(cmempool_destroy, cmempool *, NULL);
 }
-TEST(destroy_macros, ccol_r_mempool_destroy) {
-  DM_CASE(ccol_r_mempool_destroy, ccol_r_mempool *, NULL);
+TEST(destroy_macros, crmempool_destroy) {
+  DM_CASE(crmempool_destroy, crmempool *, NULL);
 }
-TEST(destroy_macros, ccol_circular_queue_destroy) {
-  DM_CASE(ccol_circular_queue_destroy, ccol_circular_queue *, NULL);
+TEST(destroy_macros, ccircq_destroy) {
+  DM_CASE(ccircq_destroy, ccircq *, NULL);
 }
-TEST(destroy_macros, ccol_dynamic_queue_destroy) {
-  DM_CASE(ccol_dynamic_queue_destroy, ccol_dynamic_queue *, NULL);
+TEST(destroy_macros, cdynmq_destroy) {
+  DM_CASE(cdynmq_destroy, cdynmq *, NULL);
 }
-TEST(destroy_macros, ccol_channel_destroy) {
-  DM_CASE(ccol_channel_destroy, ccol_channel *, NULL);
-}
+TEST(destroy_macros, cchan_destroy) { DM_CASE(cchan_destroy, cchan *, NULL); }
 
 /* The pool of a free_entry call is an ordinary argument, so it reaches the
  * call once and unchanged. */
-static ccol_mempool *const dm_mp = (ccol_mempool *)DM_VAL(9);
-static ccol_r_mempool *const dm_rmp = (ccol_r_mempool *)DM_VAL(10);
-#define DM_FREE_ENTRY(e) ccol_mempool_free_entry(dm_mp, e)
-#define DM_R_FREE_ENTRY(e) ccol_r_mempool_free_entry(dm_rmp, e)
+static cmempool *const dm_mp = (cmempool *)DM_VAL(9);
+static crmempool *const dm_rmp = (crmempool *)DM_VAL(10);
+#define DM_FREE_ENTRY(e) cmempool_free_entry(dm_mp, e)
+#define DM_R_FREE_ENTRY(e) crmempool_free_entry(dm_rmp, e)
 
-TEST(destroy_macros, ccol_mempool_free_entry) {
+TEST(destroy_macros, cmempool_free_entry) {
   DM_CASE(DM_FREE_ENTRY, void *, NULL);
   REQUIRE_EQ(dm_pool_seen, (uintptr_t)dm_mp);
 }
-TEST(destroy_macros, ccol_r_mempool_free_entry) {
+TEST(destroy_macros, crmempool_free_entry) {
   DM_CASE(DM_R_FREE_ENTRY, void *, NULL);
   REQUIRE_EQ(dm_pool_seen, (uintptr_t)dm_rmp);
 }

@@ -3,7 +3,7 @@ INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 
 # Our sources, built with the strict flags and -Werror. chttpclient.c owns its
-# own static ccol_event_loop reactor, which lives in cthreadcomm.c, and it
+# own static ceventloop reactor, which lives in cthreadcomm.c, and it
 # uses ctls.c for TLS. clogger.c is here for chttpcli_set_engine_logger, and
 # cthreadpool.c comes in through the async engine's worker pool for DNS and
 # connect (g_client_dns_pool).
@@ -115,16 +115,16 @@ build_tsan:
 # die_after_fork=0 is for one test of this suite,
 # concurrent_double_destroy_is_fatal, which forks and then creates two NEW
 # pthreads in the child to race a double destroy. chttpclient's async engine
-# keeps one ccol_event_loop reactor alive for the whole suite, and that
+# keeps one ceventloop reactor alive for the whole suite, and that
 # reactor has many threads and covers the whole process, so the parent is
 # multi-threaded when it calls fork(). TSan's default, die_after_fork=1,
 # treats that as unsafe for a child that goes on to create threads, and with
 # it the child quietly exits the normal way and never reaches the
 # _ccol_fatal_err() and the SIGABRT the test is waiting for. Only a fork()
 # followed by new threads under TSan's safety net hits this. The child's
-# chttpclient_destroy logic is correct and has no race, under gcc and clang,
+# chttpcli_destroy logic is correct and has no race, under gcc and clang,
 # at -O0 and -O1, with TSan and without it. The test in tests/cthreadcomm
-# looks the same and needs no such option, because its own ccol_event_loop
+# looks the same and needs no such option, because its own ceventloop
 # instances go away between tests, so ITS OWN parent is single-threaded when
 # it forks.
 #

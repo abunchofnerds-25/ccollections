@@ -11,7 +11,7 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Sends every allocation of the shared ccol_event_loop reactor through
+Sends every allocation of the shared ceventloop reactor through
 the malloc, free, calloc and realloc that mp holds.  That covers the
 construction of the reactor and the record it keeps for each
 connection registration, and it works like the memory management

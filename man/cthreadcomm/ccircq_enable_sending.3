@@ -1,0 +1,49 @@
+.TH CCIRCQ_ENABLE_SENDING 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccircq_enable_sending \- turn on sends on a circular queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ccircq_enable_sending(ccircq *cq);
+.fi
+.SH DESCRIPTION
+.nf
+Clears the flag that ccircq_disable_sending() set, so the queue
+accepts sends again, and wakes every thread that is blocked waiting to
+send. A woken sender goes on as soon as the queue has room for its
+message.
+
+A new queue starts with sends on, so you only need this call to reopen
+a queue whose sends were turned off. Calling it on a queue whose sends
+are already on is harmless.
+
+It also wakes every write-direction waiter on the queue (a cselect()
+call, a cselect_timed() call or a ceventloop registration), and
+each of them scans again and sees the new state. While sends are off
+the queue is ready for the write direction whatever its message count
+(see ccircq_disable_sending(3)), but from this call on a full queue
+is not ready for writing until a receive frees a slot.
+.fi
+.SH PARAMETERS
+.nf
+cq   Circular queue that gets sends turned on
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       - Sends are on again
+ccol_invalid_args  - cq is NULL
+.fi
+.SH NOTES
+.nf
+Blocked senders are woken with a broadcast, so a sender can try again
+at once if the queue has free space. Receives are not affected, and the
+function is thread-safe.
+.fi
+.SH "SEE ALSO"
+.BR ccircq_disable_sending (3),
+.BR ccircq_send (3),
+.BR ccircq_try_send (3),
+.BR ccircq_timed_send (3)

@@ -24,7 +24,7 @@ a failure has to be handled instead of being fatal, use
 chmap_init_full(3) on a handle that is already declared.
 
 The map picks its implementation from the key and value types, as
-chmap_create_full(3) describes. A custom hashing procedure leaves that
+chashmap_create_full(3) describes. A custom hashing procedure leaves that
 choice alone, but a custom key equality procedure selects separate
 chaining.
 .fi
@@ -64,7 +64,7 @@ built-in comparison. It must agree with custom_hashing_proc, so two keys
 that it reports as equal must get the same hash. A key equality
 procedure without a hashing procedure makes the creation fail, and this
 macro then stops the program. A struct key with padding bytes needs both
-procedures; see chmap_create_full(3).
+procedures; see chashmap_create_full(3).
 .fi
 .SH RETURN VALUE
 .nf
@@ -97,5 +97,5 @@ chmap_destroy(cache);
 .BR chmap_construct_ch (3),
 .BR chmap_construct_full_scoped (3),
 .BR chmap_init_full (3),
-.BR chmap_create_full (3),
+.BR chashmap_create_full (3),
 .BR chmap_destroy (3)

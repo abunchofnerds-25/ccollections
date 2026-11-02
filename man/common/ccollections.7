@@ -29,10 +29,19 @@ function differs from them.
 Each container module comes in two layers. The type-inferred macros,
 such as chmap_insert(3) and cvec_push(3), take values of the declared
 types and call _ccol_fatal_err() when an operation fails. Below them are
-the raw functions, such as chmap_insert_elem(3), which take cmap_pair
+the raw functions, such as chashmap_insert_elem(3), which take cmap_pair
 arguments and return a ccol_retval_t. A raw function never stops the
 process on a failure that it can report, so it is the layer to use when
 a failure is an expected result that you handle yourself.
+
+The two layers are named apart. A typed macro carries the short name of
+the handle (cvec_, cstr_, chmap_, cbmap_, ccache_), and a function, or a
+macro of the raw layer such as chashmap_destroy(3), carries the name of
+the module (cvector_, cstring_, chashmap_, cbstmap_, clrucache_). For
+the raw calls a typed program needs as well, the typed layer has short
+aliases with the same behaviour: cvec_size(3) for cvector_elem_count(3),
+chmap_reset(3) for chashmap_reset(3), ccache_destroy(3) for
+clrucache_destroy(3), and so on.
 .fi
 .SS "Return codes"
 .nf
@@ -120,9 +129,9 @@ the object keeps its own copy of the struct, which the page of its
 constructor tells you. clrucache, cjson and cyaml keep a copy, so with
 them you can release the struct once the creating call has returned.
 
-The exception is a ccol_mempool or ccol_r_mempool that threads share.
-Its allocator can run after ccol_mempool_destroy() returns, and even
-after main() returns; see ccol_mempool_destroy(3).
+The exception is a cmempool or crmempool that threads share.
+Its allocator can run after cmempool_destroy() returns, and even
+after main() returns; see cmempool_destroy(3).
 
 The functions of a table are called from the thread that does the
 operation, so a table for a thread-safe object must hold thread-safe
@@ -167,14 +176,14 @@ CCOL_FORK_SAFETY_REQUIRED (default 1)
     calls fork() is safe with either setting, and so is one that calls
     fork() only in the two supported patterns below.
 
-CCOL_MEMPOOL_COMPACT_LAYOUT (default 0)
+CMEMPOOL_COMPACT_LAYOUT (default 0)
     Selects the compact entry layout of cmempool. A translation unit
     that declares a buffer with
-    CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3) must use the same
+    CMEMPOOL_DECLARE_PREALLOCATED_BUFFER(3) must use the same
     setting as the library, or the link fails with an undefined
     reference. See that page.
 
-CCOL_MEMPOOL_DYNAMIC_TLS
+CMEMPOOL_DYNAMIC_TLS
     With 1, the per-thread fast paths of the library use the general
     thread-local storage model, so dlopen(3) of the library always
     succeeds. With 0 they use the initial-exec model. If the build
@@ -217,9 +226,9 @@ No internal locks (put a lock around a shared instance yourself):
   cvector, chashmap, cbstmap, cstring, cjson, cyaml
 
 Internal synchronisation (several threads can call at the same time):
-  ccol_mempool, ccol_r_mempool (unless created single-threaded),
-  ccol_circular_queue, ccol_dynamic_queue, ccol_channel,
-  ccol_event_loop, clrucache, clogger, cthreadpool, chttpclient,
+  cmempool, crmempool (unless created single-threaded),
+  ccircq, cdynmq, cchan,
+  ceventloop, clrucache, clogger, cthreadpool, chttpclient,
   chttpserver
 
 Separate objects of a module without locks share no state, so two
@@ -244,8 +253,8 @@ int main(void) {
   const char *name = "gopher";
   cmap_pair key = { (void *)name, strlen(name) + 1 };
   int port;
-  ccol_retval_t rv = chmap_get_elem_copy(ports, &key, &port,
-                                         sizeof(port));
+  ccol_retval_t rv = chashmap_get_elem_copy(ports, &key, &port,
+                                            sizeof(port));
   if (rv != ccol_success)
     printf("%s: %s\en", name, ccol_retval_to_str(rv));
 
@@ -259,8 +268,8 @@ int main(void) {
 .BR ccol_scoped_ptr_mp (3),
 .BR ccol_scoped_ptr_release (3),
 .BR ccol_fixed_width_data_type_size (3),
-.BR ccol_mempool_destroy (3),
-.BR CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER (3),
+.BR cmempool_destroy (3),
+.BR CMEMPOOL_DECLARE_PREALLOCATED_BUFFER (3),
 .BR ccol_determine_ccol_data_type (3),
 .BR citerators (7),
 .BR chttp (7),

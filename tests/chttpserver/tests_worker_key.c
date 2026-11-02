@@ -67,7 +67,7 @@ __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
 /* port.                                                                      */
 /* ========================================================================== */
 
-static void _hello(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+static void _hello(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_write_str(resp, "hello");
@@ -229,7 +229,7 @@ TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
     snprintf(host_buf, sizeof(host_buf), "unix://%s", sock_path);
     chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = host_buf;
-    chttpsvr_router *api =
+    chttpsvr_router_t *api =
         srv != CHTTPSVR_NULL ? chttpsvr_subrouter(srv, "/api") : NULL;
     if (api &&
         chttpsvr_router_on(api, CHTTP_GET, "/x", _hello, NULL) ==

@@ -2,7 +2,7 @@
 # Compile-time probe for the rule behind every cmap_pair accessor that the
 # map hands out: the key_pair/val_pair an iterator carries, and the stored
 # char* that cbmap_get_ptr() reaches for a map with string values. It also
-# pins the signature of cbmap_get_elem_ref(), which fills a cmap_pair that the
+# pins the signature of cbstmap_get_elem_ref(), which fills a cmap_pair that the
 # caller owns and hands out no accessor.
 #
 # The map keeps one {ptr, size} accessor per entry and gives its address out
@@ -137,7 +137,7 @@ EOF
 }
 
 # -------------------------------------------------------------------------
-# cbmap_get_elem_ref()
+# cbstmap_get_elem_ref()
 #
 # The function fills a cmap_pair that belongs to the caller. That pair is the
 # caller's own copy, so changing its fields changes nothing in the map, and
@@ -148,11 +148,11 @@ probe 'the address of a const cmap_pair * out-parameter' reject \
 "incompatible pointer type|discards qualifiers" '
   const cmap_pair *vp = NULL;
   (void)vp;
-  (void)cbmap_get_elem_ref(m, kp, &vp);'
+  (void)cbstmap_get_elem_ref(m, kp, &vp);'
 
 probe 'reading the filled pair and its bytes' accept - '
   cmap_pair vp;
-  if (cbmap_get_elem_ref(m, kp, &vp) == ccol_success) {
+  if (cbstmap_get_elem_ref(m, kp, &vp) == ccol_success) {
     unsigned char first = *(const unsigned char *)vp.ptr;
     size_t stored = vp.size;
     (void)first;
@@ -161,14 +161,14 @@ probe 'reading the filled pair and its bytes' accept - '
 
 probe 'writing the bytes the filled pair describes' accept - '
   cmap_pair vp;
-  if (cbmap_get_elem_ref(m, kp, &vp) == ccol_success) {
+  if (cbstmap_get_elem_ref(m, kp, &vp) == ccol_success) {
     memset(vp.ptr, 0, vp.size);
     *(unsigned char *)vp.ptr = 7u;
   }'
 
 probe 'changing the fields of the caller own pair' accept - '
   cmap_pair vp;
-  if (cbmap_get_elem_ref(m, kp, &vp) == ccol_success) {
+  if (cbstmap_get_elem_ref(m, kp, &vp) == ccol_success) {
     vp.ptr = replacement;
     vp.size = 1;
   }'
@@ -193,9 +193,9 @@ probe 'in-place update through cbmap_get_ptr' accept - '
   if (slot) *slot = 2;'
 
 # -------------------------------------------------------------------------
-# cbstmap has no cbmap_destroy_with_dtor(). Only chashmap offers an
+# cbstmap has no cbstmap_destroy_with_dtor(). Only chashmap offers an
 # allocation-free destroy-with-callback walk, so there is nothing here like
-# the accessor rule of chmap_destroy_with_dtor() to check. The two modules are
+# the accessor rule of chashmap_destroy_with_dtor() to check. The two modules are
 # parallel everywhere else, which is why we write the difference down instead
 # of leaving it for somebody to find and "harmonise". If cbstmap ever gets
 # such a function, its callback takes a const cmap_pair * and the three cases

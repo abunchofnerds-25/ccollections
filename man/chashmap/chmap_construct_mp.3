@@ -45,7 +45,7 @@ ccol_memmgmt_procs_t doesn't need to outlive the call, but the
 procedures themselves must stay callable for the whole life of the map
 Everything the map allocates later, its bucket array included, comes
 from these procedures, and everything it frees goes back to them
-Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
+Uses CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
 chmap_destroy(3) destroys the map. The companion type variables live in
 the scope of the handle, so a function that receives the handle needs
 chmap_redeclare(3) inside it
@@ -75,5 +75,5 @@ chmap_destroy(scores);
 .BR chmap_init_mp (3),
 .BR chmap_declare (3),
 .BR chmap_redeclare (3),
-.BR chmap_create_full (3),
+.BR chashmap_create_full (3),
 .BR chmap_destroy (3)

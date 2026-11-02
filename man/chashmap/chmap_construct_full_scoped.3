@@ -30,7 +30,7 @@ three arguments can be NULL to get the matching default, so this one
 macro covers every combination.
 
 The map picks its implementation from key_t and val_t, as
-chmap_create_full(3) describes. A custom hashing procedure leaves that
+chashmap_create_full(3) describes. A custom hashing procedure leaves that
 choice alone, but a custom key equality procedure selects separate
 chaining.
 .fi
@@ -74,7 +74,7 @@ built-in comparison. It must agree with custom_hashing_proc, so two keys
 that it reports as equal must get the same hash. A key equality
 procedure without a hashing procedure makes the creation fail, and this
 macro then stops the program. A struct key with padding bytes needs both
-procedures; see chmap_create_full(3).
+procedures; see chashmap_create_full(3).
 .fi
 .SH NOTES
 .nf
@@ -87,7 +87,7 @@ non-NULL. The macro copies the procedures into the map, and like the
 hashing and key equality procedures they must stay callable for the
 whole life of the map, which here ends at the closing brace of the
 enclosing scope
-Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
+Uses CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
 Leaving the scope destroys the map and clears the handle, so an explicit
 chmap_destroy(3) earlier in the scope is fine as well
 The companion type variables live in the scope of the handle, so a
@@ -129,5 +129,5 @@ void tally(char **words, size_t n) {
 .BR chmap_declare_scoped (3),
 .BR chmap_init_full (3),
 .BR chmap_redeclare (3),
-.BR chmap_create_full (3),
+.BR chashmap_create_full (3),
 .BR chmap_destroy (3)

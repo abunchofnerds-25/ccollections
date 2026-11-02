@@ -11,7 +11,7 @@ value_ptr = cbmap_get_ptr(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for cbmap_get_elem_ref() that returns a pointer to
+Type-inferred wrapper for cbstmap_get_elem_ref() that returns a pointer to
 the value, or NULL when the key is not in the map. cbmap_get() stops the
 program in that case and this macro doesn't.
 
@@ -73,5 +73,5 @@ cbmap_destroy(names);
 .fi
 .SH "SEE ALSO"
 .BR cbmap_get (3),
-.BR cbmap_get_elem_ref (3),
+.BR cbstmap_get_elem_ref (3),
 .BR cbmap_insert (3)

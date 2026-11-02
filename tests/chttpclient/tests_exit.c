@@ -63,6 +63,7 @@ SOFTWARE.
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_accept.h>
 #include <test_coverage.h>
 #include <test_signals.h>
 #include <test_threads.h>
@@ -158,7 +159,7 @@ static void _server_main(int lfd) {
       SSL_CTX_use_PrivateKey_file(ctx, g_key, SSL_FILETYPE_PEM) != 1)
     test_child_exit(1);
   for (;;) {
-    int fd = accept(lfd, NULL, NULL);
+    int fd = test_accept(lfd);
     if (fd < 0) {
       /* A failed accept is passing (a signal, a client that reset in the
          queue, a full descriptor table), and a server that left on one would

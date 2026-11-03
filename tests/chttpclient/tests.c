@@ -68,6 +68,7 @@ SOFTWARE.
 #include <test_fds.h>
 #include <test_sanitizer.h>
 #include <test_signals.h>
+#include <test_wait.h>
 #include <unistd.h>
 
 TAU_MAIN()
@@ -12736,6 +12737,7 @@ TEST(chttpcli_handle_lifecycle, handle_publish_failure_rolls_the_slot_back) {
 }
 
 TEST(chttpcli_handle_lifecycle, sequential_double_destroy_is_fatal) {
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   pid_t pid = fork();
   if (pid == 0) {
     test_child_no_core();
@@ -12761,7 +12763,7 @@ TEST(chttpcli_handle_lifecycle, sequential_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(test_wait_child_bounded(pid, 30000, &status));
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -12781,6 +12783,7 @@ static void *concurrent_destroy_thread(void *arg) {
  * the slot table's generation check it would be a real heap double free, which
  * valgrind reports as one. */
 TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   pid_t pid = fork();
   if (pid == 0) {
     test_child_no_core();
@@ -12817,7 +12820,7 @@ TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(test_wait_child_bounded(pid, 30000, &status));
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -20350,18 +20353,6 @@ TEST(async_idle_pool, a_stray_byte_that_the_idle_dispatch_took_still_evicts) {
 /*         REDIRECT RESOLUTION, GROWTH, SELF-DESTROY AND STALLED HOPS         */
 /* ========================================================================== */
 
-/* A fork() child that doesn't end within ms is killed and the result is false.
- * *status holds the child's wait status either way. */
-static bool wait_child_bounded(pid_t pid, int ms, int *status) {
-  for (int waited = 0; waited < ms; waited += 10) {
-    if (waitpid(pid, status, WNOHANG) == pid) return true;
-    usleep(10000);
-  }
-  kill(pid, SIGKILL);
-  waitpid(pid, status, 0);
-  return false;
-}
-
 /* Fails exactly the allocation at index g_resolve_fail_at among the allocations
  * a redirect resolution makes, on any thread, and passes every other allocation
  * to the real allocator. */
@@ -20554,7 +20545,7 @@ static bool growth_from_cap_fails_cleanly(int which) {
     return false;
   }
   int status = 0;
-  bool ended = wait_child_bounded(pid, 10000, &status);
+  bool ended = test_wait_child_bounded(pid, 10000, &status);
   unsigned char ok = 0;
   ssize_t r = ended ? read(fds[0], &ok, 1) : 0;
   close(fds[0]);
@@ -20622,7 +20613,7 @@ static bool self_destroy_aborts(int tier, char *msg, size_t msg_size) {
     return false;
   }
   int status = 0;
-  bool ended = wait_child_bounded(pid, 30000, &status);
+  bool ended = test_wait_child_bounded(pid, 30000, &status);
   size_t got = 0;
   int fl = fcntl(fds[0], F_GETFL);
   fcntl(fds[0], F_SETFL, fl | O_NONBLOCK);
@@ -20642,6 +20633,7 @@ static bool self_destroy_aborts(int tier, char *msg, size_t msg_size) {
  * Without the check the destroy waits for the request that runs
  * it, and the child never ends. */
 TEST(chttpcli_handle_lifecycle, destroy_from_own_write_fn_is_fatal) {
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   for (int tier = 0; tier < 3; tier++) {
     char msg[1024];
     bool aborted = self_destroy_aborts(tier, msg, sizeof(msg));
@@ -21843,7 +21835,7 @@ static int other_destroy_status(int tier, char *msg, size_t msg_size) {
     return -1;
   }
   int status = 0;
-  bool ended = wait_child_bounded(pid, 10000, &status);
+  bool ended = test_wait_child_bounded(pid, 10000, &status);
   size_t got = 0;
   int fl = fcntl(fds[0], F_GETFL);
   fcntl(fds[0], F_SETFL, fl | O_NONBLOCK);

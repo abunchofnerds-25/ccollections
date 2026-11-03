@@ -68,6 +68,7 @@ SOFTWARE.
 #include <test_coverage.h>
 #include <test_sanitizer.h>
 #include <test_signals.h>
+#include <test_wait.h>
 
 TAU_MAIN()
 
@@ -11362,6 +11363,7 @@ TEST(chttpsvr_handle_lifecycle, a_destroyed_server_keeps_no_root_router) {
 
 TEST(chttpsvr_handle_lifecycle, sequential_double_destroy_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   FORK_TEST_SCOPE();
   pid_t pid = fork();
   if (pid == 0) {
@@ -11385,13 +11387,9 @@ TEST(chttpsvr_handle_lifecycle, sequential_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  /* Check waitpid's return value before trusting status. An EINTR failure, or
-   * any other one, leaves status at its initial 0, and without this check we
-   * would quietly read that as "the child exited normally with status 0" when
-   * waitpid never actually reported this child's real outcome, which gives a
-   * confusing WIFSIGNALED failure instead of a clear one. Every later, more
-   * elaborate fork test below makes the same explicit `!= pid` check. */
-  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+  /* False when the child still ran after 30 s (it's killed then) or waitpid()
+   * failed; either way status doesn't say how the child ended. */
+  REQUIRE_TRUE(test_wait_child_bounded(pid, 30000, &status));
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -11412,6 +11410,7 @@ static void *concurrent_svr_destroy_thread(void *arg) {
  * is there to turn into a failure the library detects and reports loudly. */
 TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   FORK_TEST_SCOPE();
   pid_t pid = fork();
   if (pid == 0) {
@@ -11436,13 +11435,9 @@ TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  /* Check waitpid's return value before trusting status. An EINTR failure, or
-   * any other one, leaves status at its initial 0, and without this check we
-   * would quietly read that as "the child exited normally with status 0" when
-   * waitpid never actually reported this child's real outcome, which gives a
-   * confusing WIFSIGNALED failure instead of a clear one. Every later, more
-   * elaborate fork test below makes the same explicit `!= pid` check. */
-  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+  /* False when the child still ran after 30 s (it's killed then) or waitpid()
+   * failed; either way status doesn't say how the child ended. */
+  REQUIRE_TRUE(test_wait_child_bounded(pid, 30000, &status));
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -11471,6 +11466,7 @@ TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
  * driving exactly the same comparison that __chttpsvr_destroy itself makes. */
 TEST(chttpsvr_handle_lifecycle, destroy_from_within_own_handler_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   FORK_TEST_SCOPE();
   pid_t pid = fork();
   if (pid == 0) {
@@ -11490,13 +11486,9 @@ TEST(chttpsvr_handle_lifecycle, destroy_from_within_own_handler_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  /* Check waitpid's return value before trusting status. An EINTR failure, or
-   * any other one, leaves status at its initial 0, and without this check we
-   * would quietly read that as "the child exited normally with status 0" when
-   * waitpid never actually reported this child's real outcome, which gives a
-   * confusing WIFSIGNALED failure instead of a clear one. Every later, more
-   * elaborate fork test below makes the same explicit `!= pid` check. */
-  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+  /* False when the child still ran after 30 s (it's killed then) or waitpid()
+   * failed; either way status doesn't say how the child ended. */
+  REQUIRE_TRUE(test_wait_child_bounded(pid, 30000, &status));
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -11518,6 +11510,7 @@ TEST(chttpsvr_handle_lifecycle, destroy_from_within_own_handler_is_fatal) {
  * and this test needs no real dispatch and no running reactor. */
 TEST(chttpsvr_handle_lifecycle, engine_wait_from_within_own_handler_is_fatal) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   FORK_TEST_SCOPE();
   pid_t pid = fork();
   if (pid == 0) {
@@ -11537,13 +11530,9 @@ TEST(chttpsvr_handle_lifecycle, engine_wait_from_within_own_handler_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  /* Check waitpid's return value before trusting status. An EINTR failure, or
-   * any other one, leaves status at its initial 0, and without this check we
-   * would quietly read that as "the child exited normally with status 0" when
-   * waitpid never actually reported this child's real outcome, which gives a
-   * confusing WIFSIGNALED failure instead of a clear one. Every later, more
-   * elaborate fork test below makes the same explicit `!= pid` check. */
-  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+  /* False when the child still ran after 30 s (it's killed then) or waitpid()
+   * failed; either way status doesn't say how the child ended. */
+  REQUIRE_TRUE(test_wait_child_bounded(pid, 30000, &status));
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }

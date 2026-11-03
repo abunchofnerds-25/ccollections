@@ -2890,6 +2890,7 @@ TEST_F(engine_stop_fixture, a_child_forked_during_a_teardown_serves_requests) {
 TEST_F(engine_stop_fixture, a_start_fails_when_the_stop_watcher_cannot_start) {
   (void)tau;
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
   pid_t pid = fork();
@@ -2954,6 +2955,7 @@ TEST_F(engine_stop_fixture, a_start_fails_when_the_stop_watcher_cannot_start) {
 TEST_F(engine_stop_fixture, a_start_fails_when_the_idle_sweep_cannot_start) {
   (void)tau;
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
   pid_t pid = fork();
@@ -3027,6 +3029,7 @@ TEST_F(engine_stop_fixture, a_start_fails_when_the_idle_sweep_cannot_start) {
 TEST_F(engine_stop_fixture, a_destroy_whose_reaper_runs_inline_returns) {
   (void)tau;
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
   pid_t pid = fork();

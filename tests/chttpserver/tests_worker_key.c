@@ -200,6 +200,7 @@ enum {
    server's shells would stay allocated and the logger would stay open. */
 TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
   pid_t pid = fork();

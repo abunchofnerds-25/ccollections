@@ -104,4 +104,26 @@ SOFTWARE.
   } while (0)
 #endif
 
+/* Put this first in a test that forks while other threads of the library run
+ * (a server, an event loop, a pool or an async logger that an earlier test or
+ * the suite's setup left running) and then calls the library in the child.
+ * The fork handlers of the library hold its locks across fork(), so the child
+ * never inherits one that another thread held at that moment. A build with
+ * -DCCOL_FORK_SAFETY_REQUIRED=0 has no such handlers, and that child can wait
+ * for ever on a lock that nobody in it will release (doc/concurrency.md). Such
+ * a build skips the test; every other build runs it. */
+#if defined(CCOL_FORK_SAFETY_REQUIRED) && CCOL_FORK_SAFETY_REQUIRED == 0
+#define TEST_SKIP_FORK_WITHOUT_FORK_SAFETY()                                \
+  do {                                                                      \
+    fprintf(stderr,                                                         \
+            "SKIP: without the fork handlers this fork can inherit a held " \
+            "lock\n");                                                      \
+    return;                                                                 \
+  } while (0)
+#else
+#define TEST_SKIP_FORK_WITHOUT_FORK_SAFETY() \
+  do {                                       \
+  } while (0)
+#endif
+
 #endif /* CCOL_TESTS_TEST_SANITIZER_H */

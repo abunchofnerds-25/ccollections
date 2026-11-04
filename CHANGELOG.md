@@ -9,7 +9,7 @@ Entries are grouped by the kind of change in this order: `Added`, `Changed`,
 that changes the Application Binary Interface (ABI) names the ABI version it
 needed.
 
-## 1.0.0 - unreleased
+## 1.0.0 - Released on 2026 Oct 03
 
 This is the first release with a stable, supported interface. There is no
 earlier release to compare with, so the text below describes what `1.0.0`

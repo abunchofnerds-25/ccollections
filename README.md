@@ -7,7 +7,7 @@
 
 **C Collections** is a C library with the pieces that other languages put in their standard library and C doesn't have: vectors, hash maps, ordered maps, strings, memory pools, thread-safe queues, a thread pool, a structured logger, JSON and YAML, and an HTTP client and server.
 
-If you have used `vector` and `unordered_map` in C++, `ArrayList` and `HashMap` in Java or `list` and `dict` in Python, the containers will look familiar. They are plain C though, and the compiler checks your element types.
+If you have used `vector` and `unordered_map` in C++, `ArrayList` and `HashMap` in Java or `list` and `dict` in Python, the containers will look familiar. They are C though, and the compiler deduces your element types in the relevant macros for you automatically.
 
 ```c
 #include <ccollections/chashmap.h>
@@ -61,7 +61,7 @@ no carol
 bob is 29
 ```
 
-You don't need a code generator or any `void *` casts, and there is no runtime hiding behind it. It's the headers, one library and a C11 compiler.
+You don't need a code generator or any `void *` casts, and there is no runtime hiding behind it. It's the headers, one library and a C11 compatible version of Clang or GCC (MSVC is not suppoerted).
 
 ---
 
@@ -116,8 +116,6 @@ Each module has a guide with examples, so you can start with the one you need.
 | `cyaml` | Parse, edit and write YAML 1.2 | [doc/cyaml.md](doc/cyaml.md) |
 | `chttpclient` | An HTTP/1.1 client with TLS, keep-alive and three call styles | [doc/chttpclient.md](doc/chttpclient.md) |
 | `chttpserver` | An HTTP/1.1 server with routes, middleware, streams and TLS | [doc/chttpserver.md](doc/chttpserver.md) |
-
-The modules don't depend on each other, so you only include the headers you use.
 
 ---
 

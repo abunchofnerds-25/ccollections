@@ -384,11 +384,11 @@ jobs:
     # OpenSSL 1.1.1, as Debian 11 ships them. Every other Linux job builds with
     # a newer GCC and Clang and with OpenSSL 3, so without this job a call that
     # only OpenSSL 3 has, or a construct that only a newer compiler accepts,
-    # would pass CI. Debian 11 has left the regular mirrors and
-    # archive.debian.org lists packages that its pool doesn't hold, so apt reads
-    # the snapshot.debian.org lines that the image itself carries (commented
-    # out). They name the date the image was built, so they always match its
-    # installed packages.
+    # would pass CI. Debian 11 has left the regular mirrors (their
+    # bullseye-security misses the current updates), so apt reads Debian's own
+    # archive.debian.org, which keeps every package of the release. It doesn't
+    # use snapshot.debian.org: that service answers with 503 and 504 for hours
+    # at a time.
     container: debian:bullseye
     timeout-minutes: 120
     steps:
@@ -397,9 +397,11 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
-          sed -n 's/^# deb /deb [check-valid-until=no] /p' /etc/apt/sources.list > /tmp/sources.list
-          test -s /tmp/sources.list
-          mv /tmp/sources.list /etc/apt/sources.list
+          printf '%s\n' \
+            'deb http://archive.debian.org/debian bullseye main' \
+            'deb http://archive.debian.org/debian bullseye-updates main' \
+            'deb http://archive.debian.org/debian-security bullseye-security main' \
+            > /etc/apt/sources.list
           rm -f /etc/apt/sources.list.d/*
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libssl-dev zlib1g-dev pkg-config locales git clang-11

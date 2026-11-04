@@ -61,7 +61,7 @@ no carol
 bob is 29
 ```
 
-You don't need a code generator or any `void *` casts, and there is no runtime hiding behind it. It's the headers, one library and a C11 compatible version of Clang or GCC (MSVC is not suppoerted).
+You don't need a code generator or any `void *` casts, and there is no runtime hiding behind it. It's the headers, one library and a C11 compatible version of Clang or GCC (MSVC is not supported).
 
 ---
 

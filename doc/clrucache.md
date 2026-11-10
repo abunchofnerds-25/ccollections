@@ -391,7 +391,7 @@ two steps, so you can create the cache later in a function for example.
 `ccache_construct_scoped` and `ccache_declare_scoped` destroy the cache by
 themselves when the variable goes out of scope.
 
-The macros stop the program through `_ccol_fatal_err()` if creation fails.
+The macros stop the program through `ccol__fatal_err()` if creation fails.
 If you want to handle that failure yourself, or give the cache a custom
 allocator, call `clrucache_create_full()` and then `ccache_redeclare` on the
 handle:

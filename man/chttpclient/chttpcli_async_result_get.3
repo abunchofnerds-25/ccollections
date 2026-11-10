@@ -7,12 +7,12 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-chttpcli_async_result_t *chttpcli_async_result_get(cthrpool_future_t *f);
+chttpcli_async_result *chttpcli_async_result_get(cthrpool_future *f);
 .fi
 .SH DESCRIPTION
 .nf
 This is a thin wrapper over cthrpool_future_get that casts its void*
-result to chttpcli_async_result_t*. As with cthrpool_future_get, you can
+result to chttpcli_async_result*. As with cthrpool_future_get, you can
 call it more than once on the same future: every later call returns the
 same result pointer, which the future owns until it is freed.
 

@@ -22,7 +22,7 @@ The API has two layers:
     the value type with the handle and convert each argument to them.
   - The raw functions clrucache_create_full(3), clrucache_get_full(3)
     and clrucache_set_full(3) take each key and each value as a
-    cmap_pair and return a ccol_retval_t.
+    cmap_pair and return a ccol_retval.
 ccache_destroy(3), ccache_size(3) and ccache_capacity(3) are the typed
 names of clrucache_destroy(3), clrucache_size(3) and
 clrucache_capacity(3).
@@ -58,7 +58,7 @@ copy too.
 
 A remote getter allocates the value it fetches with the cache's
 allocator, and the cache takes ownership of it. The cache keeps its
-own copy of the ccol_memmgmt_procs_t struct, so the caller can release
+own copy of the ccol_memmgmt_procs struct, so the caller can release
 the struct once the create returns, but the functions it names must
 stay callable until the cache is destroyed.
 

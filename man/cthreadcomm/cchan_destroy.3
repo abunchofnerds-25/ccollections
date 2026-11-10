@@ -55,7 +55,7 @@ cselect_timed() call that watches the channel return.
 Do not call this from inside a ceventloop callback that dispatches
 one of the directions of this cchan, because the destroy would
 wait for that very callback. It is a caller error, and the program
-stops through _ccol_fatal_err().
+stops through ccol__fatal_err().
 
 Do not hold an application lock across this call when one of those
 callbacks takes the same lock: the destroy waits for the callback while

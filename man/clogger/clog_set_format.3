@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clogger.h>
 
-ccol_retval_t clog_set_format(clog logger, clog_format_t fmt);
+ccol_retval clog_set_format(clog logger, clog_format fmt);
 .fi
 .SH DESCRIPTION
 .nf
@@ -63,7 +63,7 @@ There are three formats.
       <PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol ...] MSG\en
 
       PRI        = (facility * 8) + RFC 5424 severity (mapped from
-                   clog_level_t: TRACE=7, DEBUG=7, INFO=6, WARN=4,
+                   clog_level: TRACE=7, DEBUG=7, INFO=6, WARN=4,
                    ERROR=3, ALERT=1, FATAL=0)
       TIMESTAMP  = ISO 8601 UTC (same format as logfmt/JSON)
       HOSTNAME   = the result of gethostname(2).  The library keeps
@@ -129,7 +129,7 @@ fmt     CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG.
 .SH RETURN VALUE
 .nf
 ccol_success       The format is set.
-ccol_invalid_args  clog_format_t does not name fmt (such as 9), or fmt
+ccol_invalid_args  clog_format does not name fmt (such as 9), or fmt
                    is CLOG_FMT_SYSLOG and the logger sits on a file.
                    The format stays as it is, and clog_get_format(3)
                    keeps reporting it.

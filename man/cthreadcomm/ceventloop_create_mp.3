@@ -9,7 +9,7 @@ C Collections (libccollections, \-lccollections)
 
 ceventloop ceventloop_create_mp(size_t max_events_per_wait,
                         size_t num_lock_stripes, size_t num_reactor_threads,
-                        ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
+                        ccol_memmgmt_procs *mmgmt_procs, char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
@@ -48,7 +48,7 @@ dispatch of the same registration collected at the same moment. The
 same design also gives the caller an identity token, described in
 ceventloop_reg_generation(3).
 
-A registration is built from the same cselectable_t type that
+A registration is built from the same cselectable type that
 cselect uses, with the builders cselectable_fd,
 ccircq_selectable, cdynmq_selectable and
 cchan_selectable. Like cselect, ceventloop never does

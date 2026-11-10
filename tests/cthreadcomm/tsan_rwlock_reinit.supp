@@ -3,8 +3,8 @@
 # The child of fork() initializes event_loop_slot_table.rwlock again instead
 # of unlocking it. glibc's rwlock records the thread ID of its writer and the
 # one thread of the child has a new ID, so a plain unlock there releases
-# nothing (see _cthreadcomm_atfork_release_impl in src/cthreadcomm.c). The
-# init itself gives no report, because _ccol_rw_lock_reinit_in_child_impl()
+# nothing (see cthreadcomm_atfork_release_impl in src/cthreadcomm.c). The
+# init itself gives no report, because ccol__rw_lock_reinit_in_child_impl()
 # of src/common.c tells ThreadSanitizer that the lock is released before it
 # initializes it again.
 #

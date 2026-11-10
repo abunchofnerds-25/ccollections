@@ -22,16 +22,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe that every public macro of this header nests inside
- * the argument of another public macro, and inside its own argument, under
- * -Wshadow -Werror. Each expansion of a value macro names its temporaries
- * uniquely, so a nested expansion never declares a local that hides one of
- * the outer expansion, and without that each nesting below would be a
- * -Wshadow error in a caller's build. The Makefile only compiles this file
- * with -fsyntax-only, nothing here runs. */
+// Compile-time probe: every public macro of this header nests inside the
+// argument of another public macro, and inside its own, under -Wshadow -Werror.
+// Each expansion names its temporaries uniquely, so a nested expansion never
+// hides a local of the outer one. The Makefile compiles this file with
+// -fsyntax-only; nothing here runs.
 
 #include <cstring.h>
 
+// Expands the nested macros so the compiler checks them; it is never called.
 void cstr_nesting_probe(void);
 void cstr_nesting_probe(void) {
   cstr_construct(s, "hello");

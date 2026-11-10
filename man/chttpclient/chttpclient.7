@@ -12,9 +12,9 @@ C Collections (libccollections, \-lccollections)
 chttpclient sends HTTP/1.1 requests and reads their responses, over
 plain TCP, TLS or a Unix domain socket. chttpclient.h includes chttp.h,
 which holds the types that the client shares with the server:
-  - chttp_method_t.
-  - chttp_request_body_t and its CHTTP_*_BODY macros.
-  - chttp_tls_config_t.
+  - chttp_method.
+  - chttp_request_body and its CHTTP_*_BODY macros.
+  - chttp_tls_config.
   - The CHTTP_STATUS_* constants.
   - The base64 helpers and the Basic auth helpers.
 
@@ -73,7 +73,7 @@ chttpcli_set_request_timeout(3).
 .fi
 .SS Requests
 .nf
-A chttp_request_t holds a method, a URL, a body and a set of headers.
+A chttp_request holds a method, a URL, a body and a set of headers.
 chttp_request_create and chttp_request_create_mp copy the URL and the
 body, so the caller can free its own buffers immediately. The method,
 expect_continue and prevent_tls_downgrade_on_redirect fields are public
@@ -91,7 +91,7 @@ Authorization header just as it does everywhere else.
 .fi
 .SS Responses
 .nf
-chttpcli_response_t has four public fields:
+chttpcli_response has four public fields:
 
   status_code  the HTTP status of the final response.
   body         a heap buffer that ends with a NUL, or NULL.
@@ -126,7 +126,7 @@ the same time, and a caller over that cap waits for a slot.
 
 Tier 2 is chttpcli_do_async and chttpcli_do_async_streaming. The
 request goes to a shared reactor engine and the call returns a
-cthrpool_future_t at once; chttpcli_async_result_get waits for the
+cthrpool_future at once; chttpcli_async_result_get waits for the
 result.
 
 Tier 3 is chttpcli_do_pooled and chttpcli_do_pooled_streaming.
@@ -286,7 +286,7 @@ same handle are a fatal error, so the application must serialize the
 destroy, and the destroy must be the last thing any thread does with
 that handle.
 
-A chttp_request_t and a chttpcli_response_t have no lock. A thread that
+A chttp_request and a chttpcli_response have no lock. A thread that
 changes one of them needs exclusive access, and so does a thread that
 reads one while another thread changes it.
 .fi

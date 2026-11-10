@@ -4,8 +4,8 @@
 # Every module here that registers a pthread_atfork() prepare handler takes
 # its own locks in that handler and holds them until after the fork, so the
 # handlers' locks nest in whatever order the handlers run in. The reported
-# cycle pairs clog_slot_table.rwlock, taken in _clog_atfork_prepare, with the
-# queue registry mutex taken in _cthreadcomm_atfork_prepare, each one
+# cycle pairs clog_slot_table.rwlock, taken in clog_atfork_prepare, with the
+# queue registry mutex taken in cthreadcomm_atfork_prepare, each one
 # appearing to be acquired while the other is held.
 #
 # It can't deadlock. The C library runs prepare handlers one sequence at a
@@ -20,8 +20,8 @@
 # adding to it.
 #
 # We check the second half of that argument instead of just claiming it.
-# Each prepare handler reports itself to _ccol_atfork_order_record (see
-# _ccol_atfork_module_t in common.h), which records the pairwise order and
+# Each prepare handler reports itself to ccol__atfork_order_record (see
+# ccol__atfork_module in common.h), which records the pairwise order and
 # aborts if two handlers ever run in opposite relative orders, and that is
 # exactly the condition that would make this cycle real. The atfork_order
 # tests of tests/common pin both directions of that check, so a real
@@ -36,7 +36,7 @@
 # The entry is anchored on this module's own frame, which is always
 # symbol-resolved, and not on a pthread-internal frame name, the same
 # "anchor on our own code" choice that tests/chttpclient/tsan_openssl.supp
-# makes. It names _clog_atfork_prepare because that's where the write lock
+# makes. It names clog_atfork_prepare because that's where the write lock
 # is taken. An anchor naming a function that doesn't take the lock
 # suppresses nothing, silently, and nothing fails until the reports show up
 # somewhere else.
@@ -44,11 +44,11 @@
 # Keep in mind what it hides. The anchor matches every lock-order-inversion
 # report that carries that frame, including one between this module's
 # prepare handler and another module's that didn't come from an inherited
-# graph. _ccol_atfork_order_record exists to catch that class on its own,
+# graph. ccol__atfork_order_record exists to catch that class on its own,
 # but whoever changes which locks a fork-prepare handler takes, or the order
 # the handlers register in, should derive the reasoning above again and not
 # trust a clean ThreadSanitizer run here.
-deadlock:_clog_atfork_prepare
+deadlock:clog_atfork_prepare
 
 # A second, separate case: ThreadSanitizer doesn't model the
 # re-initialization of a write-locked rwlock in a fork child.
@@ -78,7 +78,7 @@ deadlock:_clog_atfork_prepare
 # report, never a pthread or ThreadSanitizer frame, and the deadlock anchor
 # names the test helper whose child produces the inversion, so an inversion
 # anywhere else is reported as usual.
-mutex:_clog_exit_drain
-mutex:_cleanup_event_loop_slot_table
-mutex:_clog_test_lock_table_forever
+mutex:clog_exit_drain
+mutex:cleanup_event_loop_slot_table
+mutex:clog__test_lock_table_forever
 deadlock:exit_from_worker_child

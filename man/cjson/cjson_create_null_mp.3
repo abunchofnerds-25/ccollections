@@ -7,13 +7,13 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cjson.h>
 
-cjson cjson_create_null_mp(ccol_memmgmt_procs_t *mp);
-cjson cjson_create_bool_mp(bool val, ccol_memmgmt_procs_t *mp);
-cjson cjson_create_int_mp(long long val, ccol_memmgmt_procs_t *mp);
-cjson cjson_create_double_mp(double val, ccol_memmgmt_procs_t *mp);
-cjson cjson_create_string_mp(const char *val, ccol_memmgmt_procs_t *mp);
-cjson cjson_create_list_mp(ccol_memmgmt_procs_t *mp);
-cjson cjson_create_dictionary_mp(ccol_memmgmt_procs_t *mp);
+cjson cjson_create_null_mp(ccol_memmgmt_procs *mp);
+cjson cjson_create_bool_mp(bool val, ccol_memmgmt_procs *mp);
+cjson cjson_create_int_mp(long long val, ccol_memmgmt_procs *mp);
+cjson cjson_create_double_mp(double val, ccol_memmgmt_procs *mp);
+cjson cjson_create_string_mp(const char *val, ccol_memmgmt_procs *mp);
+cjson cjson_create_list_mp(ccol_memmgmt_procs *mp);
+cjson cjson_create_dictionary_mp(ccol_memmgmt_procs *mp);
 
 /* convenience wrappers; default allocator (NULL mp) */
 static inline cjson cjson_create_null(void);

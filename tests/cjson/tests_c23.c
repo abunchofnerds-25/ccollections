@@ -22,12 +22,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* The value macros of cjson.h compiled as C23 (-std=gnu2x). The classifier of
- * cjson_set() maps the type of the C23 nullptr to CJSON_NULL, and since the C23
- * `true` has the type bool it stores a CJSON_BOOL with no cast. Neither holds
- * in C11, which the main suite compiles as, so these tests get their own
- * binary. */
-
+// The value macros of cjson.h compiled as C23 (-std=gnu2x). cjson_set() maps
+// the C23 nullptr to CJSON_NULL, and the C23 true has the type bool, so it
+// stores a CJSON_BOOL with no cast. Neither holds in C11, which the main suite
+// uses, so these tests get their own binary.
 #include <cjson.h>
 #include <tau/tau.h>
 
@@ -36,12 +34,11 @@ TAU_MAIN()
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L && \
     ((defined(__clang__) && __clang_major__ >= 16) ||          \
      (!defined(__clang__) && defined(__GNUC__) && __GNUC__ >= 13))
-/* Take the nullptr association away and cjson_set() refuses nullptr with
- * ccol_invalid_args, so the leaf keeps its old value. */
+// Without the nullptr association cjson_set() refuses nullptr with
+// ccol_invalid_args and the leaf keeps its old value.
 TEST(c23, nullptr_sets_the_leaf_to_null) {
   cjson doc = cjson_parse("{\"k\": 1}", NULL);
-  ccol_retval_t rv =
-      doc ? cjson_set(doc, "k", nullptr) : ccol_not_enough_memory;
+  ccol_retval rv = doc ? cjson_set(doc, "k", nullptr) : ccol_not_enough_memory;
   cjson leaf = doc ? cjson_get(doc, "k") : NULL;
   bool is_null = leaf && cjson_type(leaf) == CJSON_NULL;
   cjson_destroy(doc);
@@ -51,7 +48,7 @@ TEST(c23, nullptr_sets_the_leaf_to_null) {
 
 TEST(c23, true_stores_a_bool) {
   cjson doc = cjson_parse("{\"k\": 1}", NULL);
-  ccol_retval_t rv = doc ? cjson_set(doc, "k", true) : ccol_not_enough_memory;
+  ccol_retval rv = doc ? cjson_set(doc, "k", true) : ccol_not_enough_memory;
   cjson leaf = doc ? cjson_get(doc, "k") : NULL;
   bool is_bool = leaf && cjson_type(leaf) == CJSON_BOOL && cjson_bool_val(leaf);
   cjson_destroy(doc);
@@ -59,11 +56,11 @@ TEST(c23, true_stores_a_bool) {
   REQUIRE_TRUE(is_bool);
 }
 #else
-/* For a compiler that has neither nullptr nor the C23 `true`, the binary
- * checks at least that a NULL sets the leaf to CJSON_NULL. */
+// A compiler with neither nullptr nor the C23 true checks at least that NULL
+// sets the leaf to CJSON_NULL.
 TEST(c23, null_sets_the_leaf_to_null) {
   cjson doc = cjson_parse("{\"k\": 1}", NULL);
-  ccol_retval_t rv = doc ? cjson_set(doc, "k", NULL) : ccol_not_enough_memory;
+  ccol_retval rv = doc ? cjson_set(doc, "k", NULL) : ccol_not_enough_memory;
   cjson leaf = doc ? cjson_get(doc, "k") : NULL;
   bool is_null = leaf && cjson_type(leaf) == CJSON_NULL;
   cjson_destroy(doc);

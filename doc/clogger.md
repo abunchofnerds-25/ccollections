@@ -285,11 +285,11 @@ daemon accepts in one datagram.
 ## Logging to a file, with rotation
 
 `clog_create_from_file` opens (or creates) a file and appends to it. Give it
-a `clog_rotation_cfg_t` to rotate the file, or `NULL` for a plain file that
+a `clog_rotation_cfg` to rotate the file, or `NULL` for a plain file that
 only grows:
 
 ```c
-clog_rotation_cfg_t cfg = {                          /* fragment */
+clog_rotation_cfg cfg = {                          /* fragment */
     .size_rotation_enabled = true,
     .max_file_size         = 50 * 1024 * 1024,      /* 50 MiB */
     .time_rotation_enabled = true,
@@ -364,12 +364,12 @@ programs, since a record that a call has written can't be lost if the
 program crashes later; async mode is worth it once the writes really hold
 your threads back.
 
-Passing a `clog_async_cfg_t` puts a logger into async mode. The logging
+Passing a `clog_async_cfg` puts a logger into async mode. The logging
 thread then only formats the message and hands the record over to the
 logger's writer thread, which collects records and writes them in batches:
 
 ```c
-clog_async_cfg_t acfg = {                     /* fragment */
+clog_async_cfg acfg = {                     /* fragment */
     .queue_size        = 4096,                /* 0 = unbounded */
     .flush_buffer_size = 64 * 1024,           /* write at 64 KiB buffered */
     .flush_interval_us = 200000,              /* ... or every 200 ms */
@@ -474,7 +474,7 @@ describes both policies.
 ## Custom allocators and fork
 
 `clog_create_from_fd_mp` and `clog_create_from_file_mp` take a
-`ccol_memmgmt_procs_t` as their last argument, and the logger then allocates
+`ccol_memmgmt_procs` as their last argument, and the logger then allocates
 through your functions. Set all four function pointers. Derived loggers use
 the same allocator. Two allocations belong to the library and go through
 `malloc`: the symbol text of a backtrace, which `backtrace_symbols` makes,
@@ -549,7 +549,7 @@ int main(void) {
     char path[4096];
     snprintf(path, sizeof(path), "%s/orders.log", dir);
 
-    clog_rotation_cfg_t rot = {
+    clog_rotation_cfg rot = {
         .size_rotation_enabled = true,
         .max_file_size         = 10 * 1024 * 1024,   /* 10 MiB */
         .time_rotation_enabled = true,
@@ -642,7 +642,7 @@ static void *worker(void *p) {
 }
 
 int main(void) {
-    clog_async_cfg_t acfg = {
+    clog_async_cfg acfg = {
         .queue_size        = 1024,        /* a full queue blocks the caller */
         .flush_buffer_size = 64 * 1024,
         .flush_interval_us = 100000,      /* 100 ms */
@@ -733,7 +733,7 @@ int main(void) {
     char path[4096];
     snprintf(path, sizeof(path), "%s/app.log", dir);
 
-    clog_rotation_cfg_t cfg = {
+    clog_rotation_cfg cfg = {
         .size_rotation_enabled = true,
         .max_file_size         = 4096,   /* tiny, so the demo rotates */
         .max_rotated_files     = 3,      /* keep three old generations */

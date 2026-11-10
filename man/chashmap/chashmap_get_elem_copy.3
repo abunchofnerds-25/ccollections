@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chashmap.h>
 
-ccol_retval_t chashmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
+ccol_retval chashmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
                                      void *target_buf,
                                      size_t target_buf_size);
 .fi

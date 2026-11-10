@@ -7,8 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-cthrpool_future_t *chttpcli_do_async(chttpcli cli,
-                                     const chttp_request_t *req);
+cthrpool_future *chttpcli_do_async(chttpcli cli,
+                                     const chttp_request *req);
 .fi
 .SH DESCRIPTION
 .nf
@@ -75,7 +75,8 @@ the future with ccol_http_transfer_aborted, as in chttpcli_do. A
 response that arrives in the same read as a "100 Continue" is read
 before any byte of the body goes out, as in chttpcli_do(3). A
 request with req->expect_continue set sends "Expect: 100-continue"
-(see the doc comment of chttp_request_t) and holds the body back until
+(see
+.BR chttp_request_create_mp (3)) and holds the body back until
 the server's interim response, exactly as chttpcli_do does. That
 wait is part of this function's non-blocking dispatch and never a
 blocking call. The client does not accept an endless stream of interim

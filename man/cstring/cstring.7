@@ -23,7 +23,7 @@ bytes.
 
 There are two layers in the API. The type-inferred macros, such as
 cstr_construct(3), cstr_append(3) and cstr_replace(3), stop the program
-through _ccol_fatal_err() when an operation fails. The raw functions,
+through ccol__fatal_err() when an operation fails. The raw functions,
 such as cstring_create_full(3), cstring_append(3) and
 cstring_replace(3), report a failure in their return value instead.
 cstr_copy(3) and cstr_split(3) are the two macros that behave

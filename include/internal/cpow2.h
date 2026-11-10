@@ -24,21 +24,10 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file cpow2.h
- * @brief INTERNAL ONLY. The power-of-two rounding that the containers use to
- *        size their own storage.
- *
- * No program uses the library through this function. Every caller is one of
- * our containers (cvector, cstring and chashmap) growing or reserving its own
- * backing store, and a user of the library gets the behavior through
- * cvector_reserve, cstring_reserve, chashmap_create and chashmap_reset, never
- * through this name.
- *
- * The header is internal, so it has no visibility block, make install
- * doesn't install it, and its symbol isn't in the dynamic symbol table of the
- * shared library.
- */
+// Internal: the power-of-two rounding that cvector, cstring and chashmap use
+// to size their own storage. Users get it through cvector_reserve(),
+// cstring_reserve(), chashmap_create() and chashmap_reset(), never by this
+// name, so the header isn't installed and its symbol isn't exported.
 
 #ifndef CCOL_CPOW2_H
 #define CCOL_CPOW2_H
@@ -46,32 +35,10 @@ SOFTWARE.
 #include <common.h>
 #include <stddef.h>
 
-/**
- * @brief Find the nearest power of two that is greater than or equal to input
- *
- * Gives the smallest power of two that is >= input, worked out from one
- * count of the leading zeros of input - 1. When input is bigger than the
- * largest power of two a size_t on this architecture can hold, the error is
- * reported as ccol_invalid_size.
- *
- * @param input The value to round up to a power of two
- * @return The nearest power of two >= input, or ccol_invalid_size if input is
- *         too large
- *
- * @note The cost is constant: a subtraction, a count of leading zeros and a
- *       shift
- * @note It returns 1 for an input of 0 or 1
- * @note It returns ccol_invalid_size if input is above the largest power of
- *       two that a size_t holds
- *
- * Example:
- * @code
- * _ccol_find_nearest_gte_power_of_two(5)   -> 8
- * _ccol_find_nearest_gte_power_of_two(16)  -> 16
- * _ccol_find_nearest_gte_power_of_two(100) -> 128
- * _ccol_find_nearest_gte_power_of_two(UINT64_MAX) -> ccol_invalid_size
- * @endcode
- */
-size_t _ccol_find_nearest_gte_power_of_two(size_t input);
+// Gives the smallest power of two that is >= input (1 for 0 and 1). The
+// containers round their capacities with it when they grow or reserve. It
+// counts the leading zeros of input - 1 once. An input above the largest power
+// of two a size_t holds gives ccol_invalid_size.
+size_t ccol__find_nearest_gte_power_of_two(size_t input);
 
 #endif /* CCOL_CPOW2_H */

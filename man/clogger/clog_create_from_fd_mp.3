@@ -7,12 +7,12 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clogger.h>
 
-clog clog_create_from_fd_mp(int fd, clog_level_t min_level,
-                  const clog_async_cfg_t *async_cfg,
-                  ccol_memmgmt_procs_t *mprocs);
+clog clog_create_from_fd_mp(int fd, clog_level min_level,
+                  const clog_async_cfg *async_cfg,
+                  ccol_memmgmt_procs *mprocs);
 /* convenience wrapper; default allocator */
-static inline clog clog_create_from_fd(int fd, clog_level_t min_level,
-                  const clog_async_cfg_t *async_cfg);
+static inline clog clog_create_from_fd(int fd, clog_level min_level,
+                  const clog_async_cfg *async_cfg);
 .fi
 .SH DESCRIPTION
 .nf
@@ -53,11 +53,11 @@ async_cfg  The configuration for async logging, or NULL for
            call formats only its own message and hands the rest to a
            dedicated writer thread, and every logger that clog_derive()
            makes from this logger logs asynchronously too.  See
-           clog_async_cfg_t below.  Unlike a rotation config, a struct
+           clog_async_cfg below.  Unlike a rotation config, a struct
            of all zeros also turns async mode on, with a default for
            each zero field; only a literal NULL keeps the logging
            synchronous.
-             clog_async_cfg_t fields:
+             clog_async_cfg fields:
                queue_size        - the capacity of the message
                                     queue.  0 means an unbounded
                                     queue that never blocks a caller
@@ -113,7 +113,7 @@ mprocs     A custom allocator with function pointers for malloc, free,
 A new logger handle on success.
 CLOG_NULL when fd is negative, closed, read-only or not valid in
 some other way, when min_level is not one of the values of
-clog_level_t, when mprocs is not valid, or when a memory allocation
+clog_level, when mprocs is not valid, or when a memory allocation
 fails.  CLOG_NULL also comes back when the process is ending and the
 library has already released its table of loggers, which is what an
 open from a destructor that runs after the destructor of the library

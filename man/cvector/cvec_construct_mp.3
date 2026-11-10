@@ -17,10 +17,10 @@ vector taken from mprocs. It is cvec_declare(3) followed by
 cvec_init_mp(3), and everything those two macros document holds here as
 well: the companion type variables are declared the same way, the other
 type-dispatching macros read them, and a failed creation stops the
-program through _ccol_fatal_err().
+program through ccol__fatal_err().
 
 The vector keeps a private copy of the procedure table, so the
-ccol_memmgmt_procs_t object passed here doesn't need to outlive the
+ccol_memmgmt_procs object passed here doesn't need to outlive the
 vector, but the functions in the table do. When the vector is destroyed,
 its backing buffer, the copy of the table and the container itself are
 freed through those functions. A NULL mprocs is the same as calling
@@ -39,7 +39,7 @@ of the scope.
 .nf
 v       Name of the vector variable to declare and create
 type    Element type, for example int, double or struct foo
-mprocs  Pointer to a ccol_memmgmt_procs_t. Its malloc, calloc, realloc
+mprocs  Pointer to a ccol_memmgmt_procs. Its malloc, calloc, realloc
         and free members must all be set. Pass NULL for the default
         allocator.
 .fi
@@ -51,7 +51,7 @@ an expression.
 .SH NOTES
 .nf
 When the vector can't be created the macro stops the program through
-_ccol_fatal_err(), with a message that names v and the underlying error.
+ccol__fatal_err(), with a message that names v and the underlying error.
 To handle a failed creation yourself, call cvector_create_full(3)
 directly; it doesn't stop the program.
 
@@ -71,7 +71,7 @@ cvec_redeclare(3) makes them again.
 .fi
 .SH EXAMPLES
 .nf
-ccol_memmgmt_procs_t procs = {
+ccol_memmgmt_procs procs = {
     .malloc = my_malloc, .calloc = my_calloc,
     .realloc = my_realloc, .free = my_free,
 };

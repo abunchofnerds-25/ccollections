@@ -84,7 +84,7 @@ use of the handle is checked, so a handle whose pool you already destroyed is
 detected instead of being dereferenced.
 
 The macro forms declare the variable for you and stop the program through
-`_ccol_fatal_err` when creation fails. That's handy when there is no sensible
+`ccol__fatal_err` when creation fails. That's handy when there is no sensible
 way to recover anyway:
 
 ```c
@@ -137,8 +137,8 @@ thread that waits on the future:
 
 ```c
 /* fragment */
-ccol_retval_t rv;
-cthrpool_future_t *f = cthrpool_submit_future(pool, compute, arg, &rv);
+ccol_retval rv;
+cthrpool_future *f = cthrpool_submit_future(pool, compute, arg, &rv);
 if (f) {
     void *result = cthrpool_future_get(f);   /* waits until the task is complete */
     /* ... use result, then free it the way compute allocated it ... */
@@ -204,7 +204,7 @@ shutdown function, it finishes the queued tasks first.
 
 Sometimes the result comes from a thread that isn't a pool worker at all: a
 network thread, an event loop callback or a hardware completion. For that
-case there is the **detached future**, which is the same `cthrpool_future_t` but
+case there is the **detached future**, which is the same `cthrpool_future` but
 created without a pool. The producer calls `cthrpool_future_fulfill` once and
 the consumer uses `cthrpool_future_get` and `cthrpool_future_free` as usual.
 There's a full example further down.
@@ -310,7 +310,7 @@ int main(void) {
     if (!pool) return 1;
 
     range_t ranges[RANGES];
-    cthrpool_future_t *futures[RANGES];
+    cthrpool_future *futures[RANGES];
     for (int i = 0; i < RANGES; i++) {
         ranges[i].lo = LIMIT / RANGES * (unsigned long)i;
         ranges[i].hi = LIMIT / RANGES * (unsigned long)(i + 1);
@@ -384,7 +384,7 @@ int main(void) {
         }
         job->id = i;
         /* Wait at most 50 ms for a free slot; if none, skip this job. */
-        ccol_retval_t rc = cthrpool_timed_submit(pool, run_job, job, job_done, 50000);
+        ccol_retval rc = cthrpool_timed_submit(pool, run_job, job, job_done, 50000);
         if (rc == ccol_success) {
             accepted++;
         } else {
@@ -419,7 +419,7 @@ int main(void) {
 #include <time.h>
 
 static void *network_thread(void *arg) {
-    cthrpool_future_t *reply = arg;
+    cthrpool_future *reply = arg;
     struct timespec ts = { 0, 30 * 1000000L };   /* the "response" takes 30 ms */
     nanosleep(&ts, NULL);
     cthrpool_future_fulfill(reply, strdup("HTTP/1.1 200 OK"));  /* exactly once */
@@ -428,7 +428,7 @@ static void *network_thread(void *arg) {
 
 int main(void) {
     char *err = NULL;
-    cthrpool_future_t *reply = cthrpool_future_create_detached(&err);
+    cthrpool_future *reply = cthrpool_future_create_detached(&err);
     if (!reply) { fprintf(stderr, "future: %s\n", err); return 1; }
 
     pthread_t t;

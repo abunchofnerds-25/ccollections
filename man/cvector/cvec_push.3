@@ -15,7 +15,7 @@ Type-inferred wrapper for cvector_push_back(). new_elem is converted to
 the declared element type of v by an ordinary C assignment, exactly as
 "T tmp = new_elem;" would do, and the converted value is copied into the
 vector. What gets pushed is the result of a plain C assignment, not the
-raw byte representation of new_elem. The macro calls _ccol_fatal_err()
+raw byte representation of new_elem. The macro calls ccol__fatal_err()
 when cvector_push_back() fails.
 
 For an array element type, such as char[64], new_elem is an array or a

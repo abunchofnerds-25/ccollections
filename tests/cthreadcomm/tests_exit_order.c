@@ -22,34 +22,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* An application destructor that runs AFTER the process-exit destructors of
- * cthreadcomm, while it still owns live queues and a live ceventloop.
- *
- * The library frees its process-wide bookkeeping (the queue mutex registry
- * and the event-loop slot table) at exit, but as long as anything is live it
- * leaves that release to the destroy that removes the last live object. From
- * such a late destructor this binary checks four things:
- *
- *   1. Destroying the queues and the loop that were live at exit is safe.
- *      Without the deferred release of the queue registry, the destroy of a
- *      queue indexes a freed vector, which valgrind reports as an invalid
- *      read (make memtest).
- *   2. Once the last object is gone and the bookkeeping is released, a new
- *      queue and a new loop fail cleanly with NULL and
- *      CEVENTLOOP_NULL. Without that handling a queue create pushes
- *      into a freed vector and succeeds, and a loop create asserts inside
- *      cvector_elem_count.
- *   3. A stale loop handle resolves to nothing and the call reports
- *      ccol_invalid_args instead of asserting.
- *   4. A fork() after the release runs the module's fork handlers over the
- *      released tables without an assertion.
- *
- * It needs the exit-time destructor order of a whole process, so it runs in
- * a process of its own. The destructor has priority 101, which puts it after
- * every destructor with no priority, and this file is also first on the link
- * line; either of the two alone puts it last in the .fini_array walk. We are
- * already past main at that point, so a failure writes a line to stderr and
- * ends the process with _exit(1). */
+// An application destructor that runs after the exit destructors of
+// cthreadcomm while it still owns live queues and a live loop. The library
+// frees its process-wide bookkeeping (the queue mutex registry and the loop
+// slot table) at exit only once nothing is live; otherwise the destroy of the
+// last live object releases it. The late destructor checks that destroying what
+// was live is safe (valgrind sees an invalid read without the deferred
+// release), that a stale loop handle gives ccol_invalid_args, that new queues
+// and loops then fail cleanly, and that a fork() runs the fork handlers over
+// the released tables. It needs a process of its own. Priority 101 and being
+// first on the link line each put the destructor last; we're past main there,
+// so a failure prints a line and ends the process with _exit(1).
 
 #include <cthreadcomm.h>
 #include <errno.h>
@@ -63,14 +46,19 @@ SOFTWARE.
 #include <test_signals.h>
 #include <unistd.h>
 
+// What main leaves live for the destructor, and whether main got that far (a
+// failed setup leaves nothing to check).
 static ccircq *g_cq;
 static cdynmq *g_dq;
 static ceventloop g_loop = CEVENTLOOP_NULL;
 static ceventloop_reg g_reg = CEVENTLOOP_REG_NULL;
 static bool g_main_ran;
 
+// The number of failed checks, reported at the end of the destructor.
 static int g_failures;
 
+// Records a failed check and prints what failed. The destructor runs after
+// main, where tau can't report, so it keeps its own count in g_failures.
 static void check(bool ok, const char *what) {
   if (!ok) {
     fprintf(stderr, "tests_exit_order: FAILED: %s\n", what);
@@ -78,18 +66,19 @@ static void check(bool ok, const char *what) {
   }
 }
 
+// A handler that does nothing; the registration only has to exist.
 static void on_readable_noop(ceventloop loop, ceventloop_reg reg,
-                             cselectable_t *sel, void *arg) {
+                             cselectable *sel, void *arg) {
   (void)reg;
   (void)loop;
   (void)sel;
   (void)arg;
 }
 
+// Runs the checks after the library destructors.
 __attribute__((destructor(101))) static void late_application_destructor(void) {
   if (!g_main_ran) test_child_exit(1);
 
-  /* 1. Tear down what was live when the library destructors ran. */
   check(ceventloop_remove(g_loop, g_reg) == ccol_success,
         "remove of a registration that was live at exit");
   ceventloop stale_loop = g_loop;
@@ -97,13 +86,11 @@ __attribute__((destructor(101))) static void late_application_destructor(void) {
   ccircq_destroy(g_cq);
   cdynmq_destroy(g_dq);
 
-  /* 3. A stale handle after the slot table is released. */
   check(ceventloop_reg_count(stale_loop) == ccol_invalid_size,
         "reg_count of a stale loop handle after the release");
   check(ceventloop_pause(stale_loop, g_reg) == ccol_invalid_args,
         "pause through a stale loop handle after the release");
 
-  /* 2. New objects fail cleanly once the bookkeeping is released. */
   char *err = NULL;
   ceventloop late_loop = ceventloop_create(8, 1, 1, &err);
   check(late_loop == CEVENTLOOP_NULL, "a loop created after the release fails");
@@ -119,7 +106,6 @@ __attribute__((destructor(101))) static void late_application_destructor(void) {
   if (late_dq) cdynmq_destroy(late_dq);
 #endif
 
-  /* 4. The fork handlers walk the released tables. */
   pid_t pid = fork();
   if (pid == 0) test_child_exit(0);
   check(pid > 0, "fork after the release");
@@ -138,9 +124,10 @@ __attribute__((destructor(101))) static void late_application_destructor(void) {
   fprintf(stderr, "tests_exit_order: OK\n");
 }
 
+// Creates a queue of each kind, a loop and one registration, and leaves them
+// live on purpose. The inherited signal state is reset first, because the
+// destructor waits for a child.
 int main(void) {
-  /* The destructor waits for a child, and test_reset_inherited_signals()
-   * explains what an inherited signal state does to that. */
   test_reset_inherited_signals();
   g_cq = ccircq_create(4, NULL);
   g_dq = cdynmq_create(NULL);
@@ -149,7 +136,7 @@ int main(void) {
     fprintf(stderr, "tests_exit_order: FAILED: setup\n");
     return 1;
   }
-  ceventloop_handlers_t handlers = {.on_readable = on_readable_noop};
+  ceventloop_handlers handlers = {.on_readable = on_readable_noop};
   g_reg = ceventloop_add(g_loop, ccircq_selectable(g_cq, cselect_read),
                          handlers, NULL, NULL);
   if (g_reg == CEVENTLOOP_REG_NULL) {
@@ -157,7 +144,5 @@ int main(void) {
     return 1;
   }
   g_main_ran = true;
-  /* We leave everything live on purpose, so the destructor above tears it
-   * down after the library destructors have run. */
   return 0;
 }

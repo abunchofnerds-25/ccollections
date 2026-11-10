@@ -7,9 +7,9 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-chttp_request_t *chttp_request_create(chttp_method_t method,
+chttp_request *chttp_request_create(chttp_method method,
                                       const char *url,
-                                      const chttp_request_body_t *body,
+                                      const chttp_request_body *body,
                                       char **err_str);
 .fi
 .SH DESCRIPTION

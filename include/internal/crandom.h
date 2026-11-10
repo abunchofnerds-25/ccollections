@@ -22,17 +22,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Random bytes from the kernel, without blocking. We use getrandom(2) where
- * the system has it (Linux, FreeBSD) and getentropy(2) on macOS and OpenBSD;
- * getentropy serves at most 256 bytes per call, and OpenBSD has no
- * <sys/random.h> for it. The function gives false when the bytes aren't
- * available, and the caller then falls back to a mix of its own. */
+// Random bytes from the kernel, without blocking.
 
 #ifndef CCOL_INTERNAL_CRANDOM_H
 #define CCOL_INTERNAL_CRANDOM_H
 
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-#include <stdbool.h> /* C23 has bool, true and false as keywords */
+#include <stdbool.h>
 #endif
 #include <stddef.h>
 #include <sys/types.h>
@@ -45,6 +41,12 @@ SOFTWARE.
 #include <sys/random.h>
 #endif
 
+// Fills buf with len random bytes from the kernel, without blocking. chashmap
+// seeds its process secret with it, so hash collisions can't be computed
+// offline. It uses getrandom(2) on Linux and FreeBSD and getentropy(2) on macOS
+// and OpenBSD (at most 256 bytes per call there; OpenBSD has no <sys/random.h>
+// for it). Gives false when the bytes aren't available, and the caller then
+// falls back to a mix of its own.
 static inline bool ccol_random_bytes(void *buf, size_t len) {
 #if defined(__APPLE__) || defined(__OpenBSD__)
   return len <= 256 && getentropy(buf, len) == 0;
@@ -53,4 +55,4 @@ static inline bool ccol_random_bytes(void *buf, size_t len) {
 #endif
 }
 
-#endif /* CCOL_INTERNAL_CRANDOM_H */
+#endif

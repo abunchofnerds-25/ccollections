@@ -11,7 +11,7 @@ cvec_reserve(v, new_capacity_count);
 .fi
 .SH DESCRIPTION
 .nf
-A wrapper for cvector_reserve() that calls _ccol_fatal_err() when the
+A wrapper for cvector_reserve() that calls ccol__fatal_err() when the
 reservation fails, so a caller that has no useful way to recover from an
 allocation failure doesn't need to test a return value. A reservation too
 large to represent also counts as a failure; NOTES gives the two limits
@@ -31,7 +31,7 @@ new_capacity_count  Minimum number of elements to reserve
 .fi
 .SH NOTES
 .nf
-The macro stops the program through _ccol_fatal_err() when the
+The macro stops the program through ccol__fatal_err() when the
 reservation fails: when the allocation fails, when the capacity is more
 than ccol_max_elem_count, or when the capacity times the element size
 overflows a size_t.

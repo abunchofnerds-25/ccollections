@@ -7,13 +7,13 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cyaml.h>
 
-typedef struct cyaml_dictionary_iter_t {
+typedef struct cyaml_dictionary_iter {
     const char *key;
     cyaml       value;
-    /* private fields, whose names begin with an underscore */
-} cyaml_dictionary_iter_t;
+    /* private fields, whose names begin with cyaml__ */
+} cyaml_dictionary_iter;
 
-bool cyaml_dictionary_first(cyaml dict, cyaml_dictionary_iter_t *it);
+bool cyaml_dictionary_first(cyaml dict, cyaml_dictionary_iter *it);
 .fi
 .SH DESCRIPTION
 .nf
@@ -104,7 +104,7 @@ thread changes the dictionary.
 .SH EXAMPLES
 .nf
 cyaml doc = cyaml_parse("b: 1\ena: 2\en", NULL);
-cyaml_dictionary_iter_t it;
+cyaml_dictionary_iter it;
 for (bool ok = cyaml_dictionary_first(doc, &it); ok;
      ok = cyaml_dictionary_next(&it)) {
     printf("%s = %lld\en", it.key, cyaml_int_val(it.value));

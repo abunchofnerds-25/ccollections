@@ -13,7 +13,7 @@ value = chmap_get(hm_name, key);
 .nf
 Type-inferred wrapper for chashmap_get_elem_ref() that returns the value
 itself. If the key is not found or the sizes don't match, it calls
-_ccol_fatal_err().
+ccol__fatal_err().
 
 The lookup key is converted through the DECLARED key type of the map,
 the same way chmap_insert(3) converts it, so a key stored through that

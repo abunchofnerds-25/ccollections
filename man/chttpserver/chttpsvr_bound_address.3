@@ -7,9 +7,9 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-#define CHTTPSVR_BOUND_ADDRESS_MAX 128
+#define CHTTPSVR_BOUND_ADDRESS_SIZE 128
 
-ccol_retval_t chttpsvr_bound_address(chttpsvr srv, char *buf,
+ccol_retval chttpsvr_bound_address(chttpsvr srv, char *buf,
                                      size_t buflen);
 .fi
 .SH DESCRIPTION
@@ -28,7 +28,7 @@ For a Unix domain socket it is the "unix://" form of the path in the
 configuration, so the text can be used as the host of another
 configuration.
 
-On every supported system, a buffer of CHTTPSVR_BOUND_ADDRESS_MAX
+On every supported system, a buffer of CHTTPSVR_BOUND_ADDRESS_SIZE
 (128) bytes is large enough for any address that this function
 writes.
 .fi
@@ -56,7 +56,7 @@ The answer then describes the listener from one side of that change.
 .fi
 .SH EXAMPLES
 .nf
-char addr[CHTTPSVR_BOUND_ADDRESS_MAX];
+char addr[CHTTPSVR_BOUND_ADDRESS_SIZE];
 uint16_t port = 0;
 if (chttpsvr_bound_address(srv, addr, sizeof(addr)) == ccol_success &&
     chttpsvr_bound_port(srv, &port) == ccol_success)

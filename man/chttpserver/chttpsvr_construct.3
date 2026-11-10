@@ -14,7 +14,7 @@ chttpsvr_construct(name, cl);
 Declares a chttpsvr variable called name and assigns it the result
 of chttpsvr_create(cl, &err), where err is an error string that the
 macro keeps for itself.  If the create fails, the macro calls
-_ccol_fatal_err() with a message that names the variable and carries
+ccol__fatal_err() with a message that names the variable and carries
 that error string, and it does not return.
 .fi
 .SH PARAMETERS

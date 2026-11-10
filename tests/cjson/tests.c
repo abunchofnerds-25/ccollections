@@ -42,16 +42,12 @@ SOFTWARE.
 
 TAU_MAIN()
 
-/* The forked children of this binary report through their wait status, and
- * test_reset_inherited_signals() explains what an inherited signal state does
- * to that. */
+// Resets the signal state the binary inherited, because the forked children of
+// these tests report through their wait status (see
+// test_reset_inherited_signals()).
 __attribute__((constructor)) static void _reset_inherited_signals(void) {
   test_reset_inherited_signals();
 }
-
-/* ========================================================================== */
-/*                         CONSTRUCTION                                       */
-/* ========================================================================== */
 
 TEST(construction, null) {
   cjson n = cjson_create_null();
@@ -163,29 +159,12 @@ TEST(construction, object_replace_frees_old) {
   cjson_destroy(o);
 }
 
-/* ========================================================================== */
-/*    OWNERSHIP; cjson_list_push / cjson_dictionary_set alias rejection     */
-/* ========================================================================== */
-
-/*
- * cjson_list_push() and cjson_dictionary_set() always take ownership of
- * their child argument. Without this guard a caller could put a node that
- * already has an owner into a second container slot, for example through
- * the borrowed references from cjson_get(), cjson_list_get() and
- * cjson_dictionary_get(), or simply through a self-reference. The node then
- * has two owners and each owner's teardown destroys it, which corrupts the
- * heap. With the default allocator the node pool's thread-local free list
- * becomes a cycle that points at itself, so draining that pool at process
- * exit hangs, and with a custom allocator it just segfaults. These tests go
- * through every variant of the hazard that a caller can reach, and check
- * that the call breaking the rule returns ccol_invalid_args while the tree
- * stays completely valid, with nothing corrupted.
- */
-
+// The ownership tests: a node that already has an owner (a borrowed reference
+// from a getter, a parsed child, the container itself) must be refused with
+// ccol_invalid_args and the tree must stay intact. Two owners would each
+// destroy the node, which corrupts the heap; with the default allocator the
+// node pool's free list becomes a cycle and the drain at exit hangs.
 TEST(ownership, dictionary_set_key_to_its_own_current_value_is_noop) {
-  /* Setting a key to the value it already holds (a "no-op refresh")
-   * succeeds, and the library must not take it for an illegal change of parent.
-   */
   cjson o = cjson_create_dictionary();
   REQUIRE_EQ(cjson_dictionary_set(o, "k", cjson_create_int(42)), ccol_success);
   cjson v = cjson_dictionary_get(o, "k");
@@ -201,8 +180,6 @@ TEST(ownership, list_push_same_owned_node_twice_rejected) {
   cjson item = cjson_create_int(7);
   REQUIRE_EQ(cjson_list_push(arr, item), ccol_success);
   REQUIRE_EQ(cjson_list_push(arr, item), ccol_invalid_args);
-  /* Rejected and not corrupted: there is exactly one slot and item can
-   * still be read through it. */
   REQUIRE_EQ(cjson_list_len(arr), (size_t)1);
   REQUIRE_EQ(cjson_int_val(cjson_list_get(arr, 0)), 7LL);
   cjson_destroy(arr);
@@ -233,8 +210,6 @@ TEST(ownership, dictionary_set_same_node_under_two_keys_rejected) {
 }
 
 TEST(ownership, dictionary_get_borrowed_reference_cannot_be_repushed) {
-  /* The most natural way to hit the hazard: take a borrowed reference from
-   * cjson_dictionary_get and hand it to a different container. */
   cjson o = cjson_create_dictionary();
   cjson arr = cjson_create_list();
   REQUIRE_EQ(cjson_dictionary_set(o, "k", cjson_create_string("owned")),
@@ -273,20 +248,13 @@ TEST(ownership, dictionary_set_self_rejected) {
   cjson_destroy(o);
 }
 
-/* A caller can attach a node to itself and give the wrong kind of node as
- * the container at the same time. Such a call must be answered by the
- * self-check and not by the kind check, because the kind check takes
- * ownership of a child that isn't attached and deep-frees it. If the kind
- * check answered, we would free a handle the caller still owns and then
- * return the very code that the documentation describes as "the child is
- * completely untouched". Each test below uses the node again after the
- * rejected call and destroys it exactly once. Swap the order of the checks
- * and the reuse becomes a heap-use-after-free and the destroy a double free,
- * which this suite's memtest target reports. */
+// A self-attach into the wrong kind of container must be answered by the
+// self-check, not the type check, which would deep-free a node the caller still
+// owns. The node is used again afterwards, so the wrong order shows up under
+// memtest as a use-after-free and a double free.
 TEST(ownership, list_push_self_on_a_dictionary_leaves_the_node_alive) {
   cjson obj = cjson_create_dictionary();
   REQUIRE_EQ(cjson_list_push(obj, obj), ccol_invalid_args);
-  /* Fully usable, the rejection must not have taken ownership. */
   REQUIRE_EQ(cjson_type(obj), CJSON_DICTIONARY);
   REQUIRE_EQ(cjson_dictionary_set(obj, "k", cjson_create_int(1)), ccol_success);
   REQUIRE_EQ(cjson_dictionary_size(obj), (size_t)1);
@@ -320,9 +288,6 @@ TEST(ownership, list_push_self_on_a_scalar_leaves_the_node_alive) {
 }
 
 TEST(ownership, parsed_child_cannot_be_repushed_elsewhere) {
-  /* A node that cjson_parse() produced is just as "attached" as one a caller
-   * built through the public API, so sending the child through the parser
-   * first must not be a way around the guard. */
   cjson root = cjson_parse("{\"items\":[1,2,3]}", NULL);
   REQUIRE_NE((void *)root, NULL);
   cjson items = cjson_get(root, "items");
@@ -336,9 +301,6 @@ TEST(ownership, parsed_child_cannot_be_repushed_elsewhere) {
 }
 
 TEST(ownership, clone_produces_independently_pushable_node) {
-  /* cjson_clone() must give a really fresh, unattached node. Unlike the
-   * borrowed original, a cloned child is a perfectly legitimate
-   * cjson_list_push()/cjson_dictionary_set() argument. */
   cjson o = cjson_create_dictionary();
   REQUIRE_EQ(cjson_dictionary_set(o, "k", cjson_create_int(11)), ccol_success);
   cjson borrowed = cjson_dictionary_get(o, "k");
@@ -351,13 +313,9 @@ TEST(ownership, clone_produces_independently_pushable_node) {
   cjson_destroy(arr);
 }
 
+// The root is never attached, so only the reachability check refuses pushing it
+// into its own descendant; the cycle would make the teardown free a node twice.
 TEST(ownership, list_push_ancestor_into_own_descendant_rejected) {
-  /* `root` is never attached to anything because it IS the root, so the
-   * `attached` guard alone doesn't reject pushing it into `child`, one of its
-   * own attached descendants. That push makes the cycle root -> child -> root
-   * in the graph, and the cycle turns the worklist teardown of
-   * __cjson_destroy() into a double free. Without the reachability check glibc
-   * stops the run with its "double free detected in tcache" message. */
   cjson root = cjson_create_dictionary();
   cjson child = cjson_create_list();
   REQUIRE_EQ(cjson_dictionary_set(root, "self", child), ccol_success);
@@ -369,9 +327,6 @@ TEST(ownership, list_push_ancestor_into_own_descendant_rejected) {
 }
 
 TEST(ownership, dictionary_set_ancestor_into_own_descendant_rejected) {
-  /* The same hazard as list_push_ancestor_into_own_descendant_rejected, but
-   * the list and the dictionary swap the roles of ancestor and descendant,
-   * to show that the guard doesn't happen to depend on the type. */
   cjson root = cjson_create_list();
   cjson child = cjson_create_dictionary();
   REQUIRE_EQ(cjson_list_push(root, child), ccol_success);
@@ -383,10 +338,6 @@ TEST(ownership, dictionary_set_ancestor_into_own_descendant_rejected) {
 }
 
 TEST(ownership, list_push_multi_level_ancestor_into_descendant_rejected) {
-  /* The cycle doesn't have to be a direct loop of two nodes. An ancestor
-   * several levels up can go into a deeply nested descendant, and the guard
-   * catches that too, since node_reaches() walks the whole subtree rather
-   * than only the direct children. */
   cjson root = cjson_create_list();
   cjson a = cjson_create_list();
   cjson b = cjson_create_list();
@@ -399,15 +350,13 @@ TEST(ownership, list_push_multi_level_ancestor_into_descendant_rejected) {
   cjson_destroy(root);
 }
 
+// With an attached target the cycle check walks the whole child, and for a push
+// that is acyclic that walk must still say "no cycle".
 TEST(ownership,
      list_push_large_child_into_already_attached_target_still_succeeds) {
-  /* node_reaches() has an O(1) short circuit on needle->attached that only
-   * applies while the target is NOT attached. Here it is attached, so the
-   * full subtree search runs, and for a push that really is acyclic that
-   * search must still answer "no cycle" instead of rejecting it. */
   cjson root = cjson_create_list();
   cjson holder = cjson_create_list();
-  REQUIRE_EQ(cjson_list_push(root, holder), ccol_success); /* holder attached */
+  REQUIRE_EQ(cjson_list_push(root, holder), ccol_success);
 
   cjson big = cjson_create_list();
   for (int i = 0; i < 500; i++)
@@ -418,10 +367,6 @@ TEST(ownership,
   REQUIRE_EQ(cjson_list_len(big), (size_t)500);
   cjson_destroy(root);
 }
-
-/* ========================================================================== */
-/*                         PARSING - SCALARS                                  */
-/* ========================================================================== */
 
 TEST(parse, null_literal) {
   cjson n = cjson_parse("null", NULL);
@@ -467,7 +412,6 @@ TEST(parse, zero) {
 }
 
 TEST(parse, leading_zero_rejected) {
-  /* RFC 8259 section 6: a leading zero may not be followed by more digits. */
   REQUIRE_EQ((void *)cjson_parse("01", NULL), NULL);
   REQUIRE_EQ((void *)cjson_parse("001", NULL), NULL);
   REQUIRE_EQ((void *)cjson_parse("-01", NULL), NULL);
@@ -548,8 +492,8 @@ TEST(parse, surrogate_pair) {
   cjson_destroy(n);
 }
 
-/* Parses len bytes of src and tells whether the parse failed with exactly
- * the message want. */
+// Parses len bytes of src and tells whether the parse failed with exactly the
+// message want, for the tests that pin an error text.
 static bool _cjson_test_parse_fails_with(const char *src, size_t len,
                                          const char *want) {
   char *err = NULL;
@@ -560,12 +504,12 @@ static bool _cjson_test_parse_fails_with(const char *src, size_t len,
   }
   return err && strcmp(err, want) == 0;
 }
+// Calls _cjson_test_parse_fails_with() on a string literal lit (its length
+// without the NUL) and evaluates to its result.
 #define CJSON_TEST_PARSE_FAILS_WITH(lit, want) \
   _cjson_test_parse_fails_with((lit), sizeof(lit) - 1, (want))
 
 TEST(parse, lone_low_surrogate_is_rejected) {
-  /* A low surrogate escape names no Unicode scalar value by itself. The
-   * parser refuses it and never stores a replacement character instead. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "\"\\uDC00\"",
       "low surrogate escape \\uDC00 at position 1 does not follow a high "
@@ -574,7 +518,6 @@ TEST(parse, lone_low_surrogate_is_rejected) {
       "\"ok\\uDE00\"",
       "low surrogate escape \\uDE00 at position 3 does not follow a high "
       "surrogate escape"));
-  /* A complete pair, then a low surrogate that starts a new escape. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "\"\\uD83D\\uDE00\\uDC00\"",
       "low surrogate escape \\uDC00 at position 13 does not follow a high "
@@ -582,10 +525,6 @@ TEST(parse, lone_low_surrogate_is_rejected) {
 }
 
 TEST(parse, lone_high_surrogate_is_rejected) {
-  /* A high surrogate escape must be followed immediately by a low surrogate
-   * escape. The end of the string, an ordinary escape, raw text, another high
-   * surrogate and a high surrogate that starts a valid pair are all refused,
-   * and the message names the escape that has no partner. */
   static const char *const want =
       "high surrogate escape \\uD800 at position 1 is not followed by a low "
       "surrogate escape";
@@ -602,7 +541,6 @@ TEST(parse, lone_high_surrogate_is_rejected) {
 }
 
 TEST(parse, surrogate_pair_at_both_ends_of_the_ranges_is_accepted) {
-  /* D800 DC00 is U+10000 and DBFF DFFF is U+10FFFF. */
   cjson lo = cjson_parse("\"\\uD800\\uDC00\"", NULL);
   cjson hi = cjson_parse("\"\\uDBFF\\uDFFF\"", NULL);
   bool lo_ok = lo && strcmp(cjson_str_val(lo), "\xF0\x90\x80\x80") == 0;
@@ -614,15 +552,10 @@ TEST(parse, surrogate_pair_at_both_ends_of_the_ranges_is_accepted) {
 }
 
 TEST(parse, keys_that_differ_only_in_an_unpaired_surrogate_never_merge) {
-  /* Two keys that a repair would both turn into "role" + U+FFFD. A parser
-   * that repairs reads one key where another reader sees two, and the value
-   * of the first key quietly disappears. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "{\"role\\uD800\":\"admin\",\"role\\uDC00\":\"user\"}",
       "high surrogate escape \\uD800 at position 6 is not followed by a low "
       "surrogate escape"));
-  /* A key holding an escaped U+FFFD is ordinary text, and a second key whose
-   * surrogate escape has no partner is refused rather than merged with it. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "{\"k\\ufffd\":1,\"k\\udfff\":2}",
       "low surrogate escape \\uDFFF at position 15 does not follow a high "
@@ -630,28 +563,19 @@ TEST(parse, keys_that_differ_only_in_an_unpaired_surrogate_never_merge) {
 }
 
 TEST(parse, null_byte_in_string_rejected) {
-  /* \u0000 encodes a null byte, which a null-terminated C string can't hold,
-   * so the parser must reject it instead of silently truncating. */
   REQUIRE_EQ((void *)cjson_parse("\"\\u0000\"", NULL), NULL);
   REQUIRE_EQ((void *)cjson_parse("\"hello\\u0000world\"", NULL), NULL);
 }
 
 TEST(parse, unknown_escape_rejected) {
-  /* RFC 8259 section 7 only allows \", \\, \/, \b, \f, \n, \r, \t, \uXXXX. */
   REQUIRE_EQ((void *)cjson_parse("\"\\z\"", NULL), NULL);
   REQUIRE_EQ((void *)cjson_parse("\"\\q\"", NULL), NULL);
   REQUIRE_EQ((void *)cjson_parse("\"hello\\z\"", NULL), NULL);
 }
 
 TEST(parse, incomplete_escape_at_string_end) {
-  /* A lone backslash at the end of the input starts an escape that can't be
-   * completed, so the string is unterminated. */
   REQUIRE_EQ((void *)cjson_parse("\"hello\\", NULL), NULL);
 }
-
-/* ========================================================================== */
-/*                         PARSING - COMPOSITE                                */
-/* ========================================================================== */
 
 TEST(parse, empty_array) {
   cjson a = cjson_parse("[]", NULL);
@@ -714,10 +638,6 @@ TEST(parse, whitespace_everywhere) {
   cjson_destroy(o);
 }
 
-/* ========================================================================== */
-/*                         PARSING - ERROR CASES                              */
-/* ========================================================================== */
-
 TEST(parse, error_empty) {
   char *err_str = NULL;
   cjson n = cjson_parse_mp("", &err_str, NULL);
@@ -760,8 +680,6 @@ TEST(parse, error_control_char_in_string) {
 }
 
 TEST(parse, invalid_number_syntax) {
-  /* RFC 8259 section 6 wants at least one digit after '-', after '.' and
-   * after 'e'/'E' (which may have a '+' or '-' in front of the digit). */
   REQUIRE_EQ((void *)cjson_parse("-", NULL), NULL);
   REQUIRE_EQ((void *)cjson_parse("1.", NULL), NULL);
   REQUIRE_EQ((void *)cjson_parse("1e", NULL), NULL);
@@ -782,10 +700,6 @@ TEST(parse, bounded_input_zero_len) {
   REQUIRE_EQ((void *)n, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
-
-/* ========================================================================== */
-/*                         SERIALIZATION                                      */
-/* ========================================================================== */
 
 TEST(serialize, null_val) {
   cjson n = cjson_create_null();
@@ -827,8 +741,8 @@ TEST(serialize, double_val_roundtrip) {
   cjson_destroy(n);
 }
 
-/* Serialize one double and return the text, which the caller frees with
- * cjson_serialize_free(). */
+// Serializes the double v alone and gives the text, which the caller frees with
+// cjson_serialize_free(); the shortest-digits tests use it.
 static char *_ser_double(double v) {
   cjson n = cjson_create_double(v);
   if (!n) return NULL;
@@ -837,9 +751,9 @@ static char *_ser_double(double v) {
   return s;
 }
 
-/* The number of significant digits in a "%g"-style number, that is the
- * digits before any exponent without leading and trailing zeros. So a
- * trailing ".0" that the serializer adds doesn't count. */
+// Counts the significant digits of a "%g"-style number (before any exponent,
+// without leading and trailing zeros, so a trailing ".0" doesn't count), for
+// the shortest-digits tests.
 static int _significant_digits(const char *s) {
   char digits[64];
   size_t n = 0;
@@ -882,17 +796,16 @@ TEST(serialize, double_is_written_in_its_shortest_form) {
   REQUIRE_TRUE(all_ok);
 }
 
+// For each random bit pattern (half of them subnormal or zero) the reference is
+// the smallest precision whose "%.*g" reads back the same, and the serializer
+// must read back the same with exactly that many digits.
 TEST(serialize, random_doubles_use_the_fewest_digits_that_read_back) {
-  /* For each double the reference is the smallest precision p for which
-   * "%.*g" reads back as the same value, and the serializer must read back as
-   * the same value with exactly p significant digits. Half of the bit
-   * patterns get a zero exponent field, so subnormals get plenty of cover. */
   uint64_t state = 0x9E3779B97F4A7C15ull;
   int failures = 0;
   for (int i = 0; i < 20000 && failures < 5; i++) {
     state = state * 6364136223846793005ull + 1442695040888963407ull;
     uint64_t bits = state ^ (state >> 29);
-    if (i & 1) bits &= 0x800FFFFFFFFFFFFFull; /* subnormal or zero */
+    if (i & 1) bits &= 0x800FFFFFFFFFFFFFull;
     double v;
     memcpy(&v, &bits, sizeof(v));
     if (!isfinite(v)) continue;
@@ -971,10 +884,9 @@ TEST(serialize, roundtrip_nested) {
   cjson_destroy(root2);
 }
 
+// A whole-number CJSON_FLOAT must keep a point or an exponent in the output, or
+// it parses back as CJSON_INTEGER.
 TEST(serialize, float_type_roundtrip) {
-  /* A whole-number CJSON_FLOAT node needs to serialize with a decimal point or
-   * an exponent, otherwise parsing the output back would give CJSON_INTEGER
-   * and not CJSON_FLOAT. */
   double cases[] = {1.0, 0.0, -5.0, 100.0, 1e14};
   for (size_t i = 0; i < 5; i++) {
     cjson n = cjson_create_double(cases[i]);
@@ -993,9 +905,7 @@ TEST(serialize, float_type_roundtrip) {
 }
 
 TEST(serialize, utf8_roundtrip) {
-  /* Non-ASCII UTF-8 bytes must survive serialize -> parse unchanged. */
-  const char *original =
-      "caf\xC3\xA9"; /* "cafe" with an accented e, UTF-8 encoded */
+  const char *original = "caf\xC3\xA9";
   cjson n = cjson_create_string(original);
   char *s = cjson_serialize(n);
   REQUIRE_NE((void *)s, NULL);
@@ -1036,10 +946,6 @@ TEST(serialize, pretty_indent_zero_defaults_to_four) {
   cjson_serialize_free(pretty);
   cjson_destroy(o);
 }
-
-/* ========================================================================== */
-/*                         cjson_get                                          */
-/* ========================================================================== */
 
 TEST(navigate, get_top_level_key) {
   cjson root = cjson_parse("{\"city\":\"Paris\"}", NULL);
@@ -1103,13 +1009,9 @@ TEST(navigate, get_array_out_of_bounds) {
   cjson_destroy(root);
 }
 
-/* ========================================================================== */
-/*                         cjson_set                                          */
-/* ========================================================================== */
-
 TEST(navigate, set_new_scalar_in_object) {
   cjson root = cjson_parse("{\"name\":\"Alice\"}", NULL);
-  ccol_retval_t r = cjson_set(root, "score", 42);
+  ccol_retval r = cjson_set(root, "score", 42);
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "score")), 42LL);
   cjson_destroy(root);
@@ -1170,9 +1072,9 @@ TEST(navigate, set_unsigned_int) {
   cjson_destroy(root);
 }
 
-/* The value cjson_parse() makes of a decimal literal. The tests below hold
- * cjson_set() to it, so the expectation comes from the parser and not from
- * the conversion the library does internally. */
+// Gives the value cjson_parse() makes of a decimal literal, or -1. The tests of
+// unsigned values above LLONG_MAX hold cjson_set() to it, so the expectation
+// comes from the parser.
 static double u64_parsed_value(const char *literal) {
   char doc[64];
   snprintf(doc, sizeof(doc), "{\"v\":%s}", literal);
@@ -1184,20 +1086,18 @@ static double u64_parsed_value(const char *literal) {
   return d;
 }
 
-/* Sets one unsigned value above LLONG_MAX through every path that writes a
- * scalar: a new dictionary key, an existing dictionary key holding a subtree
- * and an existing list element. Each one should read back as the CJSON_FLOAT
- * that the parser makes of the same literal, and come back as that same value
- * after a serialize and parse round trip. */
+// Sets value through every path that writes a scalar (a new key, a key that
+// holds a subtree, a list element) and requires each to read back, and to round
+// trip, as the CJSON_FLOAT the parser makes of literal.
 #define U64_CHECK_ABOVE_LLONG_MAX(value, literal)                           \
   do {                                                                      \
     double u64_expected = u64_parsed_value(literal);                        \
     REQUIRE_GT(u64_expected, 9.2e18);                                       \
     cjson u64_root = cjson_parse("{\"old\":{\"x\":1},\"l\":[0]}", NULL);    \
     REQUIRE_NE((void *)u64_root, NULL);                                     \
-    ccol_retval_t u64_r1 = cjson_set(u64_root, "new", (value));             \
-    ccol_retval_t u64_r2 = cjson_set(u64_root, "old", (value));             \
-    ccol_retval_t u64_r3 = cjson_set(u64_root, "l.#0", (value));            \
+    ccol_retval u64_r1 = cjson_set(u64_root, "new", (value));               \
+    ccol_retval u64_r2 = cjson_set(u64_root, "old", (value));               \
+    ccol_retval u64_r3 = cjson_set(u64_root, "l.#0", (value));              \
     int u64_types_ok =                                                      \
         cjson_type(cjson_get(u64_root, "new")) == CJSON_FLOAT &&            \
         cjson_type(cjson_get(u64_root, "old")) == CJSON_FLOAT &&            \
@@ -1227,8 +1127,6 @@ static double u64_parsed_value(const char *literal) {
   } while (0)
 
 TEST(navigate, set_unsigned_above_llong_max_becomes_float) {
-  /* A conversion to long long would store CJSON_INTEGER -1 for ULLONG_MAX
-   * and report success, and then the type check below fails. */
   U64_CHECK_ABOVE_LLONG_MAX(ULLONG_MAX, "18446744073709551615");
   U64_CHECK_ABOVE_LLONG_MAX((unsigned long long)LLONG_MAX + 1ULL,
                             "9223372036854775808");
@@ -1246,18 +1144,18 @@ TEST(navigate, set_unsigned_above_llong_max_becomes_float) {
 TEST(navigate, set_unsigned_up_to_llong_max_stays_integer) {
   cjson root = cjson_parse("{\"a\":0,\"b\":0,\"c\":0,\"d\":0}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  ccol_retval_t ra =
+  ccol_retval ra =
       cjson_set(root, "a", (unsigned long long)9223372036854775807ULL);
-  ccol_retval_t rb = cjson_set(root, "b", (uint64_t)0);
-  ccol_retval_t rc = cjson_set(root, "c", (unsigned long)ULONG_MAX);
-  ccol_retval_t rd = cjson_set(root, "d", (uint32_t)UINT32_MAX);
+  ccol_retval rb = cjson_set(root, "b", (uint64_t)0);
+  ccol_retval rc = cjson_set(root, "c", (unsigned long)ULONG_MAX);
+  ccol_retval rd = cjson_set(root, "d", (uint32_t)UINT32_MAX);
   int types_ok = cjson_type(cjson_get(root, "a")) == CJSON_INTEGER &&
                  cjson_type(cjson_get(root, "b")) == CJSON_INTEGER &&
                  cjson_type(cjson_get(root, "d")) == CJSON_INTEGER;
   long long a = types_ok ? cjson_int_val(cjson_get(root, "a")) : 0;
   long long b = types_ok ? cjson_int_val(cjson_get(root, "b")) : -1;
   long long d = types_ok ? cjson_int_val(cjson_get(root, "d")) : 0;
-  cjson_node_type_t ct = cjson_type(cjson_get(root, "c"));
+  cjson_node_type ct = cjson_type(cjson_get(root, "c"));
   long long c = ct == CJSON_INTEGER ? cjson_int_val(cjson_get(root, "c")) : 0;
   cjson_destroy(root);
   REQUIRE_EQ(ra, ccol_success);
@@ -1269,7 +1167,6 @@ TEST(navigate, set_unsigned_up_to_llong_max_stays_integer) {
   REQUIRE_EQ(b, 0LL);
   REQUIRE_EQ(d, 4294967295LL);
 #if ULONG_MAX > 0xFFFFFFFFUL
-  /* An 8-byte unsigned long at its maximum is above LLONG_MAX. */
   REQUIRE_EQ(ct, CJSON_FLOAT);
 #else
   REQUIRE_EQ(ct, CJSON_INTEGER);
@@ -1288,8 +1185,6 @@ TEST(navigate, set_double) {
 TEST(navigate, set_null) {
   cjson root = cjson_parse("{\"k\":\"hello\"}", NULL);
   cjson_set(root, "k", NULL);
-  /* The key must be present. cjson_type(NULL) == CJSON_NULL, so a bare type
-   * check would pass even if the key had been removed by accident. */
   cjson null_node = cjson_get(root, "k");
   REQUIRE_NE((void *)null_node, NULL);
   REQUIRE_EQ(cjson_type(null_node), CJSON_NULL);
@@ -1298,37 +1193,29 @@ TEST(navigate, set_null) {
 
 TEST(navigate, set_missing_parent_fails) {
   cjson root = cjson_parse("{\"a\":1}", NULL);
-  ccol_retval_t r = cjson_set(root, "nonexistent.child", 5);
+  ccol_retval r = cjson_set(root, "nonexistent.child", 5);
   REQUIRE_NE(r, ccol_success);
   cjson_destroy(root);
 }
 
 TEST(navigate, set_empty_path_returns_invalid_args) {
   cjson root = cjson_parse("{\"k\":1}", NULL);
-  ccol_retval_t r = cjson_set(root, "", 99);
+  ccol_retval r = cjson_set(root, "", 99);
   REQUIRE_EQ(r, ccol_invalid_args);
-  /* Existing key must be unmodified. */
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "k")), 1LL);
   cjson_destroy(root);
 }
 
+// A well-formed #N past the end names an absent element, so it's
+// ccol_key_not_found, not ccol_invalid_args.
 TEST(navigate, set_array_index_out_of_bounds) {
-  /* A "#N" index can have the right syntax and be out of range, and then it
-   * names an absent element rather than being a malformed path. So the call
-   * reports ccol_key_not_found and not ccol_invalid_args, and _cjson_delete
-   * classifies the same situation the same way. */
   cjson root = cjson_parse("{\"arr\":[1,2]}", NULL);
-  ccol_retval_t r = cjson_set(root, "arr.#99", 5);
+  ccol_retval r = cjson_set(root, "arr.#99", 5);
   REQUIRE_EQ(r, ccol_key_not_found);
   cjson_destroy(root);
 }
 
 TEST(navigate, array_index_too_large_for_any_integer_is_not_found) {
-  /* An index with any number of digits has valid syntax, so one that no
-   * integer type can hold names an absent element. cjson_get gives NULL and
-   * cjson_set and cjson_delete give ccol_key_not_found, whatever the target
-   * width. 2^32 overflows a 32-bit long and size_t, and the other two
-   * overflow 64 bits. */
   static const char *const paths[] = {
       "arr.#4294967296",
       "arr.#18446744073709551616",
@@ -1349,22 +1236,15 @@ TEST(navigate, array_index_too_large_for_any_integer_is_not_found) {
 }
 
 TEST(navigate, set_array_index_malformed_is_invalid_args) {
-  /* A malformed index (non-numeric, negative or a bare '#') is a real
-   * syntax error, which is different from a valid index that is out of
-   * range. */
   cjson root = cjson_parse("{\"arr\":[1,2]}", NULL);
   REQUIRE_EQ(cjson_set(root, "arr.#abc", 5), ccol_invalid_args);
   REQUIRE_EQ(cjson_set(root, "arr.#-1", 5), ccol_invalid_args);
   cjson_destroy(root);
 }
 
+// strtol() would accept "# 1" and "#+1"; get, set and delete each parse #N with
+// their own code, so all three are checked.
 TEST(navigate, array_index_with_leading_whitespace_or_sign_is_invalid_args) {
-  /* A bare strtol() call accepts leading white space and an explicit '+'
-   * sign before the digits of a "#N" index, so it would happily take "#  1"
-   * and "#+1" as well-formed indices. The library has to reject them just as
-   * it rejects "#abc" and "#-1" above. We cover cjson_get, which goes through
-   * navigate(), and also cjson_set and cjson_delete, since each of the three
-   * parses a "#N" component with its own code. */
   cjson root = cjson_parse("{\"arr\":[10,20,30]}", NULL);
   REQUIRE_NE((void *)root, NULL);
 
@@ -1376,8 +1256,8 @@ TEST(navigate, array_index_with_leading_whitespace_or_sign_is_invalid_args) {
   REQUIRE_EQ(cjson_set(root, "arr.#+1", 99), ccol_invalid_args);
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "arr.#1")), 20LL);
 
-  REQUIRE_EQ(_cjson_delete(root, "arr.#  1"), ccol_invalid_args);
-  REQUIRE_EQ(_cjson_delete(root, "arr.#+1"), ccol_invalid_args);
+  REQUIRE_EQ(cjson__delete(root, "arr.#  1"), ccol_invalid_args);
+  REQUIRE_EQ(cjson__delete(root, "arr.#+1"), ccol_invalid_args);
   REQUIRE_EQ(cjson_list_len(cjson_get(root, "arr")), (size_t)3);
 
   cjson_destroy(root);
@@ -1385,34 +1265,22 @@ TEST(navigate, array_index_with_leading_whitespace_or_sign_is_invalid_args) {
 
 TEST(navigate, consecutive_dots_get_rejected) {
   cjson root = cjson_parse("{\"a\":{\"b\":1}}", NULL);
-  /* "a..b" has an empty component and must give NULL instead of quietly
-   * mapping to "a.b". */
   REQUIRE_EQ((void *)cjson_get(root, "a..b"), NULL);
   REQUIRE_EQ((void *)cjson_get(root, "a."), NULL);
   cjson_destroy(root);
 }
 
 TEST(navigate, consecutive_dots_set_rejected) {
-  /* An empty INTERMEDIATE path component such as "a..b" is a syntax error,
-   * and so is an empty LEAF component such as "a." (the tests named
-   * set_empty_path_returns_invalid_args cover that one). Both report
-   * ccol_invalid_args, and the library must not take either for an ordinary
-   * absent component with valid syntax. */
   cjson root = cjson_parse("{\"a\":{\"b\":0}}", NULL);
-  ccol_retval_t r = cjson_set(root, "a..b", 99);
+  ccol_retval r = cjson_set(root, "a..b", 99);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "a.b")), 0LL);
   cjson_destroy(root);
 }
 
 TEST(navigate, set_trailing_dot_with_nonexistent_parent_still_invalid_args) {
-  /* A trailing dot is an empty leaf component, which the library always has
-   * to report as ccol_invalid_args, even when the parent path doesn't exist.
-   * The leaf's syntax is checked before navigating to the parent, so an
-   * absent parent can never hide a leaf syntax error behind
-   * ccol_key_not_found. */
   cjson root = cjson_parse("{\"a\":1}", NULL);
-  ccol_retval_t r = cjson_set(root, "missing.", 99);
+  ccol_retval r = cjson_set(root, "missing.", 99);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ((void *)cjson_get(root, "missing"), NULL);
   cjson_destroy(root);
@@ -1420,39 +1288,32 @@ TEST(navigate, set_trailing_dot_with_nonexistent_parent_still_invalid_args) {
 
 TEST(navigate,
      consecutive_dots_set_with_nonexistent_first_component_still_invalid_args) {
-  /* An empty INTERMEDIATE component such as "missing..b" is reported as
-   * ccol_invalid_args even when the component in front of it, "missing",
-   * doesn't exist either. */
   cjson root = cjson_parse("{\"a\":1}", NULL);
-  ccol_retval_t r = cjson_set(root, "missing..b", 99);
+  ccol_retval r = cjson_set(root, "missing..b", 99);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ((void *)cjson_get(root, "missing"), NULL);
   cjson_destroy(root);
 }
 
 TEST(navigate, set_new_key_in_nested_object) {
-  /* When the parent path exists but the leaf key doesn't, cjson_set creates
-   * the new leaf key. */
   cjson root = cjson_parse("{\"user\":{}}", NULL);
-  ccol_retval_t r = cjson_set(root, "user.name", "Alice");
+  ccol_retval r = cjson_set(root, "user.name", "Alice");
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_STREQ(cjson_str_val(cjson_get(root, "user.name")), "Alice");
   cjson_destroy(root);
 }
 
 TEST(navigate, set_on_array_root) {
-  /* cjson_set works when root itself is an array. */
   cjson root = cjson_parse("[10, 20, 30]", NULL);
-  ccol_retval_t r = cjson_set(root, "#1", 99);
+  ccol_retval r = cjson_set(root, "#1", 99);
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 1)), 99LL);
   REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 0)), 10LL);
   cjson_destroy(root);
 }
 
+// A 4-byte float takes the sizeof(float) branch, separate from double.
 TEST(navigate, set_float_literal) {
-  /* cjson_set with a 4-byte float goes through the sizeof(float) branch in
-   * node_reinit_scalar, which is separate from the double path. */
   cjson root = cjson_parse("{\"v\":0}", NULL);
   float f = 2.5f;
   cjson_set(root, "v", f);
@@ -1462,12 +1323,9 @@ TEST(navigate, set_float_literal) {
 }
 
 TEST(navigate, set_list_slot_composite_to_scalar) {
-  /* A list element can be a composite node itself, such as a dictionary.
-   * Replacing that element with a scalar must deep-free the composite
-   * through node_clear and leave the elements next to it alone. */
   cjson root = cjson_parse("{\"items\":[{\"a\":1},\"two\",{\"b\":2}]}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  ccol_retval_t r = cjson_set(root, "items.#0", 99);
+  ccol_retval r = cjson_set(root, "items.#0", 99);
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_EQ(cjson_type(cjson_get(root, "items.#0")), CJSON_INTEGER);
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "items.#0")), 99LL);
@@ -1477,8 +1335,6 @@ TEST(navigate, set_list_slot_composite_to_scalar) {
 }
 
 TEST(navigate, leading_dot_get_returns_null) {
-  /* A path that starts with '.' has an empty leading component, and
-   * cjson_get should return NULL cleanly for it. */
   cjson root = cjson_parse("{\"a\":1}", NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ((void *)cjson_get(root, ".a"), NULL);
@@ -1487,8 +1343,6 @@ TEST(navigate, leading_dot_get_returns_null) {
 }
 
 TEST(navigate, leading_dot_set_returns_invalid_args) {
-  /* A leading dot is a path syntax error, so expect ccol_invalid_args from
-   * cjson_set and a tree that stays as it was. */
   cjson root = cjson_parse("{\"a\":1}", NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cjson_set(root, ".a", 99), ccol_invalid_args);
@@ -1505,24 +1359,18 @@ TEST(navigate, bare_hash_get_is_error) {
 
 TEST(navigate, bare_hash_set_is_error) {
   cjson root = cjson_parse("{\"arr\":[10,20,30]}", NULL);
-  ccol_retval_t r = cjson_set(root, "arr.#", 99);
+  ccol_retval r = cjson_set(root, "arr.#", 99);
   REQUIRE_NE(r, ccol_success);
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "arr.#0")), 10LL);
   cjson_destroy(root);
 }
 
-/* ========================================================================== */
-/*                         DEEP COPY                                          */
-/* ========================================================================== */
-
 TEST(clone, scalar) {
   cjson orig = cjson_create_string("hello");
   cjson copy = cjson_clone(orig);
   REQUIRE_NE((void *)copy, (void *)orig);
-  /* String buffers must be independently allocated. */
   REQUIRE_NE((void *)cjson_str_val(copy), (void *)cjson_str_val(orig));
   REQUIRE_STREQ(cjson_str_val(copy), "hello");
-  /* Destroying orig must not corrupt copy. */
   cjson_destroy(orig);
   REQUIRE_STREQ(cjson_str_val(copy), "hello");
   cjson_destroy(copy);
@@ -1545,52 +1393,44 @@ TEST(clone, nested_object) {
   cjson_destroy(copy);
 }
 
-/* ========================================================================== */
-/*                         TYPE SAFETY - _cjson_type_of                      */
-/* ========================================================================== */
-
 TEST(type_macro, bool_detection) {
   bool b = true;
-  REQUIRE_EQ(_cjson_type_of(b), CJSON_BOOL);
+  REQUIRE_EQ(cjson__type_of(b), CJSON_BOOL);
 }
 
 TEST(type_macro, int_detection) {
   int i = 0;
-  REQUIRE_EQ(_cjson_type_of(i), CJSON_INTEGER);
+  REQUIRE_EQ(cjson__type_of(i), CJSON_INTEGER);
 }
 
 TEST(type_macro, long_long_detection) {
   long long ll = 0;
-  REQUIRE_EQ(_cjson_type_of(ll), CJSON_INTEGER);
+  REQUIRE_EQ(cjson__type_of(ll), CJSON_INTEGER);
 }
 
 TEST(type_macro, double_detection) {
   double d = 0.0;
-  REQUIRE_EQ(_cjson_type_of(d), CJSON_FLOAT);
+  REQUIRE_EQ(cjson__type_of(d), CJSON_FLOAT);
 }
 
 TEST(type_macro, float_detection) {
   float f = 0.0f;
-  REQUIRE_EQ(_cjson_type_of(f), CJSON_FLOAT);
+  REQUIRE_EQ(cjson__type_of(f), CJSON_FLOAT);
 }
 
 TEST(type_macro, string_detection) {
   const char *s = "hi";
-  REQUIRE_EQ(_cjson_type_of(s), CJSON_STRING);
+  REQUIRE_EQ(cjson__type_of(s), CJSON_STRING);
 }
 
 TEST(type_macro, char_ptr_detection) {
   char *s = NULL;
-  REQUIRE_EQ(_cjson_type_of(s), CJSON_STRING);
+  REQUIRE_EQ(cjson__type_of(s), CJSON_STRING);
 }
 
 TEST(type_macro, null_is_null_type) {
-  REQUIRE_EQ(_cjson_type_of(NULL), CJSON_NULL);
+  REQUIRE_EQ(cjson__type_of(NULL), CJSON_NULL);
 }
-
-/* ========================================================================== */
-/*                         SIGN EXTENSION                                     */
-/* ========================================================================== */
 
 TEST(sign_extension, signed_char_negative) {
   cjson root = cjson_parse("{\"v\":0}", NULL);
@@ -1615,10 +1455,6 @@ TEST(sign_extension, negative_short) {
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "v")), -500LL);
   cjson_destroy(root);
 }
-
-/* ========================================================================== */
-/*                         EDGE CASES                                         */
-/* ========================================================================== */
 
 TEST(edge, cjson_type_null_handle) { REQUIRE_EQ(cjson_type(NULL), CJSON_NULL); }
 
@@ -1694,10 +1530,6 @@ TEST(edge, llong_min_serialize_roundtrip) {
   cjson_destroy(back);
 }
 
-/* ========================================================================== */
-/*                              FUZZY TESTS                                   */
-/* ========================================================================== */
-
 TEST(fuzzy, duplicate_key_no_leak) {
   cjson root = cjson_parse("{\"x\":1,\"x\":2,\"x\":3}", NULL);
   REQUIRE_NE((void *)root, NULL);
@@ -1719,15 +1551,9 @@ TEST(fuzzy, integer_overflow_becomes_double) {
   cjson_destroy(neg);
 }
 
+// Plain char is signed on x86 and unsigned on aarch64, so the expected value is
+// the same char widened, never a hardcoded -1.
 TEST(fuzzy, plain_char_negative_sign_extension) {
-  /* The C standard leaves the signedness of a plain char to the
-   * implementation. The x86 and x86_64 ABIs make it signed but the ARM
-   * AAPCS64 ABI that aarch64 uses makes it UNSIGNED, so over there
-   * `char c = -1;` really holds a different value, 255 and not -1. That's
-   * not a bug, just another convention on that platform. So the comparison
-   * has to widen the SAME `c` that the caller gave the library, with
-   * whatever char signedness this platform has, instead of hardcoding the
-   * x86 assumption that a plain char is always signed. */
   cjson root = cjson_parse("{\"v\":0}", NULL);
   char c = -1;
   cjson_set(root, "v", c);
@@ -1793,9 +1619,8 @@ TEST(construction, null_string_becomes_json_null) {
 TEST(navigate, set_null_string_ptr_becomes_json_null) {
   cjson root = cjson_parse("{\"k\":\"hello\"}", NULL);
   const char *ptr = NULL;
-  ccol_retval_t r = cjson_set(root, "k", ptr);
+  ccol_retval r = cjson_set(root, "k", ptr);
   REQUIRE_EQ(r, ccol_success);
-  /* The key must be present, the same masking risk as in set_null above. */
   cjson null_node = cjson_get(root, "k");
   REQUIRE_NE((void *)null_node, NULL);
   REQUIRE_EQ(cjson_type(null_node), CJSON_NULL);
@@ -1835,31 +1660,24 @@ TEST(construction, double_finite_still_works) {
 
 TEST(navigate, set_nonfinite_double_rejected) {
   cjson root = cjson_parse("{\"v\":1.5}", NULL);
-  ccol_retval_t r = cjson_set(root, "v", INFINITY);
+  ccol_retval r = cjson_set(root, "v", INFINITY);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ(cjson_type(cjson_get(root, "v")), CJSON_FLOAT);
   REQUIRE_EQ(cjson_double_val(cjson_get(root, "v")), 1.5);
   cjson_destroy(root);
 }
 
-/* ========================================================================== */
-/*                       PATH ESCAPE SEQUENCE TESTS                           */
-/* ========================================================================== */
-
 TEST(navigate, get_escaped_dot_flat_key) {
-  /* The key is "a.b" (it holds a literal dot) and we reach it with "a\\.b". */
   cjson root = cjson_parse("{\"a.b\":42}", NULL);
   REQUIRE_NE((void *)root, NULL);
   cjson node = cjson_get(root, "a\\.b");
   REQUIRE_NE((void *)node, NULL);
   REQUIRE_EQ(cjson_int_val(node), 42LL);
-  /* Unescaped dot must NOT find the key. */
   REQUIRE_EQ((void *)cjson_get(root, "a.b"), NULL);
   cjson_destroy(root);
 }
 
 TEST(navigate, get_escaped_backslash_flat_key) {
-  /* The key is "a\\b" (a literal backslash) and we reach it with "a\\\\b". */
   cjson root = cjson_parse("{\"a\\\\b\":7}", NULL);
   REQUIRE_NE((void *)root, NULL);
   cjson node = cjson_get(root, "a\\\\b");
@@ -1869,7 +1687,6 @@ TEST(navigate, get_escaped_backslash_flat_key) {
 }
 
 TEST(navigate, get_escaped_dot_nested_path) {
-  /* The outer key is a plain "outer" and the inner one is "k.ey" (a dot). */
   cjson root = cjson_parse("{\"outer\":{\"k.ey\":99}}", NULL);
   REQUIRE_NE((void *)root, NULL);
   cjson node = cjson_get(root, "outer.k\\.ey");
@@ -1879,7 +1696,6 @@ TEST(navigate, get_escaped_dot_nested_path) {
 }
 
 TEST(navigate, get_escaped_dot_both_components) {
-  /* Both levels have dot-containing keys: "a.b" -> "c.d". */
   cjson root = cjson_parse("{\"a.b\":{\"c.d\":1}}", NULL);
   REQUIRE_NE((void *)root, NULL);
   cjson node = cjson_get(root, "a\\.b.c\\.d");
@@ -1889,20 +1705,17 @@ TEST(navigate, get_escaped_dot_both_components) {
 }
 
 TEST(navigate, set_escaped_dot_creates_new_key) {
-  /* Create a new key "x.y" (literal dot) at the root. */
   cjson root = cjson_parse("{}", NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cjson_set(root, "x\\.y", 55), ccol_success);
   cjson node = cjson_get(root, "x\\.y");
   REQUIRE_NE((void *)node, NULL);
   REQUIRE_EQ(cjson_int_val(node), 55LL);
-  /* Must not have created a spurious nested "x" key. */
   REQUIRE_EQ((void *)cjson_get(root, "x"), NULL);
   cjson_destroy(root);
 }
 
 TEST(navigate, set_escaped_dot_updates_existing_key) {
-  /* Update an existing key "p.q" (literal dot). */
   cjson root = cjson_parse("{\"p.q\":0}", NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cjson_set(root, "p\\.q", 123), ccol_success);
@@ -1911,7 +1724,6 @@ TEST(navigate, set_escaped_dot_updates_existing_key) {
 }
 
 TEST(navigate, set_escaped_dot_nested_path) {
-  /* Set "outer"."k.ey" through the escaped path "outer.k\\.ey". */
   cjson root = cjson_parse("{\"outer\":{\"k.ey\":0}}", NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cjson_set(root, "outer.k\\.ey", 77), ccol_success);
@@ -1920,8 +1732,6 @@ TEST(navigate, set_escaped_dot_nested_path) {
 }
 
 TEST(navigate, set_escaped_backslash_creates_key) {
-  /* Create a key "a\\b", which holds a literal backslash, through
-   * "a\\\\b". */
   cjson root = cjson_parse("{}", NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cjson_set(root, "a\\\\b", 9), ccol_success);
@@ -1929,10 +1739,6 @@ TEST(navigate, set_escaped_backslash_creates_key) {
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "a\\\\b")), 9LL);
   cjson_destroy(root);
 }
-
-/* ========================================================================== */
-/*                         CLONE REGRESSION TESTS                             */
-/* ========================================================================== */
 
 TEST(clone, flat_array) {
   cjson orig = cjson_create_list();
@@ -1991,14 +1797,10 @@ TEST(construction, object_set_replaces_old_child) {
   cjson_destroy(o);
 }
 
-/* ========================================================================== */
-/*                 OWNERSHIP CONTRACT - EARLY INVALID_ARGS PATHS              */
-/* ========================================================================== */
-
 TEST(construction, array_push_null_arr_leaves_child_untouched) {
   cjson child = cjson_create_int(42);
-  ccol_retval_t r = cjson_list_push(NULL, child);
-  cjson_node_type_t t = cjson_type(child);
+  ccol_retval r = cjson_list_push(NULL, child);
+  cjson_node_type t = cjson_type(child);
   cjson_destroy(child);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ(t, CJSON_INTEGER);
@@ -2006,7 +1808,7 @@ TEST(construction, array_push_null_arr_leaves_child_untouched) {
 
 TEST(construction, array_push_null_child_rejected) {
   cjson arr = cjson_create_list();
-  ccol_retval_t r = cjson_list_push(arr, NULL);
+  ccol_retval r = cjson_list_push(arr, NULL);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ(cjson_list_len(arr), (size_t)0);
   cjson_destroy(arr);
@@ -2015,8 +1817,8 @@ TEST(construction, array_push_null_child_rejected) {
 TEST(construction, array_push_wrong_type_leaves_child_untouched) {
   cjson not_array = cjson_create_int(7);
   cjson child = cjson_create_string("hi");
-  ccol_retval_t r = cjson_list_push(not_array, child);
-  cjson_node_type_t t = cjson_type(child);
+  ccol_retval r = cjson_list_push(not_array, child);
+  cjson_node_type t = cjson_type(child);
   cjson_destroy(child);
   cjson_destroy(not_array);
   REQUIRE_EQ(r, ccol_invalid_args);
@@ -2025,8 +1827,8 @@ TEST(construction, array_push_wrong_type_leaves_child_untouched) {
 
 TEST(construction, object_set_null_obj_leaves_child_untouched) {
   cjson child = cjson_create_int(1);
-  ccol_retval_t r = cjson_dictionary_set(NULL, "k", child);
-  cjson_node_type_t t = cjson_type(child);
+  ccol_retval r = cjson_dictionary_set(NULL, "k", child);
+  cjson_node_type t = cjson_type(child);
   cjson_destroy(child);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ(t, CJSON_INTEGER);
@@ -2035,8 +1837,8 @@ TEST(construction, object_set_null_obj_leaves_child_untouched) {
 TEST(construction, object_set_wrong_type_leaves_child_untouched) {
   cjson not_obj = cjson_create_string("oops");
   cjson child = cjson_create_int(99);
-  ccol_retval_t r = cjson_dictionary_set(not_obj, "k", child);
-  cjson_node_type_t t = cjson_type(child);
+  ccol_retval r = cjson_dictionary_set(not_obj, "k", child);
+  cjson_node_type t = cjson_type(child);
   cjson_destroy(child);
   cjson_destroy(not_obj);
   REQUIRE_EQ(r, ccol_invalid_args);
@@ -2046,8 +1848,8 @@ TEST(construction, object_set_wrong_type_leaves_child_untouched) {
 TEST(construction, object_set_null_key_leaves_child_untouched) {
   cjson o = cjson_create_dictionary();
   cjson child = cjson_create_int(1);
-  ccol_retval_t r = cjson_dictionary_set(o, NULL, child);
-  cjson_node_type_t t = cjson_type(child);
+  ccol_retval r = cjson_dictionary_set(o, NULL, child);
+  cjson_node_type t = cjson_type(child);
   size_t n = cjson_dictionary_size(o);
   cjson_destroy(child);
   cjson_destroy(o);
@@ -2056,17 +1858,9 @@ TEST(construction, object_set_null_key_leaves_child_untouched) {
   REQUIRE_EQ(n, (size_t)0);
 }
 
-/*
- * An invalid array, dictionary or key makes the call reject early with
- * ccol_invalid_args, and that rejection has to leave an ALREADY-ATTACHED
- * child alone as well, not only a free-standing one. Destroying such a child
- * frees memory that its real owner somewhere else in the tree still points
- * at, and the tree is corrupt as soon as anything touches or destroys it
- * next. Break that rule and the last REQUIRE_STREQ or REQUIRE_EQ readback
- * crashes with a heap use-after-free instead of just reporting the wrong
- * code.
- */
-
+// An early ccol_invalid_args must also leave an already attached child alone;
+// destroying it frees memory its real owner still points at, and the readback
+// at the end becomes a use-after-free.
 TEST(construction,
      array_push_wrong_type_leaves_already_attached_child_untouched) {
   cjson owner = cjson_create_dictionary();
@@ -2078,7 +1872,6 @@ TEST(construction,
   REQUIRE_EQ(cjson_list_push(not_array, borrowed), ccol_invalid_args);
   REQUIRE_EQ(cjson_list_push(NULL, borrowed), ccol_invalid_args);
 
-  /* borrowed has to be alive and owned by owner. */
   REQUIRE_STREQ(cjson_str_val(cjson_dictionary_get(owner, "k")), "owned");
   cjson_destroy(owner);
   cjson_destroy(not_array);
@@ -2099,7 +1892,6 @@ TEST(construction,
   REQUIRE_EQ(cjson_dictionary_set(valid_obj, NULL, borrowed),
              ccol_invalid_args);
 
-  /* borrowed should still be alive and owned by owner. */
   REQUIRE_STREQ(cjson_str_val(cjson_list_get(owner, 0)), "owned");
   cjson_destroy(owner);
   cjson_destroy(not_obj);
@@ -2117,15 +1909,9 @@ TEST(construction, object_get_null_returns_null) {
   cjson_destroy(o);
 }
 
-/* ========================================================================== */
-/*                         CUSTOM ALLOCATOR                                   */
-/* ========================================================================== */
-
-/*
- * Tracking allocator. It wraps the standard allocator and counts the alloc
- * and free calls, so tests can check that the custom allocator really gets
- * used.
- */
+// A tracking allocator: the _ta_* functions forward to the C library and count
+// allocations and frees, so a test can see that a tree uses its custom
+// allocator and that the counts balance.
 static size_t _ta_allocs = 0;
 static size_t _ta_frees = 0;
 
@@ -2143,15 +1929,15 @@ static void *_ta_calloc(size_t n, size_t sz) {
 }
 static void *_ta_realloc(void *p, size_t sz) { return realloc(p, sz); }
 
-static ccol_memmgmt_procs_t _tracking_alloc = {
+static ccol_memmgmt_procs _tracking_alloc = {
     .malloc = _ta_malloc,
     .free = _ta_free,
     .calloc = _ta_calloc,
     .realloc = _ta_realloc,
 };
 
-/* Counting allocator: lets exactly g_alloc_remaining malloc/calloc/realloc
- * calls through and then returns NULL. -1 means no limit (normal behaviour). */
+// A budget allocator: it lets g_alloc_remaining calls through and then fails
+// every later one (-1 means no limit), for the sweeps of every failure point.
 static int g_alloc_remaining = -1;
 
 static void *counting_malloc(size_t sz) {
@@ -2169,19 +1955,16 @@ static void *counting_realloc(void *p, size_t sz) {
   if (g_alloc_remaining > 0) g_alloc_remaining--;
   return realloc(p, sz);
 }
-static ccol_memmgmt_procs_t g_counting_mp = {.malloc = counting_malloc,
-                                             .calloc = counting_calloc,
-                                             .realloc = counting_realloc,
-                                             .free = free};
+static ccol_memmgmt_procs g_counting_mp = {.malloc = counting_malloc,
+                                           .calloc = counting_calloc,
+                                           .realloc = counting_realloc,
+                                           .free = free};
 
-/* A single-fault allocator. It fails exactly the call whose 1-based number
- * is g_single_fault_at, and every other call before and after it succeeds as
- * usual. We need it where the budget-based counting allocator above can't see
- * the result: once its budget hits zero that allocator fails every later
- * call too, so nothing that is built AFTER the failure under test can
- * succeed. A parse error message is such a thing, because the library
- * allocates it after the parse itself has failed. */
-static int g_single_fault_at = -1; /* -1 = disabled */
+// A single-fault allocator: it fails only the call whose 1-based number is
+// g_single_fault_at and counts calls in g_single_fault_counter. A test needs it
+// when something built after the failure (an error message) must still
+// succeed.
+static int g_single_fault_at = -1;
 static int g_single_fault_counter = 0;
 
 static void *single_fault_malloc(size_t sz) {
@@ -2199,13 +1982,10 @@ static void *single_fault_realloc(void *p, size_t sz) {
   if (g_single_fault_counter == g_single_fault_at) return NULL;
   return realloc(p, sz);
 }
-static ccol_memmgmt_procs_t g_single_fault_mp = {
-    .malloc = single_fault_malloc,
-    .calloc = single_fault_calloc,
-    .realloc = single_fault_realloc,
-    .free = free};
-
-/* ------------------------------------------------------------------ */
+static ccol_memmgmt_procs g_single_fault_mp = {.malloc = single_fault_malloc,
+                                               .calloc = single_fault_calloc,
+                                               .realloc = single_fault_realloc,
+                                               .free = free};
 
 TEST(custom_alloc, scalar_nodes_use_custom_alloc) {
   _ta_allocs = 0;
@@ -2230,7 +2010,6 @@ TEST(custom_alloc, scalar_nodes_use_custom_alloc) {
   cjson_destroy(n3);
   cjson_destroy(n4);
 
-  /* Nodes from a custom allocator skip the pool and are freed directly. */
   REQUIRE_GT(_ta_frees, (size_t)0);
 }
 
@@ -2242,13 +2021,11 @@ TEST(custom_alloc, string_node_uses_custom_strdup) {
   REQUIRE_NE((void *)n, NULL);
   REQUIRE_STREQ(cjson_str_val(n), "hello world");
 
-  /* At least 2 allocations: node calloc + string malloc. */
   REQUIRE_GT(_ta_allocs, (size_t)1);
 
   size_t frees_before = _ta_frees;
   cjson_destroy(n);
 
-  /* The string value is freed directly (a custom alloc skips the pool). */
   REQUIRE_GT(_ta_frees, frees_before);
 }
 
@@ -2272,7 +2049,6 @@ TEST(custom_alloc, array_and_object_use_custom_alloc) {
              ccol_success);
   REQUIRE_EQ(cjson_dictionary_size(obj), (size_t)1);
 
-  /* The backing cvec and chmap need at least one allocation each. */
   REQUIRE_GT(_ta_allocs, (size_t)3);
 
   cjson_destroy(arr);
@@ -2340,15 +2116,12 @@ TEST(custom_alloc, path_navigation_uses_custom_alloc) {
   size_t allocs_before = _ta_allocs;
   size_t frees_before = _ta_frees;
 
-  /* A short path needs no copy on the heap. */
   cjson leaf = cjson_get(doc, "a.b");
   REQUIRE_NE((void *)leaf, NULL);
   REQUIRE_EQ(cjson_int_val(leaf), 0LL);
   REQUIRE_EQ(_ta_allocs, allocs_before);
   REQUIRE_EQ(_ta_frees, frees_before);
 
-  /* A path of 256 bytes or more gets copied with the tree's allocator, and
-   * the copy is freed again afterwards. */
   char long_path[300];
   memset(long_path, 'k', sizeof(long_path) - 1);
   long_path[sizeof(long_path) - 1] = '\0';
@@ -2385,8 +2158,6 @@ TEST(custom_alloc, clone_uses_custom_alloc) {
 }
 
 TEST(custom_alloc, default_alloc_bypasses_tracking) {
-  /* With NULL (the default allocator) the tracking allocator must not be
-   * called at all. */
   _ta_allocs = 0;
   _ta_frees = 0;
 
@@ -2400,7 +2171,6 @@ TEST(custom_alloc, default_alloc_bypasses_tracking) {
 }
 
 TEST(custom_alloc, custom_alloc_frees_on_destroy) {
-  /* Check that the alloc and free counts balance for a non-trivial tree. */
   _ta_allocs = 0;
   _ta_frees = 0;
 
@@ -2414,26 +2184,13 @@ TEST(custom_alloc, custom_alloc_frees_on_destroy) {
 
   cjson_destroy(root);
 
-  /* Every allocation must be matched by a free. */
   REQUIRE_EQ(_ta_allocs, _ta_frees);
 }
 
+// The parse error message lives in library storage, so it costs the caller's
+// allocator nothing and the caller never frees it. A message built through mp
+// would show up as an allocation with no matching free.
 TEST(custom_alloc, parse_failure_error_string_is_not_an_allocation) {
-  /* The error message of a failed parse lives in LIBRARY storage, it isn't
-     an allocation of the caller's and the caller never frees it. See the
-     ownership rule at the top of common.h, which every module here follows.
-
-     We pin that with _tracking_alloc, whose .malloc and .free are functions
-     of their own next to the libc ones, each bumping a counter before it
-     calls malloc() or free(). If a regression allocated the message through
-     mp, one allocation would have no matching free and the balance below
-     would catch it.
-
-     A message that the parse builds on the heap is exactly what this test
-     is here to refuse. It would give the same-looking `char **err_str`
-     parameter a second ownership rule, the opposite of every other module's,
-     with nothing in the type or at the call site to tell them apart, and it
-     would allocate on a path that a failed allocation can reach. */
   _ta_allocs = 0;
   _ta_frees = 0;
 
@@ -2443,14 +2200,9 @@ TEST(custom_alloc, parse_failure_error_string_is_not_an_allocation) {
   REQUIRE_NE((void *)err, NULL);
   REQUIRE_TRUE(strlen(err) > 0);
 
-  /* This document fails at its very first token, so the parse builds no
-     node at all and both counters should be ZERO. A message on the heap
-     would show up here as exactly one unmatched allocation. */
   REQUIRE_EQ(_ta_allocs, (size_t)0);
   REQUIRE_EQ(_ta_frees, (size_t)0);
 
-  /* A document that does build nodes before it fails has to balance too,
-     with nothing left over for the caller to free. */
   _ta_allocs = 0;
   _ta_frees = 0;
   char *err_deep = NULL;
@@ -2460,12 +2212,8 @@ TEST(custom_alloc, parse_failure_error_string_is_not_an_allocation) {
   REQUIRE_GT(_ta_allocs, (size_t)0);
   REQUIRE_EQ(_ta_allocs, _ta_frees);
 
-  /* The message outlives the parse that produced it and stays readable
-     without the caller doing anything. */
   REQUIRE_TRUE(strlen(err) > 0);
 
-  /* A second failing parse on this thread replaces the text, which is the
-     documented lifetime and the same one strerror(3) gives. */
   char *err2 = NULL;
   cjson n2 = cjson_parse_mp("[1,", &err2, NULL);
   REQUIRE_EQ((void *)n2, NULL);
@@ -2473,17 +2221,7 @@ TEST(custom_alloc, parse_failure_error_string_is_not_an_allocation) {
   REQUIRE_EQ((void *)err2, (void *)err);
 }
 
-/* ========================================================================== */
-/*      DICTIONARY WALKS UNDER ALLOCATION FAILURE: NEVER A PARTIAL RESULT     */
-/* ========================================================================== */
-
 TEST(clone, dictionary_iterator_oom_never_returns_incomplete_clone) {
-  /* A clone that loses dictionary members to a failed allocation and still
-   * returns a node breaks cjson_clone's documented contract, which is "NULL
-   * on allocation failure". The test fails the allocator at every budget
-   * from 0 up to well past the real allocation count of the whole clone and
-   * checks at each budget that cjson_clone never returns a non-NULL
-   * dictionary clone with fewer entries than the source. */
   cjson src = cjson_parse_mp("{\"a\":1,\"b\":2,\"c\":3}", NULL, &g_counting_mp);
   REQUIRE_NE((void *)src, NULL);
   size_t src_size = cjson_dictionary_size(src);
@@ -2505,9 +2243,6 @@ TEST(clone, dictionary_iterator_oom_never_returns_incomplete_clone) {
 }
 
 TEST(serialize, dictionary_iterator_oom_never_returns_truncated_string) {
-  /* The mirror of the clone test above, for cjson_serialize(). If an
-   * allocation fails in the middle of serializing, the library must return
-   * NULL instead of a JSON object that looks fine but lost some entries. */
   cjson src = cjson_parse_mp("{\"a\":1,\"b\":2,\"c\":3}", NULL, &g_counting_mp);
   REQUIRE_NE((void *)src, NULL);
   size_t src_size = cjson_dictionary_size(src);
@@ -2530,15 +2265,9 @@ TEST(serialize, dictionary_iterator_oom_never_returns_truncated_string) {
   cjson_destroy(src);
 }
 
+// The teardown reaches every child without allocating, so it finishes while
+// every allocation fails. Only memtest (valgrind) can see a leak here.
 TEST(oom, dictionary_destroy_never_leaks_under_sustained_allocation_failure) {
-  /* node_clear is the dictionary cleanup of __cjson_destroy. It reaches each
-   * child through chashmap_destroy_with_dtor from chashmap.h, which walks the
-   * map's internal storage directly, so it never has to allocate and the
-   * teardown finishes while memory stays exhausted. tau has no leak checker
-   * so the test can't see a leak. What it does is drive this exact
-   * teardown path under `make memtest`, which runs valgrind over the whole
-   * suite, and it's valgrind that catches a regression here, not an
-   * assertion in this function. */
   const char *docs[] = {
       "{\"a\":1,\"b\":{\"x\":[1,2,3]},\"c\":3}",
       "[{\"a\":1},{\"b\":2},{\"c\":3}]",
@@ -2554,20 +2283,10 @@ TEST(oom, dictionary_destroy_never_leaks_under_sustained_allocation_failure) {
   }
 }
 
+// Failing only the first allocation (the node of "null") must give an honest
+// out-of-memory message. The single-fault allocator is needed because a budget
+// allocator would also fail the allocation of the message.
 TEST(oom, unreported_allocation_failure_reports_out_of_memory_not_unknown) {
-  /* Every real syntax rejection in this parser reports its own message with
-   * parse_err() before returning a failure, so the only thing that reaches
-   * parse_common's fallback with ctx.error still empty is an allocation
-   * failure that has nowhere of its own to report. Here that's the single
-   * _ccol_mem_calloc() call in node_alloc() for the node of the "null"
-   * literal, which is the first allocation of the parse and, for this input,
-   * the only one. We need the single-fault allocator rather than the
-   * budget-based counting one above, because an allocator that fails every
-   * call from some budget on also fails the later allocation of the error
-   * message, and then we could never see a non-NULL message. A failure of
-   * just that first allocation should report an honest out-of-memory
-   * message, not the misleading "unknown parse error", which would point at
-   * a malformed document instead of memory pressure. */
   g_single_fault_counter = 0;
   g_single_fault_at = 1;
   char *err = NULL;
@@ -2578,10 +2297,6 @@ TEST(oom, unreported_allocation_failure_reports_out_of_memory_not_unknown) {
   REQUIRE_TRUE(strstr(err, "out of memory") != NULL);
   REQUIRE_TRUE(strstr(err, "unknown parse error") == NULL);
 }
-
-/* ========================================================================== */
-/*                         DELETE                                             */
-/* ========================================================================== */
 
 TEST(delete, list_remove_middle) {
   char *err = NULL;
@@ -2645,7 +2360,6 @@ TEST(delete, list_remove_out_of_bounds) {
 }
 
 TEST(delete, list_remove_subtree_freed) {
-  /* Removing a list element that is a nested object itself must not leak. */
   char *err = NULL;
   cjson root = cjson_parse("[{\"a\":1,\"b\":[10,20]}, 99]", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -2682,7 +2396,6 @@ TEST(delete, dictionary_remove_missing_key) {
 }
 
 TEST(delete, dictionary_remove_subtree_freed) {
-  /* Removing a key whose value is a nested container must not leak. */
   char *err = NULL;
   cjson root = cjson_parse("{\"keep\":1,\"drop\":{\"x\":[1,2,3]}}", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -2748,15 +2461,9 @@ TEST(delete, path_missing_leaf_returns_key_not_found) {
   cjson_destroy(root);
 }
 
+// Through a path an absent index is ccol_key_not_found, while a direct
+// cjson_list_remove() call reports ccol_invalid_args for it on purpose.
 TEST(delete, path_delete_list_out_of_bounds_returns_key_not_found) {
-  /* A "#N" index can have the right syntax and still point past the end of
-   * the list, and then it names an absent element rather than being a
-   * malformed path. So the call reports ccol_key_not_found and not
-   * ccol_invalid_args, as the documented contract of _cjson_delete says:
-   * "ccol_key_not_found if any path component is absent". Calling
-   * cjson_list_remove() directly has a different contract on purpose, it
-   * reports ccol_invalid_args for an out-of-bounds index, and this test
-   * leaves that alone. */
   char *err = NULL;
   cjson root = cjson_parse("{\"items\":[1,2,3]}", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -2765,16 +2472,12 @@ TEST(delete, path_delete_list_out_of_bounds_returns_key_not_found) {
   REQUIRE_EQ(cjson_delete(root, "items.#99"), ccol_key_not_found);
   REQUIRE_EQ(cjson_list_len(cjson_get(root, "items")), (size_t)3);
 
-  /* Called directly, cjson_list_remove() reports ccol_invalid_args for the
-   * same out-of-bounds index. */
   REQUIRE_EQ(cjson_list_remove(cjson_get(root, "items"), 3), ccol_invalid_args);
 
   cjson_destroy(root);
 }
 
 TEST(delete, path_delete_list_root_out_of_bounds_returns_key_not_found) {
-  /* Same as above, but the path's root is a CJSON_LIST itself instead of a
-   * list under a dictionary key. */
   cjson root = cjson_parse("[10, 20, 30]", NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cjson_delete(root, "#3"), ccol_key_not_found);
@@ -2783,7 +2486,6 @@ TEST(delete, path_delete_list_root_out_of_bounds_returns_key_not_found) {
 }
 
 TEST(delete, path_delete_with_escaped_dot_in_key) {
-  /* A key whose name is literally "a.b" can be reached through "a\\.b". */
   cjson root = cjson_create_dictionary();
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cjson_dictionary_set(root, "a.b", cjson_create_int(7)),
@@ -2798,20 +2500,20 @@ TEST(delete, path_delete_with_escaped_dot_in_key) {
 }
 
 TEST(delete, null_root_returns_invalid_args) {
-  REQUIRE_EQ(_cjson_delete(NULL, "x"), ccol_invalid_args);
+  REQUIRE_EQ(cjson__delete(NULL, "x"), ccol_invalid_args);
 }
 
 TEST(delete, null_path_returns_invalid_args) {
   cjson root = cjson_parse("{\"x\":1}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  REQUIRE_EQ(_cjson_delete(root, NULL), ccol_invalid_args);
+  REQUIRE_EQ(cjson__delete(root, NULL), ccol_invalid_args);
   cjson_destroy(root);
 }
 
 TEST(delete, empty_path_returns_invalid_args) {
   cjson root = cjson_parse("{\"x\":1}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  REQUIRE_EQ(_cjson_delete(root, ""), ccol_invalid_args);
+  REQUIRE_EQ(cjson__delete(root, ""), ccol_invalid_args);
   REQUIRE_NE((void *)cjson_get(root, "x"), NULL);
   cjson_destroy(root);
 }
@@ -2819,45 +2521,32 @@ TEST(delete, empty_path_returns_invalid_args) {
 TEST(delete, trailing_dot_returns_invalid_args) {
   cjson root = cjson_parse("{\"a\":{\"b\":1}}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  REQUIRE_EQ(_cjson_delete(root, "a."), ccol_invalid_args);
+  REQUIRE_EQ(cjson__delete(root, "a."), ccol_invalid_args);
   REQUIRE_NE((void *)cjson_get(root, "a.b"), NULL);
   cjson_destroy(root);
 }
 
 TEST(delete, consecutive_dots_rejected) {
-  /* An empty INTERMEDIATE path component such as "a..b" belongs to the same
-   * class as an empty LEAF component (see trailing_dot_returns_invalid_ args
-   * above). Both are a syntax error that reports ccol_invalid_args, and
-   * neither reports ccol_key_not_found. */
   cjson root = cjson_parse("{\"a\":{\"b\":1}}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  REQUIRE_EQ(_cjson_delete(root, "a..b"), ccol_invalid_args);
+  REQUIRE_EQ(cjson__delete(root, "a..b"), ccol_invalid_args);
   REQUIRE_NE((void *)cjson_get(root, "a.b"), NULL);
   cjson_destroy(root);
 }
 
 TEST(delete, trailing_dot_with_nonexistent_parent_still_invalid_args) {
-  /* A trailing dot is an empty leaf component, which the library always has
-   * to report as ccol_invalid_args, even when the parent path doesn't exist.
-   * The leaf's syntax is checked before the parent is looked up, so an absent
-   * parent can never hide a leaf syntax error behind ccol_key_not_found. */
   cjson root = cjson_parse("{\"a\":1}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  REQUIRE_EQ(_cjson_delete(root, "missing."), ccol_invalid_args);
+  REQUIRE_EQ(cjson__delete(root, "missing."), ccol_invalid_args);
   REQUIRE_NE((void *)cjson_get(root, "a"), NULL);
   cjson_destroy(root);
 }
 
 TEST(delete,
      consecutive_dots_with_nonexistent_first_component_still_invalid_args) {
-  /* An empty INTERMEDIATE component such as "missing..b" must come back as
-   * ccol_invalid_args even when the component in front of it, "missing",
-   * doesn't exist either. navigate() keeps scanning the rest of the path for
-   * a syntax error instead of giving up as soon as an earlier, well-formed
-   * component fails to resolve. */
   cjson root = cjson_parse("{\"a\":1}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  REQUIRE_EQ(_cjson_delete(root, "missing..b"), ccol_invalid_args);
+  REQUIRE_EQ(cjson__delete(root, "missing..b"), ccol_invalid_args);
   REQUIRE_NE((void *)cjson_get(root, "a"), NULL);
   cjson_destroy(root);
 }
@@ -2865,14 +2554,12 @@ TEST(delete,
 TEST(delete, leading_dot_rejected) {
   cjson root = cjson_parse("{\"a\":1}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  REQUIRE_EQ(_cjson_delete(root, ".a"), ccol_invalid_args);
+  REQUIRE_EQ(cjson__delete(root, ".a"), ccol_invalid_args);
   REQUIRE_NE((void *)cjson_get(root, "a"), NULL);
   cjson_destroy(root);
 }
 
 TEST(delete, list_root_delete_element) {
-  /* cjson_delete works when root is a CJSON_LIST itself and the path
-   * points at an element directly (no dictionary lookup in between). */
   cjson root = cjson_parse("[10, 20, 30]", NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cjson_delete(root, "#1"), ccol_success);
@@ -2881,10 +2568,6 @@ TEST(delete, list_root_delete_element) {
   REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 1)), 30LL);
   cjson_destroy(root);
 }
-
-/* ========================================================================== */
-/*          REMOVE FUNCTION NULL / WRONG-TYPE ARGUMENT EDGE CASES             */
-/* ========================================================================== */
 
 TEST(delete, list_remove_null_arr) {
   REQUIRE_EQ(cjson_list_remove(NULL, 0), ccol_invalid_args);
@@ -2912,15 +2595,7 @@ TEST(delete, dictionary_remove_wrong_type) {
   cjson_destroy(not_dict);
 }
 
-/* ========================================================================== */
-/*         node_make_scalar ERROR PROPAGATION (new-key path)                  */
-/* ========================================================================== */
-
 TEST(navigate, set_nonfinite_new_key_returns_invalid_args) {
-  /* An Inf or a NaN on a key that does NOT exist yet gives
-   * ccol_invalid_args and not ccol_not_enough_memory. The new-key path in
-   * _cjson_set_typed must pass on the exact error that node_reinit_scalar
-   * gives and node_make_scalar carries. */
   cjson root = cjson_parse("{}", NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cjson_set(root, "v", INFINITY), ccol_invalid_args);
@@ -2931,47 +2606,34 @@ TEST(navigate, set_nonfinite_new_key_returns_invalid_args) {
 }
 
 TEST(navigate, set_typed_invalid_integer_size_new_key) {
-  /* A direct _cjson_set_typed call with an invalid raw_size for
-   * CJSON_INTEGER and a key that doesn't exist yet returns
-   * ccol_invalid_args, not ccol_not_enough_memory. Only the back-end function
-   * can get here, since cjson_set always passes a valid sizeof. */
   cjson root = cjson_parse("{}", NULL);
   REQUIRE_NE((void *)root, NULL);
   long long v = 42;
-  ccol_retval_t r = _cjson_set_typed(root, "k", CJSON_INTEGER, &v, 3, true);
+  ccol_retval r = cjson__set_typed(root, "k", CJSON_INTEGER, &v, 3, true);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ((void *)cjson_get(root, "k"), NULL);
   cjson_destroy(root);
 }
 
+// Only a direct back-end call can pass a wrong bool size. Reading the bytes at
+// the wrong width could store a trap representation in a _Bool.
 TEST(navigate, set_typed_invalid_bool_size_new_key) {
-  /* The mirror of set_typed_invalid_integer_size_new_key above, for
-   * CJSON_BOOL. On a key that doesn't exist yet, a raw_size other than
-   * sizeof(bool) has to be rejected outright. Reading the raw bytes as a
-   * bool at the wrong width could give a _Bool trap representation, so the
-   * library must not do it. Only the back-end function can get here, since
-   * cjson_set always passes sizeof(bool) for a C expression of type
-   * bool. */
   cjson root = cjson_parse("{}", NULL);
   REQUIRE_NE((void *)root, NULL);
   int not_a_bool = 4;
-  ccol_retval_t r = _cjson_set_typed(root, "k", CJSON_BOOL, &not_a_bool,
-                                     sizeof(not_a_bool), false);
+  ccol_retval r = cjson__set_typed(root, "k", CJSON_BOOL, &not_a_bool,
+                                   sizeof(not_a_bool), false);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ((void *)cjson_get(root, "k"), NULL);
   cjson_destroy(root);
 }
 
 TEST(navigate, set_typed_invalid_bool_size_existing_key_preserves_value) {
-  /* The mirror of set_unsupported_type_existing_key_preserves_ value above,
-   * for a CJSON_BOOL of the wrong size. When the write is rejected the
-   * existing value stays completely untouched, with no part of it
-   * overwritten. */
   cjson root = cjson_parse("{\"v\":123}", NULL);
   REQUIRE_NE((void *)root, NULL);
   int not_a_bool = 4;
-  ccol_retval_t r = _cjson_set_typed(root, "v", CJSON_BOOL, &not_a_bool,
-                                     sizeof(not_a_bool), false);
+  ccol_retval r = cjson__set_typed(root, "v", CJSON_BOOL, &not_a_bool,
+                                   sizeof(not_a_bool), false);
   REQUIRE_EQ(r, ccol_invalid_args);
   cjson v = cjson_get(root, "v");
   REQUIRE_NE((void *)v, NULL);
@@ -2980,20 +2642,15 @@ TEST(navigate, set_typed_invalid_bool_size_existing_key_preserves_value) {
   cjson_destroy(root);
 }
 
+// The list branch reaches the same check through a different call site (#N and
+// cvector_at()), so it needs its own case.
 TEST(navigate,
      set_typed_invalid_bool_size_existing_list_element_preserves_value) {
-  /* The mirror of set_typed_invalid_bool_size_existing_key_
-   * preserves_value above, with a CJSON_LIST as the parent instead of a
-   * CJSON_DICTIONARY. The list branch of _cjson_set_typed ends up in the same
-   * node_reinit_scalar() call, which validates before changing anything, but
-   * the call site is built differently: it uses cvector_at() and a '#N'
-   * component instead of a chmap lookup. So it needs its own coverage, and
-   * the dictionary case can't stand in for it. */
   cjson root = cjson_parse("[123]", NULL);
   REQUIRE_NE((void *)root, NULL);
   int not_a_bool = 4;
-  ccol_retval_t r = _cjson_set_typed(root, "#0", CJSON_BOOL, &not_a_bool,
-                                     sizeof(not_a_bool), false);
+  ccol_retval r = cjson__set_typed(root, "#0", CJSON_BOOL, &not_a_bool,
+                                   sizeof(not_a_bool), false);
   REQUIRE_EQ(r, ccol_invalid_args);
   cjson v = cjson_get(root, "#0");
   REQUIRE_NE((void *)v, NULL);
@@ -3002,14 +2659,7 @@ TEST(navigate,
   cjson_destroy(root);
 }
 
-/* ========================================================================== */
-/*        cjson_set - UNSUPPORTED C TYPE MUST BE REJECTED, NOT SILENCED       */
-/* ========================================================================== */
-
 TEST(navigate, set_unsupported_type_new_key_rejected) {
-  /* long double isn't on cjson_set's documented list of accepted types
-   * (bool, any integer type, float, double, char *, const char *), so a key
-   * that doesn't exist yet must not be quietly created as CJSON_NULL for it. */
   cjson root = cjson_parse("{}", NULL);
   REQUIRE_NE((void *)root, NULL);
   long double ld = 3.14L;
@@ -3019,9 +2669,6 @@ TEST(navigate, set_unsupported_type_new_key_rejected) {
 }
 
 TEST(navigate, set_unsupported_type_existing_key_preserves_value) {
-  /* Setting an unsupported type on a key that holds real data has to leave
-   * that data completely untouched, and not quietly overwrite it with
-   * CJSON_NULL. */
   cjson root = cjson_parse("{\"v\":123.456}", NULL);
   REQUIRE_NE((void *)root, NULL);
   long double ld = 3.14L;
@@ -3034,28 +2681,17 @@ TEST(navigate, set_unsupported_type_existing_key_preserves_value) {
 }
 
 TEST(navigate, set_typed_unsupported_type_direct_call_rejected) {
-  /* The same guard, driven directly through the back-end function, the way
-   * _cjson_type_of's sentinel reaches node_reinit_scalar's validation. */
   cjson root = cjson_parse("{}", NULL);
   REQUIRE_NE((void *)root, NULL);
   long double ld = 1.0L;
-  ccol_retval_t r = _cjson_set_typed(root, "k", _CJSON_TYPE_UNSUPPORTED, &ld,
-                                     sizeof(ld), false);
+  ccol_retval r = cjson__set_typed(root, "k", CJSON__TYPE_UNSUPPORTED, &ld,
+                                   sizeof(ld), false);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ((void *)cjson_get(root, "k"), NULL);
   cjson_destroy(root);
 }
 
-/* ========================================================================== */
-/*     cjson_set - NON-NULL void* MUST BE REJECTED, NOT WRITTEN AS NULL       */
-/* ========================================================================== */
-
 TEST(navigate, set_nonnull_void_ptr_new_key_rejected) {
-  /* cjson_set's _Generic dispatch (_cjson_type_of in cjson.h) maps ANY C
-   * expression of type void* to CJSON_NULL, not only a literal NULL. So
-   * node_reinit_scalar's own guard needs to reject a void* value that really
-   * is non-NULL with ccol_invalid_args, instead of quietly creating the key
-   * as CJSON_NULL. */
   cjson root = cjson_parse("{}", NULL);
   REQUIRE_NE((void *)root, NULL);
   int dummy = 5;
@@ -3066,10 +2702,6 @@ TEST(navigate, set_nonnull_void_ptr_new_key_rejected) {
 }
 
 TEST(navigate, set_nonnull_void_ptr_existing_key_preserves_value) {
-  /* The same guard as set_nonnull_void_ptr_new_key_rejected, but here the
-   * key holds real data, and rejecting the write leaves that data
-   * completely untouched instead of quietly overwriting it with
-   * CJSON_NULL. */
   cjson root = cjson_parse("{\"v\":123}", NULL);
   REQUIRE_NE((void *)root, NULL);
   int dummy = 5;
@@ -3082,11 +2714,9 @@ TEST(navigate, set_nonnull_void_ptr_existing_key_preserves_value) {
   cjson_destroy(root);
 }
 
+// The guard against a non-NULL void * must not refuse a void * that holds NULL,
+// which is documented usage.
 TEST(navigate, set_null_void_ptr_still_accepted) {
-  /* Regression guard for the guard above. It must reject only a void* that
-   * really is non-NULL and not void* as a C type in general. A void*
-   * variable that holds NULL is documented, intended usage and should keep
-   * setting the leaf to CJSON_NULL. */
   cjson root = cjson_parse("{\"v\":123}", NULL);
   REQUIRE_NE((void *)root, NULL);
   void *p = NULL;
@@ -3095,17 +2725,11 @@ TEST(navigate, set_null_void_ptr_still_accepted) {
   cjson_destroy(root);
 }
 
-/* ========================================================================== */
-/*                         ADDITIONAL COVERAGE                                */
-/* ========================================================================== */
-
 TEST(parse, null_input_returns_null) {
-  /* cjson_parse(NULL) must return NULL without crashing. */
   REQUIRE_EQ((void *)cjson_parse(NULL, NULL), NULL);
 }
 
 TEST(parse, null_input_with_error_str) {
-  /* The error string gets filled in when the input is NULL. */
   char *err = NULL;
   cjson n = cjson_parse_mp(NULL, &err, NULL);
   REQUIRE_EQ((void *)n, NULL);
@@ -3114,8 +2738,6 @@ TEST(parse, null_input_with_error_str) {
 }
 
 TEST(navigate, set_new_null_key) {
-  /* With NULL, cjson_set must CREATE a CJSON_NULL node that can be found
-   * when the key doesn't exist yet, and returning success isn't enough. */
   cjson root = cjson_parse("{}", NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cjson_set(root, "newkey", NULL), ccol_success);
@@ -3127,18 +2749,15 @@ TEST(navigate, set_new_null_key) {
 }
 
 TEST(navigate, set_trailing_dot_returns_error) {
-  /* A path with a trailing dot has an empty leaf component, so cjson_set has
-   * to return an error code and leave the tree as it was. */
   cjson root = cjson_parse("{\"a\":{\"b\":0}}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  ccol_retval_t r = cjson_set(root, "a.", 99);
+  ccol_retval r = cjson_set(root, "a.", 99);
   REQUIRE_NE(r, ccol_success);
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "a.b")), 0LL);
   cjson_destroy(root);
 }
 
 TEST(serialize, pretty_print_list) {
-  /* cjson_serialize_pretty must emit a newline-indented form for list roots. */
   cjson a = cjson_create_list();
   cjson_list_push(a, cjson_create_int(1));
   cjson_list_push(a, cjson_create_int(2));
@@ -3159,8 +2778,6 @@ TEST(serialize, pretty_print_list) {
 }
 
 TEST(clone, null_type_node) {
-  /* cjson_clone on a node of type CJSON_NULL (which is not a NULL handle)
-   * returns an independent non-NULL handle of type CJSON_NULL. */
   cjson orig = cjson_create_null();
   REQUIRE_NE((void *)orig, NULL);
   cjson copy = cjson_clone(orig);
@@ -3172,24 +2789,20 @@ TEST(clone, null_type_node) {
 }
 
 TEST(construction, list_get_wrong_type_returns_null) {
-  /* cjson_list_get on a non-CJSON_LIST node must return NULL, not crash. */
   cjson not_list = cjson_create_int(42);
   REQUIRE_EQ((void *)cjson_list_get(not_list, 0), NULL);
   cjson_destroy(not_list);
 }
 
 TEST(construction, dict_get_wrong_type_returns_null) {
-  /* cjson_dictionary_get on a non-CJSON_DICTIONARY node must return NULL. */
   cjson not_dict = cjson_create_string("oops");
   REQUIRE_EQ((void *)cjson_dictionary_get(not_dict, "k"), NULL);
   cjson_destroy(not_dict);
 }
 
 TEST(navigate, set_on_scalar_root_returns_invalid_args) {
-  /* cjson_set where the final parent is a scalar (neither dict nor list) has
-   * to return ccol_invalid_args and leave the node untouched. */
   cjson root = cjson_create_int(42);
-  ccol_retval_t r = cjson_set(root, "key", 5);
+  ccol_retval r = cjson_set(root, "key", 5);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ(cjson_type(root), CJSON_INTEGER);
   REQUIRE_EQ(cjson_int_val(root), 42LL);
@@ -3197,7 +2810,6 @@ TEST(navigate, set_on_scalar_root_returns_invalid_args) {
 }
 
 TEST(edge, llong_max_serialize_roundtrip) {
-  /* LLONG_MAX should serialize to the right decimal string and parse back. */
   cjson n = cjson_create_int(LLONG_MAX);
   REQUIRE_NE((void *)n, NULL);
   char *s = cjson_serialize(n);
@@ -3213,33 +2825,24 @@ TEST(edge, llong_max_serialize_roundtrip) {
 }
 
 TEST(delete, path_delete_non_hash_leaf_on_list_returns_invalid_args) {
-  /* When the parent is a CJSON_LIST, a leaf component that doesn't start
-   * with '#' is invalid, so cjson_delete returns ccol_invalid_args for such a
-   * path and leaves the list unchanged. */
   cjson root = cjson_parse("[1, 2, 3]", NULL);
   REQUIRE_NE((void *)root, NULL);
-  ccol_retval_t r = cjson_delete(root, "key");
+  ccol_retval r = cjson_delete(root, "key");
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ(cjson_list_len(root), (size_t)3);
   cjson_destroy(root);
 }
 
 TEST(delete, path_delete_on_scalar_root_returns_invalid_args) {
-  /* cjson_delete where root is a scalar (neither dict nor list) is expected
-   * to return ccol_invalid_args and leave the node untouched. */
   cjson root = cjson_create_int(42);
-  ccol_retval_t r = _cjson_delete(root, "key");
+  ccol_retval r = cjson__delete(root, "key");
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ(cjson_type(root), CJSON_INTEGER);
   cjson_destroy(root);
 }
 
-/* ========================================================================== */
-/*        PARSE NESTING DEPTH GUARD (CJSON_MAX_PARSE_DEPTH = 500)             */
-/* ========================================================================== */
-
-/* Builds n '[' characters, a scalar '1' and then n ']' characters into a
- * heap-allocated buffer that the caller must free(). */
+// Builds n '[' around a scalar 1 and n ']' in a malloc'd buffer that the caller
+// frees, for the depth tests.
 static char *build_nested_array(size_t n) {
   char *buf = malloc(2 * n + 2);
   size_t pos = 0;
@@ -3250,8 +2853,8 @@ static char *build_nested_array(size_t n) {
   return buf;
 }
 
-/* Builds n levels of {"a": ... } nesting around a scalar '1' into a
- * heap-allocated buffer that the caller has to free(). */
+// Builds n levels of {"a": ...} around a scalar 1 in a malloc'd buffer that the
+// caller frees, for the depth tests.
 static char *build_nested_object(size_t n) {
   char *buf = malloc(6 * n + 2);
   size_t pos = 0;
@@ -3268,15 +2871,9 @@ static char *build_nested_object(size_t n) {
   return buf;
 }
 
+// A document far past the depth cap must fail quickly with a parse error, not
+// crash or hang; the wall-clock bound checks the "quickly".
 TEST(parse, deeply_nested_array_rejected_not_crashed) {
-  /* A document can nest far deeper than CJSON_MAX_PARSE_DEPTH, and the
-   * parser has to reject it quickly with a parse error instead of crashing
-   * the process or hanging. Without the depth guard the recursive descent
-   * grows the stack without any bound, and a document this deep segfaults
-   * the parser. We assert an explicit wall-clock bound here, as the other
-   * DoS-guard tests of the codebase do (see
-   * deeply_nested_explicit_keys_rejected_not_hung in cyaml, and the
-   * ceventloop DoS-guard tests in cthreadcomm). */
   char *json = build_nested_array(5000);
   clock_t t0 = clock();
   char *err = NULL;
@@ -3291,9 +2888,6 @@ TEST(parse, deeply_nested_array_rejected_not_crashed) {
 }
 
 TEST(parse, deeply_nested_object_rejected_not_crashed) {
-  /* The same guard, driven with nested objects instead of nested arrays.
-   * parse_list() and parse_dictionary() both recurse back into
-   * parse_value(), so each of them needs its own coverage. */
   char *json = build_nested_object(5000);
   clock_t t0 = clock();
   char *err = NULL;
@@ -3308,10 +2902,6 @@ TEST(parse, deeply_nested_object_rejected_not_crashed) {
 }
 
 TEST(parse, nesting_at_max_depth_still_parses) {
-  /* A document can sit exactly at the boundary the parser accepts, 500 nested
-   * '[' characters around one scalar, which is 500 levels since a scalar adds
-   * none. It parses fine, because the guard must not be off by one against an
-   * ordinary legitimate document that is deep but bounded. */
   char *json = build_nested_array(500);
   cjson n = cjson_parse(json, NULL);
   free(json);
@@ -3321,9 +2911,6 @@ TEST(parse, nesting_at_max_depth_still_parses) {
 }
 
 TEST(parse, nesting_one_past_max_depth_rejected) {
-  /* One level past the accepted boundary (501 nested '[') gets rejected,
-   * which pins the guard's exact threshold rather than only that it
-   * "rejects something eventually". */
   char *json = build_nested_array(501);
   char *err = NULL;
   cjson n = cjson_parse_mp(json, &err, NULL);
@@ -3333,14 +2920,9 @@ TEST(parse, nesting_one_past_max_depth_rejected) {
   REQUIRE_TRUE(strstr(err, "nesting depth") != NULL);
 }
 
-/* ========================================================================== */
-/*     API-CONSTRUCTED (NOT PARSED) DEEP TREES; CLONE/SERIALIZE/DESTROY      */
-/* ========================================================================== */
-
-/* Builds a list nested n levels deep directly through the public
- * construction API (cjson_list_push), so the parser and its
- * CJSON_MAX_PARSE_DEPTH guard are not involved at all. Returns the
- * outermost node. */
+// Builds a list nested n levels deep through cjson_list_push(), so the parser's
+// depth cap plays no part, and gives the outermost node; the clone, serialize
+// and destroy depth tests use it.
 static cjson build_nested_list_via_api(size_t n) {
   cjson cur = cjson_create_list();
   cjson_list_push(cur, cjson_create_int(1));
@@ -3353,10 +2935,6 @@ static cjson build_nested_list_via_api(size_t n) {
 }
 
 TEST(clone, deeply_nested_api_built_tree_rejected_not_crashed) {
-  /* cjson_clone() has a depth cap of its own, CJSON_CLONE_MAX_DEPTH, and it
-   * needs one because a tree that reaches it need not come from
-   * cjson_parse() at all. A caller can build such a tree to any depth with
-   * cjson_list_push(), and CJSON_MAX_PARSE_DEPTH can't see or bound that. */
   cjson deep = build_nested_list_via_api(600);
   REQUIRE_NE((void *)deep, NULL);
   cjson copy = cjson_clone(deep);
@@ -3365,8 +2943,6 @@ TEST(clone, deeply_nested_api_built_tree_rejected_not_crashed) {
 }
 
 TEST(serialize, deeply_nested_api_built_tree_rejected_not_crashed) {
-  /* The same guard for cjson_serialize()'s own, separate depth cap
-   * (CJSON_MAX_SERIALIZE_DEPTH). */
   cjson deep = build_nested_list_via_api(600);
   REQUIRE_NE((void *)deep, NULL);
   char *s = cjson_serialize(deep);
@@ -3375,12 +2951,6 @@ TEST(serialize, deeply_nested_api_built_tree_rejected_not_crashed) {
 }
 
 TEST(clone, nesting_at_clone_max_depth_still_clones) {
-  /* A tree can sit exactly at the parser's cap, CJSON_MAX_PARSE_DEPTH:
-   * build_nested_list_via_api(499) is 500 nested lists around one scalar,
-   * the same as in the boundary test above. cjson_clone() must clone such a
-   * tree, and that's why CJSON_CLONE_MAX_DEPTH has the same value, since a
-   * document with the maximum nesting that parses must never fail to clone.
-   */
   cjson deep = build_nested_list_via_api(499);
   REQUIRE_NE((void *)deep, NULL);
   cjson copy = cjson_clone(deep);
@@ -3390,56 +2960,37 @@ TEST(clone, nesting_at_clone_max_depth_still_clones) {
 }
 
 TEST(destroy, deeply_nested_api_built_tree_destroyed_without_crashing) {
-  /* cjson_clone() and cjson_serialize() can fall back on a "fail cleanly"
-   * contract but __cjson_destroy() can't, since it returns void, so it has
-   * to be safe for a tree of any depth. It uses an iterative worklist for
-   * that instead of a depth cap, and the depth below is well past every
-   * other guard's cap. tau has no leak checker so the test can't see a leak
-   * directly; what it does is drive this exact teardown path under
-   * `make memtest`, which runs valgrind over the whole suite. */
   cjson deep = build_nested_list_via_api(20000);
   REQUIRE_NE((void *)deep, NULL);
   cjson_destroy(deep);
   REQUIRE_EQ((void *)deep, NULL);
 }
 
+// Wrapping a built subtree in a new unattached container must not search that
+// subtree, or building a tree bottom up costs O(n^2). The test counts the nodes
+// the search visits (about n^2/2 without the short-circuit), and first shows
+// that a push into an attached container does walk the child.
 TEST(ownership,
      list_push_into_unattached_container_stays_cheap_even_for_deep_child) {
-  /* This guards the cost of the cycle check in cjson_list_push() and
-   * cjson_dictionary_set(). A caller often wraps an already built subtree in
-   * a new outer container that isn't attached yet, and looking for a
-   * possible cycle must not make that ordinary pattern O(n^2). The doc
-   * comment on node_reaches() in cjson.c explains why testing
-   * needle->attached first keeps each call O(1) however large the already
-   * built child is. build_nested_list_via_api() does exactly this once per
-   * level, so we count the nodes the search visits instead of timing it:
-   * with the short circuit no call of the n=20000 build walks a single node,
-   * and without it the build visits about n^2/2 of them (2e8).
-   *
-   * The first part shows that the counter really counts a walk: a push into
-   * an attached container must search the child's subtree, here the list
-   * and its three members. */
   cjson root = cjson_create_list();
   cjson target = cjson_create_list();
   cjson child = cjson_create_list();
   bool created = root && target && child;
-  ccol_retval_t r_target = ccol_unexpected_failure;
-  ccol_retval_t r_child = ccol_unexpected_failure;
+  ccol_retval r_target = ccol_unexpected_failure;
+  ccol_retval r_child = ccol_unexpected_failure;
   bool members_ok = true;
   unsigned long before = 0, walked = 0;
   if (created) {
-    /* A failed push destroys the child it was given, so neither target nor
-     * child is destroyed here once it has been handed over. */
     r_target = cjson_list_push(root, target);
     for (int i = 0; i < 3; i++)
       if (cjson_list_push(child, cjson_create_int(i)) != ccol_success)
         members_ok = false;
-    before = atomic_load(&_cjson_cycle_search_nodes_for_tests);
+    before = atomic_load(&cjson__cycle_search_nodes_for_tests);
     if (r_target == ccol_success)
       r_child = cjson_list_push(target, child);
     else
       cjson_destroy(child);
-    walked = atomic_load(&_cjson_cycle_search_nodes_for_tests) - before;
+    walked = atomic_load(&cjson__cycle_search_nodes_for_tests) - before;
   } else {
     cjson_destroy(target);
     cjson_destroy(child);
@@ -3452,25 +3003,17 @@ TEST(ownership,
   REQUIRE_EQ(walked, 4UL);
 
   const size_t n = 20000;
-  before = atomic_load(&_cjson_cycle_search_nodes_for_tests);
+  before = atomic_load(&cjson__cycle_search_nodes_for_tests);
   cjson deep = build_nested_list_via_api(n);
-  walked = atomic_load(&_cjson_cycle_search_nodes_for_tests) - before;
+  walked = atomic_load(&cjson__cycle_search_nodes_for_tests) - before;
   REQUIRE_NE((void *)deep, NULL);
   cjson_destroy(deep);
   REQUIRE_EQ(walked, 0UL);
 }
 
-/* ========================================================================== */
-/*      NUMBER LITERALS LONGER THAN THE PARSER'S STACK TOKEN BUFFER           */
-/* ========================================================================== */
-
+// A valid number can be longer than the 360-byte stack token buffer (here
+// through redundant zeros); it must parse through the heap fallback.
 TEST(fuzzy, number_literal_past_stack_buffer_still_parses) {
-  /* RFC 8259 sec. 6 puts no limit on the length of a number literal, so a
-   * number can be finite, have valid syntax and still be longer than the
-   * parser's internal 360-byte stack token buffer, for example because of
-   * lots of redundant leading zeros in the fractional part. The parser has
-   * to parse it through the heap fallback instead of rejecting it as "too
-   * long". */
   char buf[500];
   size_t pos = 0;
   buf[pos++] = '0';
@@ -3488,14 +3031,6 @@ TEST(fuzzy, number_literal_past_stack_buffer_still_parses) {
 }
 
 TEST(fuzzy, long_integer_literal_past_stack_buffer_reports_out_of_range) {
-  /* The same stack-buffer-overflow class on the integer path, with a literal
-   * of many digits and no decimal point. A 401-digit literal is longer than
-   * the parser's 360-byte stack token buffer, so the parser takes the heap
-   * fallback, and it's also past the range of any finite double (which holds
-   * about 309 decimal digits at most), so strtoll() reports ERANGE and the
-   * strtod() fallback reports infinity. The whole parse should still fail
-   * cleanly, with the error path freeing the heap token, and it must not
-   * crash, leak, wrap or truncate. */
   char buf[500];
   size_t pos = 0;
   buf[pos++] = '1';
@@ -3511,10 +3046,6 @@ TEST(fuzzy, long_integer_literal_past_stack_buffer_reports_out_of_range) {
 }
 
 TEST(fuzzy, malformed_number_literal_past_stack_buffer_still_rejected) {
-  /* The heap fallback must not skip the ordinary check of the number
-   * grammar. A token longer than 360 bytes with two decimal points has a
-   * syntax error, so it's a parse error all the same and the parser must not
-   * quietly accept it. */
   char buf[500];
   size_t pos = 0;
   buf[pos++] = '0';
@@ -3528,10 +3059,6 @@ TEST(fuzzy, malformed_number_literal_past_stack_buffer_still_rejected) {
 }
 
 TEST(custom_alloc, long_number_literal_uses_custom_alloc_and_frees) {
-  /* A number literal that is too long uses the heap-fallback token buffer,
-   * and that buffer has to come from the same custom allocator as everything
-   * else in the parse. The parser frees it on both branches, the
-   * integer overflow branch and the float branch. */
   _ta_allocs = 0;
   _ta_frees = 0;
 
@@ -3546,31 +3073,16 @@ TEST(custom_alloc, long_number_literal_uses_custom_alloc_and_frees) {
   cjson n = cjson_parse_mp(buf, NULL, &_tracking_alloc);
   REQUIRE_NE((void *)n, NULL);
   REQUIRE_EQ(cjson_type(n), CJSON_FLOAT);
-  /* The token allocation is freed already, whether or not n is
-   * destroyed, because it is scratch state and not part of the returned
-   * tree. */
   REQUIRE_GT(_ta_frees, (size_t)0);
   cjson_destroy(n);
 }
 
-/* ========================================================================== */
-/*                         THREAD-LOCAL NODE POOL                             */
-/* ========================================================================== */
-
-/* This mirrors _NODE_POOL_CAP in cjson.c, an internal tuning constant that
- * no public header holds, so this test file states it again on purpose
- * instead of sharing it. Other white-box tests of the codebase pin a literal
- * internal constant the same way. */
+// NODE_POOL_CAP of cjson.c, stated again here because no header holds it.
 #define CJSON_TEST_POOL_CAP 512
 
+// Earlier tests leave anything from 0 to the cap in this thread's pool; after
+// destroying more than the cap the pool holds exactly the cap.
 TEST(node_pool, cap_eviction_keeps_pool_bounded) {
-  /* When this test runs, this thread's pool can already hold anything from 0
-   * to CJSON_TEST_POOL_CAP nodes that earlier tests of the same binary left
-   * there. We destroy more than CJSON_TEST_POOL_CAP nodes from the default
-   * allocator in one go, and after that the pool holds EXACTLY the cap. The
-   * free list takes every node_free() call while it's below the cap and frees
-   * every node past the cap directly, so the pool never grows without a
-   * bound. */
   cjson list = cjson_create_list();
   REQUIRE_NE((void *)list, NULL);
   size_t n = CJSON_TEST_POOL_CAP + 100;
@@ -3581,22 +3093,18 @@ TEST(node_pool, cap_eviction_keeps_pool_bounded) {
   REQUIRE_EQ(cjson_debug_pool_size(), (size_t)CJSON_TEST_POOL_CAP);
 }
 
+// What pool_populate_thread() saw: its pool size before and after.
 typedef struct {
   size_t start_pool_size;
   size_t end_pool_size;
 } pool_populate_result_t;
 
+// Allocates 50 nodes and then frees them all on a new thread, recording the
+// thread's pool size before and after in the pool_populate_result_t at arg.
+// Allocating all of them first keeps the pool from recycling one node.
 static void *pool_populate_thread(void *arg) {
   pool_populate_result_t *r = (pool_populate_result_t *)arg;
   r->start_pool_size = cjson_debug_pool_size();
-  /* Allocate all 50 first and THEN free all 50. An allocation followed
-   * directly by a free would recycle the same single node fifty times and leave
-   * 1 node in the pool instead of 50, because node_alloc() always prefers a
-   * node the pool already holds. With all 50 alive at once each of them has
-   * to be a fresh calloc, since there's nothing to recycle, so freeing them
-   * afterwards grows the pool by one entry per node.
-   * cap_eviction_keeps_pool_bounded above has the same shape, allocate in
-   * bulk and then free in bulk. */
   cjson nodes[50];
   for (int i = 0; i < 50; i++) nodes[i] = cjson_create_null();
   for (int i = 0; i < 50; i++) cjson_destroy(nodes[i]);
@@ -3604,29 +3112,20 @@ static void *pool_populate_thread(void *arg) {
   return NULL;
 }
 
+// The worker allocates all 50 nodes before it frees any, so each is a fresh
+// calloc and the pool grows by 50. It exits with them pooled, which drives the
+// thread-exit drain; memtest reports a broken drain as a leak.
 TEST(node_pool, fresh_thread_starts_with_an_empty_pool) {
-  /* The node pool is thread-local (see the thread-local free-list pool in
-   * cjson.c), so a new thread must never see the nodes that the main
-   * thread's pool holds when this test runs. Every node_free() the worker
-   * makes below gives the node back to ITS OWN pool and never to this
-   * thread's. The test joins the worker before reading either result field,
-   * as the test-hygiene rule of the codebase asks: join unconditionally,
-   * before any REQUIRE_*. The worker exits with 50 nodes in its own pool, so
-   * this test also drives _node_pool_drain, the pool drain of the pthread
-   * destructor, and under `make memtest` a broken drain shows up there as a
-   * leak of 50 allocations. */
   pool_populate_result_t result = {(size_t)-1, (size_t)-1};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, pool_populate_thread, &result), 0);
   pthread_join(tid, NULL);
 
   REQUIRE_EQ(result.start_pool_size, (size_t)0);
-  /* The pool starts empty. All 50 nodes are alive at the same time, so each
-   * is a fresh calloc with nothing to recycle, and freeing them afterwards
-   * grows the pool by one node per node, which is well under the cap. */
   REQUIRE_EQ(result.end_pool_size, (size_t)50);
 }
 
+// The nodes cross_thread_free_thread() frees and the pool sizes it saw.
 typedef struct {
   cjson *nodes;
   size_t count;
@@ -3634,6 +3133,9 @@ typedef struct {
   size_t end_pool_size;
 } cross_thread_free_arg_t;
 
+// Destroys nodes that the main thread allocated, recording this thread's pool
+// size before and after, to show that a node joins the pool of the thread that
+// frees it.
 static void *cross_thread_free_thread(void *arg) {
   cross_thread_free_arg_t *a = (cross_thread_free_arg_t *)arg;
   a->start_pool_size = cjson_debug_pool_size();
@@ -3643,12 +3145,6 @@ static void *cross_thread_free_thread(void *arg) {
 }
 
 TEST(node_pool, node_freed_on_a_different_thread_joins_that_threads_own_pool) {
-  /* A node has no thread affinity. node_free() always gives it to the thread
-   * that CURRENTLY calls it and never to the one that allocated it (see the
-   * doc comment on node_free() in cjson.c). We allocate every node on the
-   * main thread, free them all from a worker thread, and check that the
-   * freed nodes end up in the WORKER's pool while the main thread's pool
-   * count doesn't move at all. */
   size_t count = 20;
   cjson *nodes = malloc(count * sizeof(cjson));
   REQUIRE_NE((void *)nodes, NULL);
@@ -3672,15 +3168,6 @@ TEST(node_pool, node_freed_on_a_different_thread_joins_that_threads_own_pool) {
   REQUIRE_EQ(main_pool_after, main_pool_before);
 }
 
-/* ========================================================================== */
-/*                         cjson_type_str */
-/* ========================================================================== */
-
-/* The node type is part of every message a caller prints. A copy-paste slip
- * can map one type onto another type's spelling, every other test in this
- * suite is blind to that, and it corrupts every message a user reads. The
- * table drives the switch from an index at run time, which also keeps each
- * arm running instead of being folded away at -O3. */
 TEST(cjson_type_str, every_node_type_maps_to_its_own_spelling) {
   cjson nodes[7];
   nodes[0] = cjson_create_null();
@@ -3705,48 +3192,27 @@ TEST(cjson_type_str, every_node_type_maps_to_its_own_spelling) {
   }
 
   for (size_t i = 0; i < 7; i++)
-    if (nodes[i]) __cjson_destroy(nodes[i]);
+    if (nodes[i]) cjson__destroy(nodes[i]);
 
   REQUIRE_TRUE(all_created);
   REQUIRE_TRUE(all_named);
 }
 
 TEST(cjson_type_str, a_null_handle_reports_the_null_type) {
-  /* cjson_type() answers CJSON_NULL for a NULL handle and not some
-   * out-of-range value, so this is the documented type name and not the
-   * unknown fallback. */
   REQUIRE_STREQ(cjson_type_str(NULL), "CJSON_NULL");
 }
 
-/* ========================================================================== */
-/*          ONE RETURN CODE, ONE OWNERSHIP RULE (ccol_invalid_args)           */
-/* ========================================================================== */
-
-/*
- * cjson_list_push() and cjson_dictionary_set() sort their failures into two
- * classes, and a caller can only act on a return code if the class follows
- * from the code alone. ccol_invalid_args leaves the child untouched and the
- * caller's, while every other non-success code means the library has
- * already destroyed the child. If a rejection of the container kind or of
- * the key destroyed the child, one code would carry two opposite rules: a
- * caller that frees on that code would double-free in one case, and a
- * caller that doesn't free would leak in the other.
- *
- * Each test below reads the child back, attaches it to a real container and
- * lets that container destroy it. Without the rule the readback and the new
- * attach are both a use-after-free and the destroy is a double free. The
- * readback even reports the wrong type outright, because the node pool
- * writes its free-list link into the node's type field.
- */
-
+// ccol_invalid_args must always mean the child is untouched. Each test reads
+// the child back, attaches it to a real container and lets that destroy it; if
+// the rejection had destroyed it, that's a use-after-free and a double free.
 TEST(ownership, list_push_into_a_null_container_leaves_the_child_reusable) {
   cjson child = cjson_create_int(42);
-  ccol_retval_t r = cjson_list_push(NULL, child);
+  ccol_retval r = cjson_list_push(NULL, child);
 
-  cjson_node_type_t t = cjson_type(child);
+  cjson_node_type t = cjson_type(child);
   long long v = (t == CJSON_INTEGER) ? cjson_int_val(child) : -1;
   cjson arr = cjson_create_list();
-  ccol_retval_t r2 = cjson_list_push(arr, child);
+  ccol_retval r2 = cjson_list_push(arr, child);
   size_t n = cjson_list_len(arr);
   cjson_destroy(arr);
 
@@ -3760,13 +3226,13 @@ TEST(ownership, list_push_into_a_null_container_leaves_the_child_reusable) {
 TEST(ownership, list_push_into_a_non_list_leaves_the_child_reusable) {
   cjson scalar = cjson_create_int(7);
   cjson child = cjson_create_string("kept");
-  ccol_retval_t r = cjson_list_push(scalar, child);
+  ccol_retval r = cjson_list_push(scalar, child);
 
-  cjson_node_type_t t = cjson_type(child);
+  cjson_node_type t = cjson_type(child);
   bool text_ok =
       (t == CJSON_STRING) && strcmp(cjson_str_val(child), "kept") == 0;
   cjson arr = cjson_create_list();
-  ccol_retval_t r2 = cjson_list_push(arr, child);
+  ccol_retval r2 = cjson_list_push(arr, child);
   cjson_destroy(arr);
   cjson_destroy(scalar);
 
@@ -3777,17 +3243,13 @@ TEST(ownership, list_push_into_a_non_list_leaves_the_child_reusable) {
 
 TEST(ownership,
      list_push_into_the_result_of_an_absent_get_leaves_the_child_reusable) {
-  /* What a caller really writes: cjson_get() answers NULL for an absent
-   * path, so the push gets a NULL container. */
   cjson doc = cjson_parse("{\"present\":1}", NULL);
   cjson child = cjson_create_int(7);
-  ccol_retval_t r = cjson_list_push(cjson_get(doc, "maybe_absent"), child);
+  ccol_retval r = cjson_list_push(cjson_get(doc, "maybe_absent"), child);
 
-  /* The natural reaction of a caller to a non-success code that means
-   * "untouched" is to keep using the child. */
-  cjson_node_type_t t = cjson_type(child);
+  cjson_node_type t = cjson_type(child);
   cjson arr = cjson_create_list();
-  ccol_retval_t r2 = cjson_list_push(arr, child);
+  ccol_retval r2 = cjson_list_push(arr, child);
   cjson_destroy(arr);
   cjson_destroy(doc);
 
@@ -3799,11 +3261,11 @@ TEST(ownership,
 TEST(ownership,
      dictionary_set_into_a_null_container_leaves_the_child_reusable) {
   cjson child = cjson_create_int(11);
-  ccol_retval_t r = cjson_dictionary_set(NULL, "k", child);
+  ccol_retval r = cjson_dictionary_set(NULL, "k", child);
 
-  cjson_node_type_t t = cjson_type(child);
+  cjson_node_type t = cjson_type(child);
   cjson obj = cjson_create_dictionary();
-  ccol_retval_t r2 = cjson_dictionary_set(obj, "k", child);
+  ccol_retval r2 = cjson_dictionary_set(obj, "k", child);
   size_t n = cjson_dictionary_size(obj);
   cjson_destroy(obj);
 
@@ -3817,11 +3279,11 @@ TEST(ownership,
      dictionary_set_into_a_non_dictionary_leaves_the_child_reusable) {
   cjson scalar = cjson_create_bool(true);
   cjson child = cjson_create_int(12);
-  ccol_retval_t r = cjson_dictionary_set(scalar, "k", child);
+  ccol_retval r = cjson_dictionary_set(scalar, "k", child);
 
-  cjson_node_type_t t = cjson_type(child);
+  cjson_node_type t = cjson_type(child);
   cjson obj = cjson_create_dictionary();
-  ccol_retval_t r2 = cjson_dictionary_set(obj, "k", child);
+  ccol_retval r2 = cjson_dictionary_set(obj, "k", child);
   cjson_destroy(obj);
   cjson_destroy(scalar);
 
@@ -3833,10 +3295,10 @@ TEST(ownership,
 TEST(ownership, dictionary_set_with_a_null_key_leaves_the_child_reusable) {
   cjson obj = cjson_create_dictionary();
   cjson child = cjson_create_int(13);
-  ccol_retval_t r = cjson_dictionary_set(obj, NULL, child);
+  ccol_retval r = cjson_dictionary_set(obj, NULL, child);
 
-  cjson_node_type_t t = cjson_type(child);
-  ccol_retval_t r2 = cjson_dictionary_set(obj, "k", child);
+  cjson_node_type t = cjson_type(child);
+  ccol_retval r2 = cjson_dictionary_set(obj, "k", child);
   size_t n = cjson_dictionary_size(obj);
   cjson_destroy(obj);
 
@@ -3846,26 +3308,13 @@ TEST(ownership, dictionary_set_with_a_null_key_leaves_the_child_reusable) {
   REQUIRE_EQ(n, (size_t)1);
 }
 
-/* ========================================================================== */
-/*            _cjson_set_typed BACK-END PAYLOAD-SIZE VALIDATION               */
-/* ========================================================================== */
-
-/*
- * _cjson_set_typed() is a public back end that a caller building a setter
- * with a type chosen at run time calls directly, so it checks raw_size for
- * every type that reads a payload through raw, and not only for the types
- * that the cjson_set() macro can get wrong. For CJSON_STRING the payload is
- * a pointer, so a raw_size that is too narrow reads sizeof(const char *)
- * bytes out of a smaller object, and the function then duplicates a string
- * through whatever pointer those bytes happen to form. AddressSanitizer
- * reports that as a buffer overflow read, and an ordinary build reads live
- * stack and follows a garbage pointer.
- */
-
+// cjson__set_typed() is a public back-end, so it checks raw_size for every type
+// that reads a payload. A narrow string payload would read a pointer out of a
+// smaller object and copy through garbage.
 TEST(navigate, set_typed_invalid_string_size_new_key) {
   cjson root = cjson_create_dictionary();
   char tiny = 'x';
-  ccol_retval_t r = _cjson_set_typed(root, "k", CJSON_STRING, &tiny, 1, false);
+  ccol_retval r = cjson__set_typed(root, "k", CJSON_STRING, &tiny, 1, false);
   size_t n = cjson_dictionary_size(root);
   cjson_destroy(root);
   REQUIRE_EQ(r, ccol_invalid_args);
@@ -3875,7 +3324,7 @@ TEST(navigate, set_typed_invalid_string_size_new_key) {
 TEST(navigate, set_typed_invalid_string_size_existing_key_preserves_value) {
   cjson root = cjson_parse("{\"k\":\"original\"}", NULL);
   char tiny = 'x';
-  ccol_retval_t r = _cjson_set_typed(root, "k", CJSON_STRING, &tiny, 1, false);
+  ccol_retval r = cjson__set_typed(root, "k", CJSON_STRING, &tiny, 1, false);
   const char *kept = cjson_str_val(cjson_get(root, "k"));
   bool unchanged = strcmp(kept, "original") == 0;
   cjson_destroy(root);
@@ -3885,18 +3334,16 @@ TEST(navigate, set_typed_invalid_string_size_existing_key_preserves_value) {
 
 TEST(navigate, set_typed_null_payload_rejected_for_every_payload_type) {
   cjson root = cjson_create_dictionary();
-  ccol_retval_t rs =
-      _cjson_set_typed(root, "k", CJSON_STRING, NULL, sizeof(char *), false);
-  ccol_retval_t rb =
-      _cjson_set_typed(root, "k", CJSON_BOOL, NULL, sizeof(bool), false);
-  ccol_retval_t ri =
-      _cjson_set_typed(root, "k", CJSON_INTEGER, NULL, sizeof(int), true);
-  ccol_retval_t rf =
-      _cjson_set_typed(root, "k", CJSON_FLOAT, NULL, sizeof(double), false);
-  /* CJSON_NULL is the only type with no payload to read, so a NULL raw is
-   * how a direct call says "write a JSON null here". */
-  ccol_retval_t rn = _cjson_set_typed(root, "n", CJSON_NULL, NULL, 0, false);
-  cjson_node_type_t nt = cjson_type(cjson_get(root, "n"));
+  ccol_retval rs =
+      cjson__set_typed(root, "k", CJSON_STRING, NULL, sizeof(char *), false);
+  ccol_retval rb =
+      cjson__set_typed(root, "k", CJSON_BOOL, NULL, sizeof(bool), false);
+  ccol_retval ri =
+      cjson__set_typed(root, "k", CJSON_INTEGER, NULL, sizeof(int), true);
+  ccol_retval rf =
+      cjson__set_typed(root, "k", CJSON_FLOAT, NULL, sizeof(double), false);
+  ccol_retval rn = cjson__set_typed(root, "n", CJSON_NULL, NULL, 0, false);
+  cjson_node_type nt = cjson_type(cjson_get(root, "n"));
   size_t count = cjson_dictionary_size(root);
   cjson_destroy(root);
 
@@ -3909,21 +3356,9 @@ TEST(navigate, set_typed_null_payload_rejected_for_every_payload_type) {
   REQUIRE_EQ(count, (size_t)1);
 }
 
-/* ========================================================================== */
-/*                         UTF-8 WELL-FORMEDNESS                              */
-/* ========================================================================== */
-
-/*
- * RFC 8259 sec. 8.1 wants JSON text to be UTF-8 and cjson.h documents
- * CJSON_STRING as UTF-8 too, so no string a caller can reach from a node may
- * be anything else, whether it's a value or a dictionary key.
- *
- * The validator below is written out here on purpose rather than borrowed
- * from the library, because a test that asks the implementation whether the
- * implementation is right can never fail. It's the plain Unicode table and
- * rejects a stray continuation byte, an overlong form, a UTF-16 surrogate
- * and anything past U+10FFFF.
- */
+// Tells whether s[0..n) is well-formed UTF-8, by the plain Unicode table. The
+// UTF-8 tests check the library's output with it; it's written out here because
+// asking the library whether the library is right could never fail.
 static bool _cjson_test_utf8_ok(const char *s, size_t n) {
   const unsigned char *p = (const unsigned char *)s;
   size_t i = 0;
@@ -3951,7 +3386,7 @@ static bool _cjson_test_utf8_ok(const char *s, size_t n) {
     } else {
       return false;
     }
-    if (i + need >= n) return false; /* the sequence runs off the end */
+    if (i + need >= n) return false;
     if (p[i + 1] < lo || p[i + 1] > hi) return false;
     for (size_t k = 2; k <= need; k++)
       if (p[i + k] < 0x80 || p[i + k] > 0xBF) return false;
@@ -3960,14 +3395,12 @@ static bool _cjson_test_utf8_ok(const char *s, size_t n) {
   return true;
 }
 
+// The same check for a NUL-terminated string; false for NULL.
 static bool _cjson_test_utf8_cstr_ok(const char *s) {
   return s && _cjson_test_utf8_ok(s, strlen(s));
 }
 
 TEST(parse, raw_invalid_utf8_bytes_are_rejected) {
-  /* 0xFF can't start any UTF-8 sequence. The message names the first byte
-   * of the defect as 0xNN together with its offset in the input, and stays
-   * printable ASCII. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "{\"k\":\"\xff\xfe\xc3(\"}",
       "invalid UTF-8 in string at position 6: byte that never appears in "
@@ -3979,9 +3412,6 @@ TEST(parse, raw_invalid_utf8_bytes_are_rejected) {
 }
 
 TEST(parse, overlong_utf8_sequence_is_rejected) {
-  /* C0 AF is the overlong two-byte spelling of '/', the classic trick to
-   * get past a consumer that filters on the byte, and E0 80 AF is the
-   * three-byte one. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "\"\xc0\xaf\"",
       "invalid UTF-8 in string at position 1: overlong encoding (lead byte "
@@ -3993,8 +3423,6 @@ TEST(parse, overlong_utf8_sequence_is_rejected) {
 }
 
 TEST(parse, utf8_encoded_surrogate_is_rejected) {
-  /* ED A0 80 is U+D800 spelled in three bytes. A surrogate isn't a Unicode
-   * scalar value and has no UTF-8 encoding at all. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "\"\xed\xa0\x80\"",
       "invalid UTF-8 in string at position 1: encoded surrogate code point "
@@ -4013,7 +3441,6 @@ TEST(parse, utf8_above_the_unicode_range_is_rejected) {
 }
 
 TEST(parse, truncated_utf8_sequence_is_rejected) {
-  /* E2 82 is the euro sign with its third byte missing. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "\"\xe2\x82\"",
       "invalid UTF-8 in string at position 1: truncated sequence (lead byte "
@@ -4021,8 +3448,6 @@ TEST(parse, truncated_utf8_sequence_is_rejected) {
 }
 
 TEST(parse, invalid_utf8_alongside_an_escape_is_rejected_too) {
-  /* A literal with an escape goes down a different decode path than one
-   * without, and both must refuse the same bytes. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "\"\\t\xff\xc3(\"",
       "invalid UTF-8 in string at position 3: byte that never appears in "
@@ -4034,8 +3459,6 @@ TEST(parse, invalid_utf8_alongside_an_escape_is_rejected_too) {
 }
 
 TEST(parse, the_first_defect_of_a_string_is_the_one_reported) {
-  /* A string can hold both an ill-formed byte and an unknown escape, and the
-   * parser names whichever of them comes first. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "\"\\q\xff\"", "unknown escape '\\q' at position 2"));
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
@@ -4045,9 +3468,6 @@ TEST(parse, the_first_defect_of_a_string_is_the_one_reported) {
 }
 
 TEST(parse, well_formed_multibyte_utf8_is_preserved_byte_for_byte) {
-  /* The other half of the rule: the parser leaves everything well formed
-   * alone, at every sequence length and on both paths (the fast path with no
-   * escape and the escape path). */
   static const char plain[] = "\"\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80\"";
   static const char escaped[] = "\"\\t\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80\"";
   cjson a = cjson_parse(plain, NULL);
@@ -4065,7 +3485,6 @@ TEST(parse, well_formed_multibyte_utf8_is_preserved_byte_for_byte) {
 }
 
 TEST(parse, an_invalid_utf8_dictionary_key_is_rejected_too) {
-  /* Two keys that a repair would both turn into "is_admin" + U+FFFD. */
   REQUIRE_TRUE(CJSON_TEST_PARSE_FAILS_WITH(
       "{\"\xffk\":1}",
       "invalid UTF-8 in string at position 2: byte that never appears in "
@@ -4077,9 +3496,6 @@ TEST(parse, an_invalid_utf8_dictionary_key_is_rejected_too) {
 }
 
 TEST(parse, every_invalid_utf8_error_message_is_printable_ascii) {
-  /* Every byte value from 0x80 up, alone and after every lead byte, in a
-   * value and in a key. Each refusal names the bytes as 0xNN, so the message
-   * text never carries an input byte that isn't printable. */
   bool all_printable = true;
   bool any_refused = false;
   for (int b = 0x80; b < 256; b++) {
@@ -4109,10 +3525,6 @@ TEST(parse, every_invalid_utf8_error_message_is_printable_ascii) {
 }
 
 TEST(serialize, output_is_valid_utf8_for_every_accepted_input) {
-  /* A sweep and not a few hand-picked cases: every byte value, alone in a
-   * string and after a well-formed lead byte, plus a few shapes that go
-   * through the escape path. Whatever the parser accepts, what comes back
-   * out must be JSON text. */
   bool all_valid = true;
   bool any_parsed = false;
   for (int b = 1; b < 256; b++) {
@@ -4137,11 +3549,6 @@ TEST(serialize, output_is_valid_utf8_for_every_accepted_input) {
 }
 
 TEST(construction, create_string_rejects_invalid_utf8) {
-  /* The library reports a bad string that the calling program gives it
-   * instead of quietly rewriting it, the same way it treats a non-finite
-   * double. Such a string is a defect in the caller's code and a rewrite
-   * would hide that defect. Without the check the bytes reach the
-   * serializer, which writes them out raw. */
   cjson bad = cjson_create_string("bad\xffstring");
   REQUIRE_EQ((void *)bad, NULL);
 }
@@ -4158,7 +3565,7 @@ TEST(navigate,
      set_string_value_with_invalid_utf8_preserves_the_existing_value) {
   cjson root = cjson_parse("{\"k\":\"original\"}", NULL);
   const char *bad = "new\xc3value";
-  ccol_retval_t r = cjson_set(root, "k", bad);
+  ccol_retval r = cjson_set(root, "k", bad);
   bool unchanged = strcmp(cjson_str_val(cjson_get(root, "k")), "original") == 0;
   cjson_destroy(root);
   REQUIRE_EQ(r, ccol_invalid_args);
@@ -4166,16 +3573,14 @@ TEST(navigate,
 }
 
 TEST(construction, dictionary_set_with_an_invalid_utf8_key_leaves_child_alone) {
-  /* Rejecting the key is an argument rejection, so the ccol_invalid_args
-   * ownership rule applies here as well and the child stays the caller's. */
   cjson obj = cjson_create_dictionary();
   cjson child = cjson_create_int(5);
-  ccol_retval_t r = cjson_dictionary_set(obj,
-                                         "k\xff"
-                                         "ey",
-                                         child);
-  cjson_node_type_t t = cjson_type(child);
-  ccol_retval_t r2 = cjson_dictionary_set(obj, "key", child);
+  ccol_retval r = cjson_dictionary_set(obj,
+                                       "k\xff"
+                                       "ey",
+                                       child);
+  cjson_node_type t = cjson_type(child);
+  ccol_retval r2 = cjson_dictionary_set(obj, "key", child);
   size_t n = cjson_dictionary_size(obj);
   cjson_destroy(obj);
   REQUIRE_EQ(r, ccol_invalid_args);
@@ -4185,44 +3590,26 @@ TEST(construction, dictionary_set_with_an_invalid_utf8_key_leaves_child_alone) {
 }
 
 TEST(navigate, set_with_an_invalid_utf8_leaf_component_is_rejected) {
-  /* cjson_set() would have to CREATE that key, and every key the DOM holds
-   * is valid UTF-8. */
   cjson root = cjson_create_dictionary();
-  ccol_retval_t r = cjson_set(root, "ke\xffy", 1);
+  ccol_retval r = cjson_set(root, "ke\xffy", 1);
   size_t n = cjson_dictionary_size(root);
   cjson_destroy(root);
   REQUIRE_EQ(r, ccol_invalid_args);
   REQUIRE_EQ(n, (size_t)0);
 }
 
-/* ========================================================================== */
-/*                 NESTING COSTS A FIXED AMOUNT OF NATIVE STACK               */
-/* ========================================================================== */
-
-/*
- * A parse, a clone and a serialize all walk the nesting with an explicit
- * frame stack on the heap, so the native stack each of them needs is the
- * same for a document at CJSON_MAX_PARSE_DEPTH as for a flat one. Thanks to
- * that the depth cap is a policy limit, and without it the cap would be a
- * bet on a thread stack size that this library neither picks nor knows. A
- * thread with a small stack is where a per-level cost stops being a theory,
- * musl's default stack is 128 KiB.
- *
- * The work runs on a thread with the smallest stack the platform lets a
- * caller ask for, capped at 64 KiB. The whole test runs in a forked child,
- * so a regression is a failed assertion here and not a SIGSEGV that takes
- * every other test of this binary down with it. The child reports through a
- * pipe instead of its exit status, because valgrind overrides a forked
- * child's status as soon as it finds anything still reachable in the
- * inherited image.
- */
+// The largest stack the small-stack test asks for; musl's default is 128 KiB.
 #define CJSON_TEST_SMALL_STACK (64u * 1024u)
 
+// The depth the small-stack thread works at and whether it succeeded.
 typedef struct {
   int depth;
   int ok;
 } deep_small_stack_arg_t;
 
+// Parses, serializes and clones a document nested a->depth levels deep and sets
+// a->ok when every step succeeds and the clone writes the same text. It's the
+// body of the small-stack thread.
 static void *_cjson_deep_on_small_stack(void *argp) {
   deep_small_stack_arg_t *a = (deep_small_stack_arg_t *)argp;
   a->ok = 0;
@@ -4244,6 +3631,10 @@ static void *_cjson_deep_on_small_stack(void *argp) {
   return NULL;
 }
 
+// Parse, serialize and clone a document at the depth cap on a thread with a
+// 64 KiB stack. It runs in a forked child that reports through a pipe, so a
+// stack overflow fails this test only, and valgrind can't hide the result
+// behind its exit code.
 TEST(parse, a_maximally_nested_document_runs_on_a_small_thread_stack) {
   int fds[2];
   REQUIRE_EQ(pipe(fds), 0);
@@ -4261,10 +3652,6 @@ TEST(parse, a_maximally_nested_document_runs_on_a_small_thread_stack) {
     if (pthread_attr_init(&attr) == 0) {
       if (pthread_attr_setstacksize(&attr, want) == 0) {
         pthread_t tid;
-        /* Not a REQUIRE_* check on purpose. The failure path of REQUIRE_*
-         * returns out of the test function, which in this process means
-         * falling back into the harness's test loop, and then the child
-         * never gets to the _exit below. */
         if (pthread_create(&tid, &attr, _cjson_deep_on_small_stack, &arg) ==
             0) {
           pthread_join(tid, NULL);
@@ -4290,14 +3677,9 @@ TEST(parse, a_maximally_nested_document_runs_on_a_small_thread_stack) {
   REQUIRE_EQ((int)verdict, 1);
 }
 
+// On a failed parse only the frame stack reaches the open containers, so each
+// must be freed. Counting allocator calls makes it fail under plain make test.
 TEST(oom, a_failed_parse_of_a_nested_document_releases_every_node) {
-  /* The parser hands a container to its parent only once it has consumed
-   * that container's closing bracket, so when a parse fails the parser's
-   * frame stack is the only thing that still reaches an open container.
-   * Freeing just the outermost one would leak every container nested in it
-   * and everything the parser already put into them. The test counts the
-   * allocator calls instead of relying on a leak checker, so it fails under
-   * a plain `make test` too. */
   _ta_allocs = 0;
   _ta_frees = 0;
   static const char *broken[] = {
@@ -4322,20 +3704,12 @@ TEST(oom, a_failed_parse_of_a_nested_document_releases_every_node) {
   REQUIRE_EQ(allocs, frees);
 }
 
-/* ========================================================================== */
-/*          cjson_set: EVERY ACCEPTED C VALUE TYPE, INCLUDING ARRAYS          */
-/* ========================================================================== */
-
-/* cjson_set() copies its argument into a local of the decayed, unqualified
- * type. A named char array therefore arrives as a pointer to its first
- * character and a pointer that is const itself arrives as an ordinary
- * pointer, and neither can be mistaken for the bytes of the string. */
-
+// A const pointer that is const itself, for the cjson_set() value type tests.
 static const char *const _cjson_set_types_file_scope_name = "prod";
 
 TEST(set_value_types, string_literal) {
   cjson root = cjson_create_dictionary();
-  ccol_retval_t r = cjson_set(root, "k", "champion");
+  ccol_retval r = cjson_set(root, "k", "champion");
   cjson leaf = cjson_get(root, "k");
   bool ok = leaf && cjson_type(leaf) == CJSON_STRING &&
             strcmp(cjson_str_val(leaf), "champion") == 0;
@@ -4348,8 +3722,7 @@ TEST(set_value_types, char_array_filled_by_snprintf) {
   cjson root = cjson_create_dictionary();
   char buf[32];
   snprintf(buf, sizeof(buf), "host-%d", 7);
-  ccol_retval_t r = cjson_set(root, "k", buf);
-  /* The node has its own copy, so writing to buf later changes nothing. */
+  ccol_retval r = cjson_set(root, "k", buf);
   buf[0] = 'X';
   cjson leaf = cjson_get(root, "k");
   bool ok = leaf && cjson_type(leaf) == CJSON_STRING &&
@@ -4362,7 +3735,7 @@ TEST(set_value_types, char_array_filled_by_snprintf) {
 TEST(set_value_types, const_char_array) {
   cjson root = cjson_create_dictionary();
   const char cbuf[] = "fixed";
-  ccol_retval_t r = cjson_set(root, "k", cbuf);
+  ccol_retval r = cjson_set(root, "k", cbuf);
   cjson leaf = cjson_get(root, "k");
   bool ok = leaf && cjson_type(leaf) == CJSON_STRING &&
             strcmp(cjson_str_val(leaf), "fixed") == 0;
@@ -4377,10 +3750,10 @@ TEST(set_value_types, every_pointer_qualification) {
   const char *p_const = "a";
   char *const p_top_const = storage;
   const char *const p_both = "b";
-  ccol_retval_t r1 = cjson_set(root, "c", p_const);
-  ccol_retval_t r2 = cjson_set(root, "t", p_top_const);
-  ccol_retval_t r3 = cjson_set(root, "b", p_both);
-  ccol_retval_t r4 = cjson_set(root, "f", _cjson_set_types_file_scope_name);
+  ccol_retval r1 = cjson_set(root, "c", p_const);
+  ccol_retval r2 = cjson_set(root, "t", p_top_const);
+  ccol_retval r3 = cjson_set(root, "b", p_both);
+  ccol_retval r4 = cjson_set(root, "f", _cjson_set_types_file_scope_name);
   const char *keys[4] = {"c", "t", "b", "f"};
   const char *want[4] = {"a", "mutable", "b", "prod"};
   bool ok = true;
@@ -4400,8 +3773,8 @@ TEST(set_value_types, every_pointer_qualification) {
 TEST(set_value_types, bool_stays_bool) {
   cjson root = cjson_create_dictionary();
   const bool cb = true;
-  ccol_retval_t r1 = cjson_set(root, "a", (bool)false);
-  ccol_retval_t r2 = cjson_set(root, "b", cb);
+  ccol_retval r1 = cjson_set(root, "a", (bool)false);
+  ccol_retval r2 = cjson_set(root, "b", cb);
   cjson a = cjson_get(root, "a"), b = cjson_get(root, "b");
   bool ok = a && b && cjson_type(a) == CJSON_BOOL &&
             cjson_type(b) == CJSON_BOOL && !cjson_bool_val(a) &&
@@ -4419,7 +3792,7 @@ TEST(set_value_types, narrow_integers_keep_their_sign) {
   unsigned char uc = 250;
   short sh = -30000;
   unsigned short ush = 65535;
-  ccol_retval_t r[5];
+  ccol_retval r[5];
   r[0] = cjson_set(root, "c", c);
   r[1] = cjson_set(root, "sc", sc);
   r[2] = cjson_set(root, "uc", uc);
@@ -4445,12 +3818,9 @@ TEST(set_value_types, narrow_integers_keep_their_sign) {
 }
 
 TEST(set_value_types, unsigned_long_long_above_llong_max) {
-  /* As the man page says, a value above LLONG_MAX has no long long form and
-   * it's stored as the CJSON_FLOAT that cjson_parse() makes of the same
-   * decimal literal. */
   cjson root = cjson_create_dictionary();
   unsigned long long big = (unsigned long long)LLONG_MAX + 2ULL;
-  ccol_retval_t r = cjson_set(root, "k", big);
+  ccol_retval r = cjson_set(root, "k", big);
   cjson leaf = cjson_get(root, "k");
   bool is_float = leaf && cjson_type(leaf) == CJSON_FLOAT;
   double v = is_float ? cjson_double_val(leaf) : 0.0;
@@ -4465,8 +3835,8 @@ TEST(set_value_types, float_and_double) {
   cjson root = cjson_create_dictionary();
   const float f = 0.5f;
   volatile double d = 0.25;
-  ccol_retval_t r1 = cjson_set(root, "f", f);
-  ccol_retval_t r2 = cjson_set(root, "d", d);
+  ccol_retval r1 = cjson_set(root, "f", f);
+  ccol_retval r2 = cjson_set(root, "d", d);
   cjson a = cjson_get(root, "f"), b = cjson_get(root, "d");
   bool ok = a && b && cjson_type(a) == CJSON_FLOAT &&
             cjson_type(b) == CJSON_FLOAT && cjson_double_val(a) == 0.5 &&
@@ -4480,7 +3850,7 @@ TEST(set_value_types, float_and_double) {
 TEST(set_value_types, null_literal) {
   cjson root = cjson_create_dictionary();
   cjson_set(root, "k", "x");
-  ccol_retval_t r = cjson_set(root, "k", NULL);
+  ccol_retval r = cjson_set(root, "k", NULL);
   cjson leaf = cjson_get(root, "k");
   bool ok = leaf && cjson_type(leaf) == CJSON_NULL;
   cjson_destroy(root);
@@ -4488,12 +3858,8 @@ TEST(set_value_types, null_literal) {
   REQUIRE_TRUE(ok);
 }
 
-/* ========================================================================== */
-/*          DUPLICATE KEYS: THE LAST VALUE WINS AND NOTHING LEAKS             */
-/* ========================================================================== */
-
-/* An allocator that counts the live blocks, so a test can assert that every
- * block it caused gets freed again. */
+// An allocator that counts live blocks in _dup_live, so the duplicate key tests
+// can see that every replaced value is freed.
 static long _dup_live = 0;
 static void *_dup_malloc(size_t sz) {
   void *p = malloc(sz);
@@ -4514,10 +3880,10 @@ static void _dup_free(void *p) {
   if (p) _dup_live--;
   free(p);
 }
-static ccol_memmgmt_procs_t _dup_mp = {.malloc = _dup_malloc,
-                                       .calloc = _dup_calloc,
-                                       .realloc = _dup_realloc,
-                                       .free = _dup_free};
+static ccol_memmgmt_procs _dup_mp = {.malloc = _dup_malloc,
+                                     .calloc = _dup_calloc,
+                                     .realloc = _dup_realloc,
+                                     .free = _dup_free};
 
 TEST(duplicate_keys, parse_keeps_the_last_value_and_frees_the_others) {
   _dup_live = 0;
@@ -4547,11 +3913,10 @@ TEST(duplicate_keys, dictionary_set_replaces_and_frees_the_old_subtree) {
   REQUIRE_NE((void *)root, NULL);
   cjson first = cjson_create_list_mp(&_dup_mp);
   cjson_list_push(first, cjson_create_string_mp("old", &_dup_mp));
-  ccol_retval_t r1 = cjson_dictionary_set(root, "k", first);
-  ccol_retval_t r2 =
+  ccol_retval r1 = cjson_dictionary_set(root, "k", first);
+  ccol_retval r2 =
       cjson_dictionary_set(root, "k", cjson_create_int_mp(7, &_dup_mp));
-  /* Setting a key to the node it already holds changes nothing. */
-  ccol_retval_t r3 = cjson_dictionary_set(root, "k", cjson_get(root, "k"));
+  ccol_retval r3 = cjson_dictionary_set(root, "k", cjson_get(root, "k"));
   cjson k = cjson_get(root, "k");
   bool ok = k && cjson_type(k) == CJSON_INTEGER && cjson_int_val(k) == 7 &&
             cjson_dictionary_size(root) == 1;
@@ -4569,7 +3934,7 @@ TEST(duplicate_keys, attached_child_of_another_key_is_refused_untouched) {
   REQUIRE_NE((void *)root, NULL);
   cjson_dictionary_set(root, "a", cjson_create_int(1));
   cjson_dictionary_set(root, "b", cjson_create_int(2));
-  ccol_retval_t r = cjson_dictionary_set(root, "b", cjson_get(root, "a"));
+  ccol_retval r = cjson_dictionary_set(root, "b", cjson_get(root, "a"));
   cjson a = cjson_get(root, "a"), b = cjson_get(root, "b");
   bool ok = a && b && cjson_int_val(a) == 1 && cjson_int_val(b) == 2;
   cjson_destroy(root);
@@ -4577,12 +3942,8 @@ TEST(duplicate_keys, attached_child_of_another_key_is_refused_untouched) {
   REQUIRE_TRUE(ok);
 }
 
-/* ========================================================================== */
-/*     SET OF A NEW KEY: A FAILED BUILD LEAVES NO PLACEHOLDER BEHIND          */
-/* ========================================================================== */
-
-/* An allocator that refuses every allocation once _ff_left reaches zero and
- * counts the live blocks. With _ff_left at -1 it never refuses. */
+// An allocator that refuses every call once _ff_left reaches 0 (-1 never
+// refuses) and counts live blocks in _ff_live, for the failed-set test.
 static long _ff_left = -1;
 static long _ff_live = 0;
 static void *_ff_malloc(size_t sz) {
@@ -4610,28 +3971,25 @@ static void _ff_free(void *p) {
   if (p) _ff_live--;
   free(p);
 }
-static ccol_memmgmt_procs_t _ff_mp = {.malloc = _ff_malloc,
-                                      .calloc = _ff_calloc,
-                                      .realloc = _ff_realloc,
-                                      .free = _ff_free};
+static ccol_memmgmt_procs _ff_mp = {.malloc = _ff_malloc,
+                                    .calloc = _ff_calloc,
+                                    .realloc = _ff_realloc,
+                                    .free = _ff_free};
 
-/* Every allocation of a set that creates a new string leaf gets refused
- * once, in turn. The last one is the copy of the string while the new node
- * is built, and that runs after the key is already in the map, so the
- * budget just below the one that succeeds drives the removal of that key.
- * The size check catches a key left behind with a NULL child, which a lookup
- * alone would report as absent. Each refusal should report
- * ccol_not_enough_memory, leave the key absent and leak nothing. */
+// Each allocation of a set that creates a string leaf is refused in turn. The
+// last is the string copy, which runs after the key is in the map, so its
+// failure must remove the placeholder key; the size check catches a key left
+// with a NULL child.
 TEST(set_new_key, a_failed_build_removes_the_key_and_leaks_nothing) {
   _ff_left = -1;
   _ff_live = 0;
   cjson root = cjson_create_dictionary_mp(&_ff_mp);
   REQUIRE_NE((void *)root, NULL);
-  ccol_retval_t pre = cjson_set(root, "keep", 1);
+  ccol_retval pre = cjson_set(root, "keep", 1);
   long live_before = _ff_live;
 
   size_t failures = 0, wrong = 0;
-  ccol_retval_t r = ccol_not_enough_memory;
+  ccol_retval r = ccol_not_enough_memory;
   for (long budget = 0; budget < 64 && r != ccol_success; budget++) {
     _ff_left = budget;
     r = cjson_set(root, "fresh", "a string value");
@@ -4657,6 +4015,8 @@ TEST(set_new_key, a_failed_build_removes_the_key_and_leaks_nothing) {
   REQUIRE_EQ(live_after, 0L);
 }
 
+// Parses and destroys a document five times on a new thread and clears *arg on
+// a failed parse; the pool key lock test counts the locks it takes.
 static void *cjson_pool_arm_worker(void *arg) {
   int *ok = (int *)arg;
   *ok = 1;
@@ -4671,37 +4031,35 @@ static void *cjson_pool_arm_worker(void *arg) {
   return NULL;
 }
 
-/* A thread arms its node pool's key once and not every time its pool runs
- * empty. Each parse below drains the thread's pool and each destroy refills
- * it, so re-arming on every refill would take the pool key lock once per
- * parse. That lock is written on every acquisition, and on a thread that
- * parses in a loop it turns into a line every core writes once per parse.
- * Arming on every refill would make the count 5, which the test catches. */
+// Each parse drains the pool and each destroy refills it; arming the key on
+// every refill would take the lock 5 times instead of once.
 TEST(node_pool, a_thread_takes_the_pool_key_lock_once) {
-  unsigned long before = atomic_load(&_cjson_pool_key_lock_count_for_tests);
+  unsigned long before = atomic_load(&cjson__pool_key_lock_count_for_tests);
   int ok = 0;
   pthread_t th;
   int created = pthread_create(&th, NULL, cjson_pool_arm_worker, &ok);
   if (created == 0) pthread_join(th, NULL);
-  unsigned long after = atomic_load(&_cjson_pool_key_lock_count_for_tests);
+  unsigned long after = atomic_load(&cjson__pool_key_lock_count_for_tests);
   REQUIRE_EQ(created, 0);
   REQUIRE_EQ(ok, 1);
   REQUIRE_EQ(after - before, 1ul);
 }
 
-/* The key of a thread-specific value that owns a parsed tree. Its
- * destructor destroys the tree when the thread exits. */
+// A key whose value owns a parsed tree; its destructor destroys the tree at
+// thread exit.
 static pthread_key_t cjson_pool_owner_key;
 
+// Destroys the tree that a thread left on cjson_pool_owner_key, so the tree is
+// freed from a key destructor at thread exit.
 static void cjson_pool_owner_dtor(void *tree) {
   cjson t = (cjson)tree;
   cjson_destroy(t);
 }
 
+// Fills and arms this thread's pool first, then parks a parsed tree on
+// cjson_pool_owner_key for its destructor and sets *arg on success.
 static void *cjson_pool_owner_worker(void *arg) {
   int *ok = (int *)arg;
-  /* Fill and arm this thread's pool first, so that in the first round at
-   * exit the pool key's destructor has a value to run for. */
   cjson warm = cjson_parse("[1,2,3]", NULL);
   if (!warm) return NULL;
   cjson_destroy(warm);
@@ -4716,40 +4074,34 @@ static void *cjson_pool_owner_worker(void *arg) {
   return NULL;
 }
 
-/* A tree that another thread-specific key's destructor destroys at thread
- * exit goes back to the node pool after the pool key has drained it. The
- * first cjson call of the process creates the pool key and this owner key
- * comes after it, so in each round the C library runs the pool destructor
- * first. The drain has to leave the key disarmed, so that the refill arms
- * it again and the next round drains what was refilled, and the population
- * counter then gets back to its value from before the thread. If the drain
- * left the key armed, every node of the tree would stay in a pool that
- * nothing frees, and memtest reports those nodes as definitely lost. */
+// A key destructor that runs after the pool key's destroys a tree and refills
+// the pool. The drain must leave the key disarmed so the refill arms it again;
+// otherwise the nodes stay in a pool nothing frees and memtest reports them.
 TEST(node_pool, a_tree_freed_by_a_later_key_destructor_is_drained) {
   cjson first = cjson_parse("[0]", NULL);
   REQUIRE_NE((void *)first, NULL);
   cjson_destroy(first);
   REQUIRE_EQ(pthread_key_create(&cjson_pool_owner_key, cjson_pool_owner_dtor),
              0);
-  long before = atomic_load(&_cjson_pool_population_for_tests);
+  long before = atomic_load(&cjson__pool_population_for_tests);
   int ok = 0;
   pthread_t th;
   int created = pthread_create(&th, NULL, cjson_pool_owner_worker, &ok);
   if (created == 0) pthread_join(th, NULL);
-  long after = atomic_load(&_cjson_pool_population_for_tests);
+  long after = atomic_load(&cjson__pool_population_for_tests);
   pthread_key_delete(cjson_pool_owner_key);
   REQUIRE_EQ(created, 0);
   REQUIRE_EQ(ok, 1);
   REQUIRE_EQ(after, before);
 }
 
-/* A tree that the child below destroys from its own destructor, after the
- * library's destructor has drained the thread's pool and deleted the pool
- * key, plus the pipe that destructor reports on. A destructor with a
- * priority runs after every destructor without one. */
+// The tree the late destructor destroys, and the pipe it reports on.
 static cjson late_destroy_tree;
 static int late_destroy_report_fd = -1;
 
+// Destroys late_destroy_tree after the library's destructor has run and writes
+// 'Y' to the pipe when the thread's pool stays empty, 'N' otherwise. A
+// destructor with a priority runs after every one without.
 __attribute__((destructor(101))) static void late_destroy_from_destructor(
     void) {
   if (!late_destroy_tree || late_destroy_report_fd < 0) return;
@@ -4760,11 +4112,10 @@ __attribute__((destructor(101))) static void late_destroy_from_destructor(
   close(late_destroy_report_fd);
 }
 
-/* A tree that an application destroys from a late destructor gets freed and
- * isn't left in a pool that nothing drains. The child ends with exit(), so
- * the library's destructor runs first and the late destructor reports on a
- * pipe. Pooling the nodes of a thread whose key isn't armed would leave them
- * in the pool, and the child would report 'N'. */
+// A late destructor in a forked child destroys a tree after the library's
+// destructor ran; pooling those nodes would leave them in a pool nothing
+// drains, and the child would report 'N' on the pipe. OpenBSD's clang build
+// runs no destructor, so it has nothing to report.
 TEST(node_pool, a_tree_destroyed_after_the_library_destructor_is_freed) {
   int fds[2];
   REQUIRE_EQ(pipe(fds), 0);
@@ -4784,19 +4135,14 @@ TEST(node_pool, a_tree_destroyed_after_the_library_destructor_is_freed) {
   if (pid > 0) waitpid(pid, &status, 0);
   REQUIRE_GT(pid, 0);
 #if defined(__OpenBSD__)
-  /* On OpenBSD a clang-built program that links libpthread runs none of its
-   * own destructors, so there's nothing to report. */
   if (got == 0) return;
 #endif
   REQUIRE_EQ(got, (ssize_t)1);
   REQUIRE_EQ(verdict, 'Y');
 }
 
-/* ========================================================================== */
-/*               DICTIONARY MEMBERS KEEP THEIR INSERTION ORDER                */
-/* ========================================================================== */
-
-/* Serializes node compactly into buf and frees the library's string. */
+// Serializes node compactly into buf (cap bytes), for the order tests, and
+// frees the library's string.
 static void dict_order_serialize(cjson node, char *buf, size_t cap) {
   char *s = cjson_serialize(node);
   snprintf(buf, cap, "%s", s ? s : "(null)");
@@ -4829,13 +4175,13 @@ TEST(dict_order, set_appends_a_new_key_and_a_replace_keeps_its_place) {
   char o1[128];
   dict_order_serialize(d, o1, sizeof(o1));
   cjson_dictionary_set(d, "a", cjson_create_string("new"));
-  cjson_set(d, "c", 10);  /* a path set of an existing key */
-  cjson_set(d, "d.e", 5); /* a missing parent is an error, nothing added */
-  cjson_set(d, "e", (bool)true); /* a path set of a new key goes last */
+  cjson_set(d, "c", 10);
+  cjson_set(d, "d.e", 5);
+  cjson_set(d, "e", (bool)true);
   char o2[128];
   dict_order_serialize(d, o2, sizeof(o2));
   cjson_dictionary_remove(d, "c");
-  cjson_dictionary_set(d, "c", cjson_create_null()); /* back, now last */
+  cjson_dictionary_set(d, "c", cjson_create_null());
   char o3[128];
   dict_order_serialize(d, o3, sizeof(o3));
   cjson_destroy(d);
@@ -4872,8 +4218,6 @@ TEST(dict_order, a_clone_keeps_the_order_of_its_source) {
   REQUIRE_STREQ(o_copy, o_src);
 }
 
-/* Many keys go through several resizes of the bucket array, and the order
- * survives every one of them. */
 TEST(dict_order, the_order_survives_growth_and_shrinking) {
   enum { N = 3000 };
   size_t cap = (size_t)N * 16 + 16;
@@ -4883,11 +4227,9 @@ TEST(dict_order, the_order_survives_growth_and_shrinking) {
   cjson d = cjson_create_dictionary();
   char key[32];
   for (int i = 0; i < N; i++) {
-    /* Keys whose byte order isn't their insertion order. */
     snprintf(key, sizeof(key), "k%d", (i * 7919) % N);
     cjson_dictionary_set(d, key, cjson_create_int(i));
   }
-  /* Remove the first half, which shrinks the table. */
   for (int i = 0; i < N / 2; i++) {
     snprintf(key, sizeof(key), "k%d", (i * 7919) % N);
     cjson_dictionary_remove(d, key);
@@ -4907,10 +4249,6 @@ TEST(dict_order, the_order_survives_growth_and_shrinking) {
   REQUIRE_TRUE(same);
 }
 
-/* ========================================================================== */
-/*                      DICTIONARY ITERATION: THE CURSOR                      */
-/* ========================================================================== */
-
 TEST(dict_iter, walks_the_members_in_insertion_order) {
   cjson doc = cjson_parse("{\"c\":1,\"a\":\"two\",\"b\":[3]}", NULL);
   char keys[64] = "";
@@ -4918,18 +4256,18 @@ TEST(dict_iter, walks_the_members_in_insertion_order) {
   const char *second_val = NULL;
   size_t third_len = 0;
   size_t visited = 0;
-  cjson_dictionary_iter_t it;
+  cjson_dictionary_iter it;
   for (bool ok = cjson_dictionary_first(doc, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     strncat(keys, it.key, sizeof(keys) - strlen(keys) - 1);
-    cjson_node_type_t t = cjson_type(it.value);
+    cjson_node_type t = cjson_type(it.value);
     if (visited == 0 && t == CJSON_INTEGER) first_val = cjson_int_val(it.value);
     if (visited == 1 && t == CJSON_STRING) second_val = cjson_str_val(it.value);
     if (visited == 2 && t == CJSON_LIST) third_len = cjson_list_len(it.value);
     visited++;
   }
   bool end_cleared = it.key == NULL && it.value == NULL;
-  bool again = cjson_dictionary_next(&it); /* past the end stays false */
+  bool again = cjson_dictionary_next(&it);
   char second[8];
   snprintf(second, sizeof(second), "%s", second_val ? second_val : "");
   cjson_destroy(doc);
@@ -4946,7 +4284,7 @@ TEST(dict_iter, null_empty_and_non_dictionary_give_false_and_clear_fields) {
   cjson empty = cjson_create_dictionary();
   cjson list = cjson_create_list();
   cjson scalar = cjson_create_int(3);
-  cjson_dictionary_iter_t it;
+  cjson_dictionary_iter it;
   cjson poison = scalar;
   bool results[4];
   bool cleared[4];
@@ -4970,26 +4308,20 @@ TEST(dict_iter, null_empty_and_non_dictionary_give_false_and_clear_fields) {
   REQUIRE_FALSE(null_next);
 }
 
-/* You may remove the member the cursor stands on, because the cursor
- * already holds the member after it. */
 TEST(dict_iter, removing_the_current_member_keeps_the_walk_going) {
   cjson d = cjson_parse("{\"a\":1,\"b\":{\"x\":[1,2]},\"c\":3,\"d\":4,\"e\":5}",
                         NULL);
   char seen[16] = "";
-  cjson_dictionary_iter_t it;
+  cjson_dictionary_iter it;
   for (bool ok = cjson_dictionary_first(d, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     strncat(seen, it.key, sizeof(seen) - strlen(seen) - 1);
-    /* Remove a, b and d: the first one, a member with a subtree and one in
-     * the middle. The key string is the map's own storage, so the removal
-     * must not need it afterwards. */
     if (strcmp(it.key, "c") != 0 && strcmp(it.key, "e") != 0) {
       cjson_dictionary_remove(d, it.key);
     }
   }
   char left[64];
   dict_order_serialize(d, left, sizeof(left));
-  /* Remove every member while walking. */
   for (bool ok = cjson_dictionary_first(d, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     cjson_dictionary_remove(d, it.key);
@@ -5006,7 +4338,7 @@ TEST(dict_iter, a_walk_after_a_replace_sees_the_new_value_in_the_old_place) {
   cjson_dictionary_set(d, "b", cjson_create_string("replaced"));
   char keys[8] = "";
   const char *b_val = NULL;
-  cjson_dictionary_iter_t it;
+  cjson_dictionary_iter it;
   for (bool ok = cjson_dictionary_first(d, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     strncat(keys, it.key, sizeof(keys) - strlen(keys) - 1);
@@ -5018,19 +4350,17 @@ TEST(dict_iter, a_walk_after_a_replace_sees_the_new_value_in_the_old_place) {
   REQUIRE_TRUE(b_ok);
 }
 
-/* The walk allocates nothing, so it completes while every allocation of the
- * tree's allocator fails. */
 TEST(dict_iter, a_walk_allocates_nothing) {
   cjson d = cjson_parse_mp("{\"a\":1,\"b\":2,\"c\":3}", NULL, &g_counting_mp);
   g_alloc_remaining = 0;
   size_t visited = 0;
-  cjson_dictionary_iter_t it;
+  cjson_dictionary_iter it;
   for (bool ok = cjson_dictionary_first(d, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     visited++;
   }
-  char *out = cjson_serialize(d); /* fails: the output buffer needs memory */
-  cjson copy = cjson_clone(d);    /* fails: the copy needs memory */
+  char *out = cjson_serialize(d);
+  cjson copy = cjson_clone(d);
   g_alloc_remaining = -1;
   cjson_destroy(d);
   REQUIRE_EQ(visited, (size_t)3);
@@ -5038,23 +4368,13 @@ TEST(dict_iter, a_walk_allocates_nothing) {
   REQUIRE_EQ((void *)copy, NULL);
 }
 
-/* ========================================================================== */
-/*      NESTING DEPTH: THE EXACT 500 / 501 BOUNDARY OF EVERY WALK             */
-/* ========================================================================== */
+// The shape of a nesting test document: all arrays, all objects, or both
+// alternating by level.
+typedef enum { DEPTH_ARRAYS, DEPTH_OBJECTS, DEPTH_MIXED } depth_shape_t;
 
-/* The shape of a nesting test document. */
-typedef enum {
-  DEPTH_ARRAYS,  /* [[[ ... ]]]                                   */
-  DEPTH_OBJECTS, /* {"k":{"k":{ ... }}}                           */
-  DEPTH_MIXED    /* [{"k":[{"k": ... }]}], alternating by level   */
-} depth_shape_t;
-
-/* Builds n containers nested inside one another in the given shape, in
- * compact form (exactly the text cjson_serialize() gives back). With
- * with_scalar true the innermost container holds the scalar 1, as an array
- * element or as the value of an object's key "k", and with it false the
- * innermost container is empty. The caller frees the result with
- * free(). */
+// Builds n containers nested in the given shape, in exactly the compact text
+// cjson_serialize() gives back. With with_scalar the innermost one holds 1;
+// otherwise it's empty. The caller frees the result.
 static char *depth_build(size_t n, depth_shape_t shape, bool with_scalar) {
   char *buf = malloc(7 * n + 8);
   size_t pos = 0;
@@ -5076,16 +4396,13 @@ static char *depth_build(size_t n, depth_shape_t shape, bool with_scalar) {
   return buf;
 }
 
+// Every shape, for the boundary tests to loop over.
 static const depth_shape_t depth_shapes[] = {DEPTH_ARRAYS, DEPTH_OBJECTS,
                                              DEPTH_MIXED};
 
-/* The documented rule is at most 500 levels, where each container is one
- * level and a scalar adds none. 500 containers parse, with or without a
- * scalar in the innermost one, for arrays, objects and a mix of the two,
- * and 501 containers are a parse error that names the limit. Both edges are
- * checked: a guard that counts the scalar as a level refuses the
- * 500-with-scalar documents, and a guard one level too loose accepts the
- * 501 documents. */
+// 500 containers parse with or without an innermost scalar, in every shape, and
+// 501 are an error naming the limit; a guard that counts the scalar or is one
+// level loose fails one of the two edges.
 TEST(depth_boundary, parse_accepts_500_and_refuses_501) {
   int accepted_500 = 0, refused_501 = 0, named_limit = 0;
   for (size_t s = 0; s < 3; s++) {
@@ -5110,13 +4427,8 @@ TEST(depth_boundary, parse_accepts_500_and_refuses_501) {
   REQUIRE_EQ(named_limit, 6);
 }
 
-/* A tree that parsed at the limit serializes (compact and pretty) and
- * clones, and the compact text is exactly the input. Wrapping one more
- * container around it through the construction API makes it 501 levels
- * deep, and then the serializers and the clone both refuse it. A serializer
- * or a clone that counts the scalar as a level refuses the 500-with-scalar
- * trees, and one that lets a 501st container through accepts the wrapped
- * trees. */
+// A tree parsed at the limit serializes to the same text and clones; one more
+// container added through the API makes all three refuse it.
 TEST(depth_boundary, serialize_and_clone_accept_500_and_refuse_501) {
   int parsed = 0, ser_ok = 0, ser_exact = 0, pretty_ok = 0, clone_ok = 0;
   int clone_exact = 0, ser_refused = 0, pretty_refused = 0;
@@ -5141,11 +4453,10 @@ TEST(depth_boundary, serialize_and_clone_accept_500_and_refuse_501) {
         cjson_serialize_free(copy_out);
         cjson_destroy(copy);
 
-        /* One more level, as an array or as an object, by shape. */
         cjson outer =
             (s == 1) ? cjson_create_dictionary() : cjson_create_list();
-        ccol_retval_t r = (s == 1) ? cjson_dictionary_set(outer, "k", doc)
-                                   : cjson_list_push(outer, doc);
+        ccol_retval r = (s == 1) ? cjson_dictionary_set(outer, "k", doc)
+                                 : cjson_list_push(outer, doc);
         if (r == ccol_success) {
           char *deep_out = cjson_serialize(outer);
           char *deep_pretty = cjson_serialize_pretty(outer, 1);
@@ -5173,17 +4484,14 @@ TEST(depth_boundary, serialize_and_clone_accept_500_and_refuse_501) {
   REQUIRE_EQ(clone_refused, 6);
 }
 
-/* The limit counts containers from the node the call gets, so a subtree of a
- * deeper tree serializes and clones as long as it is within the limit
- * itself. */
 TEST(depth_boundary, a_subtree_within_the_limit_serializes_and_clones) {
   char *txt = depth_build(500, DEPTH_ARRAYS, true);
   cjson doc = cjson_parse(txt, NULL);
   free(txt);
   cjson outer = cjson_create_list();
-  ccol_retval_t r = cjson_list_push(outer, doc);
-  char *whole = cjson_serialize(outer); /* 501 levels: refused */
-  char *sub = cjson_serialize(cjson_list_get(outer, 0)); /* 500: accepted */
+  ccol_retval r = cjson_list_push(outer, doc);
+  char *whole = cjson_serialize(outer);
+  char *sub = cjson_serialize(cjson_list_get(outer, 0));
   cjson sub_copy = cjson_clone(cjson_list_get(outer, 0));
   bool sub_ok = sub != NULL, sub_copy_ok = sub_copy != NULL;
   bool whole_refused = whole == NULL;
@@ -5197,10 +4505,7 @@ TEST(depth_boundary, a_subtree_within_the_limit_serializes_and_clones) {
   REQUIRE_TRUE(sub_copy_ok);
 }
 
-/* ========================================================================== */
-/*          PARSE ERROR MESSAGES ARE PRINTABLE ASCII (VALID UTF-8)            */
-/* ========================================================================== */
-
+// Tells whether every byte of s is printable ASCII, for the error text tests.
 static bool err_is_printable_ascii(const char *s) {
   for (; *s; s++) {
     unsigned char c = (unsigned char)*s;
@@ -5209,13 +4514,9 @@ static bool err_is_printable_ascii(const char *s) {
   return true;
 }
 
-/* Every template puts the swept byte where a parse error can quote it: at a
- * value start, in a string escape, in a \uXXXX digit, at a separator, in a
- * key, a literal and a number. Every byte value from 0x00 to 0xFF goes into
- * every template through cjson_parse_n(), which can carry a NUL, and every
- * failing parse has to give a message of printable ASCII only, which is
- * valid UTF-8. A message that quotes the raw byte fails this for every byte
- * from 0x80 up and for every control byte. */
+// Every byte value goes into every template at a place a parse error can quote
+// it, through cjson_parse_n() so a NUL gets in too, and every message must be
+// printable ASCII.
 TEST(parse_err_text, every_message_is_printable_ascii) {
   static const char *const templates[] = {
       "@",           "[@",          "[1@",
@@ -5253,8 +4554,6 @@ TEST(parse_err_text, every_message_is_printable_ascii) {
   REQUIRE_EQ(bad_messages, (size_t)0);
 }
 
-/* A byte outside printable ASCII is spelled as 0xNN while a printable one is
- * quoted as it is. */
 TEST(parse_err_text, the_offending_byte_is_spelled_readably) {
   char *err = NULL;
   cjson n = cjson_parse("\xEF\xBB\xBF{}", &err);
@@ -5291,41 +4590,27 @@ TEST(parse_err_text, the_offending_byte_is_spelled_readably) {
   REQUIRE_STREQ(err, "invalid hex digit 'g' in \\uXXXX at position 5");
 }
 
-/* ========================================================================== */
-/*         DICTIONARY CURSOR: THE CHANGES THAT IT IS GUARANTEED TO SURVIVE    */
-/* ========================================================================== */
-
-/* The cursor survives replacing the current member's value (through
- * cjson_dictionary_set() and through cjson_set()), replacing another
- * member's value, and removing a member other than the successor. The walk
- * visits every member once in insertion order and sees each replaced value
- * in its place. Under valgrind (make memtest), a cursor that a replacement
- * invalidated would read freed memory. */
 TEST(dict_iter, survives_replacement_of_current_and_other_values) {
   cjson d = cjson_parse("{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5}", NULL);
   char order[8] = {0};
   size_t visited = 0;
   long long seen_d = 0;
-  ccol_retval_t r1 = ccol_success, r2 = ccol_success, r3 = ccol_success;
-  ccol_retval_t r4 = ccol_success;
+  ccol_retval r1 = ccol_success, r2 = ccol_success, r3 = ccol_success;
+  ccol_retval r4 = ccol_success;
   bool value_is_same_node_after_set = false;
-  cjson_dictionary_iter_t it;
+  cjson_dictionary_iter it;
   for (bool ok = cjson_dictionary_first(d, &it); ok;
        ok = cjson_dictionary_next(&it)) {
     if (visited < sizeof(order) - 1) order[visited] = it.key[0];
     visited++;
     if (strcmp(it.key, "a") == 0) {
-      /* The current member, through cjson_dictionary_set(). */
       r1 = cjson_dictionary_set(d, "a", cjson_create_int(10));
     } else if (strcmp(it.key, "b") == 0) {
-      /* The current member, through cjson_set(), which keeps the node. */
       cjson before = it.value;
       r2 = cjson_set(d, "b", 20);
       value_is_same_node_after_set = cjson_dictionary_get(d, "b") == before;
-      /* Another member, which the walk has not reached yet. */
       r3 = cjson_dictionary_set(d, "d", cjson_create_int(40));
     } else if (strcmp(it.key, "c") == 0) {
-      /* A member other than the successor ("d"), here the predecessor. */
       r4 = cjson_dictionary_remove(d, "a");
     } else if (strcmp(it.key, "d") == 0) {
       seen_d = cjson_int_val(it.value);
@@ -5346,14 +4631,10 @@ TEST(dict_iter, survives_replacement_of_current_and_other_values) {
   REQUIRE_TRUE(out_ok);
 }
 
-/* cjson_destroy evaluates its argument once, so walking backwards over an
- * array with `cjson_destroy(a[--k])` destroys and clears every tree. A macro
- * that evaluated its argument twice would destroy only every second tree and
- * clear the others without destroying them. */
+// cjson_destroy(a[--k]) must destroy every tree; evaluating the argument twice
+// would skip every second one. The trees sit at the end of a larger array, so a
+// wrong index stays inside the test's storage.
 TEST(cjson_macros, destroy_evaluates_its_argument_once) {
-  /* The two trees sit at the end of a larger array, so an index that a
-   * macro evaluating its argument more than once drives below 0 still lands
-   * in this test's storage. */
   cjson store[4] = {NULL, NULL, cjson_parse("[1,2]", NULL),
                     cjson_parse("{\"a\":1}", NULL)};
   cjson *trees = &store[2];
@@ -5366,18 +4647,12 @@ TEST(cjson_macros, destroy_evaluates_its_argument_once) {
   REQUIRE_EQ((void *)trees[1], NULL);
 }
 
-/* ------------------------------------------------------------------ */
-/* The allocator procs struct of the caller                           */
-/* ------------------------------------------------------------------ */
-
-/* The honest allocator of the tests below. It counts every call and the
- * blocks it handed out and hasn't taken back yet. */
+// The honest allocator of the procs tests (_pl_* functions): it counts calls
+// and live blocks. The poison allocator (_pl_poison_*) forwards to the C
+// library and counts calls in _pl_poison_calls; any call means the library read
+// the caller's struct after the call that took it.
 static atomic_long _pl_live;
 static atomic_long _pl_calls;
-/* The poison allocator, which the tests write over the caller's struct once
- * the tree exists. It forwards to the C library, so a call through it
- * corrupts nothing and only counts, and any count above zero means the
- * library read the caller's struct after the call that took it. */
 static atomic_long _pl_poison_calls;
 
 static void *_pl_malloc(size_t n) {
@@ -5419,19 +4694,15 @@ static void *_pl_poison_realloc(void *p, size_t n) {
   return realloc(p, n);
 }
 
-/* A tree built from a procs struct keeps using the allocator the struct
- * named when the call ran, even after the caller overwrote the struct. The
- * struct lives on the heap so the test is deterministic; a struct on the
- * stack of a helper that has returned is the same case, with undefined
- * behavior instead of the poison count. A node that kept the caller's
- * pointer would send every later allocation of the tree through the poison
- * allocator, and the count would show it. */
+// After the tree exists the caller overwrites its procs struct with a counting
+// "poison" allocator; any call through it means a node kept the caller's
+// pointer instead of the interned copy.
 TEST(custom_alloc, tree_does_not_read_the_procs_struct_of_the_caller_later) {
-  const ccol_memmgmt_procs_t honest = {_pl_malloc, _pl_free, _pl_calloc,
-                                       _pl_realloc};
-  const ccol_memmgmt_procs_t poison = {_pl_poison_malloc, _pl_poison_free,
-                                       _pl_poison_calloc, _pl_poison_realloc};
-  ccol_memmgmt_procs_t *mp = malloc(sizeof(*mp));
+  const ccol_memmgmt_procs honest = {_pl_malloc, _pl_free, _pl_calloc,
+                                     _pl_realloc};
+  const ccol_memmgmt_procs poison = {_pl_poison_malloc, _pl_poison_free,
+                                     _pl_poison_calloc, _pl_poison_realloc};
+  ccol_memmgmt_procs *mp = malloc(sizeof(*mp));
   REQUIRE_NE((void *)mp, NULL);
   *mp = honest;
   _pl_live = 0;
@@ -5445,8 +4716,8 @@ TEST(custom_alloc, tree_does_not_read_the_procs_struct_of_the_caller_later) {
   long calls_at_overwrite = _pl_calls;
 
   bool built = root && leaf && list;
-  ccol_retval_t set_rv = ccol_invalid_args, push_rv = ccol_invalid_args,
-                dict_rv = ccol_invalid_args;
+  ccol_retval set_rv = ccol_invalid_args, push_rv = ccol_invalid_args,
+              dict_rv = ccol_invalid_args;
   char *text = NULL;
   cjson copy = NULL;
   if (built) {
@@ -5460,7 +4731,7 @@ TEST(custom_alloc, tree_does_not_read_the_procs_struct_of_the_caller_later) {
   }
   bool have_text = text != NULL;
   bool have_copy = copy != NULL;
-  if (text) cjson_serialize_free_mp(text, (ccol_memmgmt_procs_t *)&honest);
+  if (text) cjson_serialize_free_mp(text, (ccol_memmgmt_procs *)&honest);
   cjson_destroy(copy);
   cjson_destroy(leaf);
   cjson_destroy(list);
@@ -5481,20 +4752,16 @@ TEST(custom_alloc, tree_does_not_read_the_procs_struct_of_the_caller_later) {
   REQUIRE_EQ(live, 0L);
 }
 
-/* Two structs with the same four functions are the same allocator. So a tree
- * built from a struct that the caller has released can take a child built
- * from another struct with the same content, and every block still goes back
- * to the allocator that made it. */
 TEST(custom_alloc, procs_structs_with_the_same_functions_are_one_allocator) {
-  ccol_memmgmt_procs_t first = {_pl_malloc, _pl_free, _pl_calloc, _pl_realloc};
-  ccol_memmgmt_procs_t second = first;
-  ccol_memmgmt_procs_t *a = NULL, *b = NULL;
-  ccol_retval_t ra = ccol_procs_intern(&first, &a);
-  ccol_retval_t rb = ccol_procs_intern(&second, &b);
-  ccol_memmgmt_procs_t *again = NULL;
-  ccol_retval_t rc = ccol_procs_intern(a, &again);
-  ccol_memmgmt_procs_t *none = (ccol_memmgmt_procs_t *)&first;
-  ccol_retval_t rn = ccol_procs_intern(NULL, &none);
+  ccol_memmgmt_procs first = {_pl_malloc, _pl_free, _pl_calloc, _pl_realloc};
+  ccol_memmgmt_procs second = first;
+  ccol_memmgmt_procs *a = NULL, *b = NULL;
+  ccol_retval ra = ccol_procs_intern(&first, &a);
+  ccol_retval rb = ccol_procs_intern(&second, &b);
+  ccol_memmgmt_procs *again = NULL;
+  ccol_retval rc = ccol_procs_intern(a, &again);
+  ccol_memmgmt_procs *none = (ccol_memmgmt_procs *)&first;
+  ccol_retval rn = ccol_procs_intern(NULL, &none);
   REQUIRE_EQ(ra, ccol_success);
   REQUIRE_EQ(rb, ccol_success);
   REQUIRE_EQ(rc, ccol_success);
@@ -5505,26 +4772,22 @@ TEST(custom_alloc, procs_structs_with_the_same_functions_are_one_allocator) {
   REQUIRE_EQ((void *)none, NULL);
 }
 
-/* The intern table has a fixed number of slots. Once every slot is taken, a
- * factory function or a parse that needs a new set of functions fails
- * cleanly, while a set that already has a slot keeps working. */
 TEST(custom_alloc, a_full_procs_table_fails_cleanly) {
-  ccol_memmgmt_procs_t known = {_pl_malloc, _pl_free, _pl_calloc, _pl_realloc};
-  ccol_memmgmt_procs_t *known_i = NULL;
-  ccol_retval_t rk = ccol_procs_intern(&known, &known_i);
-  size_t keep = _ccol_procs_intern_used_for_tests();
+  ccol_memmgmt_procs known = {_pl_malloc, _pl_free, _pl_calloc, _pl_realloc};
+  ccol_memmgmt_procs *known_i = NULL;
+  ccol_retval rk = ccol_procs_intern(&known, &known_i);
+  size_t keep = ccol__procs_intern_used_for_tests();
   size_t filled = 0;
   for (size_t i = keep; i < CCOL_PROCS_INTERN_CAPACITY; i++) {
-    /* Distinct contents that nothing ever calls. */
-    ccol_memmgmt_procs_t fake = {(ccol_malloc_t)(uintptr_t)(0x1000 + i * 16),
-                                 _pl_free, _pl_calloc, _pl_realloc};
-    ccol_memmgmt_procs_t *out = NULL;
+    ccol_memmgmt_procs fake = {(ccol_malloc)(uintptr_t)(0x1000 + i * 16),
+                               _pl_free, _pl_calloc, _pl_realloc};
+    ccol_memmgmt_procs *out = NULL;
     if (ccol_procs_intern(&fake, &out) == ccol_success) filled++;
   }
-  ccol_memmgmt_procs_t fresh = {_pl_poison_malloc, _pl_poison_free,
-                                _pl_poison_calloc, _pl_poison_realloc};
-  ccol_memmgmt_procs_t *fresh_i = (ccol_memmgmt_procs_t *)&known;
-  ccol_retval_t rf = ccol_procs_intern(&fresh, &fresh_i);
+  ccol_memmgmt_procs fresh = {_pl_poison_malloc, _pl_poison_free,
+                              _pl_poison_calloc, _pl_poison_realloc};
+  ccol_memmgmt_procs *fresh_i = (ccol_memmgmt_procs *)&known;
+  ccol_retval rf = ccol_procs_intern(&fresh, &fresh_i);
   _pl_poison_calls = 0;
   cjson refused_node = cjson_create_int_mp(7, &fresh);
   char *err = NULL;
@@ -5540,7 +4803,7 @@ TEST(custom_alloc, a_full_procs_table_fails_cleanly) {
   long live = _pl_live;
   cjson_destroy(refused_node);
   cjson_destroy(refused_tree);
-  _ccol_procs_intern_truncate_for_tests(keep);
+  ccol__procs_intern_truncate_for_tests(keep);
 
   REQUIRE_EQ(rk, ccol_success);
   REQUIRE_EQ(filled, CCOL_PROCS_INTERN_CAPACITY - keep);
@@ -5554,14 +4817,12 @@ TEST(custom_alloc, a_full_procs_table_fails_cleanly) {
   REQUIRE_EQ(live, 0L);
 }
 
-/* This suite compiles as C11, where the macro `true` is the int 1, so
- * cjson_set()'s classifier stores it as the CJSON_INTEGER 1, as the header
- * documents, and (bool)true stores a CJSON_BOOL. tests_c23.c pins the C23
- * side, where `true` has the type bool. */
+// In C11 true is the int 1, so it's stored as CJSON_INTEGER, and (bool)true as
+// CJSON_BOOL. tests_c23.c covers the C23 side.
 TEST(set_value_types, c11_true_is_an_int_and_a_cast_makes_a_bool) {
   cjson doc = cjson_parse("{\"i\": 0, \"b\": 0}", NULL);
-  ccol_retval_t ri = doc ? cjson_set(doc, "i", true) : ccol_not_enough_memory;
-  ccol_retval_t rb =
+  ccol_retval ri = doc ? cjson_set(doc, "i", true) : ccol_not_enough_memory;
+  ccol_retval rb =
       doc ? cjson_set(doc, "b", (bool)true) : ccol_not_enough_memory;
   cjson i = doc ? cjson_get(doc, "i") : NULL;
   cjson b = doc ? cjson_get(doc, "b") : NULL;
@@ -5574,13 +4835,8 @@ TEST(set_value_types, c11_true_is_an_int_and_a_cast_makes_a_bool) {
   REQUIRE_TRUE(b_is_bool);
 }
 
-/* ========================================================================== */
-/*                       MEMORY OF A PARSED DOCUMENT                          */
-/* ========================================================================== */
-
-/* An allocator that records each block's size in a header, so a test can
- * follow how many bytes the library holds at each moment and the most it
- * held at once. g_mem_fail makes every later call fail. */
+// What the memory probe allocator measures: live and peak bytes, live blocks,
+// calls; fail makes every later call fail.
 typedef struct {
   size_t live_bytes;
   size_t peak_bytes;
@@ -5588,14 +4844,20 @@ typedef struct {
   size_t calls;
   bool fail;
 } _cjson_mem_probe_t;
+// The state of the memory probe allocator.
 static _cjson_mem_probe_t g_mem;
+// The size header the probe puts before each block (16 keeps it aligned).
 #define _CJSON_MEM_HDR 16
 
+// Adds add and removes sub from the live byte count and raises the peak, for
+// the probe allocator functions below.
 static void _mem_note(size_t add, size_t sub) {
   g_mem.live_bytes += add;
   g_mem.live_bytes -= sub;
   if (g_mem.live_bytes > g_mem.peak_bytes) g_mem.peak_bytes = g_mem.live_bytes;
 }
+// The probe allocator: each block records its size in a header so the
+// functions can follow the live and peak bytes in g_mem.
 static void *_mem_malloc(size_t n) {
   if (g_mem.fail) return NULL;
   char *p = malloc(n + _CJSON_MEM_HDR);
@@ -5633,14 +4895,16 @@ static void *_mem_realloc(void *q, size_t n) {
   _mem_note(n, old);
   return np + _CJSON_MEM_HDR;
 }
-static ccol_memmgmt_procs_t g_mem_mp = {.malloc = _mem_malloc,
-                                        .free = _mem_free,
-                                        .calloc = _mem_calloc,
-                                        .realloc = _mem_realloc};
+static ccol_memmgmt_procs g_mem_mp = {.malloc = _mem_malloc,
+                                      .free = _mem_free,
+                                      .calloc = _mem_calloc,
+                                      .realloc = _mem_realloc};
 
+// Clears g_mem before a measurement.
 static void _mem_reset(void) { memset(&g_mem, 0, sizeof(g_mem)); }
 
-/* Builds "[u,u,...,u]" with count copies of unit; the caller frees it. */
+// Builds "[u,u,...,u]" with count copies of unit and its length in *len_out,
+// for the memory tests; the caller frees it.
 static char *_mem_repeat_in_list(const char *unit, size_t count,
                                  size_t *len_out) {
   size_t ul = strlen(unit);
@@ -5659,9 +4923,8 @@ static char *_mem_repeat_in_list(const char *unit, size_t count,
   return b;
 }
 
-/* The most bytes the library held at once while parsing src, per byte of
- * src, with the parsed tree still alive at the end, or 0 when the parse
- * failed. */
+// Gives the most bytes the library held at once while parsing src, per byte of
+// src (with the tree still alive at the end), or 0 when the parse failed.
 static double _mem_parse_ratio(const char *src, size_t len) {
   _mem_reset();
   cjson doc = cjson_parse_n_mp(src, len, NULL, &g_mem_mp);
@@ -5670,12 +4933,9 @@ static double _mem_parse_ratio(const char *src, size_t len) {
   return ratio;
 }
 
+// A container builds its store on its first child, so "{}" and "[]" cost one
+// node each.
 TEST(memory, an_empty_object_or_list_costs_one_node_and_no_store) {
-  /* "{}" and "[]" are three bytes each with their separator and each costs
-   * one node, since a container's store is built by its first child. If a
-   * container built its map or vector at creation, the parse below would pay
-   * about 4.5 allocations per container and hold over 60 bytes per input
-   * byte. */
   enum { N = 2000 };
   size_t len_o = 0, len_l = 0;
   char *objs = _mem_repeat_in_list("{}", N, &len_o);
@@ -5693,8 +4953,6 @@ TEST(memory, an_empty_object_or_list_costs_one_node_and_no_store) {
   REQUIRE_TRUE(built);
   REQUIRE_GT(r_o, 0.0);
   REQUIRE_GT(r_l, 0.0);
-  /* One node per container, plus the outer list and its vector's
-   * growth. */
   REQUIRE_LT(calls_o, (size_t)N + 64);
   REQUIRE_LT(calls_l, (size_t)N + 64);
   REQUIRE_LT(r_o, 20.0);
@@ -5702,16 +4960,10 @@ TEST(memory, an_empty_object_or_list_costs_one_node_and_no_store) {
   REQUIRE_EQ(leaked, (size_t)0);
 }
 
+// The densest shapes the grammar allows (empty containers, tiny keys and
+// numbers, one-member containers, the deepest legal nesting) stay under the 65
+// bytes of DOM per input byte that cjson_parse(3) states.
 TEST(memory, the_densest_documents_stay_under_the_documented_bound) {
-  /* cjson_parse(3) states that a parse holds at most about 65 bytes of DOM
-   * per byte of input. These are the densest shapes the grammar allows:
-   * - empty containers
-   * - empty keys and one-character keys
-   * - one-byte numbers
-   * - containers with one member
-   * - the deepest legal nesting of objects and lists with one member.
-   * The bound counts the bytes the library asks for, so the overhead that a
-   * particular allocator adds plays no part in it. */
   static const char *const units[] = {
       "{}",        "[]",         "0",           "\"\"",      "{\"\":0}",
       "{\"\":{}}", "{\"\":[]}",  "{\"\":\"\"}", "[0]",       "[[]]",
@@ -5726,8 +4978,6 @@ TEST(memory, the_densest_documents_stay_under_the_documented_bound) {
     if (r == 0.0) all_parsed = false;
     if (r > worst) worst = r;
   }
-  /* 499 nested one-member objects and lists inside the outer list are the
-   * deepest that CJSON_MAX_PARSE_DEPTH lets through. */
   for (int kind = 0; kind < 2; kind++) {
     char unit[2600];
     char *w = unit;
@@ -5755,16 +5005,13 @@ TEST(memory, the_densest_documents_stay_under_the_documented_bound) {
 }
 
 TEST(empty_containers, every_call_reads_an_empty_container_as_empty) {
-  /* An empty container from the parser, from a factory and from a clone
-   * answers every reading call as empty, and its first insert works on
-   * every path that can insert. */
   cjson doc = cjson_parse("{\"d\":{},\"l\":[]}", NULL);
   REQUIRE_NE((void *)doc, NULL);
   cjson d = cjson_get(doc, "d");
   cjson l = cjson_get(doc, "l");
   cjson fd = cjson_create_dictionary();
   cjson fl = cjson_create_list();
-  cjson_dictionary_iter_t it;
+  cjson_dictionary_iter it;
 
   bool reads_ok =
       d && l && fd && fl && cjson_dictionary_size(d) == 0 &&
@@ -5790,8 +5037,6 @@ TEST(empty_containers, every_call_reads_an_empty_container_as_empty) {
   cjson_serialize_free(pretty);
   cjson_serialize_free(copied);
 
-  /* The first insert on every path that inserts. The clone has empty
-   * containers of its own, and they take the inserts the clone needs. */
   bool inserts_ok =
       cjson_set(doc, "d.x", 1) == ccol_success &&
       cjson_list_push(l, cjson_create_int(2)) == ccol_success &&
@@ -5815,7 +5060,6 @@ TEST(empty_containers, every_call_reads_an_empty_container_as_empty) {
   cjson_serialize_free(after_fd);
   cjson_serialize_free(after_fl);
 
-  /* An empty container that a set turns into a scalar. */
   cjson e = cjson_parse("{\"a\":{},\"b\":[]}", NULL);
   bool reinit_ok = e && cjson_set(e, "a", 5) == ccol_success &&
                    cjson_set(e, "b", "s") == ccol_success &&
@@ -5834,13 +5078,11 @@ TEST(empty_containers, every_call_reads_an_empty_container_as_empty) {
   REQUIRE_TRUE(reinit_ok);
 }
 
+// When the store of an empty container can't be allocated, push and set
+// destroy the child as for any memory failure, cjson_set() changes nothing, and
+// the container stays empty and usable.
 TEST(empty_containers,
      a_first_insert_that_cannot_build_the_store_fails_cleanly) {
-  /* The first insert into an empty container allocates its store. When that
-   * allocation fails the insert fails like any insert does for lack of
-   * memory: cjson_list_push() and cjson_dictionary_set() take and destroy
-   * the child anyway, cjson_set() leaves the tree unchanged, and the
-   * container stays empty and usable. */
   _mem_reset();
   cjson list = cjson_create_list_mp(&g_mem_mp);
   cjson dict = cjson_create_dictionary_mp(&g_mem_mp);
@@ -5850,11 +5092,10 @@ TEST(empty_containers,
   size_t blocks_before = g_mem.live_blocks;
 
   g_mem.fail = true;
-  ccol_retval_t rl = built ? cjson_list_push(list, c1) : ccol_success;
-  ccol_retval_t rd = built ? cjson_dictionary_set(dict, "k", c2) : ccol_success;
-  ccol_retval_t rs = built ? cjson_set(dict, "k", 3) : ccol_success;
+  ccol_retval rl = built ? cjson_list_push(list, c1) : ccol_success;
+  ccol_retval rd = built ? cjson_dictionary_set(dict, "k", c2) : ccol_success;
+  ccol_retval rs = built ? cjson_set(dict, "k", 3) : ccol_success;
   g_mem.fail = false;
-  /* Both children are gone, and no store was left behind. */
   size_t blocks_after = g_mem.live_blocks;
 
   bool still_empty =
@@ -5878,10 +5119,9 @@ TEST(empty_containers,
   REQUIRE_EQ(leaked, (size_t)0);
 }
 
+// Indentation is written in 128-byte blocks; widths around a block boundary
+// must give exactly depth * indent spaces.
 TEST(serialize, pretty_indentation_is_exact_at_every_width) {
-  /* A line's indentation is written in blocks. Widths just below, at and
-   * above a block boundary have to come out as exactly depth * indent
-   * spaces, and we build the expected text here one byte at a time. */
   static const unsigned widths[] = {1,   2,   3,   63,  64,  65, 127,
                                     128, 129, 255, 256, 257, 300};
   bool all_ok = true;
@@ -5889,14 +5129,6 @@ TEST(serialize, pretty_indentation_is_exact_at_every_width) {
     unsigned indent = widths[w];
     cjson doc = cjson_parse("{\"a\":[1,{\"b\":2}]}", NULL);
     char *out = doc ? cjson_serialize_pretty(doc, indent) : NULL;
-    /* {
-     *   "a": [
-     *     1,
-     *     {
-     *       "b": 2
-     *     }
-     *   ]
-     * } */
     static const struct {
       unsigned depth;
       const char *text;
@@ -5921,8 +5153,8 @@ TEST(serialize, pretty_indentation_is_exact_at_every_width) {
   REQUIRE_TRUE(all_ok);
 }
 
-/* An allocator that refuses every request while get_refuse is set and counts
- * the requests it gets in the meantime. */
+// An allocator that refuses every call while get_refuse is set and counts the
+// refused calls, for the test that a lookup allocates nothing.
 static atomic_bool get_refuse;
 static atomic_long get_refused_calls;
 static void *get_refuse_malloc(size_t n) {
@@ -5948,15 +5180,9 @@ static void *get_refuse_realloc(void *p, size_t n) {
   return realloc(p, n);
 }
 
-/* A lookup by path allocates nothing for an ordinary path, so a node that is
- * there is found even while the tree's allocator refuses every request, and
- * a NULL result always means the path names nothing.
- *
- * Were the lookup to copy the path with the tree's allocator, it would
- * return NULL here and the allocator would see a call. */
 TEST(custom_alloc, a_get_by_path_allocates_nothing) {
-  ccol_memmgmt_procs_t mp = {get_refuse_malloc, get_refuse_free,
-                             get_refuse_calloc, get_refuse_realloc};
+  ccol_memmgmt_procs mp = {get_refuse_malloc, get_refuse_free,
+                           get_refuse_calloc, get_refuse_realloc};
   atomic_store(&get_refuse, false);
   cjson doc = cjson_parse_mp("{\"a\":{\"b\":1}}", NULL, &mp);
   atomic_store(&get_refused_calls, 0);
@@ -5969,10 +5195,8 @@ TEST(custom_alloc, a_get_by_path_allocates_nothing) {
   REQUIRE_EQ(calls, 0L);
 }
 
-/* ------------------------------------------------------------------ */
-/* Allocation counts of the parser and of a clone                     */
-/* ------------------------------------------------------------------ */
-
+// An allocator that counts every allocation in alloc_tally, for the allocation
+// count tests.
 static atomic_long alloc_tally;
 
 static void *tally_malloc(size_t n) {
@@ -5987,11 +5211,11 @@ static void *tally_realloc(void *p, size_t n) {
   atomic_fetch_add(&alloc_tally, 1);
   return realloc(p, n);
 }
-static ccol_memmgmt_procs_t tally_mp = {tally_malloc, free, tally_calloc,
-                                        tally_realloc};
+static ccol_memmgmt_procs tally_mp = {tally_malloc, free, tally_calloc,
+                                      tally_realloc};
 
-/* Parse text with the tallying allocator and give the number of allocations
- * the parse made, or -1 when the parse fails. */
+// Parses text with the tallying allocator and gives the number of allocations
+// the parse made, or -1 when it fails.
 static long allocations_of_parse(const char *text) {
   atomic_store(&alloc_tally, 0);
   cjson doc = cjson_parse_mp(text, NULL, &tally_mp);
@@ -6001,29 +5225,18 @@ static long allocations_of_parse(const char *text) {
   return n;
 }
 
-/* A custom allocator skips the node pool, so each node is one allocation,
- * and each list holding an element adds exactly two more, its vector's block
- * and its element buffer. The vector keeps the interned procs pointer that
- * the parser hands it rather than a private copy.
- *
- * The count tells the two apart: a vector that copied interned procs into an
- * allocation of their own would make each list cost three allocations, and
- * the count of [[1],[2],[3]] would be 19 instead of 15. */
+// With a custom allocator (no pool) a node is one allocation and a list with an
+// element adds its vector block and buffer. A vector that copied the interned
+// procs would add a third, and [[1],[2],[3]] would cost 19 instead of 15.
 TEST(alloc_count, a_parsed_list_costs_its_node_and_two_allocations) {
-  /* 7 nodes (the outer list, three lists, three integers) and 4 vectors. */
   REQUIRE_EQ(allocations_of_parse("[[1],[2],[3]]"), 7L + 4L * 2L);
-  /* One more list with one element: two nodes and one vector. */
   REQUIRE_EQ(allocations_of_parse("[[1],[2],[3],[4]]") -
                  allocations_of_parse("[[1],[2],[3]]"),
              2L + 2L);
 }
 
-/* The parser reads a dictionary key into a buffer it keeps on the stack and
- * the map copies it from there, so one more member costs its value node and
- * its map entry and nothing at all for the key.
- *
- * A parser that read each key into an allocation of its own would make the
- * difference 3. */
+// Keys are parsed into the parser's own buffer and copied by the map, so a
+// member costs its node and its map entry only.
 TEST(alloc_count, a_parsed_key_costs_no_allocation) {
   long one = allocations_of_parse("{\"a\":1}");
   long two = allocations_of_parse("{\"a\":1,\"b\":2}");
@@ -6031,14 +5244,10 @@ TEST(alloc_count, a_parsed_key_costs_no_allocation) {
   REQUIRE_EQ(two - one, 2L);
 }
 
-/* Keys that together don't fit the parser's stack buffer, keys with escapes
- * and keys of nested dictionaries all reach the right members. */
 TEST(alloc_count, long_escaped_and_nested_keys_parse_correctly) {
   char big[700];
   memset(big, 'k', sizeof(big) - 1);
   big[sizeof(big) - 1] = '\0';
-  /* 40 nested dictionaries, each under a 300-byte key so the open keys
-   * overflow the stack buffer, with an escaped key at the bottom. */
   size_t cap = 40 * 310 + sizeof(big) + 256;
   char *text = malloc(cap);
   REQUIRE_NE((void *)text, NULL);
@@ -6080,19 +5289,15 @@ TEST(alloc_count, long_escaped_and_nested_keys_parse_correctly) {
   REQUIRE_EQ(bv, 8L);
 }
 
-/* Every string of a tree is valid UTF-8 already, so a clone copies each one
- * as it is without checking it again.
- *
- * Building each string through the public string constructor instead would
- * check every string again, and the count would go up by the number of
- * strings. */
+// A clone copies strings that are already valid UTF-8 without checking them
+// again; a check would raise the UTF-8 counter by the number of strings.
 TEST(alloc_count, a_clone_does_not_check_its_strings_again) {
   cjson doc = cjson_parse(
       "{\"a\":\"x\",\"b\":[\"y\",\"z\"],\"c\":{\"d\":\"w\"}}", NULL);
   REQUIRE_NE((void *)doc, NULL);
-  unsigned long before = atomic_load(&_cjson_utf8_cstr_checks_for_tests);
+  unsigned long before = atomic_load(&cjson__utf8_cstr_checks_for_tests);
   cjson copy = cjson_clone(doc);
-  unsigned long after = atomic_load(&_cjson_utf8_cstr_checks_for_tests);
+  unsigned long after = atomic_load(&cjson__utf8_cstr_checks_for_tests);
   char *a = copy ? cjson_serialize(doc) : NULL;
   char *b = copy ? cjson_serialize(copy) : NULL;
   bool copied = copy != NULL;
@@ -6106,33 +5311,21 @@ TEST(alloc_count, a_clone_does_not_check_its_strings_again) {
   REQUIRE_EQ(after - before, 0UL);
 }
 
-/* ------------------------------------------------------------------ */
-/* An error of syntax in a component above the leaf                   */
-/* ------------------------------------------------------------------ */
-
-/* A malformed "#N" on a list and a component that isn't valid UTF-8 are
- * syntax errors wherever they sit in the path, so set and delete report
- * ccol_invalid_args for them and get gives NULL.
- *
- * If the walk took such a component above the leaf for an absent one, set
- * and delete would return ccol_key_not_found and the test would fail. */
 TEST(navigate, a_malformed_middle_component_is_invalid_args) {
   cjson doc = cjson_parse("{\"l\":[{\"k\":1}],\"d\":{\"k\":2}}", NULL);
   REQUIRE_NE((void *)doc, NULL);
   const char *bad[] = {"l.#x.k", "l.#-1.k",  "l.#.k",         "l.#+0.k",
                        "\xff.k", "d.\xc3.k", "missing.\xff.k"};
-  ccol_retval_t set_rv[7], del_rv[7];
+  ccol_retval set_rv[7], del_rv[7];
   bool got_null = true;
   for (size_t i = 0; i < 7; i++) {
     set_rv[i] = cjson_set(doc, bad[i], 5);
     del_rv[i] = cjson_delete(doc, bad[i]);
     if (cjson_get(doc, bad[i]) != NULL) got_null = false;
   }
-  /* Well formed and absent: on a dictionary a "#x" key is an ordinary key,
-   * and an index past the end is out of range. */
-  ccol_retval_t absent_key = cjson_set(doc, "d.#x.k", 5);
-  ccol_retval_t absent_idx = cjson_delete(doc, "l.#9.k");
-  ccol_retval_t ok = cjson_set(doc, "l.#0.k", 3);
+  ccol_retval absent_key = cjson_set(doc, "d.#x.k", 5);
+  ccol_retval absent_idx = cjson_delete(doc, "l.#9.k");
+  ccol_retval ok = cjson_set(doc, "l.#0.k", 3);
   cjson_destroy(doc);
   for (size_t i = 0; i < 7; i++) {
     REQUIRE_EQ(set_rv[i], ccol_invalid_args);
@@ -6144,30 +5337,18 @@ TEST(navigate, a_malformed_middle_component_is_invalid_args) {
   REQUIRE_EQ(ok, ccol_success);
 }
 
-/* A path whose shape can't apply to the tree is an error in the path at any
- * position, as in cyaml. A component that would descend into a scalar (a
- * string, a number, a bool or null) and a name that isn't "#N" on a list
- * give ccol_invalid_args from set and delete and NULL from get. Only a
- * well-formed name or index that is absent gives ccol_key_not_found.
- *
- * The middle group catches a walk that takes a component above the leaf on
- * a node of the wrong type for an absent one: set and delete would then
- * return ccol_key_not_found for every path of that group. */
 TEST(navigate, a_path_whose_shape_cannot_apply_is_invalid_args) {
   cjson doc = cjson_parse(
       "{\"s\":\"x\",\"n\":1,\"b\":true,\"z\":null,"
       "\"l\":[{\"k\":1}],\"d\":{\"k\":2}}",
       NULL);
   REQUIRE_NE((void *)doc, NULL);
-  /* The leaf meets the wrong type, because its parent is a scalar, or a
-   * list and the name isn't "#N". */
   const char *at_leaf[] = {"s.k", "n.#0", "b.k", "z.k", "l.k"};
-  /* A component above the leaf meets the wrong type. */
   const char *in_middle[] = {"s.k.x", "n.#0.x", "b.k.x",    "z.k.x",
                              "l.k.x", "d.k.x",  "l.#0.k.x", "s.k.#0.y"};
   enum { N_LEAF = 5, N_MID = 8 };
-  ccol_retval_t leaf_set[N_LEAF], leaf_del[N_LEAF];
-  ccol_retval_t mid_set[N_MID], mid_del[N_MID];
+  ccol_retval leaf_set[N_LEAF], leaf_del[N_LEAF];
+  ccol_retval mid_set[N_MID], mid_del[N_MID];
   bool got_null = true;
   for (size_t i = 0; i < N_LEAF; i++) {
     leaf_set[i] = cjson_set(doc, at_leaf[i], 5);
@@ -6179,17 +5360,13 @@ TEST(navigate, a_path_whose_shape_cannot_apply_is_invalid_args) {
     mid_del[i] = cjson_delete(doc, in_middle[i]);
     if (cjson_get(doc, in_middle[i]) != NULL) got_null = false;
   }
-  /* Well formed and absent, above the leaf and at the leaf. A component
-   * after an absent one is never judged against a type, since there's no
-   * node left to judge it against. */
-  ccol_retval_t absent_mid_key = cjson_set(doc, "d.missing.x", 5);
-  ccol_retval_t absent_mid_idx = cjson_delete(doc, "l.#7.k");
-  ccol_retval_t absent_deep = cjson_delete(doc, "missing.k.x");
-  ccol_retval_t absent_leaf_key = cjson_delete(doc, "d.missing");
-  ccol_retval_t absent_leaf_idx = cjson_set(doc, "l.#7", 5);
+  ccol_retval absent_mid_key = cjson_set(doc, "d.missing.x", 5);
+  ccol_retval absent_mid_idx = cjson_delete(doc, "l.#7.k");
+  ccol_retval absent_deep = cjson_delete(doc, "missing.k.x");
+  ccol_retval absent_leaf_key = cjson_delete(doc, "d.missing");
+  ccol_retval absent_leaf_idx = cjson_set(doc, "l.#7", 5);
   bool absent_get_null =
       cjson_get(doc, "d.missing.x") == NULL && cjson_get(doc, "l.#7.k") == NULL;
-  /* The tree is unchanged by every refused call. */
   cjson s = cjson_get(doc, "s");
   bool tree_kept = s != NULL && cjson_get(doc, "d.k") != NULL &&
                    cjson_get(doc, "l.#0.k") != NULL &&

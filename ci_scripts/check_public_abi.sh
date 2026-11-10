@@ -195,9 +195,13 @@ extract_symbols() {
 	# files (crti.o) define, not this library. FreeBSD's start files give
 	# them default visibility, so every FreeBSD shared object exports them,
 	# while glibc's keep them hidden.
+	#
+	# The version node CCOL_<abi> is left out as well. GNU ld writes it as
+	# an absolute symbol of its own, lld writes none and Mach-O has no
+	# versions, so it isn't part of the interface that one list describes.
 	_raw=$("$READELF" --dyn-syms -W "$1") || return 1
 	printf '%s\n' "$_raw" \
-		| awk '$7!="UND" && ($5=="GLOBAL"||$5=="WEAK") && $8!="_init" && $8!="_fini"{print $8}' \
+		| awk '{n = $8; sub(/@.*/, "", n)} $7!="UND" && ($5=="GLOBAL"||$5=="WEAK") && n!="_init" && n!="_fini" && !($7=="ABS" && n ~ /^CCOL_[0-9.]+$/){print $8}' \
 		| sed 's/@.*//' | sort -u
 }
 
@@ -225,7 +229,7 @@ fi
 # because it can come in through EXTRA_CFLAGS, a CFLAGS override or an edit to
 # the header. The library names the setting it was built with, so the artifact
 # can answer this question by itself.
-if printf '%s\n' "$current" | grep -qx '_cmempool_built_with_compact_layout'; then
+if printf '%s\n' "$current" | grep -qx 'cmempool__built_with_compact_layout'; then
 	echo "check_public_abi: skipped, this library was built with"
 	echo "                  CMEMPOOL_COMPACT_LAYOUT=1. That setting changes"
 	echo "                  cmempool's entry stride and the layout that goes with"

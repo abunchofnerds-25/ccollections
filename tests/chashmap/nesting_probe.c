@@ -22,17 +22,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe that every public macro of this header nests inside
- * the argument of another public macro, and inside its own argument, under
- * -Wshadow -Werror. Each expansion of a value macro names its temporaries
- * uniquely, so a nested expansion never declares a local that hides one of
- * the outer expansion, and without that each nesting below would be a
- * -Wshadow error in a caller's build. The Makefile only compiles this file
- * with -fsyntax-only, nothing here runs. */
+// A compile-time probe: every public macro of chashmap.h must nest inside
+// another public macro and inside itself under -Wshadow -Werror. The Makefile
+// compiles this file with -fsyntax-only; nothing here runs.
 
 #include <chashmap.h>
 
 void chmap_nesting_probe(void);
+
+// Each line nests value macros in the arguments of other value macros.
 void chmap_nesting_probe(void) {
   chmap_construct(m, int, int);
   chmap_insert(m, 1, 1);

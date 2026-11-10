@@ -7,20 +7,20 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chashmap.h>
 
-chmap_construct_scoped(hm_name, key_t, val_t);
+chmap_construct_scoped(hm_name, KeyT, ValT);
 .fi
 .SH DESCRIPTION
 .nf
 Declares a hash map handle named hm_name, along with the companion type
-variables that pass key_t and val_t on to every later type-inferred
+variables that pass KeyT and ValT on to every later type-inferred
 macro, and creates the map with the default allocator and the map's own
-hashing for key_t. The handle gets the cleanup attribute, which destroys
+hashing for KeyT. The handle gets the cleanup attribute, which destroys
 the map on every exit from the enclosing scope, an early return
 included.
 
 The cleanup attribute is the only difference from chmap_construct(3);
-the allocator, the hashing and the implementation chosen from key_t and
-val_t are the same. Use this macro when the whole useful life of the map
+the allocator, the hashing and the implementation chosen from KeyT and
+ValT are the same. Use this macro when the whole useful life of the map
 is one block, and chmap_construct(3) when the handle is returned, stored
 or destroyed somewhere the compiler can't see.
 
@@ -31,9 +31,9 @@ declaration.
 .SH PARAMETERS
 .nf
 hm_name  Name for the map handle to declare
-key_t    Key type; it tells every later macro how to read a key and, with
-         val_t, which implementation strategy the map uses
-val_t    Value type
+KeyT    Key type; it tells every later macro how to read a key and, with
+         ValT, which implementation strategy the map uses
+ValT    Value type
 .fi
 .SH RETURN VALUE
 .nf
@@ -41,7 +41,7 @@ None. The macro declares variables and is not an expression.
 .fi
 .SH NOTES
 .nf
-Stops the program through _ccol_fatal_err() if the creation fails; use
+Stops the program through ccol__fatal_err() if the creation fails; use
 chmap_declare_scoped(3) with chmap_init(3) when a failure has to be
 handled
 Needs GCC or Clang, because it uses the cleanup attribute

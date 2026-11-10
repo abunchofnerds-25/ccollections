@@ -21,9 +21,9 @@ memory management procedures.
 .SH PARAMETERS
 .nf
 max_size  Maximum number of messages that the queue can hold, from 1
-          to SIZE_MAX / sizeof(cmessage_t). A larger value is
+          to SIZE_MAX / sizeof(cmessage). A larger value is
           refused, because the queue lives in one array of
-          max_size * sizeof(cmessage_t) bytes and that product would
+          max_size * sizeof(cmessage) bytes and that product would
           overflow.
 err_str   Optional pointer that gets an error string on failure
 .fi

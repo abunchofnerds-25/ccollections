@@ -29,7 +29,7 @@ Each of the four constructors has a second form whose name ends in
 _mp: cmempool_create_mp(3),
 cmempool_create_from_preallocated_buffer_mp(3), crmempool_create_mp(3)
 and crmempool_create_from_preallocated_buffer_mp(3). It takes a
-ccol_memmgmt_procs_t * just before the error pointer, and the pool
+ccol_memmgmt_procs * just before the error pointer, and the pool
 takes its own memory and its fallback entries from those functions.
 The form without _mp passes NULL, which means the standard malloc and
 free.

@@ -8,7 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/cthreadcomm.h>
 
 ccircq *ccircq_create_mp(size_t max_size,
-                         ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
+                         ccol_memmgmt_procs *mmgmt_procs, char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
@@ -19,11 +19,11 @@ with sends turned on.
 Every allocation the queue makes, at creation and for the rest of its
 life, goes through mmgmt_procs. The queue keeps its own copy of the
 procedures and frees itself through them, so the caller's
-ccol_memmgmt_procs_t doesn't have to outlive this call. NULL selects
+ccol_memmgmt_procs doesn't have to outlive this call. NULL selects
 the default malloc and free, which is what the
 ccircq_create() macro passes.
 
-The queue lives in one array of max_size * sizeof(cmessage_t) bytes
+The queue lives in one array of max_size * sizeof(cmessage) bytes
 that is allocated up front, so its memory use stays the same as
 messages come and go.
 .fi
@@ -31,7 +31,7 @@ messages come and go.
 .nf
 max_size     Maximum number of messages that the queue can hold: at
              least 1, no larger than ccol_max_elem_count, and no larger
-             than SIZE_MAX / sizeof(cmessage_t), above which the size
+             than SIZE_MAX / sizeof(cmessage), above which the size
              of the backing array would overflow.
 mmgmt_procs  Custom memory management procedures, or NULL to use the
              default malloc and free. If the value is not NULL, all of
@@ -46,7 +46,7 @@ to NULL when err_str is not NULL.
 
 On failure, NULL, and *err_str describes the reason when err_str is not
 NULL. The call fails when max_size is 0, when it is larger than
-ccol_max_elem_count or than SIZE_MAX / sizeof(cmessage_t), when
+ccol_max_elem_count or than SIZE_MAX / sizeof(cmessage), when
 mmgmt_procs is malformed because it sets some but not all of malloc,
 calloc, realloc and free, when an allocation fails, when the queue's
 mutex or one of its condition variables cannot be initialized, and, in

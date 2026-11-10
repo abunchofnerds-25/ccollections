@@ -1,4 +1,4 @@
-.TH CCOLLECTIONS 7 "2026-10-06" "c_collections" "C Collections Library - Overview"
+.TH CCOLLECTIONS 7 "2026-11-09" "c_collections" "C Collections Library - Overview"
 .SH NAME
 ccollections \- library-wide conventions of c_collections: return codes, fatal
 errors, custom allocators, timeouts, thread safety and fork()
@@ -8,14 +8,14 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/common.h>
 
-typedef enum { ... } ccol_retval_t;
+typedef enum { ... } ccol_retval;
 
-typedef struct ccol_memmgmt_procs_t {
-  ccol_malloc_t  malloc;
-  ccol_free_t    free;
-  ccol_calloc_t  calloc;
-  ccol_realloc_t realloc;
-} ccol_memmgmt_procs_t;
+typedef struct ccol_memmgmt_procs {
+  ccol_malloc  malloc;
+  ccol_free    free;
+  ccol_calloc  calloc;
+  ccol_realloc realloc;
+} ccol_memmgmt_procs;
 .fi
 .SH DESCRIPTION
 .nf
@@ -28,9 +28,9 @@ function differs from them.
 .nf
 Each container module comes in two layers. The type-inferred macros,
 such as chmap_insert(3) and cvec_push(3), take values of the declared
-types and call _ccol_fatal_err() when an operation fails. Below them are
+types and call ccol__fatal_err() when an operation fails. Below them are
 the raw functions, such as chashmap_insert_elem(3), which take cmap_pair
-arguments and return a ccol_retval_t. A raw function never stops the
+arguments and return a ccol_retval. A raw function never stops the
 process on a failure that it can report, so it is the layer to use when
 a failure is an expected result that you handle yourself.
 
@@ -45,7 +45,7 @@ clrucache_destroy(3), and so on.
 .fi
 .SS "Return codes"
 .nf
-ccol_retval_t is zero for success and negative for a failure. Every
+ccol_retval is zero for success and negative for a failure. Every
 enumerator has an explicit value that does not change within a major
 version, so comparing with 0 is as correct as comparing with
 ccol_success:
@@ -92,7 +92,7 @@ A programming error is fatal: a NULL where the call needs a valid
 handle, an index out of bounds, a stale handle, or a missing key given
 to a _get macro. So is a failure inside a typed macro, such as a failed
 allocation in chmap_insert(3). In all of these cases the library calls
-_ccol_fatal_err(), which writes two lines like these to stderr:
+ccol__fatal_err(), which writes two lines like these to stderr:
 
   <file>:<line>: fatal: <message>
   <file>:<line>: ccol_assert failed: false
@@ -105,7 +105,7 @@ fatal line.
 .fi
 .SS "Custom memory management"
 .nf
-Every module that allocates memory accepts a ccol_memmgmt_procs_t * when
+Every module that allocates memory accepts a ccol_memmgmt_procs * when
 it creates an object, through the *_mp or *_full form of the
 constructor (for cmempool it is an argument of the constructor itself).
 A NULL pointer selects the standard malloc(3), calloc(3), realloc(3) and
@@ -124,7 +124,7 @@ An object frees all its memory through the same table, which is why a
 destroy takes no allocator argument. The functions must stay valid
 until the last call to them, and for every module except cmempool that
 last call happens before the destroy of the object returns. Keep the
-ccol_memmgmt_procs_t struct itself valid until that destroy too, unless
+ccol_memmgmt_procs struct itself valid until that destroy too, unless
 the object keeps its own copy of the struct, which the page of its
 constructor tells you. clrucache, cjson and cyaml keep a copy, so with
 them you can release the struct once the creating call has returned.
@@ -162,6 +162,27 @@ limit, or the default.
 .fi
 .SH NOTES
 .nf
+A name with a double underscore after its prefix, such as
+cvector__destroy, ccol__fatal_err or CCOL__ERR_STR, is internal. An
+installed header declares it because a public macro or inline
+function expands into it, so a program compiled against the header
+refers to it, but the program must not call, define or redefine it
+by name. No name of the library begins with an underscore, and none
+ends in _t or _MAX, so none is a name that ISO C reserves for the
+compiler and the C library or POSIX for the system's headers. A type
+is its plain prefixed name, such as ccol_retval or chttpsvr_req, and
+a callback type ends in _fn.
+
+On ELF systems every symbol that libccollections.so.2 exports carries
+the version node CCOL_2, and the library binds its calls to its own
+exported functions when it is linked. A function of the same name in
+another object of the process, LD_PRELOAD included, never receives a
+call that the library makes. A call that the program makes is bound
+through the version node on glibc and FreeBSD, so it reaches this
+library unless the other object has no version information at all;
+musl and OpenBSD don't use symbol versions. On macOS every imported
+symbol records the library that defines it.
+
 Compile-time switches go to the build of the library through
 EXTRA_CFLAGS, for example make EXTRA_CFLAGS="-DNAME=VALUE".
 
@@ -236,7 +257,7 @@ threads can each use their own object. The pages of the synchronised
 modules list the few calls that the caller must serialise, two destroys
 of one handle for example.
 
-The pthread wrappers of common.h (_ccol_mutex_t and the rest) exist for
+The pthread wrappers of common.h (ccol__mutex and the rest) exist for
 the portability of the library itself and are not part of the API. Use
 pthreads or C11 <threads.h> to protect your own data.
 .fi
@@ -253,7 +274,7 @@ int main(void) {
   const char *name = "gopher";
   cmap_pair key = { (void *)name, strlen(name) + 1 };
   int port;
-  ccol_retval_t rv = chashmap_get_elem_copy(ports, &key, &port,
+  ccol_retval rv = chashmap_get_elem_copy(ports, &key, &port,
                                             sizeof(port));
   if (rv != ccol_success)
     printf("%s: %s\en", name, ccol_retval_to_str(rv));
@@ -264,6 +285,7 @@ int main(void) {
 .fi
 .SH "SEE ALSO"
 .BR ccol_retval_to_str (3),
+.BR ccol_version (3),
 .BR ccol_scoped_ptr (3),
 .BR ccol_scoped_ptr_mp (3),
 .BR ccol_scoped_ptr_release (3),

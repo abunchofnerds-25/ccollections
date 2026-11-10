@@ -1,6 +1,6 @@
 .TH CSELECTABLE_FD 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cselectable_fd \- build a cselectable_t from a raw file descriptor
+cselectable_fd \- build a cselectable from a raw file descriptor
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,7 +11,7 @@ cselectable_fd(fd, dir);
 .fi
 .SH DESCRIPTION
 .nf
-Builds a cselectable_t value (a tagged union, here of type
+Builds a cselectable value (a tagged union, here of type
 cselectable_type_fd) that wraps the given file descriptor with the
 given I/O direction.
 
@@ -43,7 +43,7 @@ dir       cselect_read or cselect_write.
 .fi
 .SH RETURN VALUE
 .nf
-cselectable_t value (not a pointer).
+cselectable value (not a pointer).
 .fi
 .SH EXAMPLES
 .nf
@@ -57,7 +57,7 @@ if (write(pfd[1], &src, sizeof(src)) != (ssize_t)sizeof(src)) {
 
 /* Wake when the pipe read end has data OR q has a message: */
 size_t idx;
-ccol_retval_t r = cselect_va(&idx,
+ccol_retval r = cselect_va(&idx,
     ccircq_selectable(q, cselect_read),
     cselectable_fd(pfd[0], cselect_read));
 if (r == ccol_success && idx == 1) {

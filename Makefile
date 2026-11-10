@@ -63,9 +63,17 @@ SHORT_LIBRARY_NAME = ccollections
 # change breaks the interface. The VERSION_MAJOR = 0 branch below covers the
 # time before 1.0, when the interface isn't stable yet, so each minor release
 # counts as its own ABI.
-VERSION_MAJOR = 1
-VERSION_MINOR = 0
-VERSION_PATCH = 0
+# The numbers come from include/common.h, which is the only place the release
+# is written down, so a program's CCOL_VERSION_* macros, the file name of the
+# shared library and the pkg-config version always agree. The lookup matches
+# the macro name and not the '#', which would start a comment here.
+ccol_header_version = $(shell awk '$$2 == "CCOL_VERSION_$(1)" {print $$3}' include/common.h)
+VERSION_MAJOR := $(call ccol_header_version,MAJOR)
+VERSION_MINOR := $(call ccol_header_version,MINOR)
+VERSION_PATCH := $(call ccol_header_version,PATCH)
+ifeq ($(and $(VERSION_MAJOR),$(VERSION_MINOR),$(VERSION_PATCH)),)
+$(error could not read CCOL_VERSION_MAJOR, _MINOR and _PATCH from include/common.h)
+endif
 VERSION = $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
 ifeq ($(VERSION_MAJOR),0)
 ABI_VERSION = $(VERSION_MAJOR).$(VERSION_MINOR)
@@ -77,12 +85,12 @@ endif
 # plain development link are symlinks to it, which is the usual ELF layout
 # with three names:
 #   libccollections.so             -> what -lccollections resolves at link time
-#   libccollections.so.1           -> the SONAME, what a built binary records
-#   libccollections.so.1.0.0       -> the actual file
+#   libccollections.so.2           -> the SONAME, what a built binary records
+#   libccollections.so.2.0.0       -> the actual file
 #
 # macOS puts the version before the suffix, and the library's install name
 # plays the part of the SONAME:
-#   libccollections.dylib, libccollections.1.dylib, libccollections.1.0.0.dylib
+#   libccollections.dylib, libccollections.2.dylib, libccollections.2.0.0.dylib
 SHARED_LIBRARY_NAME = lib$(SHORT_LIBRARY_NAME).$(CCOL_SHARED_LIBRARY_SUFFIX)
 ifeq ($(CCOL_UNAME_S),Darwin)
 SHARED_LIBRARY_SONAME = lib$(SHORT_LIBRARY_NAME).$(ABI_VERSION).dylib
@@ -335,8 +343,24 @@ SHARED_LDFLAGS = -dynamiclib -install_name $(LIBDIR)/$(SHARED_LIBRARY_SONAME) \
 	-compatibility_version $(ABI_VERSION) -current_version $(VERSION) \
 	$(EXTERNAL_LIBS)
 else
-SHARED_LDFLAGS = $(CCOL_LD_HARDENING) -Wl,-soname,$(SHARED_LIBRARY_SONAME) -shared $(EXTERNAL_LIBS)
+# Every exported symbol carries the version node CCOL_$(ABI_VERSION) (the
+# version script below), so a program built against this library records
+# name@CCOL_$(ABI_VERSION) for each symbol it uses, and the dynamic loaders of
+# glibc and FreeBSD bind that reference only to a definition with the same
+# node. A same-named function of another versioned library in the process
+# can't take its place. -Bsymbolic-functions binds the library's own calls to
+# its exported functions inside the library, so no object loaded ahead of it
+# can take those over either, and the calls skip the PLT. macOS needs neither:
+# a Mach-O image records the library of every symbol it imports, and a dylib
+# binds its own calls when it's linked. --exclude-libs,ALL keeps the symbols
+# of the static archives the compiler links in (OpenBSD's clang links its
+# emulated-TLS helper __emutls_get_address from libcompiler_rt.a) out of the
+# export table, so no other object can bind to our copy of a runtime helper.
+SHARED_LDFLAGS = $(CCOL_LD_HARDENING) -Wl,-soname,$(SHARED_LIBRARY_SONAME) \
+	-Wl,--version-script=$(VERSION_SCRIPT) -Wl,-Bsymbolic-functions \
+	-Wl,--exclude-libs,ALL -shared $(EXTERNAL_LIBS)
 endif
+VERSION_SCRIPT = $(OBJECT_DIR)/ccollections.map
 STATIC_LDFLAGS =
 
 # cdebuglog.c is left out of the library on purpose. It's a diagnostic log
@@ -492,8 +516,16 @@ check_headers:
 	@./ci_scripts/check_public_headers_standalone.sh
 
 .PHONY: check_namespace
-check_namespace: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME)
+check_namespace: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME) check_reserved_identifiers
 	@./ci_scripts/check_public_namespace.sh $(SHARED_LIBRARY_REAL) $(STATIC_LIBRARY_NAME)
+
+# Fails when the library's headers or sources spell a name that ISO C
+# reserves for the implementation (a leading underscore, or a macro of a
+# family that C11 7.31 sets aside) or a macro that the compiler predefines.
+# check_namespace runs it too.
+.PHONY: check_reserved_identifiers
+check_reserved_identifiers:
+	@CC="$(CC)" $(PYTHON) ./ci_scripts/check_reserved_identifiers.py
 
 # Fails when a file under include/ or man/ has a name that the install would
 # paste onto the installation directory as a shell pattern instead of one
@@ -560,6 +592,17 @@ PYTHON ?= python3
 man_html:
 	@$(PYTHON) ./ci_scripts/build_man_html.py $(MAN_HTML_DIR)
 
+# Puts the whole GitHub Pages site together under pages_site/: the front
+# page, the man pages, the coverage report of the last `make coverage_site`
+# (the site goes without one when there is none), a 404 page and the sitemap
+# for Google Search Console. Open pages_site/index.html to look at it; the
+# Coverage workflow deploys exactly this directory.
+PAGES_SITE_DIR = pages_site
+.PHONY: pages_site
+pages_site: man_html
+	@$(PYTHON) ./ci_scripts/build_pages_site.py $(PAGES_SITE_DIR) \
+		--man $(MAN_HTML_DIR) --coverage $(COVERAGE_SITE_DIR)/html
+
 # Fails when README.md or a guide links a man page that doesn't exist, or
 # links the troff source under man/ instead of the rendered page.
 .PHONY: check_doc_links
@@ -574,6 +617,16 @@ check_doc_links:
 .PHONY: check_dso_unload
 check_dso_unload: $(SHARED_LIBRARY_NAME)
 	@./ci_scripts/check_dso_unload.sh $(SHARED_LIBRARY_REAL)
+
+# Proves on the built library that no other object in a process can take over
+# a call meant for it: every exported symbol carries the version node
+# CCOL_$(ABI_VERSION), no dependency defines one of its names, the library
+# binds its own calls itself (-Bsymbolic-functions), and an impostor library
+# preloaded ahead of it catches neither a call of the library nor, where the
+# loader honours versions, a call of the program.
+.PHONY: check_symbol_binding
+check_symbol_binding: $(SHARED_LIBRARY_NAME)
+	@CC="$(CC)" DL_LIBS="$(CCOL_DL_LIBS)" ./ci_scripts/check_symbol_binding.sh $(SHARED_LIBRARY_REAL) $(ABI_VERSION)
 
 # check_exit_reachable links a program that uses little of the library
 # against the built shared object and fails when valgrind finds memory of the
@@ -759,8 +812,17 @@ all: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME) $(PKGCONFIG_FILE)
 # runtime. A Linux shared object can leave the runtime symbols undefined and
 # get them from the program, but -dynamiclib on macOS refuses any undefined
 # symbol.
-$(SHARED_LIBRARY_REAL): $(OBJ_FILES_SHARED) $(LINK_FLAGS_STAMP)
+$(SHARED_LIBRARY_REAL): $(OBJ_FILES_SHARED) $(LINK_FLAGS_STAMP) $(VERSION_SCRIPT)
 	$(CC) $(EXTRA_CFLAGS) -o $(SHARED_LIBRARY_REAL) $(OBJ_FILES_SHARED) $(SHARED_LDFLAGS)
+
+# The version script gives every exported symbol one node, named after the ABI
+# version. Hidden visibility already decides which symbols are exported, so
+# the script names no symbol. It's rewritten only when its text changes, so an
+# ordinary build doesn't relink.
+$(VERSION_SCRIPT): FORCE
+	@mkdir -p $(OBJECT_DIR)
+	@printf 'CCOL_%s {\n  global: *;\n};\n' '$(ABI_VERSION)' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
 
 $(SHARED_LIBRARY_SONAME): $(SHARED_LIBRARY_REAL)
 	ln -sf $(SHARED_LIBRARY_REAL) $(SHARED_LIBRARY_SONAME)

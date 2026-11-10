@@ -11,7 +11,7 @@ cvec_append_array(v, arr_ptr, elem_count);
 .fi
 .SH DESCRIPTION
 .nf
-A wrapper for cvector_append_array() that calls _ccol_fatal_err() when the
+A wrapper for cvector_append_array() that calls ccol__fatal_err() when the
 append fails, so a caller that has no useful way to recover from an
 allocation failure doesn't need to test a return value.
 
@@ -33,7 +33,7 @@ elem_count  Number of elements to copy
 .fi
 .SH NOTES
 .nf
-The macro stops the program with _ccol_fatal_err() when the append fails.
+The macro stops the program with ccol__fatal_err() when the append fails.
 That happens when the allocation fails, when the new element count would
 be more than ccol_max_elem_count, when elem_count is large enough to
 overflow that count, when arr_ptr is NULL and elem_count is not zero, and

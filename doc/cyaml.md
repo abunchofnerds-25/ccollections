@@ -266,7 +266,7 @@ int main(int argc, char **argv) {
     /* After the parse, the merge key is gone from the tree and its members
      * take its place. An explicit key of the mapping wins over a merged
      * key. */
-    cyaml_dictionary_iter_t it;
+    cyaml_dictionary_iter it;
     for (bool ok = cyaml_dictionary_first(settings, &it); ok;
          ok = cyaml_dictionary_next(&it)) {
         printf("%-8s = ", it.key);
@@ -543,7 +543,7 @@ static cyaml convert(cjson j) {
         cyaml out = cyaml_create_list();
         for (size_t i = 0; out && i < cjson_list_len(j); i++) {
             cyaml child = convert(cjson_list_get(j, i));
-            ccol_retval_t r = cyaml_list_push(out, child);
+            ccol_retval r = cyaml_list_push(out, child);
             if (r != ccol_success) {
                 /* Only ccol_invalid_args hands the child back to us; after
                  * any other failure, the call has freed it. */
@@ -555,11 +555,11 @@ static cyaml convert(cjson j) {
     }
     case CJSON_DICTIONARY: {
         cyaml out = cyaml_create_dictionary();
-        cjson_dictionary_iter_t it;
+        cjson_dictionary_iter it;
         for (bool ok = out && cjson_dictionary_first(j, &it); ok;
              ok = cjson_dictionary_next(&it)) {
             cyaml child = convert(it.value);
-            ccol_retval_t r = cyaml_dictionary_set(out, it.key, child);
+            ccol_retval r = cyaml_dictionary_set(out, it.key, child);
             if (r != ccol_success) {
                 if (r == ccol_invalid_args) cyaml_destroy(child);
                 cyaml_destroy(out);
@@ -708,5 +708,5 @@ other `_mp` variants),
 Related guides:
 [cjson](cjson.md),
 [Memory management](memory.md),
-[Design of the type-safe macros](design.md),
+[How the library works](design.md),
 [Concurrency](concurrency.md)

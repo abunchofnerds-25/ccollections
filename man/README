@@ -21,24 +21,25 @@ page, no section in README.md or in a guide under doc/, and no SEE ALSO
 entry. You can still mention it in the prose of another page to explain what
 that page's symbol does.
 
-A name that starts with an underscore is internal, and the underscore is
-there exactly to say so at every call site, so such a name never gets a
-page. An internal symbol may still sit in an installed header and still be
-exported, because a header can't hide what the library itself needs across
-translation units. The boundary is marked by the underscore, not by the
-header or the symbol table.
+A name with a double underscore after its prefix (ccol__fatal_err,
+cvector__destroy, CRMEMPOOL__CALCULATE_PREALLOCATED_BUFFER_SIZE) is
+internal, and the double underscore is there exactly to say so at every
+call site, so such a name never gets a page. An internal symbol may still
+sit in an installed header and still be exported, because a header can't
+hide what the library itself needs across translation units. The boundary
+is marked by the double underscore, not by the header or the symbol table.
 
 By that test these are internal, and none of them has a page:
 
-    _csort_default_<type>_comparison_proc
+    csort__default_<type>_comparison_proc
         Every caller reaches these through csort_get_default_comparison_proc,
         which picks one from the type of its argument.
 
-    _CRMEMPOOL_CALCULATE_PREALLOCATED_BUFFER_SIZE
+    CRMEMPOOL__CALCULATE_PREALLOCATED_BUFFER_SIZE
         The size arithmetic that CRMEMPOOL_DECLARE_PREALLOCATED_BUFFER
         performs on the caller's behalf.
 
-    _ccol_find_nearest_gte_power_of_two, ccol_strdup, ccol_growbuf_*
+    ccol__find_nearest_gte_power_of_two, ccol_strdup, ccol_growbuf_*
         Helpers that the containers use for their own growth and storage.
 
 A literal constant that only matters as an argument, a buffer size or a

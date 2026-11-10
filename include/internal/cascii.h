@@ -24,48 +24,42 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file cascii.h
- * @brief INTERNAL ONLY. Case folding and case-insensitive comparison of ASCII
- *        text, independent of the locale.
- *
- * HTTP field names, tokens such as "chunked" and "close", URI schemes and host
- * names are ASCII and their case rules come from the protocol, never from the
- * locale. strcasecmp(), strncasecmp() and tolower() follow LC_CTYPE instead,
- * and under a Turkish locale tolower('I') is not 'i'. "TRANSFER-ENCODING"
- * then stops matching "transfer-encoding", and a request that a front end
- * frames with chunked reaches this library framed by Content-Length. So every
- * comparison of protocol text goes through these helpers, which fold only 'A'
- * to 'Z' and leave every other byte alone. When you add a new comparison of
- * protocol text, use them too; strcasecmp() is the easy mistake here, and no
- * test in the C locale shows it.
- */
+// INTERNAL ONLY. Case folding and case-insensitive comparison of ASCII text,
+// independent of the locale. HTTP field names, tokens such as "chunked", URI
+// schemes and host names follow the case rules of the protocol. strcasecmp()
+// and tolower() follow LC_CTYPE, and under a Turkish locale tolower('I') isn't
+// 'i', so "TRANSFER-ENCODING" stops matching. Every comparison of protocol text
+// goes through these helpers, which fold only 'A' to 'Z'. No test in the C
+// locale shows the mistake, so please use them for any new comparison.
 
 #ifndef CCOL_INTERNAL_CASCII_H
 #define CCOL_INTERNAL_CASCII_H
 
 #include <stddef.h>
 
-/* Gives c in lower case when it's an ASCII upper-case letter, else c. */
+// Gives c in lower case when it's an ASCII upper-case letter, else c. It's the
+// locale-free tolower() that every fold of protocol text uses.
 static inline int ccol_ascii_tolower(int c) {
   return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
 }
 
-/* Gives c in upper case when it's an ASCII lower-case letter, else c. */
+// Gives c in upper case when it's an ASCII lower-case letter, else c; the
+// locale-free toupper() that cstring's case conversion uses.
 static inline int ccol_ascii_toupper(int c) {
   return (c >= 'a' && c <= 'z') ? c - ('a' - 'A') : c;
 }
 
-/* True for the six ASCII white-space bytes that isspace() reports in the C
- * locale: space, '\t', '\n', '\v', '\f' and '\r'. We treat no other byte as
- * white space, whatever the locale says. */
+// Says whether c is ASCII white space; cstring_trim() uses it so the locale
+// can't change what counts as space. True for the six bytes that isspace()
+// reports in the C locale: space, '\t', '\n', '\v', '\f' and '\r'. No other
+// byte counts as white space, whatever the locale says.
 static inline int ccol_ascii_isspace(int c) {
   return c == ' ' || (c >= '\t' && c <= '\r');
 }
 
-/* Same as strcasecmp() but with ASCII folding only. Gives < 0, 0 or > 0 when
- * a sorts before, equal to or after b, and compares the folded bytes as
- * unsigned char. */
+// Compares two strings ignoring ASCII case, for protocol names and tokens;
+// strcasecmp() with ASCII folding only. Gives < 0, 0 or > 0 and compares the
+// folded bytes as unsigned char.
 static inline int ccol_ascii_casecmp(const char *a, const char *b) {
   const unsigned char *p = (const unsigned char *)a;
   const unsigned char *q = (const unsigned char *)b;
@@ -76,7 +70,8 @@ static inline int ccol_ascii_casecmp(const char *a, const char *b) {
   }
 }
 
-/* Same as strncasecmp() with ASCII folding only, looking at n bytes at most. */
+// Compares at most n bytes ignoring ASCII case, for protocol text that isn't
+// NUL-terminated where it ends; strncasecmp() with ASCII folding only.
 static inline int ccol_ascii_ncasecmp(const char *a, const char *b, size_t n) {
   const unsigned char *p = (const unsigned char *)a;
   const unsigned char *q = (const unsigned char *)b;
@@ -88,4 +83,4 @@ static inline int ccol_ascii_ncasecmp(const char *a, const char *b, size_t n) {
   return 0;
 }
 
-#endif /* CCOL_INTERNAL_CASCII_H */
+#endif  // CCOL_INTERNAL_CASCII_H

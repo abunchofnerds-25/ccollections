@@ -24,23 +24,15 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file test_helpers/cbstmap.h
- * @brief INTERNAL ONLY. The test-only hooks of cbstmap.
- *
- * src/cbstmap.c defines this hook and the cbstmap tests call it, because the
- * tree nodes are opaque outside that file.
- *
- * All of it exists only in a build that defines RUNNING_UNIT_TESTS. Every test
- * suite defines it and the shipped library never does, so none of this is
- * installed or exported.
- */
+// INTERNAL ONLY. The test-only hooks of cbstmap, defined in src/cbstmap.c. The
+// tree nodes are opaque outside that file, so the tests need this hook. It
+// exists only when RUNNING_UNIT_TESTS is defined.
 
 #include <cbstmap.h>
 
 #ifdef RUNNING_UNIT_TESTS
-/* Walks the whole tree and checks at every node the AVL balance invariant
- * and that its height is one more than the height of its taller child.
- * Gives true when every node passes. */
+// Walks the whole tree and checks at every node the AVL balance invariant and
+// that its height is one more than the height of its taller child. Gives true
+// when every node passes.
 bool cbmap_debug_validate_avl(cbmap cbm);
-#endif /* RUNNING_UNIT_TESTS */
+#endif  // RUNNING_UNIT_TESTS

@@ -14,7 +14,7 @@ ceventloop_construct(name, max_events_per_wait, num_lock_stripes,
 .nf
 Declares a ceventloop variable called name and initialises it
 with ceventloop_create(). If the create fails, the macro calls
-_ccol_fatal_err().
+ccol__fatal_err().
 .fi
 .SH PARAMETERS
 .nf
@@ -33,7 +33,7 @@ num_reactor_threads   Number of background reactor threads, at least 1.
 .fi
 .SH NOTES
 .nf
-Because a failure ends in _ccol_fatal_err(), call
+Because a failure ends in ccol__fatal_err(), call
 ceventloop_create() or ceventloop_create_mp() directly when
 you want to handle the error yourself.
 .fi

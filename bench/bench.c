@@ -228,7 +228,7 @@ double bench_now_ns(void) {
  * there. */
 static double bench_number(cjson node) {
   if (!node) return 0.0;
-  cjson_node_type_t t = cjson_type(node);
+  cjson_node_type t = cjson_type(node);
   if (t == CJSON_FLOAT) return cjson_double_val(node);
   if (t == CJSON_INTEGER) return (double)cjson_int_val(node);
   return 0.0;

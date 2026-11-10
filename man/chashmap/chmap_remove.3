@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chashmap.h>
 
-ccol_retval_t chmap_remove(hm_name, key);
+ccol_retval chmap_remove(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
@@ -39,7 +39,7 @@ Frees the memory of the key and of the value
 .SH EXAMPLES
 .nf
 int key = 42;
-ccol_retval_t r = chmap_remove(map, key);
+ccol_retval r = chmap_remove(map, key);
 if (r == ccol_key_not_found) {
   printf("Key not found\en");
 }

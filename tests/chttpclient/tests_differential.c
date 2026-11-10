@@ -22,27 +22,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/*
- * Differential tests that cross-check chttp1_parser.c against picohttpparser on
- * the same raw bytes. picohttpparser is vendored under picohttpparser/; it's an
- * independent HTTP/1.x parser that the h2o web server runs in production.
- *
- * When two parsers written by different people agree on how they extract a
- * request or status line and the headers, and on how they decode a chunked
- * body, that is much better evidence against a small framing bug than the test
- * suite of either parser alone, which is only consistent with its own
- * author's view. An off-by-one when parsing a chunk size is one such bug, a
- * header value trimmed the wrong way is another.
- *
- * The scope of the file is narrow on purpose. picohttpparser parses a request
- * or status line plus the headers and decodes the octets of a chunked body, but
- * it doesn't apply the extra RFC 7230 SS3.3.1 hardening we add, which rejects
- * "chunked" unless it is the last Transfer-Encoding token and also covers how a
- * request and a response differ for a Transfer-Encoding that doesn't end in
- * chunked. That hardening has its own regression tests in tests_parser.c, so
- * here we only compare the two parsers on messages both of them are expected to
- * accept.
- */
+// Differential tests that cross-check chttp1_parser.c against picohttpparser
+// (vendored under picohttpparser/, the parser of the h2o server) on the same
+// raw bytes. Two parsers by different authors that agree on the request or
+// status line, the headers and the decoded chunked body are good evidence
+// against small framing bugs, such as an off-by-one in a chunk size.
+//
+// picohttpparser doesn't apply our RFC 7230 SS3.3.1 Transfer-Encoding
+// hardening, which tests_parser.c covers, so this file only compares messages
+// that both parsers are expected to accept.
 
 #include <internal/chttp1_parser.h>
 #include <string.h>
@@ -52,9 +40,12 @@ SOFTWARE.
 
 TAU_MAIN()
 
+// The capacity of chttp1_ctx_t: the headers and the body bytes kept from one
+// message, enough for every test message.
 #define MAX_HDRS 32
 #define BODY_CAP (64 * 1024)
 
+// What the chttp1_parser callbacks capture from one message.
 typedef struct {
   char names[MAX_HDRS][256];
   char values[MAX_HDRS][256];
@@ -69,7 +60,10 @@ typedef struct {
   bool message_complete_called;
 } chttp1_ctx_t;
 
-static int c_on_request_line(chttp1_parser_t *p, const char *method,
+// Parser callbacks that copy what they get into the chttp1_ctx_t behind
+// p->data, each cut to the size of its buffer, so the result can be compared
+// with what picohttpparser gives.
+static int c_on_request_line(chttp1_parser *p, const char *method,
                              size_t method_len, const char *target,
                              size_t target_len) {
   chttp1_ctx_t *ctx = (chttp1_ctx_t *)p->data;
@@ -84,7 +78,7 @@ static int c_on_request_line(chttp1_parser_t *p, const char *method,
   return 0;
 }
 
-static int c_on_header(chttp1_parser_t *p, const char *name, size_t name_len,
+static int c_on_header(chttp1_parser *p, const char *name, size_t name_len,
                        const char *value, size_t value_len) {
   chttp1_ctx_t *ctx = (chttp1_ctx_t *)p->data;
   if (ctx->count < MAX_HDRS) {
@@ -99,13 +93,13 @@ static int c_on_header(chttp1_parser_t *p, const char *name, size_t name_len,
   return 0;
 }
 
-static int c_on_headers_complete(chttp1_parser_t *p) {
+static int c_on_headers_complete(chttp1_parser *p) {
   chttp1_ctx_t *ctx = (chttp1_ctx_t *)p->data;
   ctx->status_code = p->status_code;
   return CHTTP1_HEADERS_HAS_BODY;
 }
 
-static int c_on_body(chttp1_parser_t *p, const char *at, size_t len) {
+static int c_on_body(chttp1_parser *p, const char *at, size_t len) {
   chttp1_ctx_t *ctx = (chttp1_ctx_t *)p->data;
   if (ctx->body_len + len <= sizeof(ctx->body)) {
     memcpy(ctx->body + ctx->body_len, at, len);
@@ -114,23 +108,23 @@ static int c_on_body(chttp1_parser_t *p, const char *at, size_t len) {
   return 0;
 }
 
-static int c_on_message_complete(chttp1_parser_t *p) {
+static int c_on_message_complete(chttp1_parser *p) {
   chttp1_ctx_t *ctx = (chttp1_ctx_t *)p->data;
   ctx->message_complete_called = true;
   return 0;
 }
 
-/* Static storage duration, because chttp1_parser_init{,_request} only borrows
- * the settings pointer and doesn't copy it; tests_parser.c does the same for
- * the same reason. */
-static const chttp1_settings_t g_response_settings = {
+// The response-mode settings of the chttp1_parser side. They have static
+// storage because chttp1_parser_init only borrows the pointer.
+static const chttp1_settings g_response_settings = {
     .on_header = c_on_header,
     .on_headers_complete = c_on_headers_complete,
     .on_body = c_on_body,
     .on_message_complete = c_on_message_complete,
 };
 
-static const chttp1_settings_t g_request_settings = {
+// The request-mode settings, static for the same reason.
+static const chttp1_settings g_request_settings = {
     .on_request_line = c_on_request_line,
     .on_header = c_on_header,
     .on_headers_complete = c_on_headers_complete,
@@ -138,9 +132,8 @@ static const chttp1_settings_t g_request_settings = {
     .on_message_complete = c_on_message_complete,
 };
 
-/* The two parsers have to agree on the exact set of (name, value) pairs and on
- * their order, so a different header count fails the check, and so does any
- * pair that doesn't match. */
+// Tells whether both parsers saw the same (name, value) pairs in the same
+// order; every request and response check uses it.
 static bool headers_match(const chttp1_ctx_t *c1,
                           const struct phr_header *phr_headers,
                           size_t phr_num_headers) {
@@ -158,14 +151,12 @@ static bool headers_match(const chttp1_ctx_t *c1,
   return true;
 }
 
-/* ========================================================================== */
-/*                    REQUEST LINE + HEADERS                                  */
-/* ========================================================================== */
-
+// Parses msg as a request with both parsers and requires the same method,
+// target and headers; each request test calls it with one message.
 static void check_request(const char *msg) {
   size_t len = strlen(msg);
 
-  chttp1_parser_t parser;
+  chttp1_parser parser;
   chttp1_ctx_t ctx;
   memset(&ctx, 0, sizeof(ctx));
   chttp1_parser_init_request(&parser, &g_request_settings);
@@ -218,14 +209,12 @@ TEST(request_differential, repeated_header_name_kept_as_separate_entries) {
       "X-Custom: a\r\nX-Custom: b\r\n\r\n");
 }
 
-/* ========================================================================== */
-/*                    STATUS LINE + HEADERS                                   */
-/* ========================================================================== */
-
+// Parses msg as a response with both parsers and requires the same status and
+// headers; each response test calls it with one message.
 static void check_response(const char *msg) {
   size_t len = strlen(msg);
 
-  chttp1_parser_t parser;
+  chttp1_parser parser;
   chttp1_ctx_t ctx;
   memset(&ctx, 0, sizeof(ctx));
   chttp1_parser_init(&parser, &g_response_settings);
@@ -262,24 +251,19 @@ TEST(response_differential, http_1_0_redirect) {
       "\r\n");
 }
 
-/* ========================================================================== */
-/*                    CHUNKED BODY DECODING                                   */
-/* ========================================================================== */
-
-/* Decodes chunked_body, with its headers already stripped, through
- * picohttpparser, then decodes the same bytes through chttp1_parser behind a
- * small chunked response. The two decoded bodies must match byte for byte. */
+// Decodes chunked_body (headers already stripped) with picohttpparser, decodes
+// the same bytes with chttp1_parser behind a small chunked response, and
+// requires the two bodies to match byte for byte; each chunked test calls it.
 static void check_chunked(const char *chunked_body) {
   size_t chunked_len = strlen(chunked_body);
 
-  /* chttp1_parser */
   char full_msg[BODY_CAP];
   int n = snprintf(full_msg, sizeof(full_msg),
                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n%s",
                    chunked_body);
   REQUIRE_TRUE(n > 0 && (size_t)n < sizeof(full_msg));
 
-  chttp1_parser_t parser;
+  chttp1_parser parser;
   chttp1_ctx_t ctx;
   memset(&ctx, 0, sizeof(ctx));
   chttp1_parser_init(&parser, &g_response_settings);
@@ -287,7 +271,6 @@ static void check_chunked(const char *chunked_body) {
   chttp1_parser_execute(&parser, full_msg, strlen(full_msg));
   REQUIRE_TRUE(ctx.message_complete_called);
 
-  /* picohttpparser */
   char phr_buf[BODY_CAP];
   memcpy(phr_buf, chunked_body, chunked_len + 1);
   size_t phr_bufsz = chunked_len;

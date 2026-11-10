@@ -41,7 +41,7 @@ where fork(2) does not wait and the call must come before fork(2).
 
 A call from an engine thread, that is, from the write_fn of
 chttpcli_do_async_streaming or chttpcli_do_pooled_streaming,
-would wait for its own thread, so it calls _ccol_fatal_err() instead.
+would wait for its own thread, so it calls ccol__fatal_err() instead.
 .fi
 .SH THREAD SAFETY
 .nf
@@ -52,14 +52,14 @@ each call returns once the engine has stopped.
 .nf
 #include <ccollections/chttpclient.h>
 
-static ccol_memmgmt_procs_t engine_mp; /* filled by the application */
+static ccol_memmgmt_procs engine_mp; /* filled by the application */
 
 int main(void) {
   chttpcli_set_engine_mem_mgmt_procs(&engine_mp);
   chttpcli cli = chttpcli_create(NULL);
-  chttp_request_t *req =
+  chttp_request *req =
       chttp_request_create(CHTTP_GET, "http://example.com/", NULL, NULL);
-  chttpcli_response_t *resp = NULL;
+  chttpcli_response *resp = NULL;
   if (req && chttpcli_do_pooled(cli, req, &resp) == ccol_success)
     chttpcli_resp_free(resp);
   chttp_request_free(req);

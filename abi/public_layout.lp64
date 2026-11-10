@@ -2,7 +2,7 @@
 # size, alignment, and the offset, nesting depth and name of every
 # member. ci_scripts/check_public_layout.sh writes this file with
 # --update and compares the layout of the system against it.
-record struct ccol_memmgmt_procs_t sizeof=32 align=8
+record struct ccol_memmgmt_procs sizeof=32 align=8
   0 1 malloc
   8 1 free
   16 1 calloc
@@ -22,7 +22,7 @@ record struct chttp_request sizeof=80 align=8
   40 1 headers__ccol_key_type_var
   48 1 headers__ccol_val_type_var
   56 1 headers
-  64 1 _m_procs
+  64 1 ccol__m_procs
   72 1 expect_continue
   73 1 prevent_tls_downgrade_on_redirect
 record struct chttp_request_body sizeof=24 align=8
@@ -39,16 +39,16 @@ record struct chttp_tls_config sizeof=32 align=8
 record struct chttpcli_async_result sizeof=24 align=8
   0 1 rv
   8 1 resp
-  16 1 _m_procs
-record struct chttpcli_response_t sizeof=64 align=8
+  16 1 ccol__m_procs
+record struct chttpcli_response sizeof=64 align=8
   0 1 status_code
   8 1 body
   16 1 body_len
   24 1 headers__ccol_key_type_var
   32 1 headers__ccol_val_type_var
   40 1 headers
-  48 1 _m_procs
-  56 1 _field_lines
+  48 1 ccol__m_procs
+  56 1 ccol__field_lines
 record struct chttpsvr_config sizeof=176 align=8
   0 1 host
   8 1 port
@@ -75,10 +75,10 @@ record struct chttpsvr_config sizeof=176 align=8
   152 1 streaming_thread_count
   160 1 streaming_queue_capacity
   168 1 streaming_queue_timeout_us
-record struct cjson_dictionary_iter_t sizeof=24 align=8
+record struct cjson_dictionary_iter sizeof=24 align=8
   0 1 key
   8 1 value
-  16 1 _cjson_next
+  16 1 cjson__next
 record struct clog_async_cfg sizeof=24 align=8
   0 1 queue_size
   8 1 flush_buffer_size
@@ -93,23 +93,23 @@ record struct clog_rotation_cfg sizeof=40 align=8
 record struct cmap_iterator sizeof=40 align=8
   0 1 key_pair
   8 1 val_pair
-  16 1 _next_fn
-  24 1 _free_fn
-  32 1 _direct_ptr
+  16 1 ccol__next_fn
+  24 1 ccol__free_fn
+  32 1 ccol__direct_ptr
 record struct cmap_pair sizeof=16 align=8
   0 1 ptr
   8 1 size
-record struct cmessage_t sizeof=16 align=8
+record struct cmessage sizeof=16 align=8
   0 1 data
   8 1 size
-record struct cselectable_t sizeof=16 align=8
+record struct cselectable sizeof=16 align=8
   0 1 type
   4 1 dir
   8 1 (anonymous)
   8 2 cq
   8 2 dq
   8 2 fd
-record struct cyaml_dictionary_iter_t sizeof=24 align=8
+record struct cyaml_dictionary_iter sizeof=24 align=8
   0 1 key
   8 1 value
-  16 1 _cyaml_next
+  16 1 cyaml__next

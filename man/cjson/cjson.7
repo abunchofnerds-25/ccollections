@@ -9,7 +9,7 @@ Each node is reached through an opaque cjson handle.
 .fi
 .SH "NODE TYPES"
 .nf
-cjson_type(3) gives the type of a node, as a cjson_node_type_t:
+cjson_type(3) gives the type of a node, as a cjson_node_type:
 
   CJSON_NULL         null
   CJSON_BOOL         true or false, read with cjson_bool_val(3)
@@ -21,7 +21,7 @@ cjson_type(3) gives the type of a node, as a cjson_node_type_t:
   CJSON_LIST         an array of child nodes
   CJSON_DICTIONARY   an object: string keys, each with a child node
 
-A value accessor stops the program through _ccol_fatal_err() when the
+A value accessor stops the program through ccol__fatal_err() when the
 node has a different type, and for a NULL node as well, so call
 cjson_type(3) before you read a node whose type comes from the input.
 cjson_parse(3) gives the rules for large integers, strings and UTF-8.

@@ -1,6 +1,6 @@
 .TH CHTTP_TEXT_BODY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-CHTTP_TEXT_BODY \- construct a chttp_request_body_t for plain-text content
+CHTTP_TEXT_BODY \- construct a chttp_request_body for plain-text content
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,7 +11,7 @@ CHTTP_TEXT_BODY(d, n)
 .fi
 .SH DESCRIPTION
 .nf
-This macro expands to an initializer for a chttp_request_body_t that
+This macro expands to an initializer for a chttp_request_body that
 sets Content-Type to "text/plain", the data pointer to d and the byte
 length to n.
 .fi

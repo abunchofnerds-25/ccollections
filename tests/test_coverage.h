@@ -22,16 +22,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Coverage helpers for forked test children.
- *
- * gcov writes a binary's counts from an exit-time handler, so a child that
- * leaves through _exit(), or dies by abort() or a fatal error of the library,
- * throws away everything it ran. The parent never ran that code, and the
- * merged report then calls lines uncovered that a test runs and checks. Every
- * coverage target of the test Makefiles defines CCOL_TEST_COVERAGE; the
- * ordinary, sanitizer and valgrind builds don't, and there these helpers
- * compile to a plain _exit() and to nothing. */
-
+// Coverage helpers for forked test children. gcov writes the counts from an
+// exit handler, so a child that leaves by _exit(), abort() or a fatal error of
+// the library loses them. Coverage builds define CCOL_TEST_COVERAGE; in every
+// other build these helpers are a plain _exit() and nothing.
 #ifndef CCOL_TESTS_TEST_COVERAGE_H
 #define CCOL_TESTS_TEST_COVERAGE_H
 
@@ -40,52 +34,48 @@ SOFTWARE.
 #include <unistd.h>
 
 #ifdef CCOL_TEST_COVERAGE
-/* libgcov exports it for GCC and compiler-rt for Clang. */
+// libgcov exports it for GCC and compiler-rt for Clang.
 extern void __gcov_dump(void);
 #endif
 
-/* Writes the counts of the calling process to its .gcda files in a coverage
- * build, and does nothing otherwise. */
+// Writes the coverage counts of this process to its .gcda files, for a process
+// that won't reach the exit handler of gcov. It does nothing outside a coverage
+// build.
 static inline void test_child_coverage_flush(void) {
 #ifdef CCOL_TEST_COVERAGE
   __gcov_dump();
 #endif
 }
 
-/* What a forked child calls in place of _exit(), and so may any test process
- * that has to leave through _exit(): it flushes the coverage counts first.
- * Don't call it from a signal handler, because writing the .gcda files is not
- * async-signal-safe. */
+// What a forked child calls in place of _exit(): it flushes the coverage counts
+// first. Don't call it from a signal handler, since the flush isn't
+// async-signal-safe.
 static inline __attribute__((noreturn)) void test_child_exit(int code) {
   test_child_coverage_flush();
   _exit(code);
 }
 
 #ifdef CCOL_TEST_COVERAGE
+// SIGABRT handler of a coverage build: dumps the counts and raises sig again at
+// its default action, so a child that aborts on purpose keeps its counts and
+// still dies by SIGABRT. It resets SIGALRM and sig to their defaults. The dump
+// can block on a lock that another thread held at the abort, so a 30 s SIGALRM
+// (at its default action, keeping a shorter alarm the child armed) ends the
+// child rather than the run hanging.
 static inline void test_child_coverage_abort_handler(int sig) {
-  /* The dump allocates and takes locks, so in a child where another thread
-   * held one of them when the abort came it can wait for ever. The alarm
-   * then ends the child by SIGALRM, and the parent's check of SIGABRT fails
-   * instead of the coverage run hanging. SIGALRM goes back to its default
-   * action first, so a handler the child installed can't keep it alive, and
-   * a shorter alarm the child already armed stays, since the parent's own
-   * bound was sized for it. */
   signal(SIGALRM, SIG_DFL);
   unsigned left = alarm(30);
   if (left != 0 && left < 30) alarm(left);
   __gcov_dump();
   signal(sig, SIG_DFL);
-  /* SIGABRT stays blocked while the handler runs, so the signal raised here
-   * is delivered as soon as the handler returns, at its default action. */
   raise(sig);
 }
 #endif
 
-/* Makes a child that is meant to die by SIGABRT write its coverage counts
- * first, in a coverage build. The child still dies by SIGABRT, so the parent
- * sees WIFSIGNALED and WTERMSIG == SIGABRT exactly as without it. Outside a
- * coverage build it does nothing. test_child_no_core() of test_signals.h
- * calls it, so a child that starts with that call needs nothing more. */
+// Installs the SIGABRT handler above, so a child that is meant to die by
+// SIGABRT writes its coverage counts first. It does nothing outside a coverage
+// build. The child still dies by SIGABRT, so the parent sees the same status.
+// test_child_no_core() calls it.
 static inline void test_child_flush_coverage_on_abort(void) {
 #ifdef CCOL_TEST_COVERAGE
   struct sigaction sa;
@@ -96,4 +86,4 @@ static inline void test_child_flush_coverage_on_abort(void) {
 #endif
 }
 
-#endif /* CCOL_TESTS_TEST_COVERAGE_H */
+#endif

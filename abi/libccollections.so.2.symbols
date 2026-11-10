@@ -1,4 +1,4 @@
-# Exported ABI of libccollections.so.1.
+# Exported ABI of libccollections.so.2.
 #
 # There is one symbol on each line, in sorted order. To make
 # this file again, run `make update_abi_baseline`. Commit the
@@ -8,55 +8,9 @@
 # breaks every application that is already linked against this
 # ABI version, and you must then increase VERSION_MAJOR in the
 # root Makefile.
-___csort_merge_sort
-__cbstmap_destroy
-__cbstmap_iterator_destroy
-__cchan_destroy
-__ccircq_destroy
-__cdynmq_destroy
-__ceventloop_destroy
-__chashmap_destroy
-__chashmap_iterator_destroy
-__chttpcli_destroy
-__chttpsvr_destroy
-__cjson_destroy
-__clrucache_destroy
-__clrucache_get_into
-__cstring_destroy
-__cthrpool_destroy
-__cvector_destroy
-__cyaml_destroy
-_cbstmap_get_val_accessor
-_chashmap_get_val_accessor
-_cjson_delete
-_cjson_get
-_cjson_set_typed
-_clog_write
-_cmempool_built_with_fast_layout
-_cmempool_destroy
-_cmempool_free_entry
-_crmempool_destroy
-_crmempool_free_entry
-_csort_default_bool_comparison_proc
-_csort_default_char_comparison_proc
-_csort_default_double_comparison_proc
-_csort_default_float_comparison_proc
-_csort_default_int_comparison_proc
-_csort_default_long_comparison_proc
-_csort_default_long_double_comparison_proc
-_csort_default_long_long_comparison_proc
-_csort_default_short_comparison_proc
-_csort_default_signed_char_comparison_proc
-_csort_default_string_comparison_proc
-_csort_default_unsigned_char_comparison_proc
-_csort_default_unsigned_int_comparison_proc
-_csort_default_unsigned_long_comparison_proc
-_csort_default_unsigned_long_long_comparison_proc
-_csort_default_unsigned_short_comparison_proc
-_cvector_sort
-_cyaml_delete
-_cyaml_get
-_cyaml_set_typed
+cbstmap__destroy
+cbstmap__get_val_accessor
+cbstmap__iterator_destroy
 cbstmap_begin_iter
 cbstmap_create_full
 cbstmap_delete_elem
@@ -65,6 +19,7 @@ cbstmap_get_elem_copy
 cbstmap_get_elem_ref
 cbstmap_insert_elem
 cbstmap_reset
+cchan__destroy
 cchan_create_mp
 cchan_disable_sending
 cchan_enable_sending
@@ -76,6 +31,7 @@ cchan_timed_recv
 cchan_timed_send
 cchan_try_recv
 cchan_try_send
+ccircq__destroy
 ccircq_create_mp
 ccircq_disable_sending
 ccircq_enable_sending
@@ -87,6 +43,9 @@ ccircq_timed_send
 ccircq_try_recv
 ccircq_try_send
 ccol_set_thread_name
+ccol_version
+ccol_version_string
+cdynmq__destroy
 cdynmq_create_mp
 cdynmq_disable_sending
 cdynmq_enable_sending
@@ -95,6 +54,7 @@ cdynmq_recv
 cdynmq_send
 cdynmq_timed_recv
 cdynmq_try_recv
+ceventloop__destroy
 ceventloop_add
 ceventloop_create_mp
 ceventloop_modify
@@ -104,6 +64,9 @@ ceventloop_reg_generation
 ceventloop_remove
 ceventloop_resume
 ceventloop_shutdown
+chashmap__destroy
+chashmap__get_val_accessor
+chashmap__iterator_destroy
 chashmap_begin_iter
 chashmap_create_full
 chashmap_delete_elem
@@ -128,6 +91,7 @@ chttp_request_free
 chttp_request_get_header
 chttp_request_set_header
 chttp_run_query
+chttpcli__destroy
 chttpcli_async_result_free
 chttpcli_async_result_get
 chttpcli_create_mp
@@ -151,6 +115,7 @@ chttpcli_set_max_response_body_size
 chttpcli_set_pool_size
 chttpcli_set_request_timeout
 chttpcli_set_tls
+chttpsvr__destroy
 chttpsvr_bound_address
 chttpsvr_bound_port
 chttpsvr_create_mp
@@ -193,6 +158,10 @@ chttpsvr_start
 chttpsvr_stop
 chttpsvr_subrouter
 chttpsvr_use
+cjson__delete
+cjson__destroy
+cjson__get
+cjson__set_typed
 cjson_bool_val
 cjson_clone
 cjson_create_bool_mp
@@ -221,6 +190,7 @@ cjson_serialize_free_mp
 cjson_serialize_pretty
 cjson_str_val
 cjson_type
+clog__write
 clog_clear_fields
 clog_close
 clog_create_from_fd_mp
@@ -236,11 +206,16 @@ clog_set_field
 clog_set_format
 clog_set_level
 clog_set_signal_policy
+clrucache__destroy
+clrucache__get_into
 clrucache_capacity
 clrucache_create_full
 clrucache_get_full
 clrucache_set_full
 clrucache_size
+cmempool__built_with_fast_layout
+cmempool__destroy
+cmempool__free_entry
 cmempool_alloc_entry
 cmempool_allocated_bytes
 cmempool_calloc_entry
@@ -249,6 +224,8 @@ cmempool_create_mp
 cmempool_dynamic_allocs_count
 cmempool_total_capacity
 cmempool_used_count
+crmempool__destroy
+crmempool__free_entry
 crmempool_alloc_entry
 crmempool_allocated_bytes
 crmempool_calloc_entry
@@ -260,6 +237,24 @@ crmempool_total_capacity
 crmempool_used_count
 cselect
 cselect_timed
+csort__default_bool_comparison_proc
+csort__default_char_comparison_proc
+csort__default_double_comparison_proc
+csort__default_float_comparison_proc
+csort__default_int_comparison_proc
+csort__default_long_comparison_proc
+csort__default_long_double_comparison_proc
+csort__default_long_long_comparison_proc
+csort__default_short_comparison_proc
+csort__default_signed_char_comparison_proc
+csort__default_string_comparison_proc
+csort__default_unsigned_char_comparison_proc
+csort__default_unsigned_int_comparison_proc
+csort__default_unsigned_long_comparison_proc
+csort__default_unsigned_long_long_comparison_proc
+csort__default_unsigned_short_comparison_proc
+csort__merge_sort
+cstring__destroy
 cstring_append
 cstring_at
 cstring_c_str
@@ -285,6 +280,7 @@ cstring_substring
 cstring_to_lower
 cstring_to_upper
 cstring_trim
+cthrpool__destroy
 cthrpool_active_count
 cthrpool_create_mp
 cthrpool_future_cancelled
@@ -303,6 +299,8 @@ cthrpool_timed_submit_future
 cthrpool_try_submit
 cthrpool_try_submit_future
 cthrpool_wait
+cvector__destroy
+cvector__sort
 cvector_append_array
 cvector_append_cvector
 cvector_at
@@ -316,6 +314,10 @@ cvector_pop_back
 cvector_push_back
 cvector_reserve
 cvector_reset
+cyaml__delete
+cyaml__destroy
+cyaml__get
+cyaml__set_typed
 cyaml_bool_val
 cyaml_clone
 cyaml_create_bool_mp

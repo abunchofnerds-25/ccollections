@@ -11,7 +11,7 @@ CHTTP_TLS_DEFAULT
 .fi
 .SH DESCRIPTION
 .nf
-This macro expands to an initializer for a chttp_tls_config_t with:
+This macro expands to an initializer for a chttp_tls_config with:
   insecure_skip_verify         = false (verify the certificate chain)
   insecure_skip_hostname_check = false (match the hostname)
   ca_bundle_path               = NULL  (use the system CA bundle)
@@ -22,7 +22,7 @@ This macro expands to an initializer for a chttp_tls_config_t with:
 .fi
 .PP
 Every field of the default is zero, so this macro and a zero-initialized
-struct name the same settings.  A chttp_tls_config_t built with = {0}, or
+struct name the same settings.  A chttp_tls_config built with = {0}, or
 with a designated initializer that names only some of its fields,
 verifies the server's chain and matches its hostname on a client.  On a
 server, the same struct with a ca_bundle_path requires every client to
@@ -75,15 +75,15 @@ chttpcli_set_tls(3) of a client.
 .SH EXAMPLES
 .nf
 /* The defaults: verify the chain and the hostname. */
-chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+chttp_tls_config tls = CHTTP_TLS_DEFAULT;
 chttpcli_set_tls(cli, &tls);
 
 /* The same defaults, written as a zero-initialized struct. */
-chttp_tls_config_t same = {0};
+chttp_tls_config same = {0};
 chttpcli_set_tls(cli, &same);
 
 /* Pin a private CA and skip only the hostname match. */
-chttp_tls_config_t pinned = {
+chttp_tls_config pinned = {
     .ca_bundle_path = "/etc/myapp/ca-chain.pem",
     .insecure_skip_hostname_check = true,
 };
@@ -92,7 +92,7 @@ chttpcli_set_tls(cli, &pinned);
 /* Accept any certificate. Development and throwaway self-signed
    servers only; this gives an interceptor full control of the
    connection. */
-chttp_tls_config_t insecure = {.insecure_skip_verify = true};
+chttp_tls_config insecure = {.insecure_skip_verify = true};
 chttpcli_set_tls(cli, &insecure);
 .fi
 .SH "SEE ALSO"

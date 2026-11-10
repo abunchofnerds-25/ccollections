@@ -7,8 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-ccol_retval_t chttpsvr_start(chttpsvr srv,
-                             const chttpsvr_config_t *cfg);
+ccol_retval chttpsvr_start(chttpsvr srv,
+                             const chttpsvr_config *cfg);
 .fi
 .SH DESCRIPTION
 .nf
@@ -148,7 +148,7 @@ that chunk, before it waits for the data of the chunk.  This shows up
 like any other malformed body for that kind of route, as a 413 or as
 ccol_msg_too_large.
 
-Every timeout and duration of chttpsvr_config_t is a uint64_t count
+Every timeout and duration of chttpsvr_config is a uint64_t count
 of microseconds, rounded up to whole milliseconds inside the server;
 see CHTTPSVR_CONFIG_DEFAULT(3).
 
@@ -371,7 +371,7 @@ request body of up to 4 KiB.  A larger body, or one that fails to
 arrive, still gets the 200, and the connection is closed after it.  A
 declared Content-Length above 4 KiB is not read at all, and no 100
 Continue invites it.  Any other method with the target "*", including
-a method outside the seven chttp_method_t names such as
+a method outside the seven chttp_method names such as
 "PROPFIND *", gets 400 Bad Request and a close.  A method outside
 those seven names with any other target gets 501 Not Implemented.
 
@@ -486,7 +486,7 @@ plain, unencrypted HTTP.  Those other shapes are exactly one of the
 two set, cfg->tls->ca_bundle_path set with neither of the two, and a
 cfg->tls that is otherwise empty, for example CHTTP_TLS_DEFAULT.  A
 trust store alone is never a valid server configuration, and neither
-is an otherwise empty chttp_tls_config_t, because a server always
+is an otherwise empty chttp_tls_config, because a server always
 needs an identity certificate of its own.  The client side is
 different here: ca_bundle_path alone is the ordinary way to verify
 against a custom CA without any client certificate.

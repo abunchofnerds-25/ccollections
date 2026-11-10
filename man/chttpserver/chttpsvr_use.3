@@ -7,8 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-ccol_retval_t chttpsvr_use(chttpsvr srv,
-                            chttpsvr_middleware_fn_t fn, void *ctx);
+ccol_retval chttpsvr_use(chttpsvr srv,
+                            chttpsvr_middleware_fn fn, void *ctx);
 .fi
 .SH DESCRIPTION
 .nf
@@ -63,7 +63,7 @@ These rejections run no middleware:
   - A 503 means that the worker pool is full, so no more application
     work may start.
   - A 501 or a 505 is decided before the request is routed: a 501 for
-    a method token outside the seven chttp_method_t names or for a
+    a method token outside the seven chttp_method names or for a
     transfer coding that the server does not implement, and a 505 for
     an HTTP version whose major number is not 1.  There is no routed
     request for a middleware to see.

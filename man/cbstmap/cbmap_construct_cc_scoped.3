@@ -7,14 +7,14 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cbstmap.h>
 
-cbmap_construct_cc_scoped(hm_name, key_t, val_t, custom_comparison_proc);
+cbmap_construct_cc_scoped(hm_name, KeyT, ValT, custom_comparison_proc);
 .fi
 .SH DESCRIPTION
 .nf
 Declares an ordered map handle named hm_name with the companion type
-variables that carry key_t and val_t to every later type-inferred macro,
+variables that carry KeyT and ValT to every later type-inferred macro,
 then creates a map whose keys are ordered by custom_comparison_proc
-instead of the default order for key_t. The handle also gets the cleanup
+instead of the default order for KeyT. The handle also gets the cleanup
 attribute, which destroys the map on every exit from the enclosing scope,
 an early return included.
 
@@ -24,20 +24,20 @@ the default order, cbmap_construct_mp_scoped(3) takes an allocator where
 this one takes a comparison procedure, and cbmap_construct_full_scoped(3)
 takes both.
 
-Use this scoped variant for a struct key_t, because a key type that the
+Use this scoped variant for a struct KeyT, because a key type that the
 map doesn't recognize is ordered by default by a raw comparison of the
 key's representation.
 .fi
 .SH PARAMETERS
 .nf
 hm_name                 Name for the map handle to declare
-key_t                   Key type. Every later macro reads a key through
+KeyT                   Key type. Every later macro reads a key through
                         it, and the container takes from it the width to
                         expect and the alignment of a stored key
-val_t                   Value type. Only the type-inferred macros read
+ValT                   Value type. Only the type-inferred macros read
                         it; the library never passes it to the container
-custom_comparison_proc  A ccol_comparison_proc_t, or NULL for the
-                        default order for key_t
+custom_comparison_proc  A ccol_comparison_proc, or NULL for the
+                        default order for KeyT
 .fi
 .SH RETURN VALUE
 .nf
@@ -51,18 +51,18 @@ orders after it, and zero when the map must treat the two as the same
 key. A zero makes the call an update instead of an insert, so the
 procedure defines both key equality and key order.
 
-It must give a strict weak order over key_t, and that order must not
+It must give a strict weak order over KeyT, and that order must not
 change while the map holds elements. With only two bare pointers and no
-lengths, the procedure can read no more than the width that key_t fixes,
-so the map checks the width of an incoming key against key_t and aligns
-its stored keys for key_t.
+lengths, the procedure can read no more than the width that KeyT fixes,
+so the map checks the width of an incoming key against KeyT and aligns
+its stored keys for KeyT.
 
 The procedure must stay callable for the whole life of the map, which in
 this case ends at the closing brace of the enclosing scope.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through _ccol_fatal_err() if the creation
+The macro stops the program through ccol__fatal_err() if the creation
 fails. It needs GCC or Clang because of the cleanup attribute, and it uses
 the default allocator.
 

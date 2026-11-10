@@ -28,7 +28,7 @@ cbmap_construct_mp_scoped(3).
 .nf
 hm_name      The map handle that the caller declared earlier, which
              receives the new map
-mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
+mmgmt_procs  Pointer to a ccol_memmgmt_procs, or NULL for the default
              allocator
 .fi
 .SH RETURN VALUE
@@ -37,11 +37,11 @@ None. The macro expands to a statement, not to an expression.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through _ccol_fatal_err() if the creation
+The macro stops the program through ccol__fatal_err() if the creation
 fails.
 
-None of the four members of ccol_memmgmt_procs_t may be NULL. The map
-copies the procedures into itself, so the caller's ccol_memmgmt_procs_t
+None of the four members of ccol_memmgmt_procs may be NULL. The map
+copies the procedures into itself, so the caller's ccol_memmgmt_procs
 doesn't have to outlive the call, but the procedures themselves must stay
 callable for the whole life of the map. Every tree node that the map
 allocates later comes from them, and everything it frees goes back to
@@ -52,7 +52,7 @@ as cbstmap_create_full(3) describes, and a walk goes in ascending key order.
 .fi
 .SH EXAMPLES
 .nf
-ccol_memmgmt_procs_t procs = {
+ccol_memmgmt_procs procs = {
     .malloc = my_malloc, .calloc = my_calloc,
     .realloc = my_realloc, .free = my_free,
 };

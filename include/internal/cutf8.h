@@ -24,58 +24,35 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file cutf8.h
- * @brief INTERNAL ONLY. The UTF-8 well-formedness check that cjson and cyaml
- *        share.
- *
- * Both modules promise that every string a DOM node holds is a well-formed
- * UTF-8 encoding of Unicode scalar values, and they both decide that with
- * this one definition, so they can never disagree about which byte sequence
- * counts as UTF-8. A check of its own in either module would bring that
- * risk back, so extend this file instead.
- *
- * The header is internal, so it has no visibility block and make install
- * leaves it out. Every function here is static inline, so none of them ends
- * up in the dynamic symbol table of the shared library.
- */
-
+// INTERNAL ONLY. The UTF-8 well-formedness check that cjson and cyaml share,
+// so the two modules can never disagree about which bytes count as UTF-8.
+// Extend this file instead of writing a check of your own. Every function is
+// static inline and nothing here is installed or exported.
 #ifndef CCOL_CUTF8_H
 #define CCOL_CUTF8_H
 
+// C23 has bool, true and false as keywords.
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-#include <stdbool.h> /* C23 has bool, true and false as keywords */
+#include <stdbool.h>
 #endif
 #include <stddef.h>
 #include <stdio.h>
 
-/*
- * Steps over one UTF-8 sequence at s. The caller can read n > 0 bytes there.
- *
- * For a well-formed sequence it returns the length (1 to 4) and sets *ok.
- * For an ill-formed one it clears *ok and returns the length of the maximal
- * subpart, which is at least 1: the longest prefix of s that could still
- * start a well-formed sequence. That's the unit that "U+FFFD Substitution of
- * Maximal Subparts" in Unicode 15.0 sec. 3.9 replaces with one U+FFFD. Any
- * other byte count is wrong because it either merges several independent
- * errors into one replacement character or splits one error into several.
- *
- * The shape of the lead byte table rejects all of the following without any
- * arithmetic on the decoded value: a continuation byte with no lead (0x80 to
- * 0xBF), the two overlong two-byte leads (0xC0 and 0xC1), a lead outside the
- * Unicode range (0xF5 to 0xFF), the overlong three-byte and four-byte forms
- * (through the narrow range of the first continuation byte under 0xE0 and
- * under 0xF0), the UTF-16 surrogate range (through the narrow range under
- * 0xED) and anything past U+10FFFF (through the narrow range under 0xF4).
- */
+// Steps over one UTF-8 sequence at s, where n > 0 bytes are readable; every
+// other function here is built on it. For a well-formed sequence it returns its
+// length (1 to 4) and sets *ok. For an ill-formed one it clears *ok and returns
+// the length of the maximal subpart (at least 1), the unit that Unicode
+// replaces with one U+FFFD. The lead byte table (trail count plus the range of
+// the first continuation byte) refuses stray continuation bytes, overlong
+// forms, surrogates and anything above U+10FFFF without decoding the value.
 static inline size_t ccol_utf8_step(const unsigned char *s, size_t n,
                                     bool *ok) {
   unsigned char b0 = s[0];
   *ok = true;
   if (b0 < 0x80) return 1;
 
-  size_t trail;         /* continuation bytes that the lead needs after it */
-  unsigned char lo, hi; /* the range for the FIRST continuation byte */
+  size_t trail;
+  unsigned char lo, hi;
   if (b0 >= 0xC2 && b0 <= 0xDF) {
     trail = 1, lo = 0x80, hi = 0xBF;
   } else if (b0 == 0xE0) {
@@ -108,7 +85,8 @@ static inline size_t ccol_utf8_step(const unsigned char *s, size_t n,
   return trail + 1;
 }
 
-/* True when the whole n-byte buffer is well-formed UTF-8. */
+// Tells whether the n-byte buffer s is well-formed UTF-8, for the API calls of
+// cjson and cyaml that refuse a C string that isn't.
 static inline bool ccol_utf8_is_valid(const char *s, size_t n) {
   const unsigned char *p = (const unsigned char *)s;
   size_t i = 0;
@@ -125,9 +103,9 @@ static inline bool ccol_utf8_is_valid(const char *s, size_t n) {
   return true;
 }
 
-/* Gives the offset of the first byte of s[0..n) that starts an ill-formed
- * UTF-8 sequence, or n when the whole buffer is well-formed. A run of ASCII
- * costs one comparison per byte. */
+// Gives the offset of the first byte of s that starts an ill-formed sequence,
+// or n when the whole buffer is well-formed, so a parser can report where its
+// input goes wrong. ASCII costs one comparison per byte.
 static inline size_t ccol_utf8_first_ill_formed(const char *s, size_t n) {
   const unsigned char *p = (const unsigned char *)s;
   size_t i = 0;
@@ -144,14 +122,13 @@ static inline size_t ccol_utf8_first_ill_formed(const char *s, size_t n) {
   return n;
 }
 
-/*
- * Names, for a diagnostic, what is wrong with the ill-formed sequence that
- * starts at p[at], where ccol_utf8_step() reports one. The caller can read
- * len bytes at p, and at < len. We return a static phrase for the defect and
- * write into detail the bytes that show it, each as 0xNN. Both are printable
- * ASCII whatever the input holds, so a message built from them stays valid
- * UTF-8 and a NUL can't cut it short.
- */
+// Names, for a parse error, what is wrong with the ill-formed sequence at p[at]
+// (at < len). It returns a static phrase and writes the bytes that show the
+// defect into detail (detail_size bytes), each as 0xNN, so the message is
+// printable ASCII whatever the input holds. A lead byte whose maximal subpart
+// is 1 while the next byte is a continuation byte has a first continuation byte
+// outside its narrow range: a surrogate, a value above U+10FFFF, or an overlong
+// form.
 static inline const char *ccol_utf8_describe_ill_formed(const unsigned char *p,
                                                         size_t len, size_t at,
                                                         char *detail,
@@ -177,8 +154,6 @@ static inline const char *ccol_utf8_describe_ill_formed(const unsigned char *p,
     return "sequence truncated by the end of the input";
   }
   if (step == 1 && c1 >= 0x80 && c1 <= 0xBF) {
-    /* This lead accepts only a narrower range for its first continuation
-     * byte, and c1 is a continuation byte that falls outside it. */
     snprintf(detail, detail_size, "bytes 0x%02x 0x%02x", c, c1);
     return (c == 0xED)   ? "encoded surrogate code point"
            : (c == 0xF4) ? "code point above U+10FFFF"
@@ -191,4 +166,4 @@ static inline const char *ccol_utf8_describe_ill_formed(const unsigned char *p,
   return "truncated sequence";
 }
 
-#endif /* CCOL_CUTF8_H */
+#endif

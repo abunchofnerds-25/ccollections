@@ -11,9 +11,9 @@ crmempool *crmempool_create_mp(
     uint8_t smallest_size_power_of_two,
     uint8_t largest_size_power_of_two,
     uint8_t number_of_smallest_size_elems_power_of_two,
-    crmempool_fallback_policy_t fb_policy,
+    crmempool_fallback_policy fb_policy,
     bool single_threaded,
-    ccol_memmgmt_procs_t *mmgmt_procs,
+    ccol_memmgmt_procs *mmgmt_procs,
     char **err);
 .fi
 .SH DESCRIPTION

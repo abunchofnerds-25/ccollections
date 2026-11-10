@@ -7,11 +7,11 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-chttp_method_t chttpsvr_req_method(const chttpsvr_req_t *req);
+chttp_method chttpsvr_req_method(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the HTTP method of req as a chttp_method_t enum value.  The
+Returns the HTTP method of req as a chttp_method enum value.  The
 value is always one of the seven real methods (CHTTP_GET, CHTTP_POST,
 CHTTP_PUT, CHTTP_DELETE, CHTTP_PATCH, CHTTP_HEAD and CHTTP_OPTIONS);
 the function never returns CHTTP_ANY, even when the route that matched
@@ -26,7 +26,7 @@ chttpsvr_register_handler(3)).  That is what makes "always one of the
 seven real methods" a complete guarantee and not only the common case.
 
 The function returns CHTTP_GET when req is NULL.  Most other request
-accessors return NULL for a NULL req, but chttp_method_t is an integer
+accessors return NULL for a NULL req, but chttp_method is an integer
 enum with no sentinel value, so this one can't.  If req can be NULL,
 check it before you call this function.
 .fi

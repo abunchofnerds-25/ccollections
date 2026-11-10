@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-const char *chttpsvr_req_peer_cert_subject(const chttpsvr_req_t *req);
+const char *chttpsvr_req_peer_cert_subject(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
@@ -55,7 +55,7 @@ runs the handler or the middleware of req.
 #include <ccollections/chttpserver.h>
 #include <string.h>
 
-static void handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx)
+static void handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx)
 {
     (void)ctx;
     const char *who = chttpsvr_req_peer_cert_subject(req);

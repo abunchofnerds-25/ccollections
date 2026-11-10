@@ -8,7 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/cthreadcomm.h>
 
 cdynmq *cdynmq_create_mp(
-                         ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
+                         ccol_memmgmt_procs *mmgmt_procs, char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
@@ -21,7 +21,7 @@ queue starts with sends on.
 Every allocation, at creation and for each list node that a later send
 adds, goes through mmgmt_procs. The queue keeps its own copy of the
 procedures and frees itself through them, so the caller's
-ccol_memmgmt_procs_t doesn't have to outlive this call. NULL selects
+ccol_memmgmt_procs doesn't have to outlive this call. NULL selects
 the default malloc and free, which is what the
 cdynmq_create() macro passes.
 .fi

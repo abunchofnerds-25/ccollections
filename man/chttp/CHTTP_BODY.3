@@ -1,6 +1,6 @@
 .TH CHTTP_BODY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-CHTTP_BODY \- construct a chttp_request_body_t with an explicit content type
+CHTTP_BODY \- construct a chttp_request_body with an explicit content type
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,7 +11,7 @@ CHTTP_BODY(data_ptr, data_len, content_type_str)
 .fi
 .SH DESCRIPTION
 .nf
-This macro expands to an initializer for a chttp_request_body_t built
+This macro expands to an initializer for a chttp_request_body built
 from the data pointer, the length and the Content-Type string you pass.
 
 data_ptr       A pointer to the body bytes. The macro does not copy
@@ -21,7 +21,7 @@ content_type_str  The value string of the Content-Type header.
 .fi
 .SH EXAMPLES
 .nf
-chttp_request_body_t body = CHTTP_BODY(buf, len, "application/octet-stream");
+chttp_request_body body = CHTTP_BODY(buf, len, "application/octet-stream");
 .fi
 .SH "SEE ALSO"
 .BR CHTTP_JSON_BODY (3),

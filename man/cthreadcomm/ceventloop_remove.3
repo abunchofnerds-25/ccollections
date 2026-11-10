@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadcomm.h>
 
-ccol_retval_t ceventloop_remove(ceventloop loop, ceventloop_reg reg);
+ccol_retval ceventloop_remove(ceventloop loop, ceventloop_reg reg);
 .fi
 .SH DESCRIPTION
 .nf
@@ -107,7 +107,7 @@ registration runs and from that registration's own callback.
 .SH EXAMPLES
 .nf
 void on_readable(ceventloop loop, ceventloop_reg reg,
-                 cselectable_t *sel, void *arg) {
+                 cselectable *sel, void *arg) {
     conn_ctx_t *ctx = (conn_ctx_t *)arg;
     char buf[512];
     ssize_t n = read(sel->fd, buf, sizeof(buf));

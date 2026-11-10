@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cjson.h>
 
-ccol_retval_t cjson_delete(cjson root, const char *path);
+ccol_retval cjson_delete(cjson root, const char *path);
 .fi
 .SH DESCRIPTION
 .nf
@@ -28,7 +28,7 @@ backslash in a key name, as they do in cjson_get and cjson_set.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_retval_t, which is ccol_success on success.
+ccol_retval, which is ccol_success on success.
 ccol_invalid_args when root or path is NULL; for an empty path or an
 empty path component (a leading dot, a trailing dot or two dots in a
 row); for a path whose shape cannot apply to the tree, at any

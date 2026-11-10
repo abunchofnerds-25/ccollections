@@ -46,7 +46,7 @@
 # OSSL_DECODER_do_all_provided/OSSL_ENCODER_do_all_provided, EVP_MD_fetch,
 # CRYPTO_aligned_alloc and several more. Under that load the
 # ctls_sni/ctls_alpn race-stress tests of this suite call
-# ctls_ctx_cert_add()/ctls_ctx_alpn_add() -> _ctls_ctx_rebuild_locked() ->
+# ctls_ctx_cert_add()/ctls_ctx_alpn_add() -> ctls_ctx_rebuild_locked() ->
 # SSL_CTX_new_ex() over and over in a tight loop, and each call can fill a
 # DIFFERENT lazily-initialized OpenSSL 3 provider/algorithm/OSSL_LIB_CTX
 # cache the first time it reaches that particular internal code path. The
@@ -118,7 +118,7 @@
 }
 
 # There is deliberately no rule here for our own code.
-# _ctls_ctx_rebuild_locked() in ctls.c walks the named/SNI certificates with
+# ctls_ctx_rebuild_locked() in ctls.c walks the named/SNI certificates with
 # ccol_chmap_walk_next(),
 # which allocates nothing, so the rebuild has no iterator that could leak.
 # _check_chmap_iter_balance_at_exit in tests/ctls/tests.c is a process-exit

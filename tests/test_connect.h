@@ -22,25 +22,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* connect(2) for the tests, with a bound on the wait.
- *
- * On OpenBSD 7.9 a blocking connect(2) of a TCP socket can miss its wakeup.
- * The connection gets established, and can even be closed again by the
- * peer, while the caller sleeps in connect(2) for ever, because the connect
- * timer stops once the connection exists. A few lines of blocking loopback
- * connects from four threads hit it within a few million connects, while
- * the same program with a non-blocking connect(2) and poll(2) does twelve
- * million without a hang. A test that sleeps there holds its CI job until
- * the job's time limit.
- *
- * So test_connect() connects a blocking TCP socket in non-blocking mode,
- * waits for the result with poll(2) for at most TEST_CONNECT_TIMEOUT_MS and
- * hands the socket back in blocking mode. It returns 0 on success and -1
- * with errno set on failure (ETIMEDOUT when the wait ran out), the same way
- * connect(2) reports a failure. Any other socket (a Unix socket, a datagram
- * socket, or one that is non-blocking already) goes straight to connect(2),
- * so the test gets the behavior it asked for. */
-
+// connect(2) for the tests, with a bound on the wait. On OpenBSD a blocking TCP
+// connect(2) can miss its wakeup and sleep for ever on a connection that
+// already exists, so a TCP connect here runs in non-blocking mode under
+// poll(2).
 #ifndef CCOL_TESTS_TEST_CONNECT_H
 #define CCOL_TESTS_TEST_CONNECT_H
 
@@ -48,14 +33,21 @@ SOFTWARE.
 #include <fcntl.h>
 #include <poll.h>
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-#include <stdbool.h> /* C23 has bool, true and false as keywords */
+#include <stdbool.h>
 #endif
 #include <sys/socket.h>
 
+// The longest test_connect() waits for a TCP connect.
 #ifndef TEST_CONNECT_TIMEOUT_MS
 #define TEST_CONNECT_TIMEOUT_MS 30000
 #endif
 
+// Connects fd to addr, like connect(2) but bounded. Tests use it in place of
+// connect(2) because a blocking TCP connect can hang for ever on OpenBSD. It
+// connects a blocking TCP socket in non-blocking mode, waits at most
+// TEST_CONNECT_TIMEOUT_MS and hands the socket back blocking. It gives 0, or -1
+// with errno set (ETIMEDOUT when the wait ran out). Any other socket (Unix,
+// datagram, or already non-blocking) goes straight to connect(2).
 static inline int test_connect(int fd, const struct sockaddr *addr,
                                socklen_t len) {
   int type = 0;
@@ -94,4 +86,4 @@ static inline int test_connect(int fd, const struct sockaddr *addr,
   return 0;
 }
 
-#endif /* CCOL_TESTS_TEST_CONNECT_H */
+#endif

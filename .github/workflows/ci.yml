@@ -100,6 +100,13 @@ jobs:
       # links the .c files directly and never loads a .so.
       - name: fork() still works after the library is dlclose()d
         run: make check_dso_unload
+      # ELF lets any object loaded ahead of a library take over a call meant
+      # for it. This step checks the version node of every exported symbol and
+      # the -Bsymbolic-functions binding on the built .so, then preloads an
+      # impostor that defines every exported function and fails if any call,
+      # of the library or of the program, reaches it.
+      - name: no other object can take over a call of the library
+        run: make check_symbol_binding
       # Every destructor of the shared object runs at exit, whatever part of the
       # library a program used. This step links a program that uses almost
       # nothing of the library against the built .so, and fails when valgrind
@@ -141,7 +148,7 @@ jobs:
           set -eo pipefail
           make clean
           make EXTRA_CFLAGS="-DCMEMPOOL_DYNAMIC_TLS=1"
-          so=$(ls libccollections.so.1.*)
+          so=$(ls libccollections.so.2.*)
           # initial-exec emits R_X86_64_TPOFF64; the general model does not.
           if readelf -Wr "$so" | grep -q TPOFF; then
             echo "CMEMPOOL_DYNAMIC_TLS did not reach the library" >&2
@@ -166,7 +173,7 @@ jobs:
           set -eo pipefail
           make clean
           make EXTRA_CFLAGS="-DCCOL_FORK_SAFETY_REQUIRED=0"
-          so=$(ls libccollections.so.1.*)
+          so=$(ls libccollections.so.2.*)
           if objdump -R "$so" | grep -q pthread_atfork; then
             echo "CCOL_FORK_SAFETY_REQUIRED=0 did not reach the library" >&2
             exit 1
@@ -264,6 +271,7 @@ jobs:
             gmake check_abi
             gmake check_layout
             gmake check_dso_unload
+            gmake check_symbol_binding
             gmake check_exit_reachable
             gmake check_install
             # ThreadSanitizer with clang, on every module that has a TSan
@@ -338,6 +346,7 @@ jobs:
             gmake
             gmake check_layout
             gmake check_dso_unload
+            gmake check_symbol_binding
             gmake check_install
 
   linux-x86_64-musl:
@@ -375,7 +384,7 @@ jobs:
             timeout -k 30 "$SUITE_TIMEOUT" make -C "$d" memtest || { echo "$d: memtest failed or ran past $SUITE_TIMEOUT s" >&2; exit 1; }
           done
       - name: unload and install checks
-        run: make && make check_dso_unload && make check_install
+        run: make && make check_dso_unload && make check_symbol_binding && make check_install
 
   linux-x86_64-debian11:
     name: Linux x86_64 Debian 11 (GCC 10, Clang 11, OpenSSL 1.1.1)
@@ -421,7 +430,7 @@ jobs:
       # The clean puts the build back on the default compiler, so these
       # checks run against a GCC build.
       - name: unload and install checks
-        run: make clean >/dev/null && make && make check_dso_unload && make check_install
+        run: make clean >/dev/null && make && make check_dso_unload && make check_symbol_binding && make check_install
 
   linux-x86_64-minimal:
     name: Linux x86_64 (minimal build, no optional modules)
@@ -457,7 +466,7 @@ jobs:
         # passes having examined nothing at all.
         run: |
           set -eo pipefail
-          so=$(ls libccollections.so.1.*)
+          so=$(ls libccollections.so.2.*)
           needed=$(readelf -d "$so" | awk '/NEEDED/{print $NF}' | tr -d '[]')
           echo "$so needs: $needed"
           test -n "$needed"

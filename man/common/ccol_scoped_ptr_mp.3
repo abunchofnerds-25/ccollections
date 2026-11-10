@@ -30,7 +30,7 @@ ownership with ccol_scoped_ptr_release().
 name          The name of the pointer variable to declare
 type          The type that the pointer points to (for example char,
               struct foo)
-mmgmt_procs   The custom allocator (ccol_memmgmt_procs_t *) that frees
+mmgmt_procs   The custom allocator (ccol_memmgmt_procs *) that frees
               the last value of name, or NULL for the default allocator
 .fi
 .SH NOTES
@@ -44,10 +44,10 @@ scope at the declaration, which is the common case.
 
 The cleanup tests mmgmt_procs for NULL to choose between
 mmgmt_procs->free and the default allocator. If you pass the address of
-a local ccol_memmgmt_procs_t directly, the compiler can prove that the
+a local ccol_memmgmt_procs directly, the compiler can prove that the
 test is always true, and GCC may then report -Waddress ("the address of
 X will always evaluate as true"), which -Werror turns into an error. To
-avoid it, put the address in a ccol_memmgmt_procs_t * variable and pass
+avoid it, put the address in a ccol_memmgmt_procs * variable and pass
 that variable to both the macro and the allocation.
 
 The macro expands to two declarations rather than one expression, so it
@@ -65,7 +65,7 @@ mmgmt_procs is up to the caller.
 .nf
 #include <stdlib.h>
 
-void process(ccol_memmgmt_procs_t *mp) {
+void process(ccol_memmgmt_procs *mp) {
   ccol_scoped_ptr_mp(buf, char, mp);
   buf = mp ? mp->malloc(128) : malloc(128);
   if (!buf) return;

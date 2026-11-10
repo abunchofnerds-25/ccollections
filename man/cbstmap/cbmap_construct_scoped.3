@@ -7,14 +7,14 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cbstmap.h>
 
-cbmap_construct_scoped(hm_name, key_t, val_t);
+cbmap_construct_scoped(hm_name, KeyT, ValT);
 .fi
 .SH DESCRIPTION
 .nf
 Declares an ordered map handle named hm_name with the companion type
-variables that carry key_t and val_t to every later type-inferred macro,
+variables that carry KeyT and ValT to every later type-inferred macro,
 then creates the map with the default allocator and the default order for
-key_t. The handle also gets the cleanup attribute, which destroys the map
+KeyT. The handle also gets the cleanup attribute, which destroys the map
 on every exit from the enclosing scope, an early return included.
 
 That attribute is the only difference from cbmap_construct(3). This macro
@@ -29,9 +29,9 @@ the declaration.
 .SH PARAMETERS
 .nf
 hm_name  Name for the map handle to declare
-key_t    Key type. Every later macro reads a key through it, and the
+KeyT    Key type. Every later macro reads a key through it, and the
          container takes the order of the tree from it
-val_t    Value type. Only the type-inferred macros read it; the library
+ValT    Value type. Only the type-inferred macros read it; the library
          never passes it to the container
 .fi
 .SH RETURN VALUE
@@ -40,14 +40,14 @@ None. The macro declares variables and doesn't expand to an expression.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through _ccol_fatal_err() if the creation
+The macro stops the program through ccol__fatal_err() if the creation
 fails; when the caller has to handle a failure instead, use
 cbmap_declare_scoped(3) with cbmap_init(3). The cleanup attribute means it
 needs GCC or Clang.
 
 The map keeps its elements in key order and a walk visits them in
 ascending key order. cbstmap_begin_iter(3) describes that contract and
-cbstmap_create_full(3) the order that each key type gets. For a struct key_t
+cbstmap_create_full(3) the order that each key type gets. For a struct KeyT
 the default order is a raw comparison of the key's representation, so use
 cbmap_construct_cc_scoped(3) for such a key.
 

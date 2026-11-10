@@ -7,12 +7,12 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cbstmap.h>
 
-cbmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs);
+cbmap_construct_mp_scoped(hm_name, KeyT, ValT, mmgmt_procs);
 .fi
 .SH DESCRIPTION
 .nf
 Declares an ordered map handle named hm_name with the companion type
-variables that carry key_t and val_t to every later type-inferred macro,
+variables that carry KeyT and ValT to every later type-inferred macro,
 then creates a map that takes all of its memory from mmgmt_procs. The
 handle also gets the cleanup attribute, which destroys the map on every
 exit from the enclosing scope, an early return included.
@@ -25,11 +25,11 @@ takes an allocator, and cbmap_construct_full_scoped(3) takes both.
 .SH PARAMETERS
 .nf
 hm_name      Name for the map handle to declare
-key_t        Key type. Every later macro reads a key through it, and the
+KeyT        Key type. Every later macro reads a key through it, and the
              container takes the order of the tree from it
-val_t        Value type. Only the type-inferred macros read it; the
+ValT        Value type. Only the type-inferred macros read it; the
              library never passes it to the container
-mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
+mmgmt_procs  Pointer to a ccol_memmgmt_procs, or NULL for the default
              allocator
 .fi
 .SH RETURN VALUE
@@ -38,16 +38,16 @@ None. The macro declares variables and doesn't expand to an expression.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through _ccol_fatal_err() if the creation
+The macro stops the program through ccol__fatal_err() if the creation
 fails, and because of the cleanup attribute it needs GCC or Clang.
 
-None of the four members of ccol_memmgmt_procs_t may be NULL, and the
+None of the four members of ccol_memmgmt_procs may be NULL, and the
 procedures must stay callable for the whole life of the map, which here
 ends at the closing brace of the enclosing scope. Everything the map
 allocates comes from these procedures, and the destruction at the exit of
 the scope gives all of it back to them.
 
-A walk visits the elements in ascending key order, by the order that key_t
+A walk visits the elements in ascending key order, by the order that KeyT
 selects, as cbstmap_begin_iter(3) and cbstmap_create_full(3) describe.
 
 The exit of the scope destroys the map and clears the handle, so an
@@ -71,7 +71,7 @@ map.
 .fi
 .SH EXAMPLES
 .nf
-ccol_memmgmt_procs_t procs = {
+ccol_memmgmt_procs procs = {
     .malloc = my_malloc, .calloc = my_calloc,
     .realloc = my_realloc, .free = my_free,
 };

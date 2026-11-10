@@ -22,18 +22,16 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe: every public macro of this header must nest inside the
- * argument of another public macro, and inside its own argument, under -Wshadow
- * -Werror. The value macros give their temporaries a unique name for each
- * expansion, so a nested expansion never declares a local that hides one of the
- * enclosing expansion. Without that, every nesting below is a -Wshadow error in
- * a caller's build. The Makefile compiles this file with -fsyntax-only and
- * nothing here runs. */
-
+// A compile-time probe: every public macro of clrucache.h must nest inside the
+// argument of another public macro, and inside its own, under -Wshadow -Werror.
+// The Makefile compiles this file with -fsyntax-only; nothing here runs.
 #include <chashmap.h>
 #include <clrucache.h>
 
 void ccache_nesting_probe(void);
+// Nests ccache_get, ccache_set and chmap macros inside each other's arguments.
+// Each expansion names its temporaries uniquely, so no nested expansion hides a
+// local of the one around it; otherwise each nesting is a -Wshadow error.
 void ccache_nesting_probe(void) {
   ccache_construct(c, int, int, 4, NULL, NULL, NULL);
   int got = 0, got2 = 0;
@@ -48,14 +46,14 @@ void ccache_nesting_probe(void) {
   ccache_destroy(c);
 }
 
-/* A const value type, a const struct value type and a const char * key type.
- * ccache_get() copies each value into a temporary of the unqualified value
- * type, so the copy compiles, and so does assigning it to a plain variable of
- * that type. */
+// A small struct, used as a const value type.
 struct ccache_probe_pt {
   int x, y;
 };
 void ccache_const_value_probe(void);
+// Uses a const int value type, a const struct value type and a const char * key
+// type. ccache_get() copies each value into a temporary of the unqualified
+// type, so these must compile.
 void ccache_const_value_probe(void) {
   ccache_construct(ci, int, const int, 4, NULL, NULL, NULL);
   int got = 0;
@@ -71,6 +69,6 @@ void ccache_const_value_probe(void) {
   const char *s = NULL;
   (void)ccache_set(cc, "k", "v");
   (void)ccache_get(cc, "k", &s);
-  free((void *)s);
+  free((void *)(uintptr_t)s);
   ccache_destroy(cc);
 }

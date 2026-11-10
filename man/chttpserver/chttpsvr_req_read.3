@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-ssize_t chttpsvr_req_read(chttpsvr_req_t *req, void *buf, size_t buflen);
+ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen);
 .fi
 .SH DESCRIPTION
 .nf
@@ -16,11 +16,11 @@ batch, as they arrive on the connection.  The call reads the socket
 itself on the streaming thread that runs the handler, and the reactor
 thread never does this read.  It blocks that thread until at least
 one byte is available, the body ends, an error occurs,
-chttpsvr_config_t.stream_read_timeout_us expires with no new data,
-chttpsvr_config_t.max_body_read_duration_us expires (when that field
+chttpsvr_config.stream_read_timeout_us expires with no new data,
+chttpsvr_config.max_body_read_duration_us expires (when that field
 is set), or the average rate of the body since the first call falls
-below chttpsvr_config_t.min_transfer_rate_bps after
-chttpsvr_config_t.min_transfer_rate_grace_us has passed.
+below chttpsvr_config.min_transfer_rate_bps after
+chttpsvr_config.min_transfer_rate_grace_us has passed.
 
 Return values:
   > 0   The number of bytes copied into buf.

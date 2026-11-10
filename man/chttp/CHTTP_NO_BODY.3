@@ -1,6 +1,6 @@
 .TH CHTTP_NO_BODY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-CHTTP_NO_BODY \- construct a chttp_request_body_t for a bodyless request
+CHTTP_NO_BODY \- construct a chttp_request_body for a bodyless request
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,13 +11,13 @@ CHTTP_NO_BODY
 .fi
 .SH DESCRIPTION
 .nf
-This macro expands to an initializer for a chttp_request_body_t whose
+This macro expands to an initializer for a chttp_request_body whose
 fields are all zero.  Use it for GET, HEAD, DELETE and any other
 request that carries no body.
 .fi
 .SH EXAMPLES
 .nf
-chttp_request_t *req =
+chttp_request *req =
     chttp_request_create(CHTTP_GET, url, &CHTTP_NO_BODY, NULL);
 .fi
 .SH "SEE ALSO"

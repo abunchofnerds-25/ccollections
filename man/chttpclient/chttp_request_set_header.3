@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-ccol_retval_t chttp_request_set_header(chttp_request_t *req,
+ccol_retval chttp_request_set_header(chttp_request *req,
                                        const char *name,
                                        const char *value);
 .fi

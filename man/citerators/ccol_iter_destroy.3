@@ -11,7 +11,7 @@ ccol_iter_destroy(it);
 .fi
 .SH DESCRIPTION
 .nf
-ccol_iter_destroy calls the _free_fn callback of the iterator and then
+ccol_iter_destroy calls the ccol__free_fn callback of the iterator and then
 sets it to NULL. Call it where your own for loop breaks out, so the
 iterator doesn't stay alive until the end of the scope.
 

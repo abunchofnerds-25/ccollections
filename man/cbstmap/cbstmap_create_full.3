@@ -8,8 +8,8 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/cbstmap.h>
 
 cbmap cbstmap_create_full(ccol_data_type key_type,
-                          ccol_memmgmt_procs_t *mmgmt_procs,
-                          ccol_comparison_proc_t custom_comparison_proc,
+                          ccol_memmgmt_procs *mmgmt_procs,
+                          ccol_comparison_proc custom_comparison_proc,
                           char **err);
 .fi
 .SH DESCRIPTION

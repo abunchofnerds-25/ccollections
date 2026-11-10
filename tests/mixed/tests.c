@@ -1,3 +1,27 @@
+/*
+MIT License
+
+Copyright (c) 2026 - A bunch of nerds
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 #include <cbstmap.h>
 #include <chashmap.h>
 #include <cstring.h>
@@ -8,19 +32,14 @@
 
 TAU_MAIN()
 
-// ============================================================================
-// VECTOR OF HASHMAPS
+// Containers nested in other containers. The outer container stores only the
+// handle (a pointer) of each inner one, so every test destroys the inner
+// containers before the outer one.
 //
-// Each element of the outer cvec is a chmap handle (a pointer), so the outer
-// vector only stores the pointer's raw bytes. The caller has to destroy every
-// inner map before destroying the vector, or the inner maps
-// leak.
-// ============================================================================
-
+// Vector of hash maps
 TEST(vec_of_hmaps, int_int_maps_stored_and_retrieved) {
   cvec_construct(maps, chmap);
 
-  // Build 3 independent int->int maps and push them into the vector.
   for (int i = 0; i < 3; i++) {
     chmap_construct(m, int, int);
     for (int j = 0; j < 5; j++) {
@@ -62,14 +81,12 @@ TEST(vec_of_hmaps, update_map_retrieved_from_vector) {
     cvec_push(maps, m);
   }
 
-  // Insert or update through the handle we got from the vector.
   chmap first = cvec_at(maps, 0);
   chmap_redeclare(first, char *, int);
   int new_val = 999;
   chmap_insert(first, "alpha", new_val);
   REQUIRE_EQ(chmap_get(first, "alpha"), 999);
 
-  // The second map must stay as it was.
   chmap second = cvec_at(maps, 1);
   chmap_redeclare(second, char *, int);
   REQUIRE_EQ(chmap_get(second, "alpha"), 100);
@@ -93,7 +110,6 @@ TEST(vec_of_hmaps, delete_entry_in_inner_map) {
     cvec_push(maps, m);
   }
 
-  // Remove key 2 from the second map only.
   chmap target = cvec_at(maps, 1);
   chmap_redeclare(target, int, int);
   int k2 = 2;
@@ -102,7 +118,6 @@ TEST(vec_of_hmaps, delete_entry_in_inner_map) {
   REQUIRE_EQ(chashmap_elem_count(target), 3);
   REQUIRE_EQ((void *)chmap_get_ptr(target, k2), NULL);
 
-  // The first map keeps all 4 entries.
   chmap other = cvec_at(maps, 0);
   chmap_redeclare(other, int, int);
   REQUIRE_EQ(chashmap_elem_count(other), 4);
@@ -113,17 +128,10 @@ TEST(vec_of_hmaps, delete_entry_in_inner_map) {
   cvec_destroy(maps);
 }
 
-// ============================================================================
-// VECTOR OF BST MAPS
-//
-// Same ownership pattern as in vec_of_hmaps. cbmap promises a sorted in-order
-// traversal, and these tests check that explicitly.
-// ============================================================================
-
+// Vector of BST maps; each inner map must traverse in sorted order
 TEST(vec_of_bmaps, sorted_traversal_per_map) {
   cvec_construct(maps, cbmap);
 
-  // Insert the keys in reverse so the BST sorts them on the way in.
   for (int i = 0; i < 3; i++) {
     cbmap_construct(bm, int, int);
     for (int j = 4; j >= 0; j--) {
@@ -159,7 +167,6 @@ TEST(vec_of_bmaps, sorted_traversal_per_map) {
 TEST(vec_of_bmaps, independent_maps_do_not_interfere) {
   cvec_construct(maps, cbmap);
 
-  // Map 0: key k -> k * 1.  Map 1: key k -> k * 2.
   for (int i = 0; i < 2; i++) {
     cbmap_construct(bm, int, int);
     for (int k = 1; k <= 5; k++) {
@@ -182,7 +189,7 @@ TEST(vec_of_bmaps, independent_maps_do_not_interfere) {
   int k3 = 3;
   cbmap_remove(bm0, k3);
   REQUIRE_EQ(cbstmap_elem_count(bm0), 4);
-  REQUIRE_EQ(cbstmap_elem_count(bm1), 5);  // not changed
+  REQUIRE_EQ(cbstmap_elem_count(bm1), 5);
 
   for (size_t i = 0; i < cvec_size(maps); i++) {
     cbmap_destroy(cvec_at(maps, i));
@@ -190,14 +197,7 @@ TEST(vec_of_bmaps, independent_maps_do_not_interfere) {
   cvec_destroy(maps);
 }
 
-// ============================================================================
-// HASHMAP OF VECTORS
-//
-// The outer chmap stores a cvec handle as each value and copies only the
-// 8-byte pointer, so the caller must iterate and destroy the inner vectors
-// before destroying the outer map.
-// ============================================================================
-
+// Hash map of vectors
 TEST(hmap_of_vecs, category_to_int_list) {
   chmap_construct(hm, char *, cvec);
 
@@ -240,13 +240,11 @@ TEST(hmap_of_vecs, append_to_inner_vector) {
   cvec_push(nums, 20);
   chmap_insert(hm, "nums", nums);
 
-  // Get the stored handle and append more elements through it.
   cvec stored = chmap_get(hm, "nums");
   cvec_redeclare(stored, int);
   cvec_push(stored, 30);
   cvec_push(stored, 40);
 
-  // A second read shows the new elements.
   cvec reread = chmap_get(hm, "nums");
   cvec_redeclare(reread, int);
   REQUIRE_EQ(cvec_size(reread), 4);
@@ -260,16 +258,10 @@ TEST(hmap_of_vecs, append_to_inner_vector) {
   chmap_destroy(hm);
 }
 
-// ============================================================================
-// BST MAP OF VECTORS
-//
-// cbmap maps int keys to cvec handles in sorted key order.
-// ============================================================================
-
+// BST map of vectors, in sorted key order
 TEST(bmap_of_vecs, ordered_groups) {
   cbmap_construct(bm, int, cvec);
 
-  // the id of a group -> the list of values for that group
   int group_sizes[] = {3, 5, 2, 4};
   for (int g = 0; g < 4; g++) {
     cvec_construct(v, int);
@@ -281,8 +273,6 @@ TEST(bmap_of_vecs, ordered_groups) {
 
   REQUIRE_EQ(cbstmap_elem_count(bm), 4);
 
-  // The in-order traversal visits the groups in key order, 0, 1, 2,
-  // 3.
   int expected_group = 0;
   ccol_for_each(bm, it, {
     const int *key = ccol_iter_key_ptr(it);
@@ -304,17 +294,10 @@ TEST(bmap_of_vecs, ordered_groups) {
   cbmap_destroy(bm);
 }
 
-// ============================================================================
-// HASHMAP OF HASHMAPS
-//
-// The outer chmap maps a string key to an inner chmap handle. Each inner map
-// lives on the heap and is managed separately.
-// ============================================================================
-
+// Hash map of hash maps
 TEST(hmap_of_hmaps, nested_string_key_lookup) {
   chmap_construct(outer, char *, chmap);
 
-  // "fruits" -> { apple:1, banana:2, cherry:3 }
   chmap_construct(fruits, char *, int);
   int v1 = 1, v2 = 2, v3 = 3;
   chmap_insert(fruits, "apple", v1);
@@ -322,7 +305,6 @@ TEST(hmap_of_hmaps, nested_string_key_lookup) {
   chmap_insert(fruits, "cherry", v3);
   chmap_insert(outer, "fruits", fruits);
 
-  // "vegs" -> { carrot:10, broccoli:20 }
   chmap_construct(vegs, char *, int);
   int v10 = 10, v20 = 20;
   chmap_insert(vegs, "carrot", v10);
@@ -361,16 +343,14 @@ TEST(hmap_of_hmaps, add_and_remove_inner_entries) {
   }
   chmap_insert(outer, "squares", inner);
 
-  // Get the inner map through the outer map's handle and change it.
   chmap sq = chmap_get(outer, "squares");
   chmap_redeclare(sq, int, int);
   int k6 = 6, v36 = 36;
   chmap_insert(sq, k6, v36);
   int k1 = 1;
   REQUIRE_EQ(chmap_remove(sq, k1), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(sq), 5);  // 5, plus 1 entry, less 1 entry = 5
+  REQUIRE_EQ(chashmap_elem_count(sq), 5);
 
-  // Check the result with a fresh read.
   chmap sq2 = chmap_get(outer, "squares");
   chmap_redeclare(sq2, int, int);
   REQUIRE_EQ((void *)chmap_get_ptr(sq2, k1), NULL);
@@ -383,20 +363,10 @@ TEST(hmap_of_hmaps, add_and_remove_inner_entries) {
   chmap_destroy(outer);
 }
 
-// ============================================================================
-// BST MAP OF BST MAPS
-//
-// cbmap maps an int key to an inner cbmap handle. An in-order traversal of
-// the outer map visits the inner maps in sorted key order, and each inner
-// map is sorted too.
-// ============================================================================
-
+// BST map of BST maps; outer and inner traversals are both sorted
 TEST(bmap_of_bmaps, nested_sorted_maps) {
   cbmap_construct(outer, int, cbmap);
 
-  // The inner map for group i holds the keys 0..4 with the values j + i*10.
-  // We insert the keys in reverse to see that the BST sorts
-  // them.
   for (int i = 0; i < 3; i++) {
     cbmap_construct(inner, int, int);
     for (int j = 4; j >= 0; j--) {
@@ -418,7 +388,6 @@ TEST(bmap_of_bmaps, nested_sorted_maps) {
     cbmap_redeclare(*inner_p, int, int);
     REQUIRE_EQ(cbstmap_elem_count(*inner_p), 5);
 
-    // The inner traversal gives 0..4 in order, with the right values.
     int expected_inner_key = 0;
     ccol_for_each(*inner_p, inner_it, {
       const int *k = ccol_iter_key_ptr(inner_it);
@@ -441,17 +410,10 @@ TEST(bmap_of_bmaps, nested_sorted_maps) {
   cbmap_destroy(outer);
 }
 
-// ============================================================================
-// VECTOR OF VECTORS
-//
-// Each element of the outer cvec is another cvec handle (a pointer), which
-// gives a jagged 2D structure whose rows can have different lengths.
-// ============================================================================
-
+// Vector of vectors: a jagged 2D array whose rows differ in length
 TEST(vec_of_vecs, jagged_2d_array) {
   cvec_construct(rows, cvec);
 
-  // Row i contains integers 0 .. i.
   for (int i = 0; i < 4; i++) {
     cvec_construct(row, int);
     for (int j = 0; j <= i; j++) {
@@ -484,7 +446,6 @@ TEST(vec_of_vecs, sort_rows_independently) {
   int data1[] = {9, 7, 8, 6};
   int data2[] = {2, 2, 2, 2, 2, 2};
 
-  // Build each row in its own scope and put its handle into matrix.
   {
     cvec_construct(row, int);
     cvec_append_array(row, data0, 5);
@@ -501,7 +462,6 @@ TEST(vec_of_vecs, sort_rows_independently) {
     cvec_push(matrix, row);
   }
 
-  // Sort every row in place through the handles in the outer vector.
   for (size_t i = 0; i < cvec_size(matrix); i++) {
     cvec row = cvec_at(matrix, i);
     cvec_redeclare(row, int);
@@ -565,13 +525,7 @@ TEST(vec_of_vecs, append_outer_vector_of_double_rows) {
   cvec_destroy(outer);
 }
 
-// ============================================================================
-// VECTOR OF CSTRINGS
-//
-// The outer cvec stores cstr handles, which are pointer-sized elements stored
-// like any other container handle.
-// ============================================================================
-
+// Vector of cstrings
 TEST(vec_of_cstrings, build_and_retrieve) {
   cvec_construct(strings, cstr);
 
@@ -603,8 +557,6 @@ TEST(vec_of_cstrings, modify_strings_through_vector) {
     cvec_push(lines, s);
   }
 
-  // Append a suffix to every stored string through the handles in the
-  // vector.
   for (size_t i = 0; i < cvec_size(lines); i++) {
     cstr s = cvec_at(lines, i);
     cstring_append(s, "_suffix");
@@ -634,12 +586,11 @@ TEST(vec_of_cstrings, dynamic_string_building) {
   REQUIRE_EQ(strcmp(cstring_c_str(cvec_at(tokens, 0)), "item_0"), 0);
   REQUIRE_EQ(strcmp(cstring_c_str(cvec_at(tokens, 3)), "item_3"), 0);
 
-  // Check the total character count: 4 strings of 6 chars each.
   size_t total_len = 0;
   for (size_t i = 0; i < cvec_size(tokens); i++) {
     total_len += cstring_length(cvec_at(tokens, i));
   }
-  REQUIRE_EQ(total_len, 24);  // 4 * 6
+  REQUIRE_EQ(total_len, 24);
 
   for (size_t i = 0; i < cvec_size(tokens); i++) {
     cstr_destroy(cvec_at(tokens, i));
@@ -647,16 +598,10 @@ TEST(vec_of_cstrings, dynamic_string_building) {
   cvec_destroy(tokens);
 }
 
-// ============================================================================
-// COMBINED: HASHMAP OF (VECTOR OF CSTRINGS)
-//
-// Three levels of nesting: outer chmap -> inner cvec -> cstr.
-// ============================================================================
-
+// Hash map of vectors of cstrings
 TEST(hmap_of_vec_of_cstrings, three_level_nesting) {
   chmap_construct(catalog, char *, cvec);
 
-  // "greetings" -> ["hi", "hello", "hey"]
   cvec_construct(greetings, cstr);
   const char *gr_words[] = {"hi", "hello", "hey"};
   for (int i = 0; i < 3; i++) {
@@ -665,7 +610,6 @@ TEST(hmap_of_vec_of_cstrings, three_level_nesting) {
   }
   chmap_insert(catalog, "greetings", greetings);
 
-  // "farewells" -> ["bye", "goodbye"]
   cvec_construct(farewells, cstr);
   const char *fw_words[] = {"bye", "goodbye"};
   for (int i = 0; i < 2; i++) {
@@ -687,7 +631,6 @@ TEST(hmap_of_vec_of_cstrings, three_level_nesting) {
   REQUIRE_EQ(cvec_size(fv), 2);
   REQUIRE_EQ(strcmp(cstring_c_str(cvec_at(fv, 1)), "goodbye"), 0);
 
-  // Cleanup: for each cvec destroy every cstr element, then the cvec itself.
   ccol_for_each(catalog, it, {
     cvec *vp = ccol_iter_val_ptr(it);
     cvec_redeclare(*vp, cstr);
@@ -699,18 +642,10 @@ TEST(hmap_of_vec_of_cstrings, three_level_nesting) {
   chmap_destroy(catalog);
 }
 
-// ============================================================================
-// COMBINED: BST MAP OF (HASHMAP OF VECTORS)
-//
-// Three levels: outer cbmap (int key) -> inner chmap (char* key) ->
-// cvec.
-// ============================================================================
-
+// BST map (int key) of hash maps (char * key) of vectors
 TEST(bmap_of_hmap_of_vecs, three_level_nesting) {
   cbmap_construct(outer, int, chmap);
 
-  // Group 0 -> { "a": [0,1,2], "b": [3,4] }
-  // Group 1 -> { "x": [10,11], "y": [20,21,22,23] }
   for (int g = 0; g < 2; g++) {
     chmap_construct(hm, char *, cvec);
     cvec_construct(va, int);
@@ -734,7 +669,6 @@ TEST(bmap_of_hmap_of_vecs, three_level_nesting) {
 
   REQUIRE_EQ(cbstmap_elem_count(outer), 2);
 
-  // Navigate: outer[0]["a"][1] == 1
   int k0 = 0;
   chmap hm0 = cbmap_get(outer, k0);
   chmap_redeclare(hm0, char *, cvec);
@@ -743,7 +677,6 @@ TEST(bmap_of_hmap_of_vecs, three_level_nesting) {
   REQUIRE_EQ(cvec_size(va0), 3);
   REQUIRE_EQ(cvec_at(va0, 1), 1);
 
-  // Navigate: outer[1]["y"][3] == 23
   int k1 = 1;
   chmap hm1 = cbmap_get(outer, k1);
   chmap_redeclare(hm1, char *, cvec);
@@ -752,7 +685,6 @@ TEST(bmap_of_hmap_of_vecs, three_level_nesting) {
   REQUIRE_EQ(cvec_size(vy1), 4);
   REQUIRE_EQ(cvec_at(vy1, 3), 23);
 
-  // Cleanup order: innermost cvec, then inner chmap, then outer cbmap.
   ccol_for_each(outer, it, {
     chmap *hmp = ccol_iter_val_ptr(it);
     chmap_redeclare(*hmp, char *, cvec);

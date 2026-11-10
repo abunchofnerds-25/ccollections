@@ -7,12 +7,12 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cbstmap.h>
 
-cbmap_declare(hm_name, key_t, val_t);
+cbmap_declare(hm_name, KeyT, ValT);
 .fi
 .SH DESCRIPTION
 .nf
 Declares an ordered map handle named hm_name with the companion type
-variables that carry key_t and val_t to every later type-inferred macro.
+variables that carry KeyT and ValT to every later type-inferred macro.
 Nothing is created, and the handle holds no map until one of the init
 macros runs.
 
@@ -32,9 +32,9 @@ also destroys the map when the scope exits.
 .SH PARAMETERS
 .nf
 hm_name  Name for the map handle to declare
-key_t    Key type. Every later macro reads a key through it, and the init
+KeyT    Key type. Every later macro reads a key through it, and the init
          macro takes the order of the tree from it
-val_t    Value type. Only the type-inferred macros read it; the library
+ValT    Value type. Only the type-inferred macros read it; the library
          never passes it to the container
 .fi
 .SH RETURN VALUE

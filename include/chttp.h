@@ -25,34 +25,22 @@ SOFTWARE.
 #pragma once
 
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-#include <stdbool.h> /* bool, true and false are keywords in C23 */
+#include <stdbool.h>
 #endif
 #include <stddef.h>
 
 #include "chashmap.h"
 
-/* Everything this header declares from here to the end belongs to the public
- * Application Binary Interface (ABI) of libccollections, and the shared
- * library exports all of it. The library is built with -fvisibility=hidden,
- * so a function or an object outside these blocks stays internal: its name
- * isn't in the library's dynamic symbol table, an application linking
- * against the library can't interpose it, and a symbol of the same name in
- * that application can't collide with it. */
+// The types chttpclient and chttpserver share. chttpclient.h and chttpserver.h
+// include this header for you; include it yourself only when you use these
+// types without either of them.
+//
+// Everything from here to the matching pop is the public ABI and the shared
+// library exports it. The library builds with -fvisibility=hidden, so anything
+// outside these blocks stays internal.
 #pragma GCC visibility push(default)
 
-/**
- * @file chttp.h
- * @brief The common types that chttpclient and chttpserver share.
- *
- * You only need to include this header directly when your code uses the
- * shared types without either of the two sub-modules. chttpclient.h and
- * chttpserver.h both include it for you.
- */
-
-/* ========================================================================== */
-/*                         HTTP METHODS                                       */
-/* ========================================================================== */
-
+// The HTTP methods the library knows.
 typedef enum chttp_method {
   CHTTP_GET = 0,
   CHTTP_POST,
@@ -61,32 +49,20 @@ typedef enum chttp_method {
   CHTTP_PATCH,
   CHTTP_HEAD,
   CHTTP_OPTIONS,
-  /**
-   * A wildcard for the server side. As the method argument of
-   * chttpsvr_register_handler, chttpsvr_register_streaming_handler,
-   * chttpsvr_router_on or chttpsvr_router_on_stream it matches any of the
-   * seven concrete methods above. It isn't a valid method for a client
-   * request: chttp_request_create and chttp_request_create_mp refuse it
-   * (they return NULL), and chttp_run_query returns ccol_invalid_args for it,
-   * as for any value outside the seven constants above. It's only a
-   * placeholder for registering a handler and never the method of a real
-   * incoming request, so chttpsvr_req_method never gives back CHTTP_ANY or
-   * any value outside the seven concrete constants above. A request whose
-   * method chttpserver doesn't recognize at all (a WebDAV verb, TRACE,
-   * CONNECT, a custom verb and so on) never reaches a handler, even one
-   * registered with CHTTP_ANY, because chttpserver rejects it with 501 Not
-   * Implemented before the route match runs.
-   */
+  // A wildcard for registering a server handler: it matches all seven methods
+  // above. It's never the method of a real request, so chttpsvr_req_method()
+  // never gives it back. A client request refuses it (chttp_request_create()
+  // gives NULL, chttp_run_query() gives ccol_invalid_args), as any value
+  // outside the seven. A method chttpserver doesn't know (TRACE, CONNECT, a
+  // WebDAV or custom verb) gets 501 before routing, so even a CHTTP_ANY handler
+  // never sees it.
   CHTTP_ANY
-} chttp_method_t;
+} chttp_method;
 
-/**
- * @brief Give the canonical uppercase method string for a chttp_method_t.
- *
- * CHTTP_ANY gives "ANY", although CHTTP_ANY is a sentinel for server-side
- * routes and not a real HTTP method.
- */
-static inline const char *chttp_method_str(chttp_method_t m) {
+// Gives the uppercase name of method m, which the client puts on the request
+// line and both modules use in log lines. CHTTP_ANY gives "ANY" and a value
+// outside the enum gives "UNKNOWN".
+static inline const char *chttp_method_str(chttp_method m) {
   switch (m) {
     case CHTTP_GET:
       return "GET";
@@ -109,29 +85,27 @@ static inline const char *chttp_method_str(chttp_method_t m) {
   }
 }
 
-/* ========================================================================== */
-/*                         HTTP STATUS CODES                                  */
-/* ========================================================================== */
-
-/* 1xx - Informational */
+// HTTP status codes, named so handlers and callers needn't write bare numbers.
+//
+// 1xx: informational
 #define CHTTP_STATUS_CONTINUE 100
 #define CHTTP_STATUS_SWITCHING_PROTOCOLS 101
 
-/* 2xx - Success */
+// 2xx: success
 #define CHTTP_STATUS_OK 200
 #define CHTTP_STATUS_CREATED 201
 #define CHTTP_STATUS_ACCEPTED 202
 #define CHTTP_STATUS_NO_CONTENT 204
 #define CHTTP_STATUS_PARTIAL_CONTENT 206
 
-/* 3xx - Redirection */
+// 3xx: redirection
 #define CHTTP_STATUS_MOVED_PERMANENTLY 301
 #define CHTTP_STATUS_FOUND 302
 #define CHTTP_STATUS_NOT_MODIFIED 304
 #define CHTTP_STATUS_TEMPORARY_REDIRECT 307
 #define CHTTP_STATUS_PERMANENT_REDIRECT 308
 
-/* 4xx - Client Errors */
+// 4xx: client errors
 #define CHTTP_STATUS_BAD_REQUEST 400
 #define CHTTP_STATUS_UNAUTHORIZED 401
 #define CHTTP_STATUS_FORBIDDEN 403
@@ -146,7 +120,7 @@ static inline const char *chttp_method_str(chttp_method_t m) {
 #define CHTTP_STATUS_UNPROCESSABLE 422
 #define CHTTP_STATUS_TOO_MANY_REQUESTS 429
 
-/* 5xx - Server Errors */
+// 5xx: server errors
 #define CHTTP_STATUS_INTERNAL_ERROR 500
 #define CHTTP_STATUS_NOT_IMPLEMENTED 501
 #define CHTTP_STATUS_BAD_GATEWAY 502
@@ -154,264 +128,149 @@ static inline const char *chttp_method_str(chttp_method_t m) {
 #define CHTTP_STATUS_GATEWAY_TIMEOUT 504
 #define CHTTP_STATUS_HTTP_VERSION_NOT_SUPPORTED 505
 
-/* ========================================================================== */
-/*                         TLS CONFIGURATION                                  */
-/* ========================================================================== */
-
-/**
- * @brief The TLS configuration that chttpclient and chttpserver both use.
- *
- * Each sub-module ignores the fields that don't apply to it.
- * Client-side fields: insecure_skip_verify, insecure_skip_hostname_check,
- *                     ca_bundle_path, cert_path/key_path (mutual TLS).
- * Server-side fields: cert_path, key_path, ca_bundle_path,
- *                     client_cert_optional.
- *
- * A struct whose bytes are all zero is the SAFE configuration. We did that
- * on purpose, and it's the reason each of the three verification fields is
- * named for what turning it ON gives up rather than for what it asks for:
- * every idiomatic way of building a struct in C leaves the fields the caller
- * didn't name as zero:
- *
- *     chttp_tls_config_t a = {0};
- *     chttp_tls_config_t b = {.ca_bundle_path = "/etc/ssl/my-ca.pem"};
- *     chttp_tls_config_t c = {.cert_path = crt, .key_path = key};
- *
- * On a client all three verify the server's certificate chain AND match its
- * hostname. On a server, a ca_bundle_path requires every client to present a
- * certificate that verifies against it. So you can never end up with no
- * verification by writing less than you meant to. Weakening a check takes an
- * explicit assignment, and the field's name says what it costs right where
- * it is read.
- *
- * cert_path, key_path and ca_bundle_path must each name a regular file of at
- * most 16 MB. A path naming a directory, a FIFO or a device is refused at
- * once as a load failure, before a byte is read.
- *
- * A ca_bundle_path holds one or more CA certificates in PEM form, and it may
- * hold certificate revocation lists (CRLs) beside them; a file with only
- * CRLs names no CA and is refused. When the bundle holds a CRL, revocation
- * is checked for the whole chain the peer presents, like the ssl_crl
- * directive of nginx does: every certificate of that chain below its trust
- * anchor needs a CRL of its issuer in the bundle. The handshake then fails
- * for a revoked certificate, for a certificate whose issuer has no CRL in the
- * bundle and for a CRL past its next update time, because we don't accept a
- * chain that can't be checked. A bundle without a CRL checks no revocation.
- * The bundle is read when the configuration is applied, so a renewed CRL
- * takes effect at a server's next chttpsvr_start(), or a client's next
- * chttpcli_set_tls().
- */
+// The TLS settings of chttpclient and chttpserver; each one ignores the fields
+// that aren't for it. A struct of all zeros is the strict configuration, and
+// that's why each relaxation is named for what turning it on gives up. So
+// {0}, {.ca_bundle_path = p} and {.cert_path = c, .key_path = k} all verify:
+// a client checks the server's chain and hostname, and a server with a
+// ca_bundle_path requires a client certificate that verifies against it.
+//
+// cert_path, key_path and ca_bundle_path must each name a regular file of at
+// most 16 MB; a directory, FIFO or device is refused as a load failure before
+// anything is read.
+//
+// A ca_bundle_path holds one or more PEM CA certificates and may hold CRLs
+// beside them (a file with CRLs only is refused). With a CRL in the bundle,
+// revocation is checked for the whole chain the peer presents, as nginx
+// ssl_crl does: each certificate below the anchor needs a CRL of its issuer,
+// and a revoked certificate, a missing CRL or an expired CRL fails the
+// handshake. Without a CRL nothing is checked for revocation. The bundle is
+// read when the configuration is applied, so a renewed CRL takes effect at the
+// server's next chttpsvr_start() or the client's next chttpcli_set_tls().
 typedef struct chttp_tls_config {
-  const char *cert_path; /* server cert / client cert for mTLS (NULL = none) */
-  const char *key_path;  /* server key  / client key  for mTLS (NULL = none) */
-  const char *ca_bundle_path; /* custom CA bundle path; NULL = system default */
-  /* Client only. False, the value of a zero-initialised struct, verifies the
-   * server's certificate chain, against ca_bundle_path when one is set and
-   * against the system trust store otherwise.
-   *
-   * True accepts ANY certificate from ANY peer, so an attacker who can
-   * intercept the connection can read and rewrite every byte of it. Only set
-   * it where that is really acceptable, like a test against a throwaway
-   * self-signed server; it is never right in production.
-   *
-   * True also makes insecure_skip_hostname_check irrelevant. A hostname
-   * matched against a certificate that nothing validated proves nothing,
-   * since an attacker can forge the whole certificate. On purpose there's no
-   * way to ask for the hostname check WITHOUT the chain check, because that
-   * combination looks like a partial measure and gives no protection at all.
-   *
-   * Setting this true together with ca_bundle_path contradicts itself, since
-   * the bundle is there to be verified against. chttpcli_set_tls()
-   * refuses that combination with ccol_invalid_args instead of quietly
-   * picking one of the two. */
+  // The server certificate and key, or the client's for mutual TLS (NULL for
+  // none), and a CA bundle (NULL for the system trust store).
+  const char *cert_path;
+  const char *key_path;
+  const char *ca_bundle_path;
+  // Client only. False verifies the server's chain, against ca_bundle_path when
+  // it's set and the system store otherwise. True accepts any certificate from
+  // any peer, so whoever can intercept the connection can read and change it;
+  // it's for tests against throwaway servers, never for production. True also
+  // turns off the hostname check: a hostname matched against an unverified
+  // certificate proves nothing, so there's no way to ask for the hostname check
+  // without the chain check. chttpcli_set_tls() refuses true together with a
+  // ca_bundle_path (ccol_invalid_args).
   bool insecure_skip_verify;
-  /* Client only. False, the value of a zero-initialised struct, matches the
-   * hostname or the IP literal of the request against the subject of the
-   * certificate the peer presented.
-   *
-   * True keeps the full chain verification of the field above and drops only
-   * that match. It's the narrower of the two relaxations and it has real
-   * uses, such as reaching a host by an address or an internal name that its
-   * certificate doesn't carry, while still requiring the certificate to
-   * chain to a CA you pinned. The connection is then open to any peer that
-   * holds ANY certificate from that CA, so it's only as strong as the
-   * narrowest trust store you can give ca_bundle_path.
-   *
-   * The field has no effect when insecure_skip_verify is true, because then
-   * nothing is verified at all. */
+  // Client only. False matches the request's hostname or IP literal against the
+  // certificate. True keeps the chain check and drops only that match, for
+  // example to reach a host by an address its certificate doesn't name. Any
+  // peer with any certificate from the trusted CAs is then accepted, so pin the
+  // narrowest ca_bundle_path you can. No effect when insecure_skip_verify is
+  // true.
   bool insecure_skip_hostname_check;
-  /* Server only, and it only matters beside ca_bundle_path. False, the value
-   * of a zero-initialised struct, is mutual TLS that the server enforces:
-   * the handshake fails for a client that presents no certificate and for a
-   * client whose certificate doesn't verify against ca_bundle_path.
-   *
-   * True only asks each client for a certificate. A client that presents one
-   * must pass the verification, and a client that presents none is accepted
-   * too. A handler tells the two apart with chttpsvr_req_peer_cert_verified()
-   * and decides for itself what an anonymous client is allowed to do.
-   *
-   * chttpclient ignores this field like every other server-only setting,
-   * since a server always presents a certificate. */
+  // Server only, and only beside ca_bundle_path. False enforces mutual TLS: a
+  // client with no certificate, or one that doesn't verify, fails the
+  // handshake. True only asks for one: a certificate that's presented must
+  // verify, but a client without one is accepted, and a handler tells the cases
+  // apart with chttpsvr_req_peer_cert_verified(). chttpclient ignores it.
   bool client_cert_optional;
-} chttp_tls_config_t;
+} chttp_tls_config;
 
-/**
- * @brief A chttp_tls_config_t with the default settings.
- *
- * Use it as: chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
- *
- * Since every field defaults to zero, it's the same as a zero-initialised
- * struct. The name is there so a caller can write "the defaults, on
- * purpose".
- */
-#define CHTTP_TLS_DEFAULT                                      \
-  ((chttp_tls_config_t){.cert_path = NULL,                     \
-                        .key_path = NULL,                      \
-                        .ca_bundle_path = NULL,                \
-                        .insecure_skip_verify = false,         \
-                        .insecure_skip_hostname_check = false, \
-                        .client_cert_optional = false})
+// The default TLS settings: chttp_tls_config tls = CHTTP_TLS_DEFAULT;. It's
+// the same as a zeroed struct; the name lets you say you want the defaults on
+// purpose.
+#define CHTTP_TLS_DEFAULT                                    \
+  ((chttp_tls_config){.cert_path = NULL,                     \
+                      .key_path = NULL,                      \
+                      .ca_bundle_path = NULL,                \
+                      .insecure_skip_verify = false,         \
+                      .insecure_skip_hostname_check = false, \
+                      .client_cert_optional = false})
 
-/* ========================================================================== */
-/*                         REQUEST BODY                                       */
-/* ========================================================================== */
-
-/**
- * @brief Describes an HTTP request body. The client API uses it.
- *
- * The struct does NOT own data, and who owns it depends on the context.
- * chttp_request_create_mp() copies data into its own buffer, so the caller
- * can free the source once that call has returned.
- */
+// A request body for the client API. It doesn't own data;
+// chttp_request_create_mp() copies the bytes, so you may free the source once
+// that call returns.
 typedef struct chttp_request_body {
-  const void *data;         /* body bytes; NULL = no body */
-  size_t len;               /* byte length of data */
-  const char *content_type; /* owned by the caller; sets Content-Type
-                             * when it is not NULL. */
-} chttp_request_body_t;
+  // The body bytes (NULL for none) and their length, and the Content-Type to
+  // send when content_type isn't NULL (the caller owns the string).
+  const void *data;
+  size_t len;
+  const char *content_type;
+} chttp_request_body;
 
-/** @brief Shorthand for a request with no body. */
+// A request body that holds nothing, for requests that send no body.
 #define CHTTP_NO_BODY \
-  ((chttp_request_body_t){.data = NULL, .len = 0, .content_type = NULL})
+  ((chttp_request_body){.data = NULL, .len = 0, .content_type = NULL})
 
-/** @brief Inline request body with explicit content type. */
+// Builds a chttp_request_body compound literal from data d, length n and
+// content type ct, so a body can be passed inline. The JSON, text and form
+// shorthands fill in the content type. Each argument is evaluated once.
 #define CHTTP_BODY(d, n, ct) \
-  ((chttp_request_body_t){.data = (d), .len = (n), .content_type = (ct)})
+  ((chttp_request_body){.data = (d), .len = (n), .content_type = (ct)})
 
-/** @brief Inline JSON request body. */
 #define CHTTP_JSON_BODY(d, n) CHTTP_BODY((d), (n), "application/json")
 
-/** @brief Inline plain-text request body. */
 #define CHTTP_TEXT_BODY(d, n) CHTTP_BODY((d), (n), "text/plain")
 
-/** @brief Inline URL-encoded form request body. */
 #define CHTTP_FORM_BODY(d, n) \
   CHTTP_BODY((d), (n), "application/x-www-form-urlencoded")
 
-/* ========================================================================== */
-/*                         BASE64 AND BASIC AUTH                              */
-/* ========================================================================== */
-
-/**
- * @brief Encode a buffer as base64 (custom allocator).
- *
- * Standard RFC 4648 base64 with the '+' and '/' alphabet and '=' padding,
- * which is the variant RFC 7617 Basic auth needs and the one HTTP uses
- * everywhere.
- *
- * @param mp       A custom allocator, or NULL for malloc/free.
- * @param data     The buffer to encode. It can be NULL only if len == 0.
- * @param len      The number of bytes in data.
- * @param out_len  Optional: receives the length of the returned string, not
- *                 counting the terminating NUL. It can be NULL.
- * @return A new NUL-terminated base64 string, or NULL. NULL comes back when
- *         the allocation fails, when data is NULL and len > 0, or when len
- *         is so large that the encoded size would overflow size_t.
- */
-char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp, const void *data,
+// Base64 and Basic auth
+//
+// Encodes len bytes of data as RFC 4648 base64 ('+' and '/', '=' padding), the
+// variant HTTP and Basic auth use, for callers that build header values. mp
+// is your allocator or NULL. data may be NULL only when len is 0. It gives a
+// new NUL-terminated string, with its length (without the NUL) in *out_len
+// when out_len isn't NULL, or NULL when the allocation fails, data is NULL
+// with len > 0, or the encoded size would overflow size_t.
+char *chttp_base64_encode_mp(ccol_memmgmt_procs *mp, const void *data,
                              size_t len, size_t *out_len);
 
-/**
- * @brief Encode a buffer as base64 (default allocator).
- */
+// Encodes like chttp_base64_encode_mp(), for callers that use the default
+// allocator.
 static inline __attribute__((always_inline)) char *chttp_base64_encode(
     const void *data, size_t len, size_t *out_len) {
   return chttp_base64_encode_mp(NULL, data, len, out_len);
 }
 
-/**
- * @brief Decode a base64 string that ends with a NUL (custom allocator).
- *
- * Accepts standard RFC 4648 base64 (the '+' and '/' alphabet) with '='
- * padding. The input length is strlen(b64_input) and it must be a multiple
- * of 4 bytes. Any '=' padding must be the last character or the last two
- * characters. In a padded final group the bits that no decoded byte holds
- * must be zero (RFC 4648 SS3.5), so every byte string has exactly one
- * encoding: "QQ==" decodes to "A" and "QR==" is malformed. Every malformed
- * input is rejected, meaning one with an invalid character, padding in the
- * wrong place, nonzero padding bits or the wrong length.
- *
- * The returned buffer ends with a NUL, which is handy when you decode text,
- * but the decoded data may contain NUL bytes of its own. Always take the
- * real size from out_len, never from strlen().
- *
- * @param mp         A custom allocator, or NULL for malloc/free.
- * @param b64_input  The NUL-terminated base64 string to decode. It must not
- *                   be NULL.
- * @param out_len    Optional: receives the decoded byte length. It can be
- *                   NULL.
- * @return A new buffer with the decoded bytes, or NULL when the allocation
- *         fails or the input is malformed.
- */
-void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
+// Decodes the NUL-terminated RFC 4648 base64 string b64_input (not NULL), for
+// callers that read encoded header values such as Basic credentials. Its
+// length must be a multiple of 4 and '=' may only be the last one or two
+// characters. The unused bits of a padded final group must be zero (RFC 4648
+// section 3.5), so each byte string has one encoding: "QQ==" gives "A" and
+// "QR==" is malformed. A bad character, misplaced padding, nonzero padding
+// bits or a wrong length is refused. mp is your allocator or NULL. It gives a
+// new buffer, or NULL when the input is malformed or the allocation fails. The
+// buffer ends with a NUL for convenience, but the data may hold NULs of its
+// own, so take the size from *out_len (out_len may be NULL), never from
+// strlen().
+void *chttp_base64_decode_mp(ccol_memmgmt_procs *mp, const char *b64_input,
                              size_t *out_len);
 
-/**
- * @brief Decode a base64 string that ends with a NUL (default allocator).
- */
+// Decodes like chttp_base64_decode_mp(), for callers that use the default
+// allocator.
 static inline __attribute__((always_inline)) void *chttp_base64_decode(
     const char *b64_input, size_t *out_len) {
   return chttp_base64_decode_mp(NULL, b64_input, out_len);
 }
 
-/**
- * @brief Build a "Basic <base64(username:password)>" header value (custom
- * allocator).
- *
- * Only the header VALUE (RFC 7617) is built, not the "Authorization: " key
- * part. You can pass the result straight to
- * chttp_request_set_header(req, "authorization", ...) or to the equivalent
- * function of chttpsvr.
- *
- * @param mp        A custom allocator, or NULL for malloc/free.
- * @param username  The username. It must not be NULL, it can be empty, and
- *                  it must not contain a colon (':'). RFC 7617 SS2 makes the
- *                  colon the one delimiter of the encoded "user-id:password"
- *                  string, and a recipient cuts that string at its FIRST
- *                  colon, so a user-id with a colon in it can't be sent
- *                  without ambiguity. Such a user-id is rejected instead of
- *                  being cut silently into a different identity.
- * @param password  The password. It must not be NULL and it can be empty.
- *                  It may contain colons, and they need no escaping (the
- *                  password is everything after the first colon).
- *
- * RFC 7617 SS2 also forbids a control character (a byte from 0x00 to 0x1F,
- * or 0x7F) in the user-id and in the password, so either one is refused
- * when it holds such a byte. Every other byte, UTF-8 included, is encoded as
- * it is.
- *
- * @return A new "Basic <base64>" string, or NULL. NULL comes back when the
- *         allocation fails, when username or password is NULL, when
- *         username contains a colon, or when username or password contains
- *         a control character.
- */
-char *chttp_basic_auth_mp(ccol_memmgmt_procs_t *mp, const char *username,
+// Builds the RFC 7617 header value "Basic <base64(username:password)>",
+// without the "Authorization: " part, so a caller can authenticate a request
+// with chttp_request_set_header(req, "authorization", ...) or its chttpsvr
+// equivalent. Neither string may be NULL; both may be empty. The username
+// must not hold a colon: the recipient cuts at the first colon, so such a
+// user-id can't be sent unambiguously and is refused rather than turned into
+// another identity. The password may hold colons. A control byte (0x00 to
+// 0x1F, or 0x7F) in either is refused, as RFC 7617 section 2 requires; other
+// bytes, UTF-8 included, are encoded as they are. mp is your allocator or
+// NULL. It gives a new string, or NULL for a failed allocation or a refused
+// input.
+char *chttp_basic_auth_mp(ccol_memmgmt_procs *mp, const char *username,
                           const char *password);
 
-/**
- * @brief Build a "Basic <base64(username:password)>" header value (default
- * allocator).
- */
+// Builds a Basic auth value like chttp_basic_auth_mp(), for callers that use
+// the default allocator.
 static inline __attribute__((always_inline)) char *chttp_basic_auth(
     const char *username, const char *password) {
   return chttp_basic_auth_mp(NULL, username, password);

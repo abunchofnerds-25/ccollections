@@ -1,17 +1,17 @@
 .TH CHTTPSVR_CONFIG_DEFAULT 3 "2026-10-01" "c_collections" "C Collections Library - Macros"
 .SH NAME
-CHTTPSVR_CONFIG_DEFAULT \- initializer for chttpsvr_config_t with reasonable defaults
+CHTTPSVR_CONFIG_DEFAULT \- initializer for chttpsvr_config with reasonable defaults
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/chttpserver.h>
 
-chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a compound literal that initializes a chttpsvr_config_t
+Expands to a compound literal that initializes a chttpsvr_config
 with these defaults:
 
   host                  = NULL   (dual-stack, every interface;
@@ -306,7 +306,7 @@ streaming_queue_capacity creates a queue with no capacity limit.
 
 After the macro, change one field at a time:
 
-  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.port = 9090;
   cfg.worker_thread_count = 8;
 .fi

@@ -7,10 +7,10 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadpool.h>
 
-ccol_retval_t cthrpool_try_submit_future(cthrpool pool,
+ccol_retval cthrpool_try_submit_future(cthrpool pool,
                                          void *(*fn)(void *),
                                          void *arg,
-                                         cthrpool_future_t **out);
+                                         cthrpool_future **out);
 .fi
 .SH DESCRIPTION
 .nf
@@ -19,7 +19,7 @@ a bounded queue is at capacity the function returns
 ccol_container_full at once and sets *out to NULL. With an unbounded
 queue it behaves exactly like cthrpool_submit_future.
 
-On success *out is set to a new cthrpool_future_t handle with a reference
+On success *out is set to a new cthrpool_future handle with a reference
 count of 2: the caller holds one reference, and the queued task holds
 the other. The caller must call cthrpool_future_free exactly once when
 it is done.

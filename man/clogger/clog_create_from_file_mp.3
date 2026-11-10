@@ -7,15 +7,15 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clogger.h>
 
-clog clog_create_from_file_mp(const char *path, clog_level_t min_level,
-                    const clog_rotation_cfg_t *cfg,
-                    const clog_async_cfg_t *async_cfg,
-                    ccol_memmgmt_procs_t *mprocs);
+clog clog_create_from_file_mp(const char *path, clog_level min_level,
+                    const clog_rotation_cfg *cfg,
+                    const clog_async_cfg *async_cfg,
+                    ccol_memmgmt_procs *mprocs);
 /* convenience wrapper; default allocator */
 static inline clog clog_create_from_file(const char *path,
-                    clog_level_t min_level,
-                    const clog_rotation_cfg_t *cfg,
-                    const clog_async_cfg_t *async_cfg);
+                    clog_level min_level,
+                    const clog_rotation_cfg *cfg,
+                    const clog_async_cfg *async_cfg);
 .fi
 .SH DESCRIPTION
 .nf
@@ -307,7 +307,7 @@ mprocs     A custom allocator with function pointers for malloc, free,
 .nf
 A new logger handle on success.
 CLOG_NULL after a failure.  That is a bad path, a permission error,
-a min_level that is not one of the values of clog_level_t, an mprocs
+a min_level that is not one of the values of clog_level, an mprocs
 that is not valid or a failed allocation; size rotation turned on when
 the current size of an existing file cannot be found; a file that a
 rotating logger of this process already writes with another

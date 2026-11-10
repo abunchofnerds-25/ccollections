@@ -7,11 +7,11 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadcomm.h>
 
-ccol_retval_t cselect(size_t *ready_index, size_t n,
-                        cselectable_t *selectables);
+ccol_retval cselect(size_t *ready_index, size_t n,
+                        cselectable *selectables);
 
-ccol_retval_t cselect_timed(size_t *ready_index, size_t n,
-                        cselectable_t *selectables, uint64_t timeout_us);
+ccol_retval cselect_timed(size_t *ready_index, size_t n,
+                        cselectable *selectables, uint64_t timeout_us);
 .fi
 .SH DESCRIPTION
 .nf
@@ -43,7 +43,7 @@ cannot make the timeout longer.
 cselect() is the same as cselect_timed(ready_index, n,
 selectables, UINT64_MAX).
 
-A cselectable_t holds a ccircq, a cdynmq or a
+A cselectable holds a ccircq, a cdynmq or a
 raw file descriptor, and you build one with ccircq_selectable(),
 cdynmq_selectable(), cchan_selectable() or
 cselectable_fd().  A channel is turned into one of its circular
@@ -113,7 +113,7 @@ n             Number of elements in the selectables array, from 1 to
               ccol_invalid_args (see RETURN VALUE).  It must also be no
               larger than SIZE_MAX / sizeof(internal waiter node).  No
               realistic caller gets near either limit.
-selectables   Array of n cselectable_t values to watch.
+selectables   Array of n cselectable values to watch.
 timeout_us    For cselect_timed only.  Longest wait in microseconds.
               UINT64_MAX waits forever, as cselect does.  0 polls
               without blocking but still reports every selectable that
@@ -238,8 +238,8 @@ build; the other builds work the same way.
 .nf
 /* Fan-in from two circular queues and a cchan: */
 size_t idx;
-ccol_retval_t r = cselect(&idx, 3,
-    (cselectable_t[]){
+ccol_retval r = cselect(&idx, 3,
+    (cselectable[]){
         ccircq_selectable(q0, cselect_read),
         ccircq_selectable(q1, cselect_read),
         cchan_selectable(ch, cselect_read),
@@ -266,7 +266,7 @@ r = cselect_va(&idx,
         ccircq_selectable(q0, cselect_read),
         cselectable_fd(pfd[0], cselect_read));
 if (r == ccol_success) {
-    cmessage_t msg;
+    cmessage msg;
     if (idx == 0) {
         /* queue is ready; claim it ourselves (zero-copy) */
         if (ccircq_try_recv(q0, &msg) == ccol_success) {

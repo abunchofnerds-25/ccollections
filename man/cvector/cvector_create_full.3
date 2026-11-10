@@ -8,7 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/cvector.h>
 
 cvec cvector_create_full(size_t elem_size,
-                         ccol_memmgmt_procs_t *mmgmt_procs,
+                         ccol_memmgmt_procs *mmgmt_procs,
                          char **err);
 .fi
 .SH DESCRIPTION

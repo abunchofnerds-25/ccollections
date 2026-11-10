@@ -356,7 +356,7 @@ and the raw functions report the error instead. `cbstmap_create`,
 `cbstmap_create_mp`, `cbstmap_create_ch` and `cbstmap_create_full` return
 `NULL` and an error string when they fail. `cbstmap_insert_elem`,
 `cbstmap_get_elem_ref`, `cbstmap_get_elem_copy` and `cbstmap_delete_elem`
-take each key and value as a `cmap_pair` and return a `ccol_retval_t`.
+take each key and value as a `cmap_pair` and return a `ccol_retval`.
 `cbstmap_get_elem_ref` fills a `cmap_pair` that you own with the location and
 the size of the stored value, and its `ptr` stays valid until the next
 insert or delete.

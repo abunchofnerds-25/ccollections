@@ -22,32 +22,22 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/*
- * libFuzzer harness for the dot-separated path grammar of cyaml, which is
- * what _cyaml_get(), cyaml_set() and _cyaml_delete() read. It's the
- * counterpart of fuzz_cjson_path.c, which drives the same grammar in cjson,
- * and it exists for the same reason. The path is a second parser of its own
- * that walks a DOM the first parser built, and it MUTATES that DOM, so a
- * harness that only parses documents never gets there.
- *
- * cyaml can build shapes that cjson can't. An alias makes one subtree
- * reachable from two places, a merge key ("<<:") splices one mapping into
- * another, and a document can carry tags that change a node's type. A path
- * walk over any of these is worth driving directly.
- *
- * The target splits the fuzz input on the first NUL byte. Everything before
- * that byte is parsed as YAML with the bounded entry point, so the document
- * half draws on the same seed material as the fuzz_cyaml corpus, and
- * everything after it is the path string, byte for byte. An input with no
- * NUL byte or with an empty path is skipped, since it adds nothing that
- * fuzz_cyaml doesn't already cover.
- */
-
+// libFuzzer harness for the path grammar that cyaml__get(), cyaml_set() and
+// cyaml__delete() read, the counterpart of fuzz_cjson_path.c. The path walker
+// is a second parser that mutates the DOM the first one built, and aliases,
+// merge keys and tags give it shapes a plain parse never exercises. The input
+// splits at its first NUL: the bytes before it are parsed as YAML and the bytes
+// after it are the path. An input with no NUL or an empty path is skipped,
+// since fuzz_cyaml covers it already.
 #include <cyaml.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+// Runs one input: parses the document, then gets, sets and deletes the path,
+// and serializes the mutated tree. The last byte of the input picks which C
+// type cyaml_set() writes, so every accepted type is driven and a saved crash
+// replays the same branch.
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   const uint8_t *nul = memchr(data, 0, size);
   if (!nul) return 0;
@@ -72,10 +62,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   cyaml got = cyaml_get(root, path);
   (void)got;
 
-  /* Drive every C type that cyaml_set() accepts and not just one of them.
-   * The last byte of the fuzz input picks the type, and since that choice
-   * is deterministic a saved crash takes the same branch when it's
-   * replayed. */
   switch (path_bytes[path_len - 1] % 5) {
     case 0:
       cyaml_set(root, path, (long long)42);
@@ -96,9 +82,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
   cyaml_delete(root, path);
 
-  /* The document was mutated in place. Serializing it runs the emitter over
-   * a shape that no parse alone produces, and a re-parse would be the
-   * round-trip check of fuzz_cyaml applied to that shape. */
   char *text = cyaml_serialize(root);
   cyaml_serialize_free(text);
 

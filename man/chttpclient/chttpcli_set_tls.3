@@ -7,8 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-ccol_retval_t chttpcli_set_tls(chttpcli cli,
-                               const chttp_tls_config_t *tls);
+ccol_retval chttpcli_set_tls(chttpcli cli,
+                               const chttp_tls_config *tls);
 .fi
 .SH DESCRIPTION
 .nf
@@ -16,7 +16,7 @@ This function copies the TLS configuration you pass into the client.
 A tls of NULL brings the defaults back: chain and hostname
 verification, the system CA bundle and no client certificate.
 
-The strings of chttp_tls_config_t (cert_path, key_path and
+The strings of chttp_tls_config (cert_path, key_path and
 ca_bundle_path) are deep-copied into buffers that the client owns, so
 the caller can free or reuse its own originals as soon as this call
 returns.
@@ -72,7 +72,7 @@ taking that as "no client certificate", because staying quiet there
 would leave an mTLS deployment believing it presents a client
 certificate when it never does.
 
-A chttp_tls_config_t whose bytes are all zero is the SAFE
+A chttp_tls_config whose bytes are all zero is the SAFE
 configuration: it verifies the server's certificate chain and matches
 its hostname. Both verification fields are named for what you give up
 by turning them ON, so a struct built with = {0}, or with a designated

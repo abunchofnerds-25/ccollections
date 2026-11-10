@@ -22,12 +22,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* The value macros of cyaml.h compiled as C23 (-std=gnu2x). The classifier of
- * cyaml_set() maps the type of the C23 nullptr to CYAML_NULL, and since the C23
- * `true` has the type bool it stores a CYAML_BOOL with no cast. Neither holds
- * in C11, which the main suite compiles as, so these tests get their own
- * binary. */
-
+// The value macros of cyaml.h compiled as C23 (-std=gnu2x). cyaml_set() maps
+// nullptr to CYAML_NULL, and the C23 `true` is a bool, so it stores a
+// CYAML_BOOL with no cast. Neither holds in C11, which the main suite uses, so
+// these tests have their own binary.
 #include <cyaml.h>
 #include <tau/tau.h>
 
@@ -36,12 +34,11 @@ TAU_MAIN()
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L && \
     ((defined(__clang__) && __clang_major__ >= 16) ||          \
      (!defined(__clang__) && defined(__GNUC__) && __GNUC__ >= 13))
-/* Without the nullptr association this fails, because cyaml_set()
- * refuses nullptr with ccol_invalid_args and the leaf keeps its old value. */
+// Without the nullptr association cyaml_set() refuses nullptr with
+// ccol_invalid_args and the leaf keeps its old value.
 TEST(c23, nullptr_sets_the_leaf_to_null) {
   cyaml doc = cyaml_parse("{\"k\": 1}", NULL);
-  ccol_retval_t rv =
-      doc ? cyaml_set(doc, "k", nullptr) : ccol_not_enough_memory;
+  ccol_retval rv = doc ? cyaml_set(doc, "k", nullptr) : ccol_not_enough_memory;
   cyaml leaf = doc ? cyaml_get(doc, "k") : NULL;
   bool is_null = leaf && cyaml_type(leaf) == CYAML_NULL;
   cyaml_destroy(doc);
@@ -51,7 +48,7 @@ TEST(c23, nullptr_sets_the_leaf_to_null) {
 
 TEST(c23, true_stores_a_bool) {
   cyaml doc = cyaml_parse("{\"k\": 1}", NULL);
-  ccol_retval_t rv = doc ? cyaml_set(doc, "k", true) : ccol_not_enough_memory;
+  ccol_retval rv = doc ? cyaml_set(doc, "k", true) : ccol_not_enough_memory;
   cyaml leaf = doc ? cyaml_get(doc, "k") : NULL;
   bool is_bool = leaf && cyaml_type(leaf) == CYAML_BOOL && cyaml_bool_val(leaf);
   cyaml_destroy(doc);
@@ -59,11 +56,11 @@ TEST(c23, true_stores_a_bool) {
   REQUIRE_TRUE(is_bool);
 }
 #else
-/* For a compiler that has neither nullptr nor the C23 `true`, the binary
- * checks at least that a NULL sets the leaf to CYAML_NULL. */
+// For a compiler with neither nullptr nor the C23 `true`, at least a NULL must
+// set the leaf to CYAML_NULL.
 TEST(c23, null_sets_the_leaf_to_null) {
   cyaml doc = cyaml_parse("{\"k\": 1}", NULL);
-  ccol_retval_t rv = doc ? cyaml_set(doc, "k", NULL) : ccol_not_enough_memory;
+  ccol_retval rv = doc ? cyaml_set(doc, "k", NULL) : ccol_not_enough_memory;
   cyaml leaf = doc ? cyaml_get(doc, "k") : NULL;
   bool is_null = leaf && cyaml_type(leaf) == CYAML_NULL;
   cyaml_destroy(doc);

@@ -7,15 +7,15 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-chttp_request_t *chttp_request_create_mp(chttp_method_t method,
+chttp_request *chttp_request_create_mp(chttp_method method,
                                          const char *url,
-                                         const chttp_request_body_t *body,
-                                         ccol_memmgmt_procs_t *mprocs,
+                                         const chttp_request_body *body,
+                                         ccol_memmgmt_procs *mprocs,
                                          char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
-This function allocates a new chttp_request_t. It copies the URL into
+This function allocates a new chttp_request. It copies the URL into
 a buffer that the request owns, and does the same with the body data
 and the content_type string when they are not NULL, so the caller can
 free its own originals as soon as this call returns.
@@ -58,7 +58,7 @@ method    The HTTP method (CHTTP_GET, CHTTP_POST and so on). The
           wildcard, and every value outside the enum.
 url       The target URL. It must not be NULL. The function copies it
           into the request.
-body      A pointer to a chttp_request_body_t, or NULL for no body.
+body      A pointer to a chttp_request_body, or NULL for no body.
 mprocs    A custom allocator, or NULL for malloc/free.
 err_str   Optional. It gets a static error string if the call fails.
 .fi

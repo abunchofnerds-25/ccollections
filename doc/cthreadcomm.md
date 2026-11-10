@@ -42,12 +42,12 @@ static void *producer(void *arg) {
         int *n = malloc(sizeof(*n));
         if (!n) continue;             /* no memory: ignore this number */
         *n = i * i;
-        cmessage_t msg = { .data = n, .size = sizeof(*n) };
+        cmessage msg = { .data = n, .size = sizeof(*n) };
         if (ccircq_send(q, &msg) != ccol_success)
             free(msg.data);           /* after a failed send, the data is ours */
         /* after a successful send, msg.data is NULL: the queue owns the data */
     }
-    cmessage_t done = { .data = NULL, .size = 0 };   /* end of the stream */
+    cmessage done = { .data = NULL, .size = 0 };   /* end of the stream */
     ccircq_send(q, &done);
     return NULL;
 }
@@ -64,7 +64,7 @@ int main(void) {
     }
 
     for (;;) {
-        cmessage_t msg;
+        cmessage msg;
         ccircq_recv(q, &msg);  /* waits until a message arrives */
         if (!msg.data) break;         /* the sentinel */
         printf("got %d\n", *(int *)msg.data);
@@ -81,13 +81,13 @@ Build it with `-lccollections -lpthread`.
 
 ## Messages and who owns them
 
-Every queue carries a `cmessage_t`:
+Every queue carries a `cmessage`:
 
 ```c
-typedef struct cmessage_t {
+typedef struct cmessage {
     void   *data;   /* your payload, usually on the heap */
     size_t  size;   /* the size of the payload in bytes */
-} cmessage_t;
+} cmessage;
 ```
 
 The queues never copy your payload. They move the pointer, and the
@@ -175,7 +175,7 @@ you which one. You build the selectables from queues and file descriptors:
 
 ```c
 size_t which;
-ccol_retval_t rc = cselect_va(&which,
+ccol_retval rc = cselect_va(&which,
     ccircq_selectable(jobs, cselect_read),       /* index 0 */
     cselectable_fd(sock_fd, cselect_read));  /* index 1 */
 ```
@@ -228,15 +228,15 @@ its background thread calls you every time a source is ready:
 #include <string.h>
 
 static void on_job(ceventloop loop, ceventloop_reg reg,
-                   cselectable_t *sel, void *arg) {
+                   cselectable *sel, void *arg) {
     (void)loop; (void)reg;
     cdynmq *acks = arg;
-    cmessage_t msg;
+    cmessage msg;
     /* readiness only: receive here, and allow for an empty queue */
     while (ccircq_try_recv(sel->cq, &msg) == ccol_success) {
         printf("job: %s\n", (char *)msg.data);
         free(msg.data);
-        cmessage_t ack = { .data = NULL, .size = 0 };
+        cmessage ack = { .data = NULL, .size = 0 };
         cdynmq_send(acks, &ack);    /* tell main that one job is done */
     }
 }
@@ -249,7 +249,7 @@ int main(void) {
     ccircq *jobs = ccircq_create(64, NULL);
     cdynmq *acks = cdynmq_create(NULL);
     if (!jobs || !acks) return 1;
-    ceventloop_handlers_t handlers = { .on_readable = on_job };
+    ceventloop_handlers handlers = { .on_readable = on_job };
     ceventloop_reg reg = ceventloop_add(
         loop, ccircq_selectable(jobs, cselect_read),
         handlers, acks, &err);
@@ -258,20 +258,20 @@ int main(void) {
     const char *names[] = { "build #41", "build #42", "deploy" };
     int sent = 0;
     for (int i = 0; i < 3; i++) {
-        cmessage_t msg = { .data = strdup(names[i]), .size = strlen(names[i]) + 1 };
+        cmessage msg = { .data = strdup(names[i]), .size = strlen(names[i]) + 1 };
         if (ccircq_send(jobs, &msg) == ccol_success) sent++;
         else free(msg.data);
     }
 
     for (int i = 0; i < sent; i++) {   /* wait until every sent job has run */
-        cmessage_t ack;
+        cmessage ack;
         cdynmq_recv(acks, &ack);
     }
 
     /* Teardown order: stop the threads, remove, empty, destroy. */
     ceventloop_shutdown(loop);   /* completes the queued dispatches, joins */
     ceventloop_remove(loop, reg);
-    cmessage_t left;
+    cmessage left;
     while (ccircq_try_recv(jobs, &left) == ccol_success) free(left.data);
     ccircq_destroy(jobs);
     cdynmq_destroy(acks);
@@ -322,7 +322,7 @@ registration's own callback. Once it returns, no new callback of that
 registration starts, but it doesn't wait for a callback that happens to be
 running on another thread at that moment. If the `arg` of your callback has
 to stay valid until that callback is done, set `on_removed` in
-`ceventloop_handlers_t`. It runs exactly once, at a point where no callback
+`ceventloop_handlers`. It runs exactly once, at a point where no callback
 of the registration can run, and that's where you free `arg` and
 close the descriptor.
 
@@ -410,7 +410,7 @@ static size_t count_words(const char *s) {
 static void *worker(void *arg) {
     queues_t *qs = arg;
     for (;;) {
-        cmessage_t msg;
+        cmessage msg;
         ccircq_recv(qs->jobs, &msg);
         if (!msg.data) return NULL;           /* one sentinel for each worker */
 
@@ -419,7 +419,7 @@ static void *worker(void *arg) {
         free(job->text);
         job->text = NULL;
 
-        cmessage_t out = { .data = job, .size = sizeof(*job) };
+        cmessage out = { .data = job, .size = sizeof(*job) };
         if (cdynmq_send(qs->results, &out) != ccol_success)
             free(out.data);
     }
@@ -455,7 +455,7 @@ int main(void) {
         job->id = i;
         job->text = strdup(lines[i]);
         job->words = 0;
-        cmessage_t msg = { .data = job, .size = sizeof(*job) };
+        cmessage msg = { .data = job, .size = sizeof(*job) };
         if (!job->text || ccircq_send(qs.jobs, &msg) != ccol_success) {
             free(job->text);
             free(job);
@@ -466,7 +466,7 @@ int main(void) {
 
     size_t words[sizeof(lines) / sizeof(lines[0])] = { 0 };
     for (size_t got = 0; got < sent; got++) {
-        cmessage_t msg;
+        cmessage msg;
         cdynmq_recv(qs.results, &msg);
         job_t *done = msg.data;
         words[done->id] = done->words;
@@ -474,7 +474,7 @@ int main(void) {
     }
 
     for (int i = 0; i < started; i++) {
-        cmessage_t stop = { .data = NULL, .size = 0 };
+        cmessage stop = { .data = NULL, .size = 0 };
         ccircq_send(qs.jobs, &stop);
     }
     for (int i = 0; i < started; i++)
@@ -514,7 +514,7 @@ pointer.
 static void *slugify_worker(void *arg) {
     cchan *ch = arg;
     for (;;) {
-        cmessage_t req;
+        cmessage req;
         cchan_recv(ch, &req);       /* a worker receives from the owner */
         if (!req.data) return NULL;
 
@@ -522,19 +522,19 @@ static void *slugify_worker(void *arg) {
         for (char *p = s; *p; p++)
             *p = isalnum((unsigned char)*p) ? (char)tolower((unsigned char)*p) : '-';
 
-        cmessage_t reply = req;           /* send the same buffer back */
+        cmessage reply = req;           /* send the same buffer back */
         if (cchan_send(ch, &reply) != ccol_success)
             free(reply.data);
     }
 }
 
 static char *slugify(cchan *ch, const char *title) {
-    cmessage_t req = { .data = strdup(title), .size = strlen(title) + 1 };
+    cmessage req = { .data = strdup(title), .size = strlen(title) + 1 };
     if (cchan_send(ch, &req) != ccol_success) {   /* owner -> worker */
         free(req.data);
         return NULL;
     }
-    cmessage_t reply;
+    cmessage reply;
     cchan_recv(ch, &reply);         /* the owner receives from workers */
     return reply.data;                     /* the caller frees it */
 }
@@ -556,7 +556,7 @@ int main(void) {
         free(slug);
     }
 
-    cmessage_t stop = { .data = NULL, .size = 0 };
+    cmessage stop = { .data = NULL, .size = 0 };
     cchan_send(ch, &stop);
     pthread_join(helper, NULL);
     cchan_destroy(ch);
@@ -596,7 +596,7 @@ static void *feeder(void *arg) {
     const char *cmds[] = { "reload", "rotate-logs", "flush" };
     for (int i = 0; i < 3; i++) {
         sleep_ms(150);
-        cmessage_t msg = { .data = strdup(cmds[i]), .size = strlen(cmds[i]) + 1 };
+        cmessage msg = { .data = strdup(cmds[i]), .size = strlen(cmds[i]) + 1 };
         if (cdynmq_send(fa->commands, &msg) != ccol_success)
             free(msg.data);
     }
@@ -618,7 +618,7 @@ int main(void) {
     int ticks = 0;
     for (int running = 1; running;) {
         size_t which;
-        ccol_retval_t rc = cselect_timed_va(&which, 100000,   /* 100 ms */
+        ccol_retval rc = cselect_timed_va(&which, 100000,   /* 100 ms */
             cdynmq_selectable(commands, cselect_read),
             cselectable_fd(pfd[0], cselect_read));
 
@@ -629,7 +629,7 @@ int main(void) {
         if (rc != ccol_success) break;
 
         if (which == 0) {
-            cmessage_t msg;
+            cmessage msg;
             /* cselect only says "ready"; we must take the message */
             while (cdynmq_try_recv(commands, &msg) == ccol_success) {
                 printf("command: %s\n", (char *)msg.data);
@@ -644,7 +644,7 @@ int main(void) {
 
     pthread_join(t, NULL);
     /* A command may be queued when the select reports the stop byte. */
-    cmessage_t msg;
+    cmessage msg;
     while (cdynmq_try_recv(commands, &msg) == ccol_success) {
         printf("command: %s\n", (char *)msg.data);
         free(msg.data);
@@ -694,7 +694,7 @@ static void conn_release(void *arg) {
 }
 
 static void on_client(ceventloop loop, ceventloop_reg reg,
-                      cselectable_t *sel, void *arg) {
+                      cselectable *sel, void *arg) {
     conn_t *c = arg;
     char buf[4096];
     ssize_t n = recv(sel->fd, buf, sizeof(buf), 0);
@@ -711,7 +711,7 @@ static void on_client(ceventloop loop, ceventloop_reg reg,
 }
 
 static void on_accept(ceventloop loop, ceventloop_reg reg,
-                      cselectable_t *sel, void *arg) {
+                      cselectable *sel, void *arg) {
     (void)reg; (void)arg;
     for (;;) {
         int fd = accept4(sel->fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
@@ -720,7 +720,7 @@ static void on_accept(ceventloop loop, ceventloop_reg reg,
         conn_t *c = calloc(1, sizeof(*c));
         if (!c) { close(fd); continue; }
         c->fd = fd;
-        ceventloop_handlers_t h = { .on_readable = on_client,
+        ceventloop_handlers h = { .on_readable = on_client,
                                     .on_removed = conn_release };
         if (!ceventloop_add(loop, cselectable_fd(fd, cselect_read),
                             h, c, NULL)) {
@@ -764,7 +764,7 @@ int main(void) {
 
     ceventloop loop = ceventloop_create(64, 1, 1, NULL);
     if (!loop) return 1;
-    ceventloop_handlers_t lh = { .on_readable = on_accept };
+    ceventloop_handlers lh = { .on_readable = on_accept };
     ceventloop_reg lreg = ceventloop_add(
         loop, cselectable_fd(lfd, cselect_read), lh, NULL, NULL);
     if (!lreg) return 1;

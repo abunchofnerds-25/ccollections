@@ -1,3 +1,27 @@
+/*
+MIT License
+
+Copyright (c) 2026 - A bunch of nerds
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 #include <cbstmap.h>
 #include <common_invariants.h>
 #include <internal/test_helpers/cbstmap.h>
@@ -10,16 +34,14 @@
 #include <test_coverage.h>
 #include <test_signals.h>
 
-TAU_MAIN()  // Sets up Tau and gives the main function
+TAU_MAIN()
 
-/* The forked children of this binary report through their wait status, and
- * test_reset_inherited_signals() explains what an inherited signal state does
- * to that. */
+// Resets the signal state this binary inherited, before any test runs. The
+// forked children report through their wait status, which an inherited signal
+// state can break; test_reset_inherited_signals() explains how.
 __attribute__((constructor)) static void _reset_inherited_signals(void) {
   test_reset_inherited_signals();
 }
-
-// BST_MAP TESTS (AVL Tree)
 
 TEST(cbst_maps, create_fails) {
   char *err = NULL;
@@ -29,7 +51,7 @@ TEST(cbst_maps, create_fails) {
 
   cbmap = cbstmap_create_mp(
       ccol_int,
-      &(ccol_memmgmt_procs_t){
+      &(ccol_memmgmt_procs){
           .malloc = NULL, .free = free, .calloc = calloc, .realloc = realloc},
       &err);
   REQUIRE_EQ((void *)cbmap, NULL);
@@ -37,7 +59,7 @@ TEST(cbst_maps, create_fails) {
 
   cbmap = cbstmap_create_mp(
       ccol_int,
-      &(ccol_memmgmt_procs_t){
+      &(ccol_memmgmt_procs){
           .malloc = malloc, .free = NULL, .calloc = calloc, .realloc = realloc},
       &err);
   REQUIRE_EQ((void *)cbmap, NULL);
@@ -45,7 +67,7 @@ TEST(cbst_maps, create_fails) {
 
   cbmap = cbstmap_create_mp(
       ccol_int,
-      &(ccol_memmgmt_procs_t){
+      &(ccol_memmgmt_procs){
           .malloc = malloc, .free = free, .calloc = NULL, .realloc = realloc},
       &err);
   REQUIRE_EQ((void *)cbmap, NULL);
@@ -53,7 +75,7 @@ TEST(cbst_maps, create_fails) {
 
   cbmap = cbstmap_create_mp(
       ccol_int,
-      &(ccol_memmgmt_procs_t){
+      &(ccol_memmgmt_procs){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = NULL},
       &err);
   REQUIRE_EQ((void *)cbmap, NULL);
@@ -71,7 +93,7 @@ TEST(cbst_maps, create_succeeds) {
 
   cbmap = cbstmap_create_mp(
       ccol_int,
-      &(ccol_memmgmt_procs_t){
+      &(ccol_memmgmt_procs){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc},
       &err);
 
@@ -79,7 +101,9 @@ TEST(cbst_maps, create_succeeds) {
   REQUIRE_EQ((void *)cbmap, NULL);
 }
 
-// The helper functions start here.
+// Raw-layer wrappers for an int -> int map, so the raw tests don't build pairs
+// by hand: insert, copy out, get a pointer to the value (0 on a hit, -1 on a
+// miss) and delete. Each gives the result of the raw call.
 int insert_int_to_int(cbstmap *cbmap, int key, int val) {
   return cbstmap_insert_elem(
       cbmap, &(cmap_pair){.ptr = (void *)&key, .size = sizeof(key)},
@@ -103,25 +127,17 @@ int get_int_ref_from_int(cbstmap *cbmap, int key, int **val_ptr) {
   return -1;
 }
 
-ccol_retval_t delete_int_from_int(cbstmap *cbmap, int key) {
+ccol_retval delete_int_from_int(cbstmap *cbmap, int key) {
   return cbstmap_delete_elem(
       cbmap, &(cmap_pair){.ptr = (void *)&key, .size = sizeof(key)});
 }
-// The helper functions end here.
 
-/* The type-inferred macros give their private copy of a caller expression
-   the tree's DECLARED key or value type, so the copy is a plain C assignment
-   and converts. Copying into typeof(key) instead would put the RAW BYTES of
-   the caller expression into the tree whenever the two types happen to have
-   the same width, with no size check and no compiler diagnostic able to
-   notice. cvec_push() and chmap_insert() follow the same rule. */
-
+// A copy into typeof(val) would store the raw bytes of a same-width expression,
+// so 1.5f would read back as 1069547520.
 TEST(cbst_maps, value_converts_to_the_declared_type_and_is_not_reinterpreted) {
   cbmap_construct(b, char *, int);
   float f = 1.5f;
   cbmap_insert(b, "k", f);
-  /* The converted value is 1. The bits of 1.5f read as an int give
-     1069547520, which is what a raw byte copy would store. */
   REQUIRE_EQ(cbmap_get(b, "k"), 1);
   cbmap_destroy(b);
 }
@@ -140,9 +156,6 @@ TEST(cbst_maps, key_converts_to_the_declared_type_and_stays_findable) {
 }
 
 TEST(cbst_maps, narrower_value_widens_to_the_declared_type) {
-  /* Without the conversion the node holds two bytes, the insert reports
-     success, and cbmap_get()'s value-size guard stops the process on the
-     first READ, at a call site that did nothing wrong. */
   cbmap_construct(b, char *, int);
   short sv = -1;
   cbmap_insert(b, "k", sv);
@@ -209,7 +222,7 @@ TEST(cbst_maps, basic_insertions_and_lookups) {
 TEST(cbst_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
   cbstmap *cbmap = cbstmap_create_mp(
       ccol_int,
-      &(ccol_memmgmt_procs_t){
+      &(ccol_memmgmt_procs){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc},
       NULL);
   REQUIRE_NE((void *)cbmap, NULL);
@@ -237,9 +250,6 @@ TEST(cbst_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
 TEST(cbst_maps, insert_values_with_different_sizes) {
   cbstmap *cbmap = cbstmap_create(ccol_int, NULL);
 
-  // Both keys are int, which matches the map's declared ccol_int key type.
-  // Values can have any size, but keys of a fixed-width key type can't
-  // (see wrong_size_key_rejected_for_fixed_width_key_type below).
   int key1 = 3;
   long val1 = 43;
   REQUIRE_EQ(
@@ -313,7 +323,6 @@ TEST(cbst_maps, accessing_references) {
   REQUIRE_EQ(get_int_ref_from_int(cbmap, 10, &val_ptr), 0);
   REQUIRE_EQ(*val_ptr, 100);
 
-  // Modify through the reference
   *val_ptr = 150;
 
   int val = -1;
@@ -342,7 +351,6 @@ TEST(cbst_maps, reset) {
     REQUIRE_EQ(get_int_from_int(cbmap, i, &val), ccol_key_not_found);
   }
 
-  // The map is usable after a reset
   REQUIRE_EQ(insert_int_to_int(cbmap, 42, 420), ccol_success);
   REQUIRE_EQ(get_int_from_int(cbmap, 42, &val), ccol_success);
   REQUIRE_EQ(val, 420);
@@ -351,10 +359,8 @@ TEST(cbst_maps, reset) {
 }
 
 TEST(cbst_maps, in_order_iteration) {
-  // The BST iterates in sorted order
   cbmap_construct(bmap, int, int);
 
-  // Insert in random order
   int keys[] = {50, 30, 70, 20, 40, 60, 80, 10, 25, 35, 45};
   int num_keys = sizeof(keys) / sizeof(keys[0]);
 
@@ -365,7 +371,6 @@ TEST(cbst_maps, in_order_iteration) {
 
   REQUIRE_EQ(cbstmap_elem_count(bmap), (size_t)num_keys);
 
-  // Iterate and verify in-order traversal
   int prev_key = -1;
   int count = 0;
   ccol_iter_declare(bmap, it);
@@ -373,7 +378,6 @@ TEST(cbst_maps, in_order_iteration) {
     int key = *ccol_iter_key_ptr(it);
     int val = *ccol_iter_val_ptr(it);
 
-    // Verify sorted order
     REQUIRE_TRUE(key > prev_key);
     REQUIRE_EQ(val, key * 10);
 
@@ -387,11 +391,8 @@ TEST(cbst_maps, in_order_iteration) {
 }
 
 TEST(cbst_maps, avl_balancing_worst_case_insertions) {
-  // Insert in sorted order, the worst case for an unbalanced BST, which the
-  // AVL tree should handle without trouble
   cbmap_construct(bmap, int, int);
 
-  // Insert 100 elements in ascending order
   for (int i = 0; i < 100; ++i) {
     int val = i * 10;
     cbmap_insert(bmap, i, val);
@@ -399,13 +400,11 @@ TEST(cbst_maps, avl_balancing_worst_case_insertions) {
 
   REQUIRE_EQ(cbstmap_elem_count(bmap), 100);
 
-  // Verify all elements are present and correct
   for (int i = 0; i < 100; ++i) {
     int val = cbmap_get(bmap, i);
     REQUIRE_EQ(val, i * 10);
   }
 
-  // Verify in-order iteration
   int expected_key = 0;
   ccol_iter_declare(bmap, it);
   for (it = ccol_begin(bmap); it != NULL; it = ccol_iter_next(it)) {
@@ -418,10 +417,8 @@ TEST(cbst_maps, avl_balancing_worst_case_insertions) {
 }
 
 TEST(cbst_maps, avl_balancing_reverse_order) {
-  // Insert in reverse sorted order (the other worst case)
   cbmap_construct(bmap, int, int);
 
-  // Insert 100 elements in descending order
   for (int i = 99; i >= 0; --i) {
     int val = i * 10;
     cbmap_insert(bmap, i, val);
@@ -429,13 +426,11 @@ TEST(cbst_maps, avl_balancing_reverse_order) {
 
   REQUIRE_EQ(cbstmap_elem_count(bmap), 100);
 
-  // Verify all elements are present and correct
   for (int i = 0; i < 100; ++i) {
     int val = cbmap_get(bmap, i);
     REQUIRE_EQ(val, i * 10);
   }
 
-  // Check the in-order iteration (expect it ascending)
   int expected_key = 0;
   ccol_iter_declare(bmap, it);
   for (it = ccol_begin(bmap); it != NULL; it = ccol_iter_next(it)) {
@@ -450,36 +445,31 @@ TEST(cbst_maps, avl_balancing_reverse_order) {
 TEST(cbst_maps, deletions_maintain_balance) {
   cbmap_construct(bmap, int, int);
 
-  // Insert many elements
   for (int i = 0; i < 50; ++i) {
     int val = i * 10;
     cbmap_insert(bmap, i, val);
   }
 
-  // Delete every other element
   for (int i = 0; i < 50; i += 2) {
     REQUIRE_EQ(cbmap_remove(bmap, i), ccol_success);
   }
 
   REQUIRE_EQ(cbstmap_elem_count(bmap), 25);
 
-  // Verify remaining elements
   for (int i = 1; i < 50; i += 2) {
     int val = cbmap_get(bmap, i);
     REQUIRE_EQ(val, i * 10);
   }
 
-  // Verify deleted elements are gone
   for (int i = 0; i < 50; i += 2) {
     REQUIRE_EQ(cbmap_remove(bmap, i), ccol_key_not_found);
   }
 
-  // The in-order iteration should keep working
   int count = 0;
   ccol_iter_declare(bmap, it);
   for (it = ccol_begin(bmap); it != NULL; it = ccol_iter_next(it)) {
     int key = *ccol_iter_key_ptr(it);
-    REQUIRE_TRUE(key % 2 == 1);  // only odd numbers are left
+    REQUIRE_TRUE(key % 2 == 1);
     ++count;
   }
   REQUIRE_EQ(count, 25);
@@ -487,6 +477,7 @@ TEST(cbst_maps, deletions_maintain_balance) {
   cbmap_destroy(bmap);
 }
 
+// Orders int keys ascending, for the tests of a custom comparator.
 int custom_int_comparator(const void *a, const void *b) {
   int val_a = *(const int *)a;
   int val_b = *(const int *)b;
@@ -513,7 +504,7 @@ TEST(cbst_maps, declarative_macros) {
   }
 
   {
-    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+    ccol_memmgmt_procs mp = (ccol_memmgmt_procs){
         .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
     cbmap_declare(bm, int, int);
     cbmap_init_mp(bm, &mp);
@@ -530,7 +521,7 @@ TEST(cbst_maps, declarative_macros) {
   }
 
   {
-    ccol_comparison_proc_t comp = &custom_int_comparator;
+    ccol_comparison_proc comp = &custom_int_comparator;
     cbmap_declare(bm, int, int);
     cbmap_init_cc(bm, comp);
 
@@ -546,8 +537,8 @@ TEST(cbst_maps, declarative_macros) {
   }
 
   {
-    ccol_comparison_proc_t comp = &custom_int_comparator;
-    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+    ccol_comparison_proc comp = &custom_int_comparator;
+    ccol_memmgmt_procs mp = (ccol_memmgmt_procs){
         .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
     cbmap_declare(bm, int, int);
     cbmap_init_full(bm, &mp, comp);
@@ -580,7 +571,7 @@ TEST(cbst_maps, constructive_macros) {
   }
 
   {
-    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+    ccol_memmgmt_procs mp = (ccol_memmgmt_procs){
         .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
     cbmap_construct_mp(bm, int, int, &mp);
 
@@ -596,7 +587,7 @@ TEST(cbst_maps, constructive_macros) {
   }
 
   {
-    ccol_comparison_proc_t comp = &custom_int_comparator;
+    ccol_comparison_proc comp = &custom_int_comparator;
     cbmap_construct_cc(bm, int, int, comp);
 
     int key = 3;
@@ -611,8 +602,8 @@ TEST(cbst_maps, constructive_macros) {
   }
 
   {
-    ccol_comparison_proc_t comp = &custom_int_comparator;
-    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+    ccol_comparison_proc comp = &custom_int_comparator;
+    ccol_memmgmt_procs mp = (ccol_memmgmt_procs){
         .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
     cbmap_construct_full(bm, int, int, &mp, comp);
 
@@ -640,7 +631,7 @@ TEST(cbst_maps, iteration_with_macros) {
   key = 5;
   cbmap_insert(bm, key, "test");
 
-  int records[6] = {0};  // 0 to 5, so 3, 4 and 5 are valid indices
+  int records[6] = {0};
   int counter = 0;
   ccol_iter_declare(bm, it);
   for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
@@ -780,7 +771,6 @@ TEST(cbst_maps, negative_keys) {
 
   REQUIRE_EQ(cbstmap_elem_count(bm), 100);
 
-  // The in-order iteration includes the negative numbers, in order
   int expected = -50;
   ccol_iter_declare(bm, it);
   for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
@@ -796,11 +786,6 @@ TEST(cbst_maps, negative_keys) {
 TEST(cbst_maps, long_keys) {
   cbmap_construct(bm, long, long);
 
-  // Derived from LONG_MAX instead of fixed 10-digit literals, because `long`
-  // is only 4 bytes on an ILP32 target (i386, armhf) and a literal like
-  // 4000000000L overflows it there. Capping the largest key at LONG_MAX / 2
-  // also keeps this test's own `keys[i] * 2` below from overflowing on any
-  // platform.
   long keys[] = {LONG_MAX / 8, LONG_MAX / 6, LONG_MAX / 4, LONG_MAX / 2};
   int num_keys = sizeof(keys) / sizeof(keys[0]);
 
@@ -826,11 +811,10 @@ TEST(cbst_maps, duplicate_insert_updates_value) {
   REQUIRE_EQ(cbstmap_elem_count(bm), 1);
   REQUIRE_EQ(cbmap_get(bm, key), 100);
 
-  // Insert the same key with a different value
   val = 200;
   cbmap_insert(bm, key, val);
-  REQUIRE_EQ(cbstmap_elem_count(bm), 1);  // the count must not grow
-  REQUIRE_EQ(cbmap_get(bm, key), 200);    // and the value must be updated
+  REQUIRE_EQ(cbstmap_elem_count(bm), 1);
+  REQUIRE_EQ(cbmap_get(bm, key), 200);
 
   cbmap_destroy(bm);
 }
@@ -838,7 +822,6 @@ TEST(cbst_maps, duplicate_insert_updates_value) {
 TEST(cbst_maps, empty_tree_iteration) {
   cbmap_construct(bm, int, int);
 
-  // Iterate over empty tree
   int count = 0;
   ccol_iter_declare(bm, it);
   for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
@@ -875,7 +858,6 @@ TEST(cbst_maps, stress_test_many_insertions) {
 
   const int size = 1000000;
 
-  // Insert elements
   for (int i = 0; i < size; ++i) {
     int val = i * 10;
     cbmap_insert(bm, i, val);
@@ -883,13 +865,11 @@ TEST(cbst_maps, stress_test_many_insertions) {
 
   REQUIRE_EQ(cbstmap_elem_count(bm), (size_t)size);
 
-  // Verify all elements
   for (int i = 0; i < size; ++i) {
     int val = cbmap_get(bm, i);
     REQUIRE_EQ(val, i * 10);
   }
 
-  // Verify in-order iteration
   int expected = 0;
   ccol_iter_declare(bm, it);
   for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
@@ -907,7 +887,6 @@ TEST(cbst_maps, stress_test_many_deletions) {
 
   const int size = 1000000;
 
-  // Insert elements
   for (int i = 0; i < size; ++i) {
     int val = i * 10;
     cbmap_insert(bm, i, val);
@@ -915,14 +894,12 @@ TEST(cbst_maps, stress_test_many_deletions) {
 
   REQUIRE_EQ(cbstmap_elem_count(bm), (size_t)size);
 
-  // Delete all elements
   for (int i = 0; i < size; ++i) {
     REQUIRE_EQ(cbmap_remove(bm, i), ccol_success);
   }
 
   REQUIRE_EQ(cbstmap_elem_count(bm), 0);
 
-  // Verify all are gone
   for (int i = 0; i < size; ++i) {
     REQUIRE_EQ(cbmap_remove(bm, i), ccol_key_not_found);
   }
@@ -934,7 +911,6 @@ TEST(cbst_maps, alternating_insert_delete) {
   cbmap_construct(bm, int, int);
 
   for (int round = 0; round < 10; ++round) {
-    // Insert 100 elements
     for (int i = 0; i < 100; ++i) {
       int val = i * round;
       cbmap_insert(bm, i, val);
@@ -942,14 +918,12 @@ TEST(cbst_maps, alternating_insert_delete) {
 
     REQUIRE_EQ(cbstmap_elem_count(bm), 100);
 
-    // Delete 50 elements
     for (int i = 0; i < 50; ++i) {
       cbmap_remove(bm, i);
     }
 
     REQUIRE_EQ(cbstmap_elem_count(bm), 50);
 
-    // Delete remaining 50
     for (int i = 50; i < 100; ++i) {
       cbmap_remove(bm, i);
     }
@@ -969,7 +943,6 @@ TEST(cbst_maps, re_enabled_local_cbm_macros) {
   }
 
   {
-    // Check that enabling the local macros again works
     cbmap_redeclare(bm, int, int);
 
     for (int i = 0; i < 10; ++i) {
@@ -984,13 +957,10 @@ TEST(cbst_maps, re_enabled_local_cbm_macros) {
 TEST(cbst_maps, string_keys) {
   cbmap_construct(bm, char *, int);
 
-  // Strings of varied lengths, so size != 4 or 8 (that avoids the
-  // endian-sensitive path in compare_keys for equal-length keys whose first
-  // characters differ)
-  char *k_alpha = "alpha";   // 6 bytes with null
-  char *k_beta = "beta";     // 5 bytes with null
-  char *k_gamma = "gamma";   // 6 bytes with null
-  char *k_missing = "zeta";  // 5 bytes with null, never inserted
+  char *k_alpha = "alpha";
+  char *k_beta = "beta";
+  char *k_gamma = "gamma";
+  char *k_missing = "zeta";
 
   int v1 = 100, v2 = 200, v3 = 300;
   cbmap_insert(bm, k_alpha, v1);
@@ -1001,23 +971,22 @@ TEST(cbst_maps, string_keys) {
   REQUIRE_EQ(cbmap_get(bm, k_beta), v2);
   REQUIRE_EQ(cbmap_get(bm, k_gamma), v3);
 
-  // Update existing key
   int v_updated = 999;
   cbmap_insert(bm, k_alpha, v_updated);
   REQUIRE_EQ(cbmap_get(bm, k_alpha), v_updated);
 
-  // Remove a key and check that it's gone
   REQUIRE_EQ(cbmap_remove(bm, k_beta), ccol_success);
   REQUIRE_EQ((void *)cbmap_get_ptr(bm, k_beta), NULL);
   REQUIRE_EQ(cbmap_remove(bm, k_beta), ccol_key_not_found);
 
-  // A key we never inserted must not be found
   REQUIRE_EQ((void *)cbmap_get_ptr(bm, k_missing), NULL);
 
   cbmap_destroy(bm);
 }
 
-// Helper: collects the iterated string keys into an array, returns the count.
+// Walks a char * -> int map in order and stores up to max_out keys in out, so
+// the iteration-order tests can compare the walk with an expected array. Gives
+// the number of keys walked, which can exceed max_out.
 static int collect_string_keys(cbmap bm, const char *out[], int max_out) {
   cbmap_redeclare(bm, char *, int);
   int n = 0;
@@ -1032,20 +1001,6 @@ static int collect_string_keys(cbmap bm, const char *out[], int max_out) {
 }
 
 TEST(cbst_maps, string_keys_3_char_iteration_order) {
-  // A string of 3 characters takes exactly 4 bytes with the null terminator.
-  // compare_keys must not fall through to cmp_unsigned_small, which compares
-  // a key of size 4 as a uint32_t, because on a little-endian machine that
-  // compares the bytes from the highest address down to the lowest, the
-  // reverse of the character order, and the lexicographic order comes out
-  // wrong. We insert strings in an order whose sorted sequence under an
-  // integer comparison differs from the right lexicographic one, then assert
-  // that an in-order iteration gives the right order.
-  //
-  // Correct lexicographic order: "abc" < "acb" < "bac" < "bca" < "cab"
-  //
-  // uint32_t order (little-endian): "bca" < "cab" < "acb" < "bac" <
-  // "abc" (sorted by 0x00616362, 0x00626163, 0x00626361, 0x00636162,
-  // 0x00636261)
   cbmap_construct(bm, char *, int);
 
   char *keys[] = {"bca", "abc", "cab", "acb", "bac"};
@@ -1065,7 +1020,6 @@ TEST(cbst_maps, string_keys_3_char_iteration_order) {
     REQUIRE_STREQ(got[i], expected[i]);
   }
 
-  // Lookups work whatever the ordering.
   REQUIRE_NE((void *)cbmap_get_ptr(bm, "abc"), NULL);
   REQUIRE_NE((void *)cbmap_get_ptr(bm, "bca"), NULL);
   REQUIRE_EQ((void *)cbmap_get_ptr(bm, "xyz"), NULL);
@@ -1074,19 +1028,6 @@ TEST(cbst_maps, string_keys_3_char_iteration_order) {
 }
 
 TEST(cbst_maps, string_keys_7_char_iteration_order) {
-  // A string of 7 characters takes exactly 8 bytes with the null terminator.
-  // compare_keys must not compare a key of size 8 as a uint64_t, because on a
-  // little-endian machine that reverses the character order and char[6]
-  // becomes the most significant byte. Two strings that differ only at
-  // char[0] then get ordered by their LAST character instead of their FIRST,
-  // which can turn the right order around.
-  //
-  // Correct lexicographic order:
-  //   "abcdefg" < "abcdefh" < "abcdegh" < "bacdefg" < "gfedcba"
-  //
-  // uint64_t order (little-endian):
-  //   "gfedcba" < "bacdefg" < "abcdefg" < "abcdefh" < "abcdegh"
-  // (sorted by 0x0061..., 0x0067...62, 0x0067...61, 0x0068...61, 0x0068...61)
   cbmap_construct(bm, char *, int);
 
   char *keys[] = {"bacdefg", "abcdefg", "gfedcba", "abcdegh", "abcdefh"};
@@ -1107,7 +1048,6 @@ TEST(cbst_maps, string_keys_7_char_iteration_order) {
     REQUIRE_STREQ(got[i], expected[i]);
   }
 
-  // Lookups have to work too.
   REQUIRE_NE((void *)cbmap_get_ptr(bm, "abcdefg"), NULL);
   REQUIRE_NE((void *)cbmap_get_ptr(bm, "gfedcba"), NULL);
   REQUIRE_EQ((void *)cbmap_get_ptr(bm, "zzzzzzz"), NULL);
@@ -1116,8 +1056,6 @@ TEST(cbst_maps, string_keys_7_char_iteration_order) {
 }
 
 TEST(cbst_maps, char_type_variants_as_string_keys) {
-  // signed char * (= int8_t *) must be treated as a string key, with the
-  // right lexicographic order in an in-order iteration.
   {
     cbmap_construct(bm, signed char *, int);
 
@@ -1135,7 +1073,6 @@ TEST(cbst_maps, char_type_variants_as_string_keys) {
     REQUIRE_EQ(cbmap_get(bm, k_apple), 2);
     REQUIRE_EQ(cbmap_get(bm, k_cherry), 3);
 
-    // The in-order iteration gives lexicographic order.
     const char *expected_sc[] = {"apple", "banana", "cherry"};
     int idx = 0;
     ccol_iter_declare(bm, it);
@@ -1145,14 +1082,12 @@ TEST(cbst_maps, char_type_variants_as_string_keys) {
     }
     REQUIRE_EQ(idx, 3);
 
-    // A char * with the same string content finds the same entries.
     char *ck = "banana";
     REQUIRE_EQ(cbmap_get(bm, ck), 1);
 
     cbmap_destroy(bm);
   }
 
-  // unsigned char * (= uint8_t *), the same check.
   {
     cbmap_construct(bm, unsigned char *, int);
 
@@ -1170,7 +1105,6 @@ TEST(cbst_maps, char_type_variants_as_string_keys) {
     REQUIRE_EQ(cbmap_get(bm, k_kiwi), 20);
     REQUIRE_EQ(cbmap_get(bm, k_lime), 30);
 
-    // In-order: kiwi < lime < mango.
     const char *expected_uc[] = {"kiwi", "lime", "mango"};
     int idx = 0;
     ccol_iter_declare(bm, it);
@@ -1180,14 +1114,12 @@ TEST(cbst_maps, char_type_variants_as_string_keys) {
     }
     REQUIRE_EQ(idx, 3);
 
-    // A signed char * with the same content should find the entries too.
     signed char *sk = (signed char *)"kiwi";
     REQUIRE_EQ(cbmap_get(bm, sk), 20);
 
     cbmap_destroy(bm);
   }
 
-  // A char * map, looked up with signed char * and unsigned char *.
   {
     cbmap_construct(bm, char *, int);
 
@@ -1209,12 +1141,6 @@ TEST(cbst_maps, char_type_variants_as_string_keys) {
 }
 
 TEST(cbst_maps, float_double_long_double_keys_sort_numerically) {
-  // A default comparator (one the caller didn't supply) must order a
-  // floating-point key by its real numeric value and not by reading the
-  // key's raw bit pattern as an unsigned integer. A negative float, double
-  // or long double has its sign bit set, which is a large value as an
-  // unsigned integer, but such a key still sorts before every non-negative
-  // key of the same map.
   {
     cbmap_construct(bm, float, int);
 
@@ -1254,7 +1180,6 @@ TEST(cbst_maps, float_double_long_double_keys_sort_numerically) {
     }
     REQUIRE_EQ(idx, 5);
 
-    // -0.0 and 0.0 compare equal, not as two distinct keys.
     double neg_zero = -0.0;
     double pos_zero = 0.0;
     REQUIRE_EQ(cbmap_get(bm, neg_zero), cbmap_get(bm, pos_zero));
@@ -1285,18 +1210,6 @@ TEST(cbst_maps, float_double_long_double_keys_sort_numerically) {
 }
 
 TEST(cbst_maps, nan_key_does_not_corrupt_other_entries) {
-  // The default comparator for float, double and long double can't rely on
-  // the native `<` and `>` alone, because those return false for ANY
-  // comparison with a NaN operand, against ANY other key and not only another
-  // NaN. Every descent for an insert, a get or a delete starts by comparing
-  // against the root of the tree, so a comparator with no guard makes a NaN
-  // key silently "equal" to whatever key sits at the root: inserting a NaN
-  // key never creates a new node but overwrites the ROOT's value and reports
-  // ccol_key_already_present for a key that isn't there. cmp_float_small
-  // gives a NaN a well-defined place instead. A NaN is greater than every key
-  // that isn't a NaN and equal only to another NaN, so a NaN key is a real
-  // entry of its
-  // own.
   cbmap_construct(bm, double, int);
 
   double k1 = 5.0, k2 = 9.0;
@@ -1307,17 +1220,15 @@ TEST(cbst_maps, nan_key_does_not_corrupt_other_entries) {
 
   double nan_key = NAN;
   int nan_val = 999;
-  ccol_retval_t r = cbstmap_insert_elem(
+  ccol_retval r = cbstmap_insert_elem(
       bm, &(cmap_pair){.ptr = &nan_key, .size = sizeof(nan_key)},
       &(cmap_pair){.ptr = &nan_val, .size = sizeof(nan_val)});
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_EQ(cbstmap_elem_count(bm), (size_t)3);
 
-  // The keys that were there before must not be affected by the NaN insert.
   REQUIRE_EQ(cbmap_get(bm, k1), 111);
   REQUIRE_EQ(cbmap_get(bm, k2), 222);
 
-  // The NaN key itself can be read back on its own.
   int readback = 0;
   REQUIRE_EQ(cbstmap_get_elem_copy(
                  bm, &(cmap_pair){.ptr = &nan_key, .size = sizeof(nan_key)},
@@ -1325,9 +1236,6 @@ TEST(cbst_maps, nan_key_does_not_corrupt_other_entries) {
              ccol_success);
   REQUIRE_EQ(readback, 999);
 
-  // A second, different NaN bit pattern compares equal to the first (an
-  // explicit, documented choice), so it updates that entry in place instead
-  // of adding a fourth one.
   double other_nan = -NAN;
   int other_nan_val = 1000;
   r = cbstmap_insert_elem(
@@ -1336,8 +1244,6 @@ TEST(cbst_maps, nan_key_does_not_corrupt_other_entries) {
   REQUIRE_EQ(r, ccol_key_already_present);
   REQUIRE_EQ(cbstmap_elem_count(bm), (size_t)3);
 
-  // The NaN entry can be deleted like any other key, without touching the
-  // rest of the map.
   REQUIRE_EQ(cbstmap_delete_elem(
                  bm, &(cmap_pair){.ptr = &nan_key, .size = sizeof(nan_key)}),
              ccol_success);
@@ -1349,20 +1255,8 @@ TEST(cbst_maps, nan_key_does_not_corrupt_other_entries) {
 }
 
 TEST(cbst_maps, char_keys_use_native_char_comparison) {
-  // The default comparator for a `char` key should match this platform's
-  // native `char` order, whatever the signedness of `char` is here: it's
-  // signed on x86 and x86_64 but unsigned under the standard aarch64 AAPCS64
-  // ABI, so the comparator must not force a signed int8_t reading everywhere.
-  // We check an in-order iteration against a reference order computed with
-  // the native `char` `<`, so the expectation itself is right on whatever
-  // platform runs
-  // it.
   cbmap_construct(bm, char, int);
 
-  // The values below come in two groups. The first one has the high bit set,
-  // so a forced signed reading makes each of them negative, and the second
-  // one holds small positive values, so a signed/unsigned mismatch reorders
-  // them visibly.
   unsigned char raw[] = {200, 5, 128, 1, 255, 0, 127, 100};
   const int n = (int)(sizeof(raw) / sizeof(raw[0]));
   char keys[sizeof(raw) / sizeof(raw[0])];
@@ -1376,8 +1270,6 @@ TEST(cbst_maps, char_keys_use_native_char_comparison) {
   }
   REQUIRE_EQ(cbstmap_elem_count(bm), (size_t)n);
 
-  // The reference order comes from a plain insertion sort with the native
-  // `char` `<`.
   char expected[sizeof(raw) / sizeof(raw[0])];
   memcpy(expected, keys, sizeof(keys));
   for (int i = 0; i < n; ++i) {
@@ -1402,28 +1294,12 @@ TEST(cbst_maps, char_keys_use_native_char_comparison) {
 }
 
 TEST(cbst_maps, scalar_signed_char_keys_sort_by_genuine_signed_value) {
-  // A scalar `signed char` key, or one of its typedef `int8_t`, is a C type
-  // of its own, separate from plain `char`, and it needs a real signed
-  // comparison that doesn't depend on the platform, like short, int, long
-  // and long long do, NOT the native `char` comparison ccol_char uses. So
-  // ccol_determine_ccol_data_type() must keep `signed char` in its own
-  // ccol_signed_char bucket instead of folding it into ccol_char together
-  // with plain `char`. On some platforms a plain `char` is unsigned by default
-  // (the standard aarch64 AAPCS64 ABI is one), and there a folded negative
-  // signed char or int8_t key would sort as a large positive value although
-  // it belongs before every non-negative key. The expected order below is
-  // fixed, the true two's-complement signed order, while the expectation of
-  // char_keys_use_native_char_comparison depends on the platform. The
-  // contract of ccol_signed_char is NOT to depend on the signedness of a
-  // native `char`.
   cbmap_construct(bm, signed char, int);
 
   signed char keys[] = {(signed char)-128, (signed char)-5,  0,
                         (signed char)3,    (signed char)100, (signed char)127};
   const int n = (int)(sizeof(keys) / sizeof(keys[0]));
 
-  // Insert in shuffled order so the tree structure doesn't just happen to
-  // match the expected in-order sequence already.
   int insert_order[] = {3, 0, 5, 1, 4, 2};
   for (int i = 0; i < n; ++i) {
     int idx = insert_order[i];
@@ -1432,10 +1308,6 @@ TEST(cbst_maps, scalar_signed_char_keys_sort_by_genuine_signed_value) {
   }
   REQUIRE_EQ(cbstmap_elem_count(bm), (size_t)n);
 
-  // We cast to `int` for REQUIRE_EQ because tau's printer in tests/tau/tau.h
-  // has a `_Generic` case for `char` but none for `signed char`. This key
-  // type is a different C type from `char` on purpose, and that difference
-  // is exactly what this test pins.
   int idx = 0;
   ccol_iter_declare(bm, it);
   for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
@@ -1445,17 +1317,14 @@ TEST(cbst_maps, scalar_signed_char_keys_sort_by_genuine_signed_value) {
   }
   REQUIRE_EQ(idx, n);
 
-  // Lookups for negative and non-negative keys both work.
-  REQUIRE_EQ(cbmap_get(bm, keys[0]), 0);  // -128
-  REQUIRE_EQ(cbmap_get(bm, keys[1]), 1);  // -5
-  REQUIRE_EQ(cbmap_get(bm, keys[5]), 5);  // 127
+  REQUIRE_EQ(cbmap_get(bm, keys[0]), 0);
+  REQUIRE_EQ(cbmap_get(bm, keys[1]), 1);
+  REQUIRE_EQ(cbmap_get(bm, keys[5]), 5);
 
   cbmap_destroy(bm);
 }
 
 TEST(cbst_maps, int8_t_keys_sort_by_genuine_signed_value) {
-  // int8_t is a typedef for signed char on every mainstream platform the
-  // library targets, and the same contract holds through that spelling.
   cbmap_construct(bm, int8_t, int);
 
   int8_t keys[] = {-100, -1, 0, 1, 100};
@@ -1467,7 +1336,6 @@ TEST(cbst_maps, int8_t_keys_sort_by_genuine_signed_value) {
   }
   REQUIRE_EQ(cbstmap_elem_count(bm), (size_t)n);
 
-  // Cast to `int`, for the same tau printer reason as above.
   int idx = 0;
   ccol_iter_declare(bm, it);
   for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
@@ -1480,12 +1348,6 @@ TEST(cbst_maps, int8_t_keys_sort_by_genuine_signed_value) {
 }
 
 TEST(cbst_maps, signed_char_keys_4_and_8_byte_strings_iteration_order) {
-  // A signed char* key must be recognized as a string (ccol_string), just
-  // like a char* key and an unsigned char* key, and that is expected for
-  // string sizes of 4 and 8 bytes (null terminator included) as well. Those
-  // two sizes would otherwise land on the typed uint32_t and uint64_t
-  // reading of cmp_unsigned_small, which silently orders such keys by their
-  // raw byte pattern and not lexicographically.
   {
     cbmap_construct(bm, signed char *, int);
 
@@ -1535,15 +1397,10 @@ TEST(cbst_maps, signed_char_keys_4_and_8_byte_strings_iteration_order) {
 }
 
 TEST(cbst_maps, struct_key_default_comparator_uses_memcmp_regardless_of_size) {
-  // A struct key type is ccol_other_types, and it is always ordered by
-  // a raw memcmp of its representation, even when the struct happens to be
-  // the size of a real integer, 1, 2, 4 or 8 bytes. Otherwise such a size
-  // sends the key through a typed integer reading, which depends on the
-  // machine's endianness.
   typedef struct {
     short a;
     short b;
-  } pair_t;  // 4 bytes, the size of a uint32_t
+  } pair_t;
 
   cbmap_construct(bm, pair_t, int);
 
@@ -1555,8 +1412,6 @@ TEST(cbst_maps, struct_key_default_comparator_uses_memcmp_regardless_of_size) {
 
   REQUIRE_EQ(cbstmap_elem_count(bm), 4);
 
-  // The expected order is whatever a plain memcmp of the 4-byte
-  // representation gives, not a numeric reading of the two short fields.
   pair_t expected[4];
   memcpy(expected, keys, sizeof(keys));
   for (int i = 0; i < 4; ++i) {
@@ -1594,7 +1449,6 @@ TEST(cbst_maps, construct_scoped_lifecycle) {
     for (int i = 0; i < 5; ++i) {
       REQUIRE_EQ(cbmap_get(bm, i), i * 10);
     }
-    // bm gets destroyed automatically at the end of the block
   }
 }
 
@@ -1614,7 +1468,6 @@ TEST(cbst_maps, declare_scoped_lifecycle) {
     REQUIRE_EQ(cbmap_get(bm, k1), 70);
     REQUIRE_EQ(cbmap_get(bm, k2), 30);
     REQUIRE_EQ(cbmap_get(bm, k3), 90);
-    // bm gets destroyed automatically at the end of the block
   }
 }
 
@@ -1629,19 +1482,12 @@ TEST(cbst_maps, get_elem_copy_size_mismatch) {
                           &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
       ccol_success);
 
-  // The buffer size is wrong, since the map stores a sizeof(int) and the
-  // call asks for a sizeof(double). We avoid `long` on purpose, because on an
-  // ILP32 platform such as i386 sizeof(long) == sizeof(int) (both 4 bytes),
-  // so that pair isn't a real size mismatch there. A `double` is 8 bytes on
-  // every mainstream platform this library targets, LP64 and ILP32
-  // alike.
   double wrong_buf = 0;
   REQUIRE_EQ(
       cbstmap_get_elem_copy(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
                             &wrong_buf, sizeof(wrong_buf)),
       ccol_invalid_args);
 
-  // The right buffer size works
   int right_buf = 0;
   REQUIRE_EQ(
       cbstmap_get_elem_copy(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
@@ -1652,19 +1498,16 @@ TEST(cbst_maps, get_elem_copy_size_mismatch) {
   cbmap_destroy(cbm);
 }
 
-/* A NULL target buffer whose non-zero size matches the stored value is
- * refused, the same way chashmap_get_elem_copy refuses it. A NULL buffer of
- * size 0 can read a stored value of size 0, which
- * update_value_to_zero_size_does_not_corrupt pins. Drop the check and the
- * copy writes through NULL, so the process dies with SIGSEGV. */
+// A NULL buffer of size 0 is fine for a stored value of size 0. Without the
+// check, the copy writes through NULL and the process dies with SIGSEGV.
 TEST(cbst_maps, get_elem_copy_refuses_a_null_buffer) {
   cbmap cbm = cbstmap_create(ccol_int, NULL);
   REQUIRE_NE((void *)cbm, NULL);
   int key = 7, val = 70;
-  ccol_retval_t ins =
+  ccol_retval ins =
       cbstmap_insert_elem(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
                           &(cmap_pair){.ptr = &val, .size = sizeof(val)});
-  ccol_retval_t got = cbstmap_get_elem_copy(
+  ccol_retval got = cbstmap_get_elem_copy(
       cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)}, NULL, sizeof(int));
   cbmap_destroy(cbm);
   REQUIRE_EQ(ins, ccol_success);
@@ -1702,11 +1545,9 @@ TEST(cbst_maps, get_ptr_missing_int_key) {
   cbmap_insert(bm, k1, v1);
   cbmap_insert(bm, k2, v2);
 
-  // Present keys
   REQUIRE_NE((void *)cbmap_get_ptr(bm, k1), NULL);
   REQUIRE_EQ(*cbmap_get_ptr(bm, k1), 10);
 
-  // A missing key gives NULL
   REQUIRE_EQ((void *)cbmap_get_ptr(bm, k_missing), NULL);
 
   cbmap_destroy(bm);
@@ -1720,7 +1561,6 @@ TEST(cbst_maps, early_iterator_destroy) {
     cbmap_insert(bm, i, val);
   }
 
-  // Stop the iteration after the first 5 elements and check nothing leaks
   int count = 0;
   ccol_iter_declare(bm, it);
   for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
@@ -1732,14 +1572,12 @@ TEST(cbst_maps, early_iterator_destroy) {
   }
   REQUIRE_EQ(count, 5);
 
-  // The map has to be fully usable after the aborted iteration
   REQUIRE_EQ(cbstmap_elem_count(bm), 20);
   for (int i = 0; i < 20; ++i) {
     int val = cbmap_get(bm, i);
     REQUIRE_EQ(val, i * 10);
   }
 
-  // A fresh full iteration visits every node
   count = 0;
   ccol_iter_declare(bm, it2);
   for (it2 = ccol_begin(bm); it2 != NULL; it2 = ccol_iter_next(it2)) {
@@ -1754,7 +1592,6 @@ TEST(cbst_maps, update_value_with_different_size) {
   cbmap cbm = cbstmap_create(ccol_int, NULL);
   REQUIRE_NE((void *)cbm, NULL);
 
-  // Insert with int value (4 bytes)
   int key = 7;
   int small_val = 42;
   REQUIRE_EQ(cbstmap_insert_elem(
@@ -1770,11 +1607,6 @@ TEST(cbst_maps, update_value_with_different_size) {
       ccol_success);
   REQUIRE_EQ(readback, 42);
 
-  // Insert the same key again with an 8-byte value, which takes the realloc
-  // path. It's an int64_t on purpose and a long would be wrong: a long is
-  // only 4 bytes on an ILP32 platform such as i386, and that would silently
-  // kill the whole point of this test, which is to resize a value from 4
-  // bytes to 8.
   int64_t big_val = INT64_C(1234567890123);
   REQUIRE_EQ(cbstmap_insert_elem(
                  cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
@@ -1790,7 +1622,6 @@ TEST(cbst_maps, update_value_with_different_size) {
   const int64_t expected_big_val = INT64_C(1234567890123);
   REQUIRE_EQ(big_readback, expected_big_val);
 
-  // Insert it again back at int size, which reallocs in the other direction
   small_val = 99;
   REQUIRE_EQ(cbstmap_insert_elem(
                  cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
@@ -1809,13 +1640,6 @@ TEST(cbst_maps, update_value_with_different_size) {
 }
 
 TEST(cbst_maps, update_value_to_zero_size_does_not_corrupt) {
-  // Shrinking an existing key's value to zero bytes must not call
-  // realloc(ptr, 0) directly. glibc defines that call as freeing ptr and
-  // returning NULL, and the return value alone can't tell that from a real
-  // allocation failure. What follows is that the node's value pointer
-  // dangles while the call reports ccol_not_enough_memory, later reads go to
-  // the old value which is already freed, and destroying the map frees it a
-  // second time.
   cbmap cbm = cbstmap_create(ccol_int, NULL);
   REQUIRE_NE((void *)cbm, NULL);
 
@@ -1827,27 +1651,23 @@ TEST(cbst_maps, update_value_to_zero_size_does_not_corrupt) {
       ccol_success);
 
   char dummy = 0;
-  ccol_retval_t r =
+  ccol_retval r =
       cbstmap_insert_elem(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
                           &(cmap_pair){.ptr = &dummy, .size = 0});
   REQUIRE_EQ(r, ccol_key_already_present);
   REQUIRE_EQ(cbstmap_elem_count(cbm), 1);
 
-  cmap_pair vp = {(void *)0x1, 12345}; /* a poison value */
+  cmap_pair vp = {(void *)0x1, 12345};
   REQUIRE_EQ(cbstmap_get_elem_ref(
                  cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)}, &vp),
              ccol_success);
   REQUIRE_EQ(vp.size, (size_t)0);
   REQUIRE_EQ((void *)vp.ptr, NULL);
 
-  // Reading a zero-size buffer with cbstmap_get_elem_copy succeeds
-  // too.
   REQUIRE_EQ(cbstmap_get_elem_copy(
                  cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)}, NULL, 0),
              ccol_success);
 
-  // Grow the same key's value back to a real size, which exercises
-  // realloc(NULL, n), defined to behave like malloc(n).
   int restored = 777;
   r = cbstmap_insert_elem(
       cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
@@ -1865,10 +1685,6 @@ TEST(cbst_maps, update_value_to_zero_size_does_not_corrupt) {
 }
 
 TEST(cbst_maps, insert_and_retrieve_zero_size_value_for_new_key) {
-  // Inserting a new key with a zero-size value must succeed without ever
-  // calling the allocator with a size of zero, because the C standard lets
-  // malloc(0) return either NULL or a unique pointer even when it
-  // succeeds.
   cbmap cbm = cbstmap_create(ccol_int, NULL);
   REQUIRE_NE((void *)cbm, NULL);
 
@@ -1889,7 +1705,7 @@ TEST(cbst_maps, insert_and_retrieve_zero_size_value_for_new_key) {
       ccol_success);
   REQUIRE_EQ(cbstmap_elem_count(cbm), 2);
 
-  cmap_pair vp1 = {(void *)0x1, 12345}; /* a poison value */
+  cmap_pair vp1 = {(void *)0x1, 12345};
   REQUIRE_EQ(cbstmap_get_elem_ref(
                  cbm, &(cmap_pair){.ptr = &key1, .size = sizeof(key1)}, &vp1),
              ccol_success);
@@ -1903,7 +1719,6 @@ TEST(cbst_maps, insert_and_retrieve_zero_size_value_for_new_key) {
              ccol_success);
   REQUIRE_EQ(readback2, 55);
 
-  // Deleting the key with the zero-size value works like for any other key.
   REQUIRE_EQ(cbstmap_delete_elem(
                  cbm, &(cmap_pair){.ptr = &key1, .size = sizeof(key1)}),
              ccol_success);
@@ -1913,57 +1728,35 @@ TEST(cbst_maps, insert_and_retrieve_zero_size_value_for_new_key) {
 }
 
 TEST(cbst_maps, wrong_size_key_rejected_for_fixed_width_key_type) {
-  // A fixed-width declared key type has one exact size, and every raw-layer
-  // entry point that takes a key_pair rejects a key of any other size
-  // with ccol_invalid_args, instead of storing it as a separate key that no
-  // correctly typed lookup could ever reach.
-  //
-  // The oversized key's size comes from sizeof(int) itself, never from some
-  // other type that just happens to be wider on this machine: on an ILP32
-  // ABI such as armhf and i386 a long is as wide as an int, so a long key
-  // there is a perfectly valid int-sized key and proves nothing.
-  //
-  // Each call stores its result in a local and the assertions only run after
-  // the map is destroyed, for two reasons. Tau evaluates the expression it
-  // gets in REQUIRE_EQ a second time to print it when the assertion fails,
-  // so an inline call that changes the map runs twice and the report shows
-  // the second run's value. And a failing REQUIRE_* returns at once, which
-  // skips any cleanup below it.
-  //
-  // Without the size check this fails: insert_r is
-  // ccol_success, count_after_reject is 1, and the three lookups report
-  // ccol_key_not_found instead of ccol_invalid_args.
   cbmap cbm = cbstmap_create(ccol_int, NULL);
   REQUIRE_NE((void *)cbm, NULL);
 
   unsigned char too_wide[sizeof(int) + 1] = {0};
   int val = 42;
 
-  const ccol_retval_t insert_r = cbstmap_insert_elem(
+  const ccol_retval insert_r = cbstmap_insert_elem(
       cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)},
       &(cmap_pair){.ptr = &val, .size = sizeof(val)});
   const size_t count_after_reject = cbstmap_elem_count(cbm);
 
   int readback = -1;
-  const ccol_retval_t copy_r = cbstmap_get_elem_copy(
+  const ccol_retval copy_r = cbstmap_get_elem_copy(
       cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)}, &readback,
       sizeof(readback));
 
   cmap_pair val_pair = {NULL, 0};
-  const ccol_retval_t ref_r = cbstmap_get_elem_ref(
+  const ccol_retval ref_r = cbstmap_get_elem_ref(
       cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)}, &val_pair);
 
-  const ccol_retval_t delete_r = cbstmap_delete_elem(
+  const ccol_retval delete_r = cbstmap_delete_elem(
       cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)});
 
-  // A correctly sized key of the same declared type keeps working
-  // everywhere, so the check only rejects the mismatch.
   int good_key = 5;
-  const ccol_retval_t good_insert_r = cbstmap_insert_elem(
+  const ccol_retval good_insert_r = cbstmap_insert_elem(
       cbm, &(cmap_pair){.ptr = &good_key, .size = sizeof(good_key)},
       &(cmap_pair){.ptr = &val, .size = sizeof(val)});
   const size_t count_after_good = cbstmap_elem_count(cbm);
-  const ccol_retval_t good_copy_r = cbstmap_get_elem_copy(
+  const ccol_retval good_copy_r = cbstmap_get_elem_copy(
       cbm, &(cmap_pair){.ptr = &good_key, .size = sizeof(good_key)}, &readback,
       sizeof(readback));
 
@@ -1982,10 +1775,6 @@ TEST(cbst_maps, wrong_size_key_rejected_for_fixed_width_key_type) {
 
 TEST(cbst_maps,
      wrong_size_key_rejected_matches_chashmap_for_every_fixed_width_type) {
-  // Every key type that ccol_fixed_width_data_type_size() gives a width for
-  // enforces it, and a key one byte short is rejected. We cover the float,
-  // long double and pointer types as well as the integers, since they reach
-  // different branches of compare_keys().
   const ccol_data_type fixed_width_types[] = {ccol_char,
                                               ccol_signed_char,
                                               ccol_unsigned_char,
@@ -2011,17 +1800,15 @@ TEST(cbst_maps,
     cbmap cbm = cbstmap_create(type, NULL);
     REQUIRE_NE((void *)cbm, NULL);
 
-    // A buffer big enough for the widest key type, so the deliberately
-    // undersized key_pair below never points at less memory than it claims.
     unsigned char key_buf[sizeof(long double) + sizeof(uintptr_t)] = {0};
     int val = 7;
 
-    const ccol_retval_t short_r = cbstmap_insert_elem(
+    const ccol_retval short_r = cbstmap_insert_elem(
         cbm, &(cmap_pair){.ptr = key_buf, .size = width - 1},
         &(cmap_pair){.ptr = &val, .size = sizeof(val)});
     const size_t count_after_short = cbstmap_elem_count(cbm);
 
-    const ccol_retval_t exact_r =
+    const ccol_retval exact_r =
         cbstmap_insert_elem(cbm, &(cmap_pair){.ptr = key_buf, .size = width},
                             &(cmap_pair){.ptr = &val, .size = sizeof(val)});
     const size_t count_after_exact = cbstmap_elem_count(cbm);
@@ -2036,11 +1823,6 @@ TEST(cbst_maps,
 }
 
 TEST(cbst_maps, variable_width_key_types_still_accept_any_key_size) {
-  // ccol_string and ccol_other_types have no fixed width, so keys of
-  // different sizes are an ordinary, supported case for them: the map orders
-  // them by their common prefix and then by size, and never rejects them.
-  // Otherwise every string key that isn't exactly as long as some other type
-  // would start failing.
   const ccol_data_type variable_width_types[] = {ccol_string, ccol_other_types};
 
   for (size_t i = 0;
@@ -2053,10 +1835,10 @@ TEST(cbst_maps, variable_width_key_types_still_accept_any_key_size) {
     REQUIRE_NE((void *)cbm, NULL);
 
     int val = 1;
-    const ccol_retval_t short_r =
+    const ccol_retval short_r =
         cbstmap_insert_elem(cbm, &(cmap_pair){.ptr = (void *)"ab", .size = 3},
                             &(cmap_pair){.ptr = &val, .size = sizeof(val)});
-    const ccol_retval_t long_r = cbstmap_insert_elem(
+    const ccol_retval long_r = cbstmap_insert_elem(
         cbm, &(cmap_pair){.ptr = (void *)"abcdefghij", .size = 11},
         &(cmap_pair){.ptr = &val, .size = sizeof(val)});
     const size_t count = cbstmap_elem_count(cbm);
@@ -2070,9 +1852,6 @@ TEST(cbst_maps, variable_width_key_types_still_accept_any_key_size) {
 }
 
 TEST(cbst_maps, zero_size_key_roundtrips) {
-  // The same coverage for a zero-size KEY, because create_new_node's
-  // key-side allocation has exactly the same malloc(0) hazard as the value
-  // side.
   cbmap cbm = cbstmap_create(ccol_other_types, NULL);
   REQUIRE_NE((void *)cbm, NULL);
 
@@ -2090,7 +1869,6 @@ TEST(cbst_maps, zero_size_key_roundtrips) {
              ccol_success);
   REQUIRE_EQ(readback, 111);
 
-  // A different, non-zero-size key must not collide with the zero-size key.
   int other_key = 5;
   int val2 = 222;
   REQUIRE_EQ(
@@ -2112,12 +1890,6 @@ TEST(cbst_maps, zero_size_key_roundtrips) {
   cbmap_destroy(cbm);
 }
 
-// A string key always has a size of at least 1, because its size counts the
-// terminating NUL. Every raw entry point refuses a size-0 key on a map with
-// ccol_string keys, like chmap does, with or without a pointer, so no
-// iterator over a string map can yield a NULL char * key. Take the size
-// check away and the test catches it: the insert succeeds and the iterator
-// hands back a key whose ptr is NULL.
 TEST(cbst_maps, zero_size_string_key_is_refused_by_every_raw_entry_point) {
   cbmap cbm = cbstmap_create(ccol_string, NULL);
   REQUIRE_NE((void *)cbm, NULL);
@@ -2128,22 +1900,21 @@ TEST(cbst_maps, zero_size_string_key_is_refused_by_every_raw_entry_point) {
   const cmap_pair null_key = {.ptr = NULL, .size = 0};
   const cmap_pair empty_key = {.ptr = &dummy, .size = 0};
 
-  const ccol_retval_t insert_null =
+  const ccol_retval insert_null =
       cbstmap_insert_elem(cbm, &null_key, &val_pair);
-  const ccol_retval_t insert_empty =
+  const ccol_retval insert_empty =
       cbstmap_insert_elem(cbm, &empty_key, &val_pair);
   const size_t count_after_inserts = cbstmap_elem_count(cbm);
 
-  /* A real string key, so looking up the empty key has a tree to descend. */
-  const ccol_retval_t insert_real = cbstmap_insert_elem(
+  const ccol_retval insert_real = cbstmap_insert_elem(
       cbm, &(cmap_pair){.ptr = (void *)"", .size = 1}, &val_pair);
 
   int readback = 0;
-  const ccol_retval_t copy_r =
+  const ccol_retval copy_r =
       cbstmap_get_elem_copy(cbm, &null_key, &readback, sizeof(readback));
   cmap_pair ref = {NULL, 0};
-  const ccol_retval_t ref_r = cbstmap_get_elem_ref(cbm, &empty_key, &ref);
-  const ccol_retval_t delete_r = cbstmap_delete_elem(cbm, &null_key);
+  const ccol_retval ref_r = cbstmap_get_elem_ref(cbm, &empty_key, &ref);
+  const ccol_retval delete_r = cbstmap_delete_elem(cbm, &null_key);
 
   bool saw_null_key = false;
   size_t iterated = 0;
@@ -2169,38 +1940,24 @@ TEST(cbst_maps, zero_size_string_key_is_refused_by_every_raw_entry_point) {
   REQUIRE_EQ(final_count, (size_t)1);
 }
 
-// cbstmap_begin_iter(NULL, ...) must behave like an empty map: return NULL,
-// leave err alone and not assert. That's a deliberate exception to how every
-// OTHER cbstmap accessor treats a NULL map, since cbstmap_elem_count,
-// cbstmap_reset, cbstmap_insert_elem, cbstmap_get_elem_copy,
-// cbstmap_get_elem_ref and cbstmap_delete_elem all call _ccol_assert(false) for
-// one. Only begin_iter is exempt. It matches the same deliberate NULL tolerance
-// of chashmap_begin_iter and keeps the two sibling map modules consistent for
-// a map field that the caller creates lazily and that can be NULL for a
-// while.
+// begin_iter is the one accessor that accepts a NULL map, as
+// chashmap_begin_iter() does, so a lazily created map field can be iterated.
 TEST(cbst_maps, begin_iter_null_map_returns_null_like_empty) {
   cbmap null_map = NULL;
-  char *err = (char *)0x1; /* poison value, must be reset to NULL */
+  char *err = (char *)0x1;
   REQUIRE_EQ((void *)cbstmap_begin_iter(null_map, &err), NULL);
   REQUIRE_EQ((void *)err, NULL);
 
-  // A NULL err has to be tolerated too (it's documented as optional).
   REQUIRE_EQ((void *)cbstmap_begin_iter(null_map, NULL), NULL);
 }
 
-// ========================================================================
-// INVARIANT TESTS (randomized operation sequences)
-// ========================================================================
-
+// The key range of the randomized invariant test, small enough that inserts and
+// removes keep hitting existing keys.
 #define INVARIANTS_KEY_RANGE 200
 
-// Random inserts and removes against an int->int map, with three
-// independent invariants checked after every operation: the AVL balance and
-// height invariant, which cbmap_debug_validate_avl checks inside cbstmap.c;
-// an in-order iteration that strictly increases; and a shadow reference
-// model, a plain array indexed by key, where every key the model holds has
-// to give back its exact shadow value and every key it lacks should be
-// really absent.
+// Random inserts and removes, checking after every operation the AVL heights
+// and balance, a strictly increasing in-order walk, and a shadow array that
+// every lookup must agree with.
 TEST(cbst_maps, invariants_random_ops) {
   ccol_invariants_rng_t rng;
   uint64_t seed = CCOL_INVARIANTS_DEFAULT_SEED;
@@ -2236,7 +1993,7 @@ TEST(cbst_maps, invariants_random_ops) {
     for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
       int k = *ccol_iter_key_ptr(it);
       if (have_prev) {
-        REQUIRE_TRUE(k > prev_key);  // strictly increasing in-order traversal
+        REQUIRE_TRUE(k > prev_key);
       }
       prev_key = k;
       have_prev = true;
@@ -2256,39 +2013,20 @@ TEST(cbst_maps, invariants_random_ops) {
   cbmap_destroy(hm);
 }
 
-/* A value's bytes start inside the node's own allocation and move out to a
- * buffer of their own the first time an update changes their size. This
- * test drives every crossing of that boundary, in both directions. Each
- * crossing decides where a later free points, at the node block or at a
- * buffer of its own, and a mistake either way is a free of an interior
- * pointer or a leak, which this suite's memtest run catches on top of the
- * values the test compares. The zero-size representation is one more
- * crossing, and update_value_to_zero_size_does_not_corrupt owns that one. A
- * char * value is always at least one byte long, so nothing here reaches
- * it. */
-/* cbstmap_get_elem_ref fills a pair whose ptr points into the node's value,
- * and callers often hand that pointer straight back to resize the value.
- * The resize allocates new storage, frees the old one and copies, so a copy
- * that reads its source after that free reads the buffer it has just
- * freed.
- *
- * Move the copy after the free and AddressSanitizer reports a
- * heap-use-after-free inside the update, and the node ends up
- * with whatever the allocator left behind. */
+// The value passed back is the pointer cbstmap_get_elem_ref() gave out. If the
+// resize copied it after freeing the old storage, AddressSanitizer would report
+// a heap-use-after-free.
 TEST(cbstmap_value_storage, resizing_a_value_from_its_own_buffer_is_safe) {
   cbmap_construct_scoped(bm, int, char *);
   int key = 3;
 
   cbmap_insert(bm, key, "first value, short enough to sit inside the node");
-  /* A different size moves it out to its own buffer, which is the state
-     where the release below has something to release. */
   cbmap_insert(bm, key, "second value, a different length, now external");
 
   cmap_pair kp = {&key, sizeof(key)};
   cmap_pair held = {NULL, 0};
-  ccol_retval_t got = cbstmap_get_elem_ref(bm, &kp, &held);
+  ccol_retval got = cbstmap_get_elem_ref(bm, &kp, &held);
 
-  /* Resize with the map's own buffer as the source. */
   bool shrank = false;
   if (got == ccol_success && held.ptr) {
     cmap_pair selfref = {held.ptr, 14};
@@ -2297,7 +2035,7 @@ TEST(cbstmap_value_storage, resizing_a_value_from_its_own_buffer_is_safe) {
   }
 
   cmap_pair after = {NULL, 0};
-  ccol_retval_t reread = cbstmap_get_elem_ref(bm, &kp, &after);
+  ccol_retval reread = cbstmap_get_elem_ref(bm, &kp, &after);
   bool intact = (reread == ccol_success && after.ptr && after.size == 14 &&
                  memcmp(after.ptr, "second value,", 13) == 0);
 
@@ -2306,11 +2044,9 @@ TEST(cbstmap_value_storage, resizing_a_value_from_its_own_buffer_is_safe) {
   REQUIRE_TRUE(intact);
 }
 
-/* We read through cbmap_get_ptr and not cbmap_get everywhere. A regression in
-   the resize path loses the key outright, and cbmap_get answers a missing key
-   with _ccol_fatal_err, which aborts the whole binary along with every other
-   suite's result in the same run; cbmap_get_ptr answers NULL, so the same
-   regression fails only this test and reports what it found. */
+// Checks the string stored under key_ the way the value-storage tests need it.
+// It reads with cbmap_get_ptr(), so a lost key fails only this test;
+// cbmap_get() would end the whole binary.
 #define REQUIRE_STRING_VALUE_IS(map_, key_, expected_) \
   do {                                                 \
     char *const *found_ = cbmap_get_ptr(map_, key_);   \
@@ -2318,6 +2054,9 @@ TEST(cbstmap_value_storage, resizing_a_value_from_its_own_buffer_is_safe) {
     if (found_) REQUIRE_STREQ(*found_, (expected_));   \
   } while (0)
 
+// A value starts inside the node's allocation and moves to a buffer of its own
+// when an update changes its size. This drives every crossing; a wrong one is a
+// free of an interior pointer or a leak, which the memtest run catches.
 TEST(cbstmap_value_storage, resizing_a_value_across_the_inline_boundary) {
   cbmap_construct_scoped(bm, int, char *);
 
@@ -2325,29 +2064,22 @@ TEST(cbstmap_value_storage, resizing_a_value_across_the_inline_boundary) {
   cbmap_insert(bm, key, "short");
   REQUIRE_STRING_VALUE_IS(bm, key, "short");
 
-  /* Longer than the room reserved when the node was built, so it moves out. */
   cbmap_insert(bm, key, "a considerably longer value than the first one");
   REQUIRE_STRING_VALUE_IS(bm, key,
                           "a considerably longer value than the first one");
 
-  /* Shorter again: it stays in its own buffer and doesn't go back inline. */
   cbmap_insert(bm, key, "tiny");
   REQUIRE_STRING_VALUE_IS(bm, key, "tiny");
 
-  /* The same size twice in a row is written in place, wherever it lives. */
   cbmap_insert(bm, key, "tin2");
   REQUIRE_STRING_VALUE_IS(bm, key, "tin2");
 
-  /* Back up to a longer one, then a second node to show that none of this
-     disturbed the first node's own storage. */
   cbmap_insert(bm, key, "grown back out to something long again");
   int other = 8;
   cbmap_insert(bm, other, "other");
   REQUIRE_STRING_VALUE_IS(bm, key, "grown back out to something long again");
   REQUIRE_STRING_VALUE_IS(bm, other, "other");
 
-  /* Removing the resized node frees exactly one buffer of its own plus
-     the node block, and leave the untouched node readable. */
   cbmap_remove(bm, key);
   REQUIRE_STRING_VALUE_IS(bm, other, "other");
   REQUIRE_EQ(cbstmap_elem_count(bm), (size_t)1);
@@ -2355,24 +2087,10 @@ TEST(cbstmap_value_storage, resizing_a_value_across_the_inline_boundary) {
 
 #undef REQUIRE_STRING_VALUE_IS
 
-/* A node's key bytes sit inside the node's allocation, at an offset rounded
- * to what that key type really needs and not to the strongest alignment any
- * type could need. This test stores and reads back every declared key type
- * through the macro layer, which casts the stored pointer to the caller's
- * type and dereferences it, so an offset that under-aligns any of those
- * types is a real misaligned access on this path, not just a latent one.
- *
- * On x86-64 a misaligned scalar read gives the right value anyway, so the
- * value comparisons alone can't prove the offsets are right. The test pays
- * off under -fsanitize=alignment and on a target with strict alignment,
- * where a wrong offset stops being invisible. A long double is the case
- * that really needs 16, and a narrower rounding breaks it
- * first. */
+// The key offset in a node is rounded to the key type's own alignment. On
+// x86-64 a misaligned read works anyway, so this test pays off under
+// -fsanitize=alignment and on strict-alignment targets; long double needs 16.
 TEST(cbstmap_key_storage, every_key_type_round_trips_through_inline_storage) {
-  /* We read back through cbmap_get_ptr, because a key offset that is
-     under-aligned or of the wrong size makes the key impossible to find, and
-     cbmap_get answers that with _ccol_fatal_err, which takes the whole binary
-     down with it; a NULL keeps the failure local. */
 #define ROUND_TRIP(ctype, keyval, valval)          \
   do {                                             \
     cbmap_construct_scoped(m_, ctype, int);        \
@@ -2400,9 +2118,6 @@ TEST(cbstmap_key_storage, every_key_type_round_trips_through_inline_storage) {
   ROUND_TRIP(double, 2.25, 13);
 #undef ROUND_TRIP
 
-  /* long double on its own, because it has the strongest alignment
-     requirement of any key type here, so it fails first if the offset is
-     rounded to anything narrower than the type really needs. */
   {
     cbmap_construct_scoped(mld, long double, int);
     long double k = 3.0625L;
@@ -2413,8 +2128,6 @@ TEST(cbstmap_key_storage, every_key_type_round_trips_through_inline_storage) {
     if (found) REQUIRE_EQ(*found, 14);
   }
 
-  /* A pointer key, and a string key whose bytes are stored instead of a
-     pointer to them. */
   {
     int target = 0;
     cbmap_construct_scoped(mp, int *, int);
@@ -2436,23 +2149,6 @@ TEST(cbstmap_key_storage, every_key_type_round_trips_through_inline_storage) {
 }
 
 TEST(cbst_maps, null_pair_arguments_are_rejected_like_chashmap_rejects_them) {
-  // A NULL cmap_pair is a caller mistake in either map module, but the two
-  // modules are close enough to interchangeable that two different answers
-  // would be a trap: a caller moving from one to the other would get a
-  // return code from chashmap_insert_elem and a crash from cbstmap_insert_elem
-  // for the very same line of code. So both report ccol_invalid_args and
-  // neither dereferences it.
-  //
-  // val_pair is the out-parameter of cbstmap_get_elem_ref(), which has nowhere
-  // to report a hit without it, and an input pair for cbstmap_insert_elem(),
-  // and we cover both.
-  //
-  // Every result goes into a local and is only asserted after the map is
-  // destroyed, for the reasons given in
-  // wrong_size_key_rejected_for_fixed_width_key_type above.
-  //
-  // It matters because, without the guards, each call dereferences the
-  // NULL pair and the whole binary dies with SIGSEGV on the first one.
   cbmap cbm = cbstmap_create(ccol_int, NULL);
   REQUIRE_NE((void *)cbm, NULL);
 
@@ -2460,30 +2156,27 @@ TEST(cbst_maps, null_pair_arguments_are_rejected_like_chashmap_rejects_them) {
   const cmap_pair valid_key = {.ptr = &key, .size = sizeof(key)};
   const cmap_pair valid_val = {.ptr = &val, .size = sizeof(val)};
 
-  const ccol_retval_t insert_null_key =
+  const ccol_retval insert_null_key =
       cbstmap_insert_elem(cbm, NULL, &valid_val);
-  const ccol_retval_t insert_null_val =
+  const ccol_retval insert_null_val =
       cbstmap_insert_elem(cbm, &valid_key, NULL);
-  const ccol_retval_t insert_both_null = cbstmap_insert_elem(cbm, NULL, NULL);
+  const ccol_retval insert_both_null = cbstmap_insert_elem(cbm, NULL, NULL);
 
   int readback = -1;
-  const ccol_retval_t copy_null_key =
+  const ccol_retval copy_null_key =
       cbstmap_get_elem_copy(cbm, NULL, &readback, sizeof(readback));
 
   cmap_pair out = {NULL, 0};
-  const ccol_retval_t ref_null_key = cbstmap_get_elem_ref(cbm, NULL, &out);
-  const ccol_retval_t ref_null_out =
-      cbstmap_get_elem_ref(cbm, &valid_key, NULL);
+  const ccol_retval ref_null_key = cbstmap_get_elem_ref(cbm, NULL, &out);
+  const ccol_retval ref_null_out = cbstmap_get_elem_ref(cbm, &valid_key, NULL);
 
-  const ccol_retval_t delete_null_key = cbstmap_delete_elem(cbm, NULL);
+  const ccol_retval delete_null_key = cbstmap_delete_elem(cbm, NULL);
 
-  // None of the rejected calls stored anything, and a correctly formed call
-  // works afterwards, so the guards only reject the mistake.
   const size_t count_after_rejects = cbstmap_elem_count(cbm);
-  const ccol_retval_t good_insert =
+  const ccol_retval good_insert =
       cbstmap_insert_elem(cbm, &valid_key, &valid_val);
   const size_t count_after_good = cbstmap_elem_count(cbm);
-  const ccol_retval_t good_copy =
+  const ccol_retval good_copy =
       cbstmap_get_elem_copy(cbm, &valid_key, &readback, sizeof(readback));
 
   cbmap_destroy(cbm);
@@ -2503,20 +2196,8 @@ TEST(cbst_maps, null_pair_arguments_are_rejected_like_chashmap_rejects_them) {
   REQUIRE_EQ(out.ptr, NULL);
 }
 
-/*
- * The map reads from the cmap_pair the caller supplies instead of just
- * passing it along, so a pair that describes bytes it doesn't have needs
- * to be reported instead of dereferenced. The combination that can't be read
- * is a NULL ptr with a non-zero size. A size of zero is fine on either side,
- * because this module stores and looks up empty keys and empty values, and
- * that's where it differs from chashmap.
- *
- * If the guards go, the insert dies in the memcpy
- * of create_new_node, and the three lookup and delete paths die in the
- * memcmp of compare_keys. The test fills the tree before those three just so
- * they reach compare_keys, because on an empty tree they return
- * ccol_key_not_found without ever reading the pair.
- */
+// The tree is filled first so the lookup and delete paths reach compare_keys();
+// on an empty tree they'd return ccol_key_not_found without reading the pair.
 TEST(raw_entry_points, a_null_pointer_pair_with_a_nonzero_size_is_rejected) {
   cbmap_construct(m, int, int);
 
@@ -2525,11 +2206,9 @@ TEST(raw_entry_points, a_null_pointer_pair_with_a_nonzero_size_is_rejected) {
   cmap_pair key_pair = {.ptr = &real_key, .size = sizeof(int)};
   cmap_pair val_pair = {.ptr = &real_val, .size = sizeof(int)};
 
-  /* An empty tree, where the insert path reads both pairs directly. */
   REQUIRE_EQ(cbstmap_insert_elem(m, &unreadable, &val_pair), ccol_invalid_args);
   REQUIRE_EQ(cbstmap_insert_elem(m, &key_pair, &unreadable), ccol_invalid_args);
 
-  /* Populated, so the three below really reach compare_keys. */
   REQUIRE_EQ(cbstmap_insert_elem(m, &key_pair, &val_pair), ccol_success);
 
   int out = 0;
@@ -2539,7 +2218,6 @@ TEST(raw_entry_points, a_null_pointer_pair_with_a_nonzero_size_is_rejected) {
   REQUIRE_EQ(cbstmap_get_elem_ref(m, &unreadable, &ref), ccol_invalid_args);
   REQUIRE_EQ(cbstmap_delete_elem(m, &unreadable), ccol_invalid_args);
 
-  /* None of the rejections touched the legitimate entry. */
   out = 0;
   REQUIRE_EQ(cbstmap_get_elem_copy(m, &key_pair, &out, sizeof(out)),
              ccol_success);
@@ -2548,22 +2226,9 @@ TEST(raw_entry_points, a_null_pointer_pair_with_a_nonzero_size_is_rejected) {
   cbmap_destroy(m);
 }
 
-/* ------------------------------------------------------------------------- */
-/* Macro argument lifetime                                                    */
-/* ------------------------------------------------------------------------- */
-
-/* A compound literal written as a macro argument has automatic storage
-   duration limited to the block it's instantiated in, so the type-inferred
-   macros have to bind the caller's expression in their own block before it
-   reaches any nested one. Otherwise the literal gets created inside
-   _populate_cmap_pair's own inner block, dies when that block closes, and the
-   insert below copies out of a dead stack slot.
-
-   At the optimization level this suite builds at, these tests do catch it:
-   without the binding gcc -O3 reuses the slot, the first one reads 9 instead
-   of 12345 and the rest don't find the key at all. Under AddressSanitizer the
-   defect is diagnosed whatever the compiler, as a stack-use-after-scope read
-   inside create_new_node(). */
+// A compound literal argument lives only in the block it's created in. Without
+// the macros' own copy it would die inside ccol__populate_cmap_pair(), which
+// gcc -O3 and AddressSanitizer both show.
 TEST(cbmap_macro_arg_lifetime, a_compound_literal_value_survives_the_insert) {
   cbmap_construct_scoped(bm, int, int);
 
@@ -2597,16 +2262,13 @@ TEST(cbmap_macro_arg_lifetime, a_compound_literal_key_survives_every_lookup) {
   REQUIRE_NE((void *)found, NULL);
   if (found) REQUIRE_EQ(*found, 900);
 
-  /* cbmap_get() only runs once cbmap_get_ptr() has shown the key is there,
-     because an absent key is what a regression here produces, and cbmap_get
-     answers one with _ccol_fatal_err, which would abort the whole binary and
-     every other suite's result in the same run. */
   REQUIRE_EQ(cbmap_get(bm, (int){7}), 900);
 
   REQUIRE_EQ(cbmap_remove(bm, (int){7}), ccol_success);
   REQUIRE_EQ(cbstmap_elem_count(bm), (size_t)0);
 }
 
+// A struct value wider than any register, for the lifetime tests.
 typedef struct {
   long a;
   long b;
@@ -2614,9 +2276,8 @@ typedef struct {
   long d;
 } cbmap_lifetime_wide_value;
 
-/* The literal is written behind a macro so its commas don't split the
-   cbmap_insert() argument list. It's substituted, and so instantiated,
-   exactly where writing it inline would put it. */
+// A struct literal behind a macro, so its commas don't split the cbmap_insert()
+// arguments; it's created where it's written.
 #define CBMAP_LIFETIME_WIDE_LITERAL \
   (cbmap_lifetime_wide_value){.a = 11, .b = 22, .c = 33, .d = 44}
 
@@ -2636,23 +2297,8 @@ TEST(cbmap_macro_arg_lifetime, a_compound_literal_struct_value_survives) {
   }
 }
 
-/* ------------------------------------------------------------------------- */
-/* String value references                                                    */
-/* ------------------------------------------------------------------------- */
-
-/* A map with string values owns the bytes it stores and keeps its own
-   {ptr, size} accessor for the node in step with them. The only char* object
-   in the map is that accessor's own ptr field, so cbmap_get_ptr() can only
-   hand back its address, and storing a different char* through it would
-   leave the size describing the old string. So for a string-valued map the
-   macro gives a pointer to a const-qualified target, which turns that store
-   into a compile error.
-
-   We check the result's TYPE and not some run-time effect, because the
-   guarantee is exactly that the bad store never compiles. The controlling
-   expression of _Generic isn't evaluated, so it doesn't touch the map.
-   Without the const, the first association below doesn't match and the test
-   reports 0. */
+// The guarantee is that a store through the result doesn't compile, so the test
+// checks the result's type with _Generic, which doesn't evaluate the map.
 TEST(cbmap_string_value_ref, get_ptr_on_a_string_map_is_not_writable) {
   cbmap_construct_scoped(bm, char *, char *);
 
@@ -2666,8 +2312,6 @@ TEST(cbmap_string_value_ref, get_ptr_on_a_string_map_is_not_writable) {
              1);
 }
 
-/* The const only applies to the string case, and every other value type
-   keeps the writable pointer that cbmap_get_ptr() is there to provide. */
 TEST(cbmap_string_value_ref, get_ptr_on_a_non_string_map_stays_writable) {
   cbmap_construct_scoped(bm, char *, int);
 
@@ -2687,8 +2331,6 @@ TEST(cbmap_string_value_ref, get_ptr_on_a_non_string_map_stays_writable) {
   }
 }
 
-/* Reading the stored char*, and editing the bytes it points at within the
-   stored length, are both available; only replacing the pointer isn't. */
 TEST(cbmap_string_value_ref, a_string_reference_reads_and_edits_in_place) {
   cbmap_construct_scoped(bm, char *, char *);
 
@@ -2702,8 +2344,6 @@ TEST(cbmap_string_value_ref, a_string_reference_reads_and_edits_in_place) {
     (*found)[0] = 'j';
     REQUIRE_STREQ(cbmap_get(bm, key), "jello");
 
-    /* The accessor's own size never gets out of step with the bytes it
-       describes, so a copy-out reads exactly the stored string. */
     char buf[6] = {0};
     cmap_pair key_pair = {.ptr = key, .size = sizeof(key)};
     REQUIRE_EQ(cbstmap_get_elem_copy(bm, &key_pair, buf, sizeof(buf)),
@@ -2712,12 +2352,6 @@ TEST(cbmap_string_value_ref, a_string_reference_reads_and_edits_in_place) {
   }
 }
 
-/* cbstmap_get_elem_ref() fills a cmap_pair that belongs to the caller, so
-   val_pair.ptr and val_pair.size can be read and the bytes ptr describes can
-   be edited in place, for a string value like for any other.
-   tests/cbstmap/compile_probe.sh pins the signature, a property of the type
-   that no run-time test can see, and this test pins the reads and the
-   edits. */
 TEST(cbmap_elem_ref_accessor, the_filled_pair_reads_and_edits_bytes) {
   cbmap_construct_scoped(bm, char *, char *);
 
@@ -2742,9 +2376,6 @@ TEST(cbmap_elem_ref_accessor, the_filled_pair_reads_and_edits_bytes) {
   REQUIRE_STREQ(buf, "jello");
 }
 
-/* Each filled pair points at its own node's value, so a result held for one
-   key isn't disturbed by looking up any other key, and you can hold several
-   at once. */
 TEST(cbmap_elem_ref_accessor, references_for_distinct_keys_are_independent) {
   cbmap_construct_scoped(bm, int, int);
 
@@ -2778,10 +2409,6 @@ TEST(cbmap_elem_ref_accessor, references_for_distinct_keys_are_independent) {
   REQUIRE_EQ(*(const int *)second_ref.ptr, 123);
 }
 
-/* A hit fills the caller's pair with the address and size of the stored
-   value, and writing through ptr changes what cbmap_get() reads. A miss, and
-   every refused call with a val_pair, set the pair to {NULL, 0}, which the
-   poison values below prove. */
 TEST(cbmap_elem_ref_accessor, the_pair_contract_holds) {
   cbmap_construct(bm, int, long);
   for (int i = 0; i < 100; i++) {
@@ -2793,7 +2420,7 @@ TEST(cbmap_elem_ref_accessor, the_pair_contract_holds) {
   cmap_pair kp = {&k, sizeof(k)}, kpa = {&absent, sizeof(absent)};
   cmap_pair bad = {&wrong, sizeof(wrong)};
   cmap_pair hit = {(void *)0x1, 12345};
-  ccol_retval_t hit_r = cbstmap_get_elem_ref(bm, &kp, &hit);
+  ccol_retval hit_r = cbstmap_get_elem_ref(bm, &kp, &hit);
   bool ptr_in_map = false, write_seen = false;
   if (hit_r == ccol_success) {
     long *direct = cbmap_get_ptr(bm, k);
@@ -2802,11 +2429,11 @@ TEST(cbmap_elem_ref_accessor, the_pair_contract_holds) {
     write_seen = cbmap_get(bm, k) == 4242;
   }
   cmap_pair miss = {(void *)0x1, 12345};
-  ccol_retval_t miss_r = cbstmap_get_elem_ref(bm, &kpa, &miss);
+  ccol_retval miss_r = cbstmap_get_elem_ref(bm, &kpa, &miss);
   cmap_pair refused = {(void *)0x1, 12345};
-  ccol_retval_t refused_r = cbstmap_get_elem_ref(bm, &bad, &refused);
+  ccol_retval refused_r = cbstmap_get_elem_ref(bm, &bad, &refused);
   cmap_pair null_key = {(void *)0x1, 12345};
-  ccol_retval_t null_key_r = cbstmap_get_elem_ref(bm, NULL, &null_key);
+  ccol_retval null_key_r = cbstmap_get_elem_ref(bm, NULL, &null_key);
   cbmap_destroy(bm);
 
   REQUIRE_EQ(hit_r, ccol_success);
@@ -2824,9 +2451,6 @@ TEST(cbmap_elem_ref_accessor, the_pair_contract_holds) {
   REQUIRE_EQ(null_key.size, (size_t)0);
 }
 
-/* For a map with string values cbmap_get_ptr() points at the char* that the
-   node keeps, so two calls for one key give the same address and the string
-   bytes can be edited through it. */
 TEST(cbmap_elem_ref_accessor, get_ptr_of_a_string_value_points_into_the_node) {
   cbmap_construct(bm, int, char *);
   cbmap_insert(bm, 1, "hello");
@@ -2843,28 +2467,10 @@ TEST(cbmap_elem_ref_accessor, get_ptr_of_a_string_value_points_into_the_node) {
   REQUIRE_TRUE(edited);
 }
 
-/* ========================================================================== */
-/*          RAW-LAYER KEY PAIRS CARRY NO ALIGNMENT GUARANTEE                  */
-/* ========================================================================== */
-
-/* cbstmap_insert_elem, cbstmap_get_elem_ref and cbstmap_delete_elem accept a
- * cmap_pair the caller built by hand, pointing at whatever address the
- * caller has: key bytes sliced out of a packed frame, a mmap()ed record or a
- * serialized buffer sit at an arbitrary offset.
- *
- * So the comparison path must read both operands with memcpy and never
- * dereference a pointer cast to the key type. The note on _ccol_typed_cmp in
- * common.h explains the two separate requirements the cast breaks: the
- * address's alignment and the object's effective type.
- *
- * This test would notice a build whose _ccol_typed_cmp and
- * cmp_float_val dereference a cast pointer: an UndefinedBehaviorSanitizer
- * run reports "load of misaligned address ... which requires N byte
- * alignment" at the first probe below, for every one of these key types. */
+// A raw pair can point at any offset, for example inside a packed frame. If the
+// comparison read through a cast pointer, UndefinedBehaviorSanitizer would
+// report a misaligned load at the first probe.
 TEST(cbmap_raw_layer_alignment, misaligned_key_pair_resolves_for_every_type) {
-  /* One over-aligned block. Every probe puts its key bytes at an ODD offset
-   * inside it, so the address is misaligned for every type wider than a
-   * byte. */
   _Alignas(64) static unsigned char frame[256];
 
 #define CBMAP_MISALIGNED_PROBE(TYPE, DATA_TYPE, VALUE, OFFSET)                 \
@@ -2882,7 +2488,7 @@ TEST(cbmap_raw_layer_alignment, misaligned_key_pair_resolves_for_every_type) {
     memcpy(frame + (OFFSET), &probe_key, sizeof(probe_key));                   \
     REQUIRE_NE((size_t)((uintptr_t)(frame + (OFFSET)) % _Alignof(TYPE) == 0 && \
                         _Alignof(TYPE) > 1),                                   \
-               (size_t)1); /* the probe address really is misaligned */        \
+               (size_t)1);                                                     \
     cmap_pair misaligned_pair = {.ptr = frame + (OFFSET),                      \
                                  .size = sizeof(probe_key)};                   \
     cmap_pair found = {NULL, 0};                                               \
@@ -2912,31 +2518,26 @@ TEST(cbmap_raw_layer_alignment, misaligned_key_pair_resolves_for_every_type) {
 #undef CBMAP_MISALIGNED_PROBE
 }
 
-/* A misaligned key pair should give the SAME ordering as an aligned one. A
- * read that silently picked up the wrong bytes would still "work" for a
- * single lookup while corrupting the tree order, so this walks the map in
- * order and checks the sequence itself. */
 TEST(cbmap_raw_layer_alignment, misaligned_inserts_keep_the_sorted_order) {
   _Alignas(64) static unsigned char frame[64];
   char *err = NULL;
   cbmap bm = cbstmap_create(ccol_int, &err);
   REQUIRE_NE((void *)bm, NULL);
 
-  /* Insert 0..63 out of order, every key through a misaligned pair. */
   for (int step = 0; step < 64; step++) {
-    int k = (step * 37) % 64; /* 37 is coprime with 64: a permutation */
+    int k = (step * 37) % 64;
     int v = k * 5;
     memcpy(frame + 1, &k, sizeof(k));
     cmap_pair kp = {.ptr = frame + 1, .size = sizeof(k)};
     cmap_pair vp = {.ptr = &v, .size = sizeof(v)};
-    ccol_retval_t r = cbstmap_insert_elem(bm, &kp, &vp);
+    ccol_retval r = cbstmap_insert_elem(bm, &kp, &vp);
     REQUIRE_EQ(r, ccol_success);
   }
   REQUIRE_EQ(cbstmap_elem_count(bm), (size_t)64);
 
   int expected = 0;
   for (cmap_iterator *it = cbstmap_begin_iter(bm, NULL); it;
-       it = it->_next_fn(it)) {
+       it = it->ccol__next_fn(it)) {
     int k;
     memcpy(&k, it->key_pair->ptr, sizeof(k));
     REQUIRE_EQ(k, expected);
@@ -2947,19 +2548,15 @@ TEST(cbmap_raw_layer_alignment, misaligned_inserts_keep_the_sorted_order) {
   cbmap_destroy(bm);
 }
 
-/* ========================================================================== */
-/*          AN ITERATOR THAT OUTLIVES ITS CONTAINER UNTIL SCOPE EXIT          */
-/* ========================================================================== */
-
-/* An allocator that overwrites every block with a poison pattern before it
- * frees it. Reading freed memory then gives the poison and not the stale
- * value, so a use after free through a stale pointer faults in an ordinary
- * run and doesn't need a sanitizer to show up. */
+// The size header in front of each block of the poisoning allocator, padded to
+// max_align_t so the block after it stays aligned.
 typedef union {
   size_t size;
   max_align_t align;
 } cbmap_life_poison_hdr;
 
+// An allocator that fills every block with 0xA5 before it frees it, so the
+// iterator-lifetime tests see a use after free as a fault in an ordinary run.
 static void *cbmap_life_poison_malloc(size_t size) {
   cbmap_life_poison_hdr *h = malloc(sizeof(cbmap_life_poison_hdr) + size);
   if (!h) return NULL;
@@ -2991,22 +2588,20 @@ static void *cbmap_life_poison_realloc(void *ptr, size_t size) {
   return n;
 }
 
-static ccol_memmgmt_procs_t cbmap_life_poison_procs_storage = {
+// The poisoning allocator as a procs table, and a getter for the macros.
+static ccol_memmgmt_procs cbmap_life_poison_procs_storage = {
     .malloc = cbmap_life_poison_malloc,
     .calloc = cbmap_life_poison_calloc,
     .realloc = cbmap_life_poison_realloc,
     .free = cbmap_life_poison_free};
 
-static ccol_memmgmt_procs_t *cbmap_life_poison_procs(void) {
+static ccol_memmgmt_procs *cbmap_life_poison_procs(void) {
   return &cbmap_life_poison_procs_storage;
 }
 
-/* A loop that leaves early keeps its iterator live until the end of the
- * ccol_iter_declare scope. Destroying the map inside that scope has to leave
- * the iterator freeable, because the scope-exit cleanup frees it after the
- * map and its allocator record are gone. An iterator that frees itself
- * through the map would read the poisoned map struct at scope exit and
- * fault, which this test catches. */
+// The scope-exit cleanup frees an iterator after its map and allocator copy are
+// gone. An iterator that freed itself through the map would read the poisoned
+// map and fault.
 TEST(iterator_lifetime, break_then_destroy_then_scope_exit_custom_allocator) {
   int seen = 0;
   {
@@ -3035,15 +2630,14 @@ TEST(iterator_lifetime, break_then_destroy_then_scope_exit_default_allocator) {
   REQUIRE_EQ(seen, 2);
 }
 
-/* ========================================================================== */
-/*              A STRUCT KEY WITH PADDING, THROUGH THE MACRO LAYER            */
-/* ========================================================================== */
-
+// A key with padding between tag and id.
 typedef struct {
   char tag;
-  long id; /* padding sits between tag and id on every supported target */
+  long id;
 } cbmap_padded_key;
 
+// Set when the compiler has __builtin_clear_padding, which the macros need to
+// clear the padding of their key copy.
 #if defined(__has_builtin)
 #if __has_builtin(__builtin_clear_padding)
 #define CBMAP_TEST_COMPILER_CLEARS_PADDING 1
@@ -3051,6 +2645,8 @@ typedef struct {
 #endif
 
 #ifdef CBMAP_TEST_COMPILER_CLEARS_PADDING
+// Gives a padded key with zeroed padding. The macros copy it member by member,
+// so the zeros don't survive into their copy by themselves.
 static cbmap_padded_key cbmap_padded_make(char tag, long id) {
   cbmap_padded_key k;
   memset(&k, 0, sizeof(k));
@@ -3059,13 +2655,15 @@ static cbmap_padded_key cbmap_padded_make(char tag, long id) {
   return k;
 }
 
-/* Fills the stack below the caller with a non-zero pattern, so a copy that
- * leaves its padding untouched shows it as non-zero bytes. */
+// Fills the stack below the caller with 0xAB, so a key copy that leaves its
+// padding alone shows non-zero bytes.
 static __attribute__((noinline)) void cbmap_padded_dirty_stack(void) {
   volatile unsigned char buf[4096];
   for (size_t i = 0; i < sizeof(buf); i++) buf[i] = 0xAB;
 }
 
+// Inserts or looks up a padded key from its own stack frame, on top of the
+// dirtied stack, as the padding test needs.
 static __attribute__((noinline)) void cbmap_padded_insert(cbmap m, int i) {
   cbmap_redeclare(m, cbmap_padded_key, int);
   cbmap_insert(m, cbmap_padded_make('x', i), i);
@@ -3078,12 +2676,9 @@ static __attribute__((noinline)) int *cbmap_padded_lookup(cbmap m, int i) {
 
 #endif
 
-/* With no comparator, a key of a type the map doesn't know compares byte for
- * byte, padding included. Where the compiler has __builtin_clear_padding the
- * macros clear the padding of their own copy of the key, so a padded key
- * needs no comparator there. Under GCC this test catches it: without the
- * clearing the stored keys carry the stack pattern in their padding and the
- * lookups miss. */
+// A key of an unknown type compares byte for byte, padding included. Under GCC
+// the test fails without the clearing: the padding carries the stack pattern
+// and the lookups miss.
 TEST(padded_key, the_macros_clear_the_padding_of_their_key_copy) {
 #ifdef CBMAP_TEST_COMPILER_CLEARS_PADDING
   cbmap_construct(m, cbmap_padded_key, int);
@@ -3097,7 +2692,6 @@ TEST(padded_key, the_macros_clear_the_padding_of_their_key_copy) {
     int *v = cbmap_padded_lookup(m, i);
     if (!v || *v != i) all_found = false;
   }
-  /* Every stored key carries zero padding. */
   bool padding_zero = true;
   size_t pad_start = offsetof(cbmap_padded_key, tag) + 1;
   size_t pad_end = offsetof(cbmap_padded_key, id);
@@ -3116,23 +2710,24 @@ TEST(padded_key, the_macros_clear_the_padding_of_their_key_copy) {
 #endif
 }
 
-/* ------------------------------------------------------------------------ */
-/* A NULL character pointer through the typed macros                         */
-/* ------------------------------------------------------------------------ */
-
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+// A variable that is never set, so getenv() gives a real NULL char * the
+// compiler can't see through.
 #define CBMAP_NULL_TEST_UNSET_VAR "CCOL_CBMAP_TEST_SURELY_UNSET_VARIABLE"
 
-/* See the matching helper in tests/chashmap/tests.c. The result goes through
- * a pipe, because valgrind overrides the exit status of a child that exits
- * with memory still reachable, and a child that dies on SIGSEGV writes
- * nothing. */
+// What cbmap_null_run_probe() reports when the child dies instead of writing a
+// result.
 enum { cbmap_null_probe_crashed = 250, cbmap_null_probe_aborted = 251 };
 
+// Runs probe in a forked child and gives its result byte, or
+// cbmap_null_probe_aborted for SIGABRT and cbmap_null_probe_crashed for any
+// other death. The NULL key tests need it because the typed macros end the
+// process on purpose. The result goes through a pipe, since valgrind overrides
+// the exit status of a child with reachable memory.
 static int cbmap_null_run_probe(int (*probe)(void)) {
   int fds[2];
   if (pipe(fds) != 0) return -1;
@@ -3167,6 +2762,9 @@ static int cbmap_null_run_probe(int (*probe)(void)) {
   return cbmap_null_probe_crashed;
 }
 
+// Probes for the NULL char pointer tests. Each passes a NULL key or value to
+// one typed macro and gives 1 when the map behaved as documented; the fatal
+// ones never reach their return.
 static int cbmap_null_probe_get_ptr_key(void) {
   unsetenv(CBMAP_NULL_TEST_UNSET_VAR);
   cbmap_construct(b, char *, int);
@@ -3181,7 +2779,7 @@ static int cbmap_null_probe_remove_key(void) {
   unsetenv(CBMAP_NULL_TEST_UNSET_VAR);
   cbmap_construct(b, char *, int);
   cbmap_insert(b, "HOME", 1);
-  ccol_retval_t r = cbmap_remove(b, getenv(CBMAP_NULL_TEST_UNSET_VAR));
+  ccol_retval r = cbmap_remove(b, getenv(CBMAP_NULL_TEST_UNSET_VAR));
   int ok = r == ccol_invalid_args && cbstmap_elem_count(b) == 1;
   cbmap_destroy(b);
   return ok;
@@ -3212,14 +2810,9 @@ static int cbmap_null_probe_get_key(void) {
   return v == 1;
 }
 
-/* A NULL character pointer isn't a string. The raw layer of this module
- * accepts a size-0 pair as an empty key or value, so the macros refuse a
- * pair with no pointer themselves, with the same ccol_invalid_args chmap
- * reports: cbmap_get_ptr() gives NULL, cbmap_remove() returns the code, and
- * cbmap_insert() and cbmap_get() stop the program. Without the NULL test
- * in _populate_cmap_pair() every probe dies with
- * SIGSEGV inside strlen(), and without the refusal in the macros the insert
- * probes store an empty key or value and report success. */
+// A NULL char pointer isn't a string. Without the NULL test in
+// ccol__populate_cmap_pair() the probes die in strlen(); without the macros'
+// refusal the inserts store an empty key or value and succeed.
 TEST(cbmap_null_char_ptr, get_ptr_of_a_null_key_gives_null) {
   REQUIRE_EQ(cbmap_null_run_probe(cbmap_null_probe_get_ptr_key), 1);
 }
@@ -3243,13 +2836,7 @@ TEST(cbmap_null_char_ptr, get_of_a_null_key_is_fatal) {
              (int)cbmap_null_probe_aborted);
 }
 
-/* ------------------------------------------------------------------------ */
-/* Binary keys                                                                */
-/* ------------------------------------------------------------------------ */
-
-/* Through the typed macros a fixed-size digest wrapped in a struct is a
- * binary key, and the tree orders keys by all 32 bytes, embedded zero bytes
- * included. */
+// A 32-byte digest wrapped in a struct, used as a binary key.
 typedef struct {
   unsigned char b[32];
 } cbmap_test_digest;
@@ -3279,10 +2866,6 @@ TEST(cbmap_binary_keys, a_digest_struct_key_compares_every_byte) {
   REQUIRE_EQ(v3, 3);
 }
 
-/* A binary key whose length only the caller knows goes through the raw
- * layer, with that length in cmap_pair.size. Every byte counts, embedded
- * zero bytes included, and a key that's a prefix of another up to and past a
- * zero byte stays distinct from it. */
 TEST(cbmap_binary_keys, a_raw_layer_key_with_embedded_zeros) {
   cbmap m = cbstmap_create(ccol_other_types, NULL);
   REQUIRE_NE((void *)m, NULL);
@@ -3296,20 +2879,20 @@ TEST(cbmap_binary_keys, a_raw_layer_key_with_embedded_zeros) {
   cmap_pair kp1 = {k1, sizeof(k1)}, vp1 = {&v1, sizeof(v1)};
   cmap_pair kp2 = {k2, sizeof(k2)}, vp2 = {&v2, sizeof(v2)};
   cmap_pair kp3 = {k3, sizeof(k3)}, vp3 = {&v3, sizeof(v3)};
-  ccol_retval_t r1 = cbstmap_insert_elem(m, &kp1, &vp1);
-  ccol_retval_t r2 = cbstmap_insert_elem(m, &kp2, &vp2);
-  ccol_retval_t r3 = cbstmap_insert_elem(m, &kp3, &vp3);
+  ccol_retval r1 = cbstmap_insert_elem(m, &kp1, &vp1);
+  ccol_retval r2 = cbstmap_insert_elem(m, &kp2, &vp2);
+  ccol_retval r3 = cbstmap_insert_elem(m, &kp3, &vp3);
   size_t count = cbstmap_elem_count(m);
   unsigned char probe[16];
   memcpy(probe, k2, sizeof(probe));
   cmap_pair pp = {probe, sizeof(probe)};
   cmap_pair out = {NULL, 0};
-  ccol_retval_t rg = cbstmap_get_elem_ref(m, &pp, &out);
+  ccol_retval rg = cbstmap_get_elem_ref(m, &pp, &out);
   int got = -1;
   if (rg == ccol_success && out.ptr) memcpy(&got, out.ptr, sizeof(got));
   cmap_pair pp3 = {k3, sizeof(k3)};
   cmap_pair out3 = {NULL, 0};
-  ccol_retval_t rg3 = cbstmap_get_elem_ref(m, &pp3, &out3);
+  ccol_retval rg3 = cbstmap_get_elem_ref(m, &pp3, &out3);
   int got3 = -1;
   if (rg3 == ccol_success && out3.ptr) memcpy(&got3, out3.ptr, sizeof(got3));
   cbmap_destroy(m);
@@ -3321,17 +2904,10 @@ TEST(cbmap_binary_keys, a_raw_layer_key_with_embedded_zeros) {
   REQUIRE_EQ(got3, 3);
 }
 
-// ========================================================================
-// TYPED DESCENT AND REBALANCE EARLY-STOP TESTS
-// ========================================================================
-
-// Inserts the values in a scrambled order, then checks three things: an
-// in-order walk strictly increases under the key type's native <, every
-// inserted key is found with its own value, and a key that was never
-// inserted is absent. The value sets put negative numbers next to positive
-// ones for the signed types, and values with the top bit set next to small
-// ones for the unsigned and pointer types, so a comparison of the wrong
-// signedness or width orders them differently from <.
+// Inserts the values in a scrambled order and checks that the walk increases
+// under T's own <, that every key is found with its value and that absent is
+// missing. The value sets mix signs and top-bit values, so a comparison of the
+// wrong signedness or width gives another order.
 #define CBMAP_TYPED_ORDER_CASE(T, absent, ...)                               \
   do {                                                                       \
     T vals_[] = {__VA_ARGS__};                                               \
@@ -3339,7 +2915,7 @@ TEST(cbmap_binary_keys, a_raw_layer_key_with_embedded_zeros) {
     _Static_assert(sizeof(vals_) / sizeof(vals_[0]) < 11, "scramble");       \
     cbmap_construct(om, T, int);                                             \
     for (size_t i_ = 0; i_ < n_; ++i_) {                                     \
-      size_t j_ = (i_ * 11 + 3) % n_; /* a permutation for n_ < 11 */        \
+      size_t j_ = (i_ * 11 + 3) % n_;                                        \
       T k_ = vals_[j_];                                                      \
       int v_ = (int)j_;                                                      \
       cbmap_insert(om, k_, v_);                                              \
@@ -3386,17 +2962,16 @@ TEST(cbst_maps, typed_key_kinds_order_and_find_like_native_less_than) {
   CBMAP_TYPED_ORDER_CASE(unsigned long long, 3ULL, 0ULL, ULLONG_MAX,
                          0x8000000000000000ULL, 0x7fffffffffffffffULL, 1ULL,
                          0xfffffffffffffff0ULL);
-  // Pointers order as unsigned addresses. These values are never
-  // dereferenced, they're only keys.
   CBMAP_TYPED_ORDER_CASE(
       void *, (void *)(uintptr_t)0x30, (void *)(uintptr_t)0x10,
       (void *)(uintptr_t)UINTPTR_MAX, (void *)(uintptr_t)(UINTPTR_MAX / 2 + 1),
       (void *)(uintptr_t)(UINTPTR_MAX / 2), (void *)(uintptr_t)0x20,
       (void *)(uintptr_t)(UINTPTR_MAX - 15));
-  // The generic comparison path, for contrast.
   CBMAP_TYPED_ORDER_CASE(double, 0.5, -1e300, 1e300, -0.25, 0.0, 2.5, -7.0);
 }
 
+// Orders int keys descending, to show that a custom comparator overrides the
+// typed descent of an int key.
 static int cbmap_tests_reverse_int_cmp(const void *a, const void *b) {
   int x, y;
   memcpy(&x, a, sizeof(x));
@@ -3404,8 +2979,6 @@ static int cbmap_tests_reverse_int_cmp(const void *a, const void *b) {
   return (y > x) - (y < x);
 }
 
-// A custom comparison proc has to decide the order even for an integer key
-// type, which otherwise has a typed descent of its own.
 TEST(cbst_maps, custom_proc_on_an_integer_key_still_decides_the_order) {
   cbmap_construct_cc(rm, int, int, cbmap_tests_reverse_int_cmp);
   for (int i = 0; i < 64; ++i) {
@@ -3433,15 +3006,12 @@ TEST(cbst_maps, custom_proc_on_an_integer_key_still_decides_the_order) {
   REQUIRE_TRUE(ok);
 }
 
+// The key range of the deep churn test, large enough for rotations far from the
+// leaves.
 #define DEEP_CHURN_KEY_RANGE 4096
 
-// Insert and delete both stop rebalancing at the first ancestor whose height
-// didn't change. This test builds trees deep enough for a rotation and a
-// height change to happen far from the leaf, with long runs of deletes that
-// shrink the tree and runs of inserts that grow it back, and validates every
-// height and balance factor after every operation. A rebalance that stops
-// one level too early leaves a stale height above it, and the validator
-// reports that.
+// Insert and delete stop rebalancing at the first unchanged height. A stop one
+// level too early leaves a stale height that the validator reports.
 TEST(cbst_maps, deep_churn_keeps_every_height_and_balance_exact) {
   ccol_invariants_rng_t rng;
   uint64_t seed = CCOL_INVARIANTS_DEFAULT_SEED ^ 0x5bd1e995u;
@@ -3455,7 +3025,6 @@ TEST(cbst_maps, deep_churn_keeps_every_height_and_balance_exact) {
   bool ok = true;
 
   for (int phase = 0; phase < 12 && ok; ++phase) {
-    // Even phases mostly insert, odd phases mostly delete.
     unsigned insert_share = (phase % 2 == 0) ? 85 : 15;
     for (int i = 0; i < 3000 && ok; ++i) {
       int key = (int)ccol_invariants_next_bounded(&rng, DEEP_CHURN_KEY_RANGE);
@@ -3478,7 +3047,6 @@ TEST(cbst_maps, deep_churn_keeps_every_height_and_balance_exact) {
     int *p = cbmap_get_ptr(dm, k);
     if (present[k] ? (!p || *p != (k ^ 0x55)) : p != NULL) ok = false;
   }
-  // Drain in an order that deletes from both ends towards the middle.
   for (int lo = 0, hi = DEEP_CHURN_KEY_RANGE - 1; lo <= hi && ok; ++lo, --hi) {
     cbmap_remove(dm, lo);
     if (lo != hi) cbmap_remove(dm, hi);
@@ -3489,8 +3057,6 @@ TEST(cbst_maps, deep_churn_keeps_every_height_and_balance_exact) {
   REQUIRE_TRUE(ok);
 }
 
-/* The raw destroy macro and the short names of the typed layer are one
- * implementation under two names: each pair must give the same answer. */
 TEST(cbmap_aliases, raw_destroy_evaluates_its_argument_once) {
   cbmap maps[2] = {cbstmap_create(ccol_int, NULL),
                    cbstmap_create(ccol_int, NULL)};
@@ -3508,7 +3074,7 @@ TEST(cbmap_aliases, size_and_reset_follow_the_raw_layer) {
   for (int i = 0; i < 40; i++) cbmap_insert(m, i, i * 3);
   size_t typed = cbmap_size(m);
   size_t raw = cbstmap_elem_count(m);
-  ccol_retval_t rv = cbmap_reset(m);
+  ccol_retval rv = cbmap_reset(m);
   size_t after = cbmap_size(m);
   cbmap_insert(m, 7, 8);
   int back = cbmap_get(m, 7);

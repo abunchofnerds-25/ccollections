@@ -22,13 +22,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe that a caller which only includes these headers builds
- * under a strict -std=c11 -pedantic-errors, with no GNU mode. The headers'
- * inline functions expand _ccol_fatal_err(), so that macro can't rely on a
- * GNU extension like the comma swallow of , ##__VA_ARGS__, which clang
- * -pedantic rejects. Only code that USES the typed container macros needs
- * -std=gnu11. The Makefile compiles this file with -fsyntax-only under every
- * compiler it finds, nothing here runs. */
+// A compile-time probe: a caller that only includes these headers must build
+// under a strict -std=c11 -pedantic-errors, with no GNU mode. The inline
+// functions of the headers expand ccol__fatal_err(), so that macro can't use a
+// GNU extension like the comma swallow of , ##__VA_ARGS__. Only code that uses
+// the typed container macros needs -std=gnu11. The Makefile compiles this file
+// with -fsyntax-only under every compiler it finds; nothing here runs.
 
 #include <cbstmap.h>
 #include <chashmap.h>
@@ -38,5 +37,8 @@ SOFTWARE.
 #include <cstring.h>
 #include <cvector.h>
 
+// Does nothing and gives 0. It exists because ISO C forbids an empty
+// translation unit, and -pedantic-errors would refuse a file that holds only
+// includes.
 int ccol_pedantic_probe(void);
 int ccol_pedantic_probe(void) { return 0; }

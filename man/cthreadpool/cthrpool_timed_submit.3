@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadpool.h>
 
-ccol_retval_t cthrpool_timed_submit(cthrpool pool,
+ccol_retval cthrpool_timed_submit(cthrpool pool,
                                     void (*fn)(void *),
                                     void *arg,
                                     void (*on_complete)(void *arg, bool ran),

@@ -12,7 +12,7 @@ value = cbmap_get(hm_name, key);
 .SH DESCRIPTION
 .nf
 Type-inferred wrapper for cbstmap_get_elem_ref() that returns the value
-itself. It calls _ccol_fatal_err() when the key is not in the map and also
+itself. It calls ccol__fatal_err() when the key is not in the map and also
 when the two sizes don't match.
 
 The lookup key is converted through the DECLARED key type of the tree,

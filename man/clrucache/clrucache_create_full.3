@@ -10,10 +10,10 @@ C Collections (libccollections, \-lccollections)
 ccache clrucache_create_full(size_t capacity,
                              ccol_data_type key_type,
                              ccol_data_type val_type,
-                             ccache_remote_getter_fn_t getter,
-                             ccache_remote_setter_fn_t setter,
-                             ccache_eviction_fn_t eviction_cb,
-                             ccol_memmgmt_procs_t *mprocs,
+                             ccache_remote_getter_fn getter,
+                             ccache_remote_setter_fn setter,
+                             ccache_eviction_fn eviction_cb,
+                             ccol_memmgmt_procs *mprocs,
                              char **err);
 .fi
 .SH DESCRIPTION

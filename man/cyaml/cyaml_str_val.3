@@ -12,7 +12,7 @@ const char *cyaml_str_val(cyaml node);
 .SH DESCRIPTION
 .nf
 Returns a read-only pointer to the null-terminated string that node
-stores.  The function calls _ccol_fatal_err() when node is NULL and
+stores.  The function calls ccol__fatal_err() when node is NULL and
 when node is not of type CYAML_STRING.
 
 The node owns the string, so the caller must not free the pointer.

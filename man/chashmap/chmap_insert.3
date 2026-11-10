@@ -13,7 +13,7 @@ chmap_insert(hm_name, key, val);
 .nf
 Type-inferred wrapper for chashmap_insert_elem() that builds the key and
 value cmap_pairs from the given expressions. If the map already holds
-the key, the value is updated silently. _ccol_fatal_err() is called only
+the key, the value is updated silently. ccol__fatal_err() is called only
 on a real failure, which means ccol_not_enough_memory,
 ccol_container_full or ccol_invalid_args.
 

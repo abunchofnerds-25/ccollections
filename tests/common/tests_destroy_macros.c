@@ -22,23 +22,19 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Every public destroy, free and release macro has to evaluate its handle
- * argument exactly once, call the destroy function once with the value the
- * argument held, and then clear the argument. This binary checks only the
- * macros. The destroy functions they call are defined here as stubs that
- * record their calls, so none of the library is linked and no module code
- * runs.
- *
- * Each case walks an array backwards with `while (k) F(a[--k])`. A macro
- * that evaluates its argument twice decrements k twice per call, so it
- * destroys the wrong elements and skips others. The array sits at the end of
- * a larger one, which means an index such a macro drives below 0 still
- * points at the test's own storage, and we get an assertion failure instead
- * of undefined behaviour.
- *
- * The binary is built with -Wshadow and every case also nests one call in
- * the argument of another, so if a destroy macro's temporary hides another
- * one the build fails. */
+// Every public destroy, free and release macro must evaluate its handle
+// argument once, call the destroy function once with the value the argument
+// held, and then clear the argument. This binary checks only the macros: the
+// destroy functions are stubs defined here that record their calls, so none
+// of the library is linked.
+//
+// Each case walks an array backwards with `while (k) F(a[--k])`. A macro that
+// evaluates its argument twice decrements k twice per call, destroys the
+// wrong elements and skips others. The array sits at the end of a larger one,
+// so an index driven below 0 still points at our own storage and we get an
+// assertion failure instead of undefined behaviour. The binary is built with
+// -Wshadow and every case nests one call in the argument of another, so a
+// destroy macro whose temporary hides another one fails the build.
 
 #include <cbstmap.h>
 #include <chashmap.h>
@@ -55,65 +51,79 @@ SOFTWARE.
 #include <cyaml.h>
 #include <stdint.h>
 #include <tau/tau.h>
-TAU_MAIN()  // sets Tau up, and gives the main function
+TAU_MAIN()
 
+// The number of handles each case destroys; three is enough to see a skipped or
+// repeated element.
 #define DM_N 3
 
-/* What the stubs saw: the value of each call, in order. */
+// What the stubs saw: the value of each call, in order, and the call count.
 static uintptr_t dm_seen[16];
 static int dm_calls;
 
+// Records one call of a stub, so a case can check which values the macros
+// passed and in what order. Appends v to dm_seen while it fits and increments
+// dm_calls.
 static void dm_record(uintptr_t v) {
   if (dm_calls < (int)(sizeof(dm_seen) / sizeof(dm_seen[0])))
     dm_seen[dm_calls] = v;
   dm_calls++;
 }
 
+// Clears dm_seen and dm_calls, so each case (and each half of DM_CASE) starts
+// with no recorded calls.
 static void dm_reset(void) {
   memset(dm_seen, 0, sizeof(dm_seen));
   dm_calls = 0;
 }
 
-/* Stubs that record their calls, with the library functions' signatures. */
-void __chashmap_destroy(chmap h) { dm_record((uintptr_t)h); }
-void __cbstmap_destroy(cbmap h) { dm_record((uintptr_t)h); }
-void __chttpcli_destroy(chttpcli h) { dm_record((uintptr_t)h); }
-void __chttpsvr_destroy(chttpsvr h) { dm_record((uintptr_t)h); }
-void __cjson_destroy(cjson h) { dm_record((uintptr_t)h); }
-void __cyaml_destroy(cyaml h) { dm_record((uintptr_t)h); }
-void __clrucache_destroy(ccache h) { dm_record((uintptr_t)h); }
-void _cmempool_destroy(cmempool *h) { dm_record((uintptr_t)h); }
-void _crmempool_destroy(crmempool *h) { dm_record((uintptr_t)h); }
-void __ccircq_destroy(ccircq *h) { dm_record((uintptr_t)h); }
-void __cdynmq_destroy(cdynmq *h) { dm_record((uintptr_t)h); }
-void __cchan_destroy(cchan *h) { dm_record((uintptr_t)h); }
-void __ceventloop_destroy(ceventloop h) { dm_record((uintptr_t)h); }
-void __cthrpool_destroy(cthrpool h) { dm_record((uintptr_t)h); }
-void __cvector_destroy(cvec h) { dm_record((uintptr_t)h); }
-void __cstring_destroy(cstr h) { dm_record((uintptr_t)h); }
+// Stubs of the destroy functions that the macros call, with the signatures of
+// the library functions. They take the place of the library, so only the macros
+// run; each records the handle value it got through dm_record().
+void chashmap__destroy(chmap h) { dm_record((uintptr_t)h); }
+void cbstmap__destroy(cbmap h) { dm_record((uintptr_t)h); }
+void chttpcli__destroy(chttpcli h) { dm_record((uintptr_t)h); }
+void chttpsvr__destroy(chttpsvr h) { dm_record((uintptr_t)h); }
+void cjson__destroy(cjson h) { dm_record((uintptr_t)h); }
+void cyaml__destroy(cyaml h) { dm_record((uintptr_t)h); }
+void clrucache__destroy(ccache h) { dm_record((uintptr_t)h); }
+void cmempool__destroy(cmempool *h) { dm_record((uintptr_t)h); }
+void crmempool__destroy(crmempool *h) { dm_record((uintptr_t)h); }
+void ccircq__destroy(ccircq *h) { dm_record((uintptr_t)h); }
+void cdynmq__destroy(cdynmq *h) { dm_record((uintptr_t)h); }
+void cchan__destroy(cchan *h) { dm_record((uintptr_t)h); }
+void ceventloop__destroy(ceventloop h) { dm_record((uintptr_t)h); }
+void cthrpool__destroy(cthrpool h) { dm_record((uintptr_t)h); }
+void cvector__destroy(cvec h) { dm_record((uintptr_t)h); }
+void cstring__destroy(cstr h) { dm_record((uintptr_t)h); }
 
-/* We record the pool argument of a free_entry macro too, so a case can
- * check that the pool reached the call unchanged. */
+// The pool argument of the last free_entry call, so a case can check that the
+// pool reached the call unchanged.
 static uintptr_t dm_pool_seen;
-void _cmempool_free_entry(cmempool *mp, void *entry) {
+// Stubs of the two free_entry functions, in place of the library. Each stores
+// its pool in dm_pool_seen and records the entry through dm_record().
+void cmempool__free_entry(cmempool *mp, void *entry) {
   dm_pool_seen = (uintptr_t)mp;
   dm_record((uintptr_t)entry);
 }
-void _crmempool_free_entry(crmempool *rmp, void *entry) {
+void crmempool__free_entry(crmempool *rmp, void *entry) {
   dm_pool_seen = (uintptr_t)rmp;
   dm_record((uintptr_t)entry);
 }
 
-/* A fake handle value for element i. It's never 0, so a macro that skips a
- * NULL or invalid handle calls the stub anyway, and the stubs never
- * dereference it. */
+// Gives a fake handle value for element i, as a uintptr_t. The cases fill their
+// arrays with it. It's never 0, so a macro that skips a NULL or invalid handle
+// still calls the stub, and the stubs never dereference it. Evaluates i once.
 #define DM_VAL(i) ((uintptr_t)0x1000u + (uintptr_t)(i) * 0x10u)
 
-/* Runs F backwards over an array of three handles of type T, then checks
- * that exactly three calls happened in order with each element's value, that
- * every element was cleared to CLEARED and that k got to 0 after exactly
- * three calls. A call nested in the argument checks that two expansions of F
- * don't collide. */
+// Runs the destroy macro F over an array of DM_N handles of type T, last
+// element first, and checks the result with REQUIRE_* (it returns from the test
+// on a failure). It is the body of every macro case: exactly DM_N calls in
+// order with each element's value, every element cleared to CLEARED, and k at 0
+// after DM_N calls. The array below dm_a holds live guard handles, so an index
+// driven below 0 stays in our storage. A second part nests one F call in the
+// argument of another to check that two expansions don't collide. Reads and
+// resets dm_seen and dm_calls through the stubs.
 #define DM_CASE(F, T, CLEARED)                                            \
   do {                                                                    \
     T dm_all[2 * DM_N];                                                   \
@@ -187,10 +197,14 @@ TEST(destroy_macros, cdynmq_destroy) {
 }
 TEST(destroy_macros, cchan_destroy) { DM_CASE(cchan_destroy, cchan *, NULL); }
 
-/* The pool of a free_entry call is an ordinary argument, so it reaches the
- * call once and unchanged. */
+// The pools that the free_entry cases pass; a pool is an ordinary argument, so
+// it must reach the call once and unchanged.
 static cmempool *const dm_mp = (cmempool *)DM_VAL(9);
 static crmempool *const dm_rmp = (crmempool *)DM_VAL(10);
+// Single-argument wrappers of cmempool_free_entry and crmempool_free_entry, so
+// DM_CASE can drive them like a destroy macro. e is the entry; the pool is the
+// fixed dm_mp or dm_rmp. They expand to the call of the wrapped macro, whose
+// stub records the entry and stores the pool in dm_pool_seen.
 #define DM_FREE_ENTRY(e) cmempool_free_entry(dm_mp, e)
 #define DM_R_FREE_ENTRY(e) crmempool_free_entry(dm_rmp, e)
 
@@ -203,19 +217,21 @@ TEST(destroy_macros, crmempool_free_entry) {
   REQUIRE_EQ(dm_pool_seen, (uintptr_t)dm_rmp);
 }
 
-/* ccol_iter_destroy calls the _free_fn of the iterator itself. */
+// The ccol__free_fn of the test iterators, which ccol_iter_destroy calls. It
+// records the iterator through dm_record(), so the case can check the order.
 static void dm_iter_free(cmap_iterator *it) { dm_record((uintptr_t)it); }
 
+// DM_CASE written out for iterators, whose destroy goes through a function
+// pointer of the iterator itself. The guard iterators below dm_a are live.
 TEST(destroy_macros, ccol_iter_destroy) {
   cmap_iterator dm_its[DM_N + 2];
   memset(dm_its, 0, sizeof(dm_its));
-  for (int i = 0; i < DM_N + 2; i++) dm_its[i]._free_fn = dm_iter_free;
-  /* As in DM_CASE, the guard iterators below dm_a are live too. */
+  for (int i = 0; i < DM_N + 2; i++) dm_its[i].ccol__free_fn = dm_iter_free;
   cmap_iterator dm_guard_its[DM_N];
   memset(dm_guard_its, 0, sizeof(dm_guard_its));
   cmap_iterator *dm_all[2 * DM_N];
   for (int i = 0; i < DM_N; i++) {
-    dm_guard_its[i]._free_fn = dm_iter_free;
+    dm_guard_its[i].ccol__free_fn = dm_iter_free;
     dm_all[i] = &dm_guard_its[i];
   }
   cmap_iterator **dm_a = &dm_all[DM_N];

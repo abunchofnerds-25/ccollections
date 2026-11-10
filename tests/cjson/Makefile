@@ -37,9 +37,10 @@ tests_c23: build_c23
 
 # nesting_probe.c nests this module's value macro inside its own argument.
 # -Wshadow turns any local that a nested expansion hides into a hard error, and
-# only the compiler can report that, so the probe is compiled but never run.
+# only the compiler can report that, so the probe is compiled but never run. -Wcast-qual holds every expansion to
+# the const rules of a caller that builds with it.
 nesting_probe:
-	$(CC) $(INCLUDES) $(DEFINITIONS) -std=gnu11 -Wall -Wextra -Wshadow -Werror \
+	$(CC) $(INCLUDES) $(DEFINITIONS) -std=gnu11 -Wall -Wextra -Wshadow -Wcast-qual -Werror \
 		-fsyntax-only nesting_probe.c
 
 test: build build_c23 build_keys nesting_probe

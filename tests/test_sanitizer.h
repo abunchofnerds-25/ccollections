@@ -22,25 +22,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* What a test binary can't run under the sanitizer it was built with.
- *
- * ThreadSanitizer doesn't support a child of a multithreaded fork() that
- * starts threads of its own (its die_after_fork option, on by default, ends
- * such a child), and every ThreadSanitizer process is multithreaded since
- * the runtime has a thread of its own. The suites turn that option off and
- * on Linux those children run fine. On FreeBSD the runtime's thread registry
- * breaks in them: joining a thread that the child started never returns,
- * and a child that starts an event loop hangs at random. So a
- * ThreadSanitizer build on FreeBSD skips the tests that fork in the suites
- * whose children start threads, and every other build runs them. That same
- * build can't see a pthread_timedjoin_np() either, see
- * TEST_TIMEDJOIN_VISIBLE below. */
-
+// What a test binary can't run under the sanitizer it was built with.
 #ifndef CCOL_TESTS_TEST_SANITIZER_H
 #define CCOL_TESTS_TEST_SANITIZER_H
 
 #include <stdio.h>
 
+// Defined to 1 in a ThreadSanitizer build (Clang or GCC), so the macros
+// below can tell that build apart.
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
 #define TEST_SANITIZER_THREAD 1
@@ -50,6 +39,10 @@ SOFTWARE.
 #define TEST_SANITIZER_THREAD 1
 #endif
 
+// 1 when this build can run the fork tests, 0 for ThreadSanitizer on FreeBSD.
+// There the runtime breaks in a forked child that starts threads (a join never
+// returns, an event loop hangs), so that build skips the fork tests of the
+// suites whose children start threads. A Makefile may define it first.
 #ifndef TEST_FORK_RUNS
 #if defined(TEST_SANITIZER_THREAD) && defined(__FreeBSD__)
 #define TEST_FORK_RUNS 0
@@ -58,15 +51,10 @@ SOFTWARE.
 #endif
 #endif
 
-/* glibc, musl and FreeBSD have pthread_timedjoin_np(), macOS and OpenBSD
- * don't.
- * ThreadSanitizer on FreeBSD intercepts pthread_join() and pthread_detach()
- * but not pthread_timedjoin_np(), so a thread joined through the latter
- * stays alive as far as the runtime knows. It sees no ordering between that
- * thread and what the joiner does next, and the next thread that libthr
- * starts in the same thread structure stops the process with a CHECK
- * failure of the runtime. In every other build a bounded join just joins
- * without its bound, and the CI job's timeout bounds a hang. */
+// 1 where pthread_timedjoin_np() exists and the runtime sees it.
+// ThreadSanitizer on FreeBSD doesn't intercept it, so a thread joined that way
+// stays alive for the runtime and a later thread start fails a CHECK. There a
+// bounded join is a plain join.
 #if defined(__linux__) || \
     (defined(__FreeBSD__) && !defined(TEST_SANITIZER_THREAD))
 #define TEST_TIMEDJOIN_VISIBLE 1
@@ -74,8 +62,10 @@ SOFTWARE.
 #define TEST_TIMEDJOIN_VISIBLE 0
 #endif
 
-/* Put this first in a test that forks; in a build that can't run the test it
- * ends it with a SKIP line. */
+// Ends the calling test with a SKIP line on stderr when TEST_FORK_RUNS is 0,
+// and does nothing otherwise. Put it first in a test that forks, so a build
+// that can't run the fork skips the test instead of hanging. It takes no
+// arguments, is a statement (no value) and returns from the test function.
 #define TEST_SKIP_FORK_IF_UNSUPPORTED()                                   \
   do {                                                                    \
     if (!TEST_FORK_RUNS) {                                                \
@@ -85,11 +75,12 @@ SOFTWARE.
     }                                                                     \
   } while (0)
 
-/* Put this first in a test whose forked child starts threads and then forks
- * again. In a child of a threaded process OpenBSD's fork() leaves the lock
- * of its fork handler list held, so once the child has started a thread the
- * second fork() waits there for ever. We don't support that pattern on
- * OpenBSD (doc/platforms.md). */
+// On OpenBSD it ends the calling test with a SKIP line on stderr; elsewhere it
+// does nothing. Put it first in a test whose child starts threads and forks
+// again: OpenBSD leaves the lock of its fork handler list held in a child of a
+// threaded process, so the second fork() waits for ever, and we don't support
+// that pattern there (doc/platforms.md). It takes no arguments, is a statement
+// and returns from the test function.
 #if defined(__OpenBSD__)
 #define TEST_SKIP_FORK_AGAIN_IN_A_THREADED_CHILD()                         \
   do {                                                                     \
@@ -104,14 +95,12 @@ SOFTWARE.
   } while (0)
 #endif
 
-/* Put this first in a test that forks while other threads of the library run
- * (a server, an event loop, a pool or an async logger that an earlier test or
- * the suite's setup left running) and then calls the library in the child.
- * The fork handlers of the library hold its locks across fork(), so the child
- * never inherits one that another thread held at that moment. A build with
- * -DCCOL_FORK_SAFETY_REQUIRED=0 has no such handlers, and that child can wait
- * for ever on a lock that nobody in it will release (doc/concurrency.md). Such
- * a build skips the test; every other build runs it. */
+// In a build with CCOL_FORK_SAFETY_REQUIRED=0 it ends the calling test with a
+// SKIP line on stderr; elsewhere it does nothing. Put it first in a test that
+// forks while other threads of the library run and then calls the library in
+// the child: without the fork handlers that child can inherit a held lock and
+// wait for ever. It takes no arguments, is a statement and returns from the
+// test function.
 #if defined(CCOL_FORK_SAFETY_REQUIRED) && CCOL_FORK_SAFETY_REQUIRED == 0
 #define TEST_SKIP_FORK_WITHOUT_FORK_SAFETY()                                \
   do {                                                                      \
@@ -126,4 +115,4 @@ SOFTWARE.
   } while (0)
 #endif
 
-#endif /* CCOL_TESTS_TEST_SANITIZER_H */
+#endif

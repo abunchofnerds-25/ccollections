@@ -7,11 +7,11 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadpool.h>
 
-ccol_retval_t cthrpool_timed_submit_future(cthrpool pool,
+ccol_retval cthrpool_timed_submit_future(cthrpool pool,
                                            void *(*fn)(void *),
                                            void *arg,
                                            uint64_t timeout_us,
-                                           cthrpool_future_t **out);
+                                           cthrpool_future **out);
 .fi
 .SH DESCRIPTION
 .nf
@@ -35,7 +35,7 @@ capacity, because only the workers of this pool can free a slot and
 the caller is one of them. It returns ccol_container_full at once,
 whatever timeout_us says.
 
-On success *out is set to a new cthrpool_future_t handle with a reference
+On success *out is set to a new cthrpool_future handle with a reference
 count of 2: the caller holds one reference, and the queued task holds
 the other. The caller must call cthrpool_future_free exactly once when
 it is done.

@@ -7,11 +7,11 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cbstmap.h>
 
-cbmap_redeclare(hm_name, key_t, val_t);
+cbmap_redeclare(hm_name, KeyT, ValT);
 .fi
 .SH DESCRIPTION
 .nf
-Declares the companion type variables that carry key_t and val_t for an
+Declares the companion type variables that carry KeyT and ValT for an
 ordered map handle that already exists. It declares no handle, and it
 neither creates nor destroys a map; all it gives back is the type
 information that the type-inferred macros need.
@@ -32,8 +32,8 @@ value is a char * that the map stores by contents.
 .SH PARAMETERS
 .nf
 hm_name  Name of the map handle that already exists
-key_t    Key type that the caller created the map with
-val_t    Value type that the caller created the map with
+KeyT    Key type that the caller created the map with
+ValT    Value type that the caller created the map with
 .fi
 .SH RETURN VALUE
 .nf
@@ -62,7 +62,7 @@ elements. A struct that holds the array works.
 .nf
 The declared value type can have a different width from the stored one.
 cbmap_get(3) and cbmap_get_ptr(3) catch that at run time: they describe
-the size mismatch and stop the program through _ccol_fatal_err(). They
+the size mismatch and stop the program through ccol__fatal_err(). They
 can't see a mismatch between two types of the same width, though, so the
 types given here are a promise that the caller keeps and the compiler
 doesn't check. A key of the wrong width is reported rather than accepted,

@@ -22,15 +22,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Parsing in a process that has no thread-specific key left to give. Each
- * thread's node pool and error buffer are freed by the destructor of a key
- * of this module, so a thread that can't arm that key must keep neither of
- * them. Every node goes straight back to the allocator and a failed parse
- * reports a fixed message. The key is created once per process, which is
- * why this runs in its own binary where no other cyaml call comes first.
- * The memtest target runs it under valgrind, and valgrind reports any node
- * or buffer that a thread left behind. */
-
+// Parsing in a process with no thread-specific key left. The destructor of a
+// cyaml key frees each thread's node pool and error buffer, so a thread that
+// can't arm that key must keep neither: every node goes back to the allocator
+// and a failed parse reports a fixed message. The key is created once per
+// process, so this runs in its own binary where no cyaml call comes first; the
+// memtest target runs it under valgrind, which reports anything left behind.
 #include <cyaml.h>
 #include <internal/test_helpers/cyaml.h>
 #include <pthread.h>
@@ -40,24 +37,27 @@ SOFTWARE.
 
 TAU_MAIN()
 
+// How many keys the test may use up, and how many threads parse without one.
 enum { MAX_TEST_KEYS = 65536, KEYS_TEST_THREADS = 50 };
+// The keys the test creates to use up the process's supply.
 static pthread_key_t exhausted[MAX_TEST_KEYS];
 
-/* Where the compiler emulates thread-local storage (clang and GCC on
- * OpenBSD), the runtime creates one pthread key for all the thread-locals of
- * the process on the first access to any of them, and it aborts when no key
- * is left. A real program has touched some thread-local long before it could
- * use up every key, so the test touches one of its own first. That access
- * creates the runtime's key and has nothing to do with the key of this
- * module. */
+// Where the compiler emulates thread-local storage (OpenBSD), the runtime makes
+// one pthread key on the first access to any thread-local and aborts when none
+// is left. The test touches this first so that key exists, as it would in any
+// real program, before using up the rest.
 static __thread volatile int runtime_tls_probe;
 
+// What one thread saw: how many of its parses worked, its pool size after the
+// destroys, and whether a failed parse gave the fixed message.
 typedef struct {
   int parsed;
   size_t pool_after_destroy;
   int fixed_message;
 } keys_thread_result_t;
 
+// Thread body: parses and destroys a document four times, then fails a parse,
+// and records the results in the keys_thread_result_t that arg points at.
 static void *parse_and_destroy(void *arg) {
   keys_thread_result_t *r = (keys_thread_result_t *)arg;
   for (int round = 0; round < 4; round++) {
@@ -76,10 +76,9 @@ static void *parse_and_destroy(void *arg) {
   return NULL;
 }
 
-/* Break either rule and this test notices. If node_free() pools a node for a
- * thread whose key is not armed, cyaml_debug_pool_size() is above zero after
- * the destroy, and if the error path keeps a buffer for such a thread we get
- * the real message back. */
+// If node_free() pooled a node for a thread whose key isn't armed, the pool
+// size is above zero after the destroys; if the error path kept a buffer, the
+// real message comes back instead of the fixed one.
 TEST(cyaml_pool_keys, threads_without_a_key_keep_no_nodes_and_no_buffer) {
   runtime_tls_probe = 1;
   int n = 0;
@@ -96,7 +95,6 @@ TEST(cyaml_pool_keys, threads_without_a_key_keep_no_nodes_and_no_buffer) {
   }
   for (int i = 0; i < started; i++) pthread_join(tids[i], NULL);
 
-  /* The main thread takes the same path. */
   keys_thread_result_t main_result;
   memset(&main_result, 0, sizeof(main_result));
   parse_and_destroy(&main_result);

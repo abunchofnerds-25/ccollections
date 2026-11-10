@@ -66,7 +66,7 @@ static void log_teardown(void *state) {
   free(st);
 }
 
-static log_state_t *log_make(clog_format_t fmt, const clog_async_cfg_t *async) {
+static log_state_t *log_make(clog_format fmt, const clog_async_cfg *async) {
   log_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
   st->fd = open("/dev/null", O_WRONLY);
@@ -95,7 +95,7 @@ static void *log_json_setup(size_t n) {
 
 static void *log_async_setup(size_t n) {
   (void)n;
-  static const clog_async_cfg_t cfg = {
+  static const clog_async_cfg cfg = {
       .queue_size = 0, .flush_buffer_size = 0, .flush_interval_us = 0};
   return log_make(CLOG_FMT_LOGFMT, &cfg);
 }

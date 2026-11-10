@@ -47,16 +47,16 @@ that uses these names reads better than code full of bare integers.
 The list holds only the codes that this library and its test suites
 name, not every status code of the HTTP specifications.  Any other
 code works as a plain integer: pass it to chttpsvr_resp_set_status(),
-or compare chttpcli_response_t.status_code against it directly.
+or compare chttpcli_response.status_code against it directly.
 .fi
 .SH EXAMPLES
 .nf
-/* client: resp is a chttpcli_response_t * */
+/* client: resp is a chttpcli_response * */
 if (resp->status_code == CHTTP_STATUS_NOT_FOUND) {
     /* ... */
 }
 
-/* server handler: resp is a chttpsvr_resp_t * */
+/* server handler: resp is a chttpsvr_resp * */
 chttpsvr_resp_set_status(resp, CHTTP_STATUS_SERVICE_UNAVAILABLE);
 .fi
 .SH "SEE ALSO"

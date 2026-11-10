@@ -40,7 +40,7 @@ None. The macro expands to a statement, not to an expression.
 .SH NOTES
 .nf
 When it cannot create the vector, the macro stops the program through
-_ccol_fatal_err() with a message that names v and the underlying
+ccol__fatal_err() with a message that names v and the underlying
 error.  To handle a failed creation yourself, call cvector_create(3)
 directly, which does not stop the program.
 The element size comes from the declared element type, so the macro

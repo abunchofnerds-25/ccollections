@@ -321,4 +321,4 @@ Related guides:
 [Vectors](cvector.md),
 [Hash maps](chashmap.md),
 [Ordered maps](cbstmap.md),
-[Design of the type-safe macros](design.md)
+[How the library works](design.md)

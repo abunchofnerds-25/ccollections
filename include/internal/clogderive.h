@@ -24,32 +24,17 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file clogderive.h
- * @brief INTERNAL ONLY. A derive of a clog handle that never ends the
- * process.
- *
- * clog_derive() takes a stale or closed parent handle as a programming
- * error and calls _ccol_fatal_err(). A module that gets a logger handle
- * from its own caller, and has to report a bad handle as an ordinary
- * error, uses this function instead. Checking the handle first and then
- * calling clog_derive() would race with a concurrent clog_close(), so this
- * function resolves and pins the parent and derives under that pin, which
- * gives one answer for one moment. None of this is public: the library
- * never installs this header and doesn't export the function.
- */
-
+// Internal: a derive of a clog handle that never ends the process. Not
+// installed and not exported.
 #include <clogger.h>
 #include <common.h>
 
-/**
- * Derives a new logger from parent the same way clog_derive() does, but
- * reports a failure through *rv instead of ending the process.
- *
- * On success it gives the new handle and sets *rv to ccol_success. It
- * gives CLOG_NULL with *rv set to ccol_invalid_args when parent is
- * CLOG_NULL, stale or closed, and CLOG_NULL with *rv set to
- * ccol_not_enough_memory when the new logger or its handle couldn't be
- * allocated. rv must not be NULL.
- */
-clog _clog_derive_checked(clog parent, ccol_retval_t *rv);
+// Derives a logger from parent like clog_derive(), but reports a failure
+// through *rv instead of ending the process. A module that gets a logger handle
+// from its own caller (chttpserver, chttpclient) needs this to treat a bad
+// handle as an ordinary error; checking first and then calling clog_derive()
+// would race a concurrent clog_close(), so this resolves, pins and derives in
+// one step. Gives the new handle with *rv = ccol_success, or CLOG_NULL with *rv
+// = ccol_invalid_args (parent CLOG_NULL, stale or closed) or
+// ccol_not_enough_memory. rv must not be NULL.
+clog clog__derive_checked(clog parent, ccol_retval *rv);

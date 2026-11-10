@@ -32,7 +32,7 @@ left side of an assignment.
 index is evaluated exactly once, so an expression with a side effect, for
 example cvec_at(v, i++), is safe to pass.
 
-An index that is out of bounds stops the program with _ccol_fatal_err().
+An index that is out of bounds stops the program with ccol__fatal_err().
 If you'd rather get NULL for such an index, use cvec_at_ptr.
 .fi
 .SH EXAMPLES

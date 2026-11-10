@@ -22,12 +22,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* See cdebuglog.h for the full reason, and for why the build needs both
- * RUNNING_UNIT_TESTS and CDEBUGLOG_ENABLED instead of only the first one.
- * This file compiles to an empty translation unit unless both are defined,
- * and the src wildcard sweep of the root Makefile also excludes it on purpose
- * (see the SOURCE_FILES comment of that Makefile), so it is never part of the
- * default library build. */
+// See cdebuglog.h for why this file needs both RUNNING_UNIT_TESTS and
+// CDEBUGLOG_ENABLED. Without both it's an empty translation unit.
 #if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
 
 #include <internal/cdebuglog.h>
@@ -42,68 +38,65 @@ SOFTWARE.
 
 #include "common.h"
 
-/* We keep one buffer for the whole process rather than one per consumer
- * module, so after a flush the lines of all callers appear in their real
- * chronological order. That matters when you compare a rotation event in
- * clogger.c with a fork() in cthreadcomm.c at about the same time. The
- * buffer is large because a full run of about 200 tests collects several MB
- * of lines, and once it gets full between two flush points it starts
- * dropping lines silently (see the doc comment of cdebuglog_write()). */
+// One buffer for the whole process, so the lines of all callers come out in
+// their real order. It's large because a full run collects several MB.
 #define CDEBUGLOG_BUF_CAP (8U * 1024U * 1024U)
-/* If we flushed only at fork() or exit(), the lines of a whole run without a
- * crash would pile up before any of them reached stderr, and the output
- * would come as one huge burst at the first fork() instead of near the tests
- * that wrote each line.
- *
- * With this threshold cdebuglog_write() also starts a flush once the buffer
- * passes it, so a long run comes out in several bursts, each with a clear
- * place in time, and still with far fewer write() calls than one per line.
- * The threshold only sets the size of each batch; batching itself happens
- * either way. */
+// cdebuglog_write() flushes once the buffer passes this, so a long run comes
+// out in several bursts near the tests that wrote them, instead of one burst at
+// the first fork() or at exit.
 #define CDEBUGLOG_FLUSH_THRESHOLD (CDEBUGLOG_BUF_CAP / 8U)
-static char _cdebuglog_buf[CDEBUGLOG_BUF_CAP];
-static size_t _cdebuglog_pos = 0;
-static _Atomic bool _cdebuglog_atexit_registered = false;
-/* One lock makes copying a line into the buffer and flushing the buffer
- * exclusive. A flush then never writes a line that another thread is still
- * copying, and a line never lands in a range that a flush has already given
- * back. */
-static _ccol_mutex_t _cdebuglog_lock;
-static _ccol_once_flag_t _cdebuglog_lock_once = _CCOL_ONCE_INIT;
+// The shared buffer, its fill level and whether the atexit flush is registered.
+static char cdebuglog_buf[CDEBUGLOG_BUF_CAP];
+static size_t cdebuglog_pos = 0;
+static _Atomic bool cdebuglog_atexit_registered = false;
+// Makes copying a line and flushing exclusive, so a flush never writes a
+// half-copied line. It's initialized once through cdebuglog_lock_once.
+static ccol__mutex cdebuglog_lock;
+static ccol__once_flag cdebuglog_lock_once = CCOL__ONCE_INIT;
 
-static void _cdebuglog_lock_init(void) {
-  (void)_ccol_mutex_init(_cdebuglog_lock);
+// Initializes cdebuglog_lock, once through cdebuglog_lock_once, because the
+// library initializes no lock statically.
+static void cdebuglog_lock_init(void) {
+  (void)ccol__mutex_init(cdebuglog_lock);
 }
 
-/* Writes the buffer to stderr and empties it. The caller holds the lock. */
-static void _cdebuglog_flush_locked(void) {
-  if (_cdebuglog_pos > 0) {
-    ssize_t wn = write(STDERR_FILENO, _cdebuglog_buf, _cdebuglog_pos);
-    (void)wn; /* best-effort diagnostic flush, nothing to do on a failure */
+// Writes cdebuglog_buf to stderr and empties it, for the flush entry points and
+// the threshold flush of cdebuglog_write. A failed write is ignored, since this
+// is a best-effort diagnostic. The caller holds cdebuglog_lock.
+static void cdebuglog_flush_locked(void) {
+  if (cdebuglog_pos > 0) {
+    ssize_t wn = write(STDERR_FILENO, cdebuglog_buf, cdebuglog_pos);
+    (void)wn;
   }
-  _cdebuglog_pos = 0;
+  cdebuglog_pos = 0;
 }
 
+// Writes the buffer to stderr and empties it, for a caller that is about to end
+// the process without atexit() or wants its lines out now. It takes
+// cdebuglog_lock, so no half-copied line goes out.
 void cdebuglog_flush(void) {
-  _ccol_call_once(_cdebuglog_lock_once, _cdebuglog_lock_init);
-  _ccol_mutex_lock(_cdebuglog_lock);
-  _cdebuglog_flush_locked();
-  _ccol_mutex_unlock(_cdebuglog_lock);
+  ccol__call_once(cdebuglog_lock_once, cdebuglog_lock_init);
+  ccol__mutex_lock(cdebuglog_lock);
+  cdebuglog_flush_locked();
+  ccol__mutex_unlock(cdebuglog_lock);
 }
 
-static void _cdebuglog_atexit(void) { cdebuglog_flush(); }
+// Flushes at exit, so the lines of an ordinary run aren't lost. cdebuglog_write
+// registers it.
+static void cdebuglog_atexit(void) { cdebuglog_flush(); }
 
+// Formats one line and appends it to cdebuglog_buf under cdebuglog_lock. It's
+// the logging call of a suite that chases a timing-sensitive failure, where a
+// write per line would disturb the timing. It flushes once the buffer passes
+// CDEBUGLOG_FLUSH_THRESHOLD, and drops a line that doesn't fit. The first call
+// of a process sets cdebuglog_atexit_registered, registers the atexit flush and
+// logs the umask and the working directory once, which helps explain a later
+// permission mismatch. The umask comes from /proc/self/status, because umask(2)
+// can only be read by setting it, and that would race with files other threads
+// create.
 void cdebuglog_write(const char *fmt, ...) {
-  if (!atomic_exchange(&_cdebuglog_atexit_registered, true)) {
-    atexit(_cdebuglog_atexit);
-    /* The context at process start (the umask and the current working
-     * directory), captured once, the first time a process uses this module.
-     * If a directory permission mismatch shows up later in the same process,
-     * it tells you whether an inherited process-wide umask or an odd working
-     * directory explains it. We read the umask from the "Umask:" line of
-     * /proc/self/status, because umask(2) can only be read by setting it,
-     * and that would change the mode of every file another thread creates in
-     * the meantime. Without /proc it isn't shown. */
+  if (!atomic_exchange(&cdebuglog_atexit_registered, true)) {
+    atexit(cdebuglog_atexit);
     char um[16] = "unknown";
     FILE *st = fopen("/proc/self/status", "r");
     if (st) {
@@ -126,16 +119,14 @@ void cdebuglog_write(const char *fmt, ...) {
   if (len <= 0) return;
   size_t ulen = (size_t)len < sizeof(line) ? (size_t)len : sizeof(line) - 1;
 
-  _ccol_call_once(_cdebuglog_lock_once, _cdebuglog_lock_init);
-  _ccol_mutex_lock(_cdebuglog_lock);
-  if (_cdebuglog_pos + ulen <= CDEBUGLOG_BUF_CAP) {
-    memcpy(_cdebuglog_buf + _cdebuglog_pos, line, ulen);
-    _cdebuglog_pos += ulen;
-  } /* else dropped, see the doc comment of cdebuglog_write() */
-  /* Once the buffer is past the threshold it goes out in one burst; see the
-   * doc comment of CDEBUGLOG_FLUSH_THRESHOLD. */
-  if (_cdebuglog_pos >= CDEBUGLOG_FLUSH_THRESHOLD) _cdebuglog_flush_locked();
-  _ccol_mutex_unlock(_cdebuglog_lock);
+  ccol__call_once(cdebuglog_lock_once, cdebuglog_lock_init);
+  ccol__mutex_lock(cdebuglog_lock);
+  if (cdebuglog_pos + ulen <= CDEBUGLOG_BUF_CAP) {
+    memcpy(cdebuglog_buf + cdebuglog_pos, line, ulen);
+    cdebuglog_pos += ulen;
+  }
+  if (cdebuglog_pos >= CDEBUGLOG_FLUSH_THRESHOLD) cdebuglog_flush_locked();
+  ccol__mutex_unlock(cdebuglog_lock);
 }
 
-#endif /* RUNNING_UNIT_TESTS && CDEBUGLOG_ENABLED */
+#endif

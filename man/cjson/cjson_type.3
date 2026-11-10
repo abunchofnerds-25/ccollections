@@ -7,11 +7,11 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cjson.h>
 
-cjson_node_type_t cjson_type(cjson node);
+cjson_node_type cjson_type(cjson node);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the cjson_node_type_t tag of node.  A NULL node is safe to
+Returns the cjson_node_type tag of node.  A NULL node is safe to
 pass and gives CJSON_NULL.
 .fi
 .SH "SEE ALSO"

@@ -24,7 +24,7 @@ immediately".  In CLOG_FMT_SYSLOG mode each backtrace frame goes out as
 a separate syslog message with the same PRI, TIMESTAMP and MSGID as the
 original record.
 
-In the order of clog_level_t, ALERT sits between ERROR (severity 3) and
+In the order of clog_level, ALERT sits between ERROR (severity 3) and
 FATAL (severity 0).  It is meant for a condition that an operator has
 to look at right away but that does not have to stop the process.
 .fi

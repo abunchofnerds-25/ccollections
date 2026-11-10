@@ -8,7 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/cthreadcomm.h>
 
 cchan *cchan_create_mp(size_t max_size,
-                       ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
+                       ccol_memmgmt_procs *mmgmt_procs, char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
@@ -26,7 +26,7 @@ direction argument.
 
 The two queues and the cchan struct itself are allocated through
 mmgmt_procs. The channel keeps its own copy of the procedures and frees
-itself through them, so the caller's ccol_memmgmt_procs_t doesn't have
+itself through them, so the caller's ccol_memmgmt_procs doesn't have
 to outlive this call. NULL selects the default malloc and free, which
 is what the cchan_create() macro passes.
 .fi
@@ -36,7 +36,7 @@ max_size     Maximum number of messages that each direction can hold.
              Because one circular queue holds each direction, the bound
              of ccircq_create_mp(3) applies: at
              least 1, no larger than ccol_max_elem_count, and no larger
-             than SIZE_MAX / sizeof(cmessage_t).
+             than SIZE_MAX / sizeof(cmessage).
 mmgmt_procs  Custom memory management procedures, or NULL to use the
              default malloc and free. If the value is not NULL, all of
              malloc, calloc, realloc and free must be set.

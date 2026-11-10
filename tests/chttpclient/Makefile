@@ -120,7 +120,7 @@ build_tsan:
 # multi-threaded when it calls fork(). TSan's default, die_after_fork=1,
 # treats that as unsafe for a child that goes on to create threads, and with
 # it the child quietly exits the normal way and never reaches the
-# _ccol_fatal_err() and the SIGABRT the test is waiting for. Only a fork()
+# ccol__fatal_err() and the SIGABRT the test is waiting for. Only a fork()
 # followed by new threads under TSan's safety net hits this. The child's
 # chttpcli_destroy logic is correct and has no race, under gcc and clang,
 # at -O0 and -O1, with TSan and without it. The test in tests/cthreadcomm
@@ -208,10 +208,10 @@ build_exit: $(SRC_OBJS)
 # through hand-written byte sequences that include malformed and hostile
 # input. The tests binary works over a real socket and can't reach such
 # input, because its mock server only ever sends well-formed responses. The
-# "stream" group of tests_parser drives chttp1_stream_t over local AF_UNIX
+# "stream" group of tests_parser drives chttp1_stream over local AF_UNIX
 # socketpairs but stays fully independent of real network traffic.
 # chttp1_parser.c links ctls.c, and with it chashmap.c and common.c, because
-# chttp1_stream_t can drive a TLS connection through ctls_conn_read and
+# chttp1_stream can drive a TLS connection through ctls_conn_read and
 # ctls_conn_write (see the module doc comment of chttp1_parser.h). It's a
 # binary of its own in this directory, not a new top-level directory under
 # tests/.

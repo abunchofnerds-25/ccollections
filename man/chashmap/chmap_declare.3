@@ -7,12 +7,12 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chashmap.h>
 
-chmap_declare(hm_name, key_t, val_t);
+chmap_declare(hm_name, KeyT, ValT);
 .fi
 .SH DESCRIPTION
 .nf
 Declares a hash map handle named hm_name, along with the companion type
-variables that pass key_t and val_t on to every later type-inferred
+variables that pass KeyT and ValT on to every later type-inferred
 macro. Nothing is created, and the handle holds no map until one of the
 init macros runs.
 
@@ -33,9 +33,9 @@ also destroys the map at scope exit.
 .SH PARAMETERS
 .nf
 hm_name  Name for the map handle to declare
-key_t    Key type; it tells every later macro how to read a key and, with
-         val_t, which implementation strategy the init macro selects
-val_t    Value type
+KeyT    Key type; it tells every later macro how to read a key and, with
+         ValT, which implementation strategy the init macro selects
+ValT    Value type
 .fi
 .SH RETURN VALUE
 .nf

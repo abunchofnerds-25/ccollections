@@ -7,19 +7,19 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chashmap.h>
 
-chmap_construct_full(hm_name, key_t, val_t, mmgmt_procs,
+chmap_construct_full(hm_name, KeyT, ValT, mmgmt_procs,
                      custom_hashing_proc, custom_key_equality_proc);
 .fi
 .SH DESCRIPTION
 .nf
 Declares a hash map handle named hm_name, along with the companion type
-variables that pass key_t and val_t on to every later type-inferred
+variables that pass KeyT and ValT on to every later type-inferred
 macro, and creates the map. This is the widest of the construct macros.
 chmap_construct(3) is this macro with the default allocator and the
 map's own hashing, chmap_construct_mp(3) gives only an allocator, and
 chmap_construct_ch(3) gives only a hashing procedure.
 
-If the creation fails, the program stops through _ccol_fatal_err(). When
+If the creation fails, the program stops through ccol__fatal_err(). When
 a failure has to be handled instead of being fatal, use
 chmap_init_full(3) on a handle that is already declared.
 
@@ -31,14 +31,14 @@ chaining.
 .SH PARAMETERS
 .nf
 hm_name              Name for the map handle to declare
-key_t                Key type
-val_t                Value type
-mmgmt_procs          Pointer to ccol_memmgmt_procs_t, or NULL for the
+KeyT                Key type
+ValT                Value type
+mmgmt_procs          Pointer to ccol_memmgmt_procs, or NULL for the
                      default allocator
-custom_hashing_proc  A ccol_hashing_proc_t, or NULL to use the map's own
+custom_hashing_proc  A ccol_hashing_proc, or NULL to use the map's own
                      hashing for the key type
 custom_key_equality_proc
-                     A ccol_key_equality_proc_t, or NULL to use the map's
+                     A ccol_key_equality_proc, or NULL to use the map's
                      own key comparison
 .fi
 .SH "CUSTOM HASHING"

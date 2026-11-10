@@ -155,7 +155,7 @@ and `cjson_dictionary_set` first. An array index has to exist too, because
 `cjson_list_push`. An existing value of any type, a whole object or array
 included, is replaced and the old value is freed.
 
-`cjson_set` returns a `ccol_retval_t`. A string that isn't valid UTF-8, a
+`cjson_set` returns a `ccol_retval`. A string that isn't valid UTF-8, a
 `double` that isn't finite and a C type it doesn't support (a struct, a
 `long double`, most pointers) are refused with `ccol_invalid_args`, and the
 document is left unchanged.
@@ -224,7 +224,7 @@ source and it's the same on every run.
 The cursor visits every member:
 
 ```c
-cjson_dictionary_iter_t it;
+cjson_dictionary_iter it;
 for (bool ok = cjson_dictionary_first(obj, &it); ok;
      ok = cjson_dictionary_next(&it)) {
     printf("%s is a %s\n", it.key, cjson_type_str(it.value));
@@ -440,16 +440,16 @@ think about it.
  * the child on success and on every failure except ccol_invalid_args, so
  * only that code leaves us a child to free. A failed create (a NULL child)
  * leaves nothing to free. */
-static ccol_retval_t put(cjson obj, const char *key, cjson child) {
+static ccol_retval put(cjson obj, const char *key, cjson child) {
     if (!child) return ccol_not_enough_memory;
-    ccol_retval_t r = cjson_dictionary_set(obj, key, child);
+    ccol_retval r = cjson_dictionary_set(obj, key, child);
     if (r == ccol_invalid_args) cjson_destroy(child);
     return r;
 }
 
-static ccol_retval_t push(cjson list, cjson child) {
+static ccol_retval push(cjson list, cjson child) {
     if (!child) return ccol_not_enough_memory;
-    ccol_retval_t r = cjson_list_push(list, child);
+    ccol_retval r = cjson_list_push(list, child);
     if (r == ccol_invalid_args) cjson_destroy(child);
     return r;
 }
@@ -491,7 +491,7 @@ int main(void) {
     /* The words that occur more than once, in the order of their first
      * occurrence. */
     cjson repeated = cjson_create_list();
-    cjson_dictionary_iter_t it;
+    cjson_dictionary_iter it;
     for (bool ok = cjson_dictionary_first(words, &it); ok;
          ok = cjson_dictionary_next(&it)) {
         if (cjson_int_val(it.value) > 1)
@@ -554,7 +554,7 @@ static void scrub(cjson node) {
     }
     if (cjson_type(node) != CJSON_DICTIONARY) return;
 
-    cjson_dictionary_iter_t it;
+    cjson_dictionary_iter it;
     for (bool ok = cjson_dictionary_first(node, &it); ok;
          ok = cjson_dictionary_next(&it)) {
         if (cjson_type(it.value) == CJSON_NULL) {
@@ -619,7 +619,7 @@ The output is:
 ## Custom allocators
 
 Every function that makes nodes has an `_mp` variant that takes a
-`ccol_memmgmt_procs_t *`. Each node remembers its allocator, so
+`ccol_memmgmt_procs *`. Each node remembers its allocator, so
 `cjson_destroy` needs no extra argument. The one thing to remember is that a
 serialized string comes from the allocator of the root node, and you release
 it through `cjson_serialize_free_mp` with the same procs.
@@ -649,7 +649,7 @@ static void *count_realloc(void *p, size_t n) {
 static void count_free(void *p) { if (p) live_blocks--; free(p); }
 
 int main(void) {
-    ccol_memmgmt_procs_t procs = {
+    ccol_memmgmt_procs procs = {
         .malloc = count_malloc, .free = count_free,
         .calloc = count_calloc, .realloc = count_realloc};
 
@@ -762,5 +762,5 @@ other `_mp` variants),
 Related guides:
 [cyaml](cyaml.md),
 [Memory management](memory.md),
-[Design of the type-safe macros](design.md),
+[How the library works](design.md),
 [Concurrency](concurrency.md)

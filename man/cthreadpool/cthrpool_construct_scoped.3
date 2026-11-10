@@ -21,12 +21,12 @@ nothing has run one already.
 name            Variable name for the pool handle.
 num_threads     Number of worker threads to spawn (must be >= 1).
 queue_capacity  Maximum pending tasks (0 for unbounded). The macro
-                calls _ccol_fatal_err() for ccol_invalid_size, as it
+                calls ccol__fatal_err() for ccol_invalid_size, as it
                 does for every other failure of the creation.
 .fi
 .SH NOTES
 .nf
-It calls _ccol_fatal_err() on a failure, so call cthrpool_create()
+It calls ccol__fatal_err() on a failure, so call cthrpool_create()
 directly when you must handle an error yourself.
 It needs GCC or Clang, because it uses __attribute__((cleanup)).
 The drain inside the destructor can block for a long time if the tasks

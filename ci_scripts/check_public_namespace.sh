@@ -34,7 +34,7 @@
 # the system's nm while layer 2 runs as everywhere else. Layer 3 needs DWARF
 # that GNU readelf can read, which a Mach-O object doesn't carry, so it runs
 # on the ELF build only. There it scans the headers twice, once as they are
-# and once with _CCOL_EMULATE_DARWIN_SYNC, the one switch that changes what an
+# and once with CCOL__EMULATE_DARWIN_SYNC, the one switch that changes what an
 # installed header declares on macOS, so the ELF run also checks the names a
 # macOS build sees.
 #
@@ -68,11 +68,14 @@ AR_LIB="${2:-libccollections.a}"
 # handle types or APIs (cvec, ccache, crmempool, ccircq, cdynmq, cchan,
 # ceventloop, cselect). ccollections_ shows up on enum tags, the one surface
 # that uses the full library name instead of the short form, and it's as
-# clearly ours as ccol_ is.
-NS='^_*(ccol_|CCOL_|ccollections_|cvec|cvector|chmap|chashmap|cbmap|cbstmap|cstr|cstring|csort|cjson|cyaml|clog|clru|ccache|cmap|cmempool|crmempool|cthreadcomm|ccircq|cdynmq|cchan|ceventloop|cselect|cthreadpool|cthrpool|chttp|ctls|citer|CVEC|CHMAP|CBMAP|CSTR|CSORT|CJSON|CYAML|CLOG|CLRU|CCACHE|CMAP|CMEMPOOL|CRMEMPOOL|CTHREAD|CEVENTLOOP|CSELECT|CTHRPOOL|CHTTP|CTLS|CITER)'
+# clearly ours as ccol_ is. The prefix starts the name: ISO C reserves every
+# name that begins with an underscore for the compiler and the C library, so
+# the library has none (an internal name puts a double underscore after its
+# prefix instead, as in cvector__destroy).
+NS='^(ccol_|CCOL_|ccollections_|cvec|cvector|chmap|chashmap|cbmap|cbstmap|cstr|cstring|csort|cjson|cyaml|clog|clru|ccache|cmap|cmempool|crmempool|cthreadcomm|ccircq|cdynmq|cchan|ceventloop|cselect|cthreadpool|cthrpool|chttp|ctls|citer|CVEC|CHMAP|CBMAP|CSTR|CSORT|CJSON|CYAML|CLOG|CLRU|CCACHE|CMAP|CMEMPOOL|CRMEMPOOL|CTHREAD|CEVENTLOOP|CSELECT|CTHRPOOL|CHTTP|CTLS|CITER)'
 
 # Struct tags that already start with c and aren't generic English words.
-ALLOW='^(cmessage_t|cthread_pool)$'
+ALLOW='^(cmessage|cthread_pool)$'
 
 # The headers that ship are exactly include/*.h. An internal header lives in
 # include/internal/, has no visibility block and is left out by make install,
@@ -99,7 +102,7 @@ else
   # this library; FreeBSD's give them default visibility, so every FreeBSD
   # shared object exports them. These two are the only names left out.
   all_syms=$(printf '%s\n' "$raw_syms" \
-    | awk '$7!="UND" && ($5=="GLOBAL"||$5=="WEAK") && $8!="_init" && $8!="_fini"{print $8}' \
+    | awk '{n = $8; sub(/@.*/, "", n)} $7!="UND" && ($5=="GLOBAL"||$5=="WEAK") && n!="_init" && n!="_fini"{print $8}' \
     | sed 's/@.*//' | sort -u)
 fi
 # An empty set is never a correct answer for this library; it's exactly what
@@ -216,7 +219,7 @@ fi
 
 # Both variants compile the same probe. "plain" gives the Linux and FreeBSD
 # headers and "darwin" gives the macOS ones, where common.h declares the types
-# of _CCOL_EMULATE_DARWIN_SYNC.
+# of CCOL__EMULATE_DARWIN_SYNC.
 for v in plain darwin; do
 case "$v" in
 plain) vflags='' ;;

@@ -1,13 +1,13 @@
 .TH CCHAN_SELECTABLE 3 "2026-09-26" "c_collections" "C Collections Library - Functions"
 .SH NAME
-cchan_selectable \- resolve a cchan into a cselectable_t for the calling thread and requested direction
+cchan_selectable \- resolve a cchan into a cselectable for the calling thread and requested direction
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/cthreadcomm.h>
 
-cselectable_t cchan_selectable(cchan *ch, cselect_dir_t dir);
+cselectable cchan_selectable(cchan *ch, cselect_dir dir);
 .fi
 .SH DESCRIPTION
 .nf
@@ -22,7 +22,7 @@ picks which of the two queues to wrap:
 
 The queue is picked here, at the call site, so cselect() never
 needs to look inside the opaque cchan struct. The cchan
-pointer is not kept: the returned cselectable_t holds only the
+pointer is not kept: the returned cselectable holds only the
 ccircq pointer that was picked and the dir value, and it
 watches that one queue whichever thread later waits on it or runs a
 callback for it.
@@ -53,7 +53,7 @@ dir  cselect_read or cselect_write.
 .fi
 .SH RETURN VALUE
 .nf
-A cselectable_t of type cselectable_type_ccircq that wraps the right
+A cselectable of type cselectable_type_ccircq that wraps the right
 ccircq for the calling thread and for the direction.
 
 If ch is NULL, the result is a cselectable_type_ccircq with a NULL
@@ -77,16 +77,16 @@ other call.
 .nf
 /* The owner watches the replies of its workers on a ceventloop. */
 static void on_reply(ceventloop loop, ceventloop_reg reg,
-                     cselectable_t *sel, void *arg) {
+                     cselectable *sel, void *arg) {
     (void)loop; (void)reg;
-    cmessage_t msg;
+    cmessage msg;
     /* sel->cq, and not cchan_try_recv(): this runs on a thread of
        the loop, which the channel counts as a worker. */
     while (ccircq_try_recv(sel->cq, &msg) == ccol_success)
         handle_reply(arg, &msg);
 }
 
-ceventloop_handlers_t h = { .on_readable = on_reply };
+ceventloop_handlers h = { .on_readable = on_reply };
 ceventloop_reg reg = ceventloop_add(
     loop, cchan_selectable(ch, cselect_read), h, ctx, NULL);
 .fi

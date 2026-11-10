@@ -12,7 +12,7 @@ cmap_iterator *ccol_iter_next(it);
 .SH DESCRIPTION
 .nf
 ccol_iter_next moves the iterator to the next element by calling its
-_next_fn callback. At the end of the sequence it destroys the iterator
+ccol__next_fn callback. At the end of the sequence it destroys the iterator
 and returns NULL. The argument is evaluated exactly once.
 .fi
 .SH PARAMETERS

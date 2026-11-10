@@ -44,36 +44,29 @@ SOFTWARE.
 
 TAU_MAIN()
 
-/* The test clients of this binary write to the server with plain write(2), and
- * the server can close a connection while one of them is writing. The library
- * leaves the SIGPIPE disposition to the application, so this binary ignores it
- * itself; tests_sigpipe.c covers the library under the default disposition.
- *
- * test_reset_inherited_signals() puts back the rest of the signal state that
- * the parent process can leave behind, before any thread starts. */
+// Ignores SIGPIPE and resets the rest of the inherited signal state before any
+// thread starts. The test clients write with plain write(2) and the server can
+// close a connection during one; tests_sigpipe.c covers the default
+// disposition.
 __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
   signal(SIGPIPE, SIG_IGN);
   test_reset_inherited_signals();
 }
 
-/* ========================================================================== */
-/*          THREAD-SPECIFIC KEY EXHAUSTION (dedicated binary)                 */
-/*                                                                            */
-/* chttpsvr_start creates the thread-specific key that marks the worker       */
-/* threads of a server. The first creation in the process happens while      */
-/* this test holds every key the process can have, so this file is a binary   */
-/* of its own: in tests.c the shared _setup has already started a server and  */
-/* created the key. The test uses a unix:// listener, so it binds no fixed    */
-/* port.                                                                      */
-/* ========================================================================== */
+// chttpsvr_start creates the thread-specific key that marks the worker threads
+// of a server. This binary exists so that the first creation in the process
+// happens while a test holds every key (in tests.c the shared _setup already
+// created it). Its listeners are unix:// sockets, so it binds no fixed port.
 
-static void _hello(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
+// Answers "hello"; the route that proves a server serves.
+static void _hello(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_write_str(resp, "hello");
 }
 
-/* Sends one GET over the Unix domain socket at path and returns the status. */
+// Sends one GET of /hello over the Unix socket at path and gives the status, or
+// -1; the tests use it to prove that a server serves.
 static int _get_over_unix(const char *path) {
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) return -1;
@@ -100,18 +93,18 @@ static int _get_over_unix(const char *path) {
   return status;
 }
 
+// The most keys the test takes, more than any system we run on allows a
+// process, so taking them all exhausts the process's keys.
 #define WORKER_KEY_TEST_MAX_KEYS 4096
 
-/* With every key of the process taken, chttpsvr_start has no key to mark its
-   worker threads with, so it must refuse to start instead of running workers
-   that write the server pointer through a key that some other component owns.
-   Once keys are free again, a later chttpsvr_start creates the key and the
-   server serves normally. If the key creation weren't checked, the first
-   chttpsvr_start would succeed. */
+// With every key taken, chttpsvr_start must refuse instead of running workers
+// that write through a key some other component owns. Once keys are free, a
+// later start creates the key and serves. An unchecked key creation would make
+// the first start succeed.
 TEST(chttpsvr_worker_key, start_fails_cleanly_when_no_thread_key_is_left) {
   chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
   REQUIRE_NE(srv, CHTTPSVR_NULL);
-  ccol_retval_t reg_rv =
+  ccol_retval reg_rv =
       chttpsvr_register_handler(srv, CHTTP_GET, "/hello", _hello, NULL);
   if (reg_rv != ccol_success) chttpsvr_destroy(srv);
   REQUIRE_EQ((int)reg_rv, (int)ccol_success);
@@ -122,7 +115,7 @@ TEST(chttpsvr_worker_key, start_fails_cleanly_when_no_thread_key_is_left) {
   unlink(sock_path);
   char host_buf[96];
   snprintf(host_buf, sizeof(host_buf), "unix://%s", sock_path);
-  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = host_buf;
 
   pthread_key_t *keys = malloc(WORKER_KEY_TEST_MAX_KEYS * sizeof(*keys));
@@ -135,13 +128,13 @@ TEST(chttpsvr_worker_key, start_fails_cleanly_when_no_thread_key_is_left) {
     nkeys++;
   bool exhausted = create_rv == EAGAIN;
 
-  ccol_retval_t first_rv = chttpsvr_start(srv, &cfg);
+  ccol_retval first_rv = chttpsvr_start(srv, &cfg);
   if (first_rv == ccol_success) chttpsvr_stop(srv);
 
   for (size_t i = 0; i < nkeys; i++) pthread_key_delete(keys[i]);
   free(keys);
 
-  ccol_retval_t second_rv = chttpsvr_start(srv, &cfg);
+  ccol_retval second_rv = chttpsvr_start(srv, &cfg);
   int status = second_rv == ccol_success ? _get_over_unix(sock_path) : -1;
   chttpsvr_destroy(srv);
   unlink(sock_path);
@@ -153,10 +146,8 @@ TEST(chttpsvr_worker_key, start_fails_cleanly_when_no_thread_key_is_left) {
   REQUIRE_EQ(status, 200);
 }
 
-/* ========================================================================== */
-/*          A SERVER DESTROYED AFTER THE EXIT-TIME DESTRUCTOR                 */
-/* ========================================================================== */
-
+// An allocator that counts live blocks, so the late-destroy test can check that
+// nothing the server allocated is left.
 static _Atomic long g_late_live_blocks = 0;
 static void *_late_malloc(size_t n) {
   void *p = malloc(n);
@@ -178,7 +169,7 @@ static void _late_free(void *p) {
   free(p);
 }
 
-/* What the child of the test below found, one byte per check. */
+// What the child of the test below found, one byte per check.
 enum {
   LATE_DEFERRED,
   LATE_SERVED,
@@ -189,15 +180,13 @@ enum {
   LATE_CHECKS
 };
 
-/* An application can destroy its server from a destructor of its own that runs
-   after the library's exit-time destructors, as a statically linked program
-   can. The library then leaves what those destructors couldn't release while
-   the server lived (its handle table, the shells of its routers and the logger
-   of chttpsvr_set_engine_logger) to the destroy of that server and the stop of
-   its engine, so nothing it allocated is left behind. The child runs the
-   library's destructors while a started server with a sub-router is alive, and
-   then destroys the server. Without the deferral, the handle table and the
-   server's shells would stay allocated and the logger would stay open. */
+// An application destructor can destroy its server after the library's
+// exit-time destructors (as a statically linked program can). The library then
+// leaves its handle table, the router shells and the engine logger to that
+// destroy and the engine stop, so nothing is left behind. The child runs the
+// library's destructors with a started server and a sub-router alive, then
+// destroys the server. Without the deferral the table and shells stay allocated
+// and the logger stays open.
 TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   TEST_SKIP_FORK_WITHOUT_FORK_SAFETY();
@@ -213,10 +202,10 @@ TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
     close(pipefd[0]);
     alarm(20);
     char out[LATE_CHECKS] = {0};
-    static ccol_memmgmt_procs_t procs = {.malloc = _late_malloc,
-                                         .calloc = _late_calloc,
-                                         .realloc = _late_realloc,
-                                         .free = _late_free};
+    static ccol_memmgmt_procs procs = {.malloc = _late_malloc,
+                                       .calloc = _late_calloc,
+                                       .realloc = _late_realloc,
+                                       .free = _late_free};
     int null_fd = open("/dev/null", O_WRONLY);
     clog cl = null_fd >= 0 ? clog_create_from_fd(null_fd, CLOG_INFO, NULL)
                            : CLOG_NULL;
@@ -228,9 +217,9 @@ TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
     unlink(sock_path);
     char host_buf[96];
     snprintf(host_buf, sizeof(host_buf), "unix://%s", sock_path);
-    chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+    chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = host_buf;
-    chttpsvr_router_t *api =
+    chttpsvr_router *api =
         srv != CHTTPSVR_NULL ? chttpsvr_subrouter(srv, "/api") : NULL;
     if (api &&
         chttpsvr_router_on(api, CHTTP_GET, "/x", _hello, NULL) ==
@@ -239,19 +228,19 @@ TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
             ccol_success &&
         chttpsvr_start(srv, &cfg) == ccol_success) {
       out[LATE_SERVED] = _get_over_unix(sock_path) == 200;
-      _chttpsvr_run_exit_cleanup_for_tests();
+      chttpsvr__run_exit_cleanup_for_tests();
       size_t shells = 0;
       bool array = false;
-      _chttpsvr_router_shell_registry_state_for_tests(&shells, &array);
-      out[LATE_DEFERRED] = !_chttpsvr_slot_table_released_for_tests() &&
+      chttpsvr__router_shell_registry_state_for_tests(&shells, &array);
+      out[LATE_DEFERRED] = !chttpsvr__slot_table_released_for_tests() &&
                            shells == 2 && array &&
-                           _chttpsvr_engine_user_log_set_for_tests();
+                           chttpsvr__engine_user_log_set_for_tests();
       chttpsvr_destroy(srv);
       chttpsvr_engine_wait();
-      _chttpsvr_router_shell_registry_state_for_tests(&shells, &array);
-      out[LATE_SLOTS] = _chttpsvr_slot_table_released_for_tests();
+      chttpsvr__router_shell_registry_state_for_tests(&shells, &array);
+      out[LATE_SLOTS] = chttpsvr__slot_table_released_for_tests();
       out[LATE_SHELLS] = shells == 0 && !array;
-      out[LATE_LOGGER] = !_chttpsvr_engine_user_log_set_for_tests();
+      out[LATE_LOGGER] = !chttpsvr__engine_user_log_set_for_tests();
       out[LATE_BLOCKS] = atomic_load(&g_late_live_blocks) == 0;
     }
     unlink(sock_path);
@@ -275,21 +264,11 @@ TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
   REQUIRE_EQ(got[LATE_BLOCKS], 1);
 }
 
-/* ========================================================================== */
-/*          HANDLES AFTER THE EXIT-TIME DESTRUCTOR OF THE LIBRARY             */
-/*                                                                            */
-/* chttpserver's exit-time destructor releases the handle table once no       */
-/* server is left, but an application destructor or atexit handler that runs  */
-/* later can still pass a stale handle in, or create a server. This binary    */
-/* destroys every server it creates, so its table is released at exit, and    */
-/* _check_handles_after_library_destructor below is a destructor of priority  */
-/* 101, so it runs after the library's destructors, which have the default    */
-/* priority.                                                                  */
-/* ========================================================================== */
-
+// A handle whose server is destroyed, for the check that runs after the
+// library's exit-time destructor. This binary destroys every server it creates,
+// so the library releases its handle table at exit.
 static chttpsvr g_stale_handle_for_exit_check = CHTTPSVR_NULL;
 
-/* Remembers a handle whose server is destroyed, for the check at exit. */
 TEST(chttpsvr_worker_key, a_stale_handle_is_kept_for_the_check_at_exit) {
   chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
   REQUIRE_NE(srv, CHTTPSVR_NULL);
@@ -298,18 +277,17 @@ TEST(chttpsvr_worker_key, a_stale_handle_is_kept_for_the_check_at_exit) {
   g_stale_handle_for_exit_check = kept;
 }
 
-/* Once the library has released its table, a stale handle resolves to nothing
- * (every call that takes it reports an invalid handle and reads no freed
- * memory) and a creation fails with an error string. This check is non-vacuous:
- * if the release left the freed arrays in place, the calls below would read
- * them and the process would end on an assertion of the container (or the
- * creation would succeed), with AddressSanitizer and valgrind reporting the
- * reads of freed memory. */
+// Checks, after the library's exit-time destructors (which have the default
+// priority), that a stale handle resolves to nothing and that a creation fails
+// with an error string once the handle table is released. It reads
+// g_stale_handle_for_exit_check and ends the process with status 1 on a
+// failure. If the release left freed arrays in place, these calls would read
+// them (ASan and valgrind report it) or the creation would succeed.
 __attribute__((destructor(101))) static void
 _check_handles_after_library_destructor(void) {
   if (g_stale_handle_for_exit_check == CHTTPSVR_NULL) return;
   chttpsvr_stop(g_stale_handle_for_exit_check);
-  ccol_retval_t reg_rv = chttpsvr_register_handler(
+  ccol_retval reg_rv = chttpsvr_register_handler(
       g_stale_handle_for_exit_check, CHTTP_GET, "/late", _hello, NULL);
   char *err = NULL;
   chttpsvr late = chttpsvr_create(CLOG_NULL, &err);

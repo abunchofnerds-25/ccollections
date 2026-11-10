@@ -7,14 +7,14 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cbstmap.h>
 
-cbmap_construct_cc(hm_name, key_t, val_t, custom_comparison_proc);
+cbmap_construct_cc(hm_name, KeyT, ValT, custom_comparison_proc);
 .fi
 .SH DESCRIPTION
 .nf
 Declares an ordered map handle named hm_name with the companion type
-variables that carry key_t and val_t to every later type-inferred macro,
+variables that carry KeyT and ValT to every later type-inferred macro,
 then creates a map whose keys are ordered by custom_comparison_proc
-instead of the default order for key_t.
+instead of the default order for KeyT.
 
 Think of it as cbmap_construct(3) with a comparison procedure added; the
 allocator is the default one. cbmap_construct_mp(3) replaces the
@@ -22,7 +22,7 @@ allocator instead, and cbmap_construct_full(3) takes both.
 cbmap_construct_cc_scoped(3) is the same macro with a cleanup attribute
 that destroys the map when the scope exits.
 
-A struct key_t needs this variant. Without a procedure the map orders a
+A struct KeyT needs this variant. Without a procedure the map orders a
 key type that it doesn't recognize by a raw comparison of the key's
 representation, which reads the padding bytes and orders a pointer member
 by its address.
@@ -34,13 +34,13 @@ not be fatal.
 .SH PARAMETERS
 .nf
 hm_name                 Name for the map handle to declare
-key_t                   Key type. Every later macro reads a key through
+KeyT                   Key type. Every later macro reads a key through
                         it, and the container takes from it the width to
                         expect and the alignment of a stored key
-val_t                   Value type. Only the type-inferred macros read
+ValT                   Value type. Only the type-inferred macros read
                         it; the library never passes it to the container
-custom_comparison_proc  A ccol_comparison_proc_t, or NULL for the
-                        default order for key_t
+custom_comparison_proc  A ccol_comparison_proc, or NULL for the
+                        default order for KeyT
 .fi
 .SH RETURN VALUE
 .nf
@@ -54,7 +54,7 @@ orders after the second, and zero when the map must treat the two as the
 same key. Since a zero turns an insert into an update, the procedure
 defines key equality as well as key order.
 
-The procedure must give a strict weak order over key_t, and that order
+The procedure must give a strict weak order over KeyT, and that order
 must not change while the map holds elements: the same pair of keys
 always compares the same way, swapping the two gives the opposite sign,
 and the order is transitive. An inconsistent procedure breaks the
@@ -62,13 +62,13 @@ placement invariant of the tree, and after that the map can't find keys
 that it holds.
 
 The procedure gets two bare pointers and no lengths, so it can only read
-a width that key_t fixes. That is why the map checks the width of an
-incoming key against key_t and aligns its stored keys for key_t; the
+a width that KeyT fixes. That is why the map checks the width of an
+incoming key against KeyT and aligns its stored keys for KeyT; the
 procedure decides the order of the keys and nothing else.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through _ccol_fatal_err() if the creation
+The macro stops the program through ccol__fatal_err() if the creation
 fails, and it uses the default allocator.
 
 The procedure must stay callable for the whole life of the map.

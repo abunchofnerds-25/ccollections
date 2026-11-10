@@ -26,2436 +26,656 @@ SOFTWARE.
 
 #include "common.h"
 
-/* Everything this header declares from here to the end of the file belongs
- * to the public Application Binary Interface (ABI) of libccollections, and
- * the shared library exports all of it. The library itself is built with
- * -fvisibility=hidden, so a function or object outside these blocks stays
- * internal: it isn't in the dynamic symbol table, an application linking
- * against the library can't interpose it, and a symbol of the same name in
- * that application can't collide with it. */
+// Everything from here to the matching pop is the public ABI and the shared
+// library exports it. The library builds with -fvisibility=hidden, so anything
+// outside these blocks stays internal.
+//
+// Thread-safe message passing between threads. ccircq is a fixed-size queue
+// whose send blocks while it's full (that's its backpressure), cdynmq is a
+// linked-list queue whose send never blocks, and cchan is two-way communication
+// between an owner thread and a worker thread. Nothing is copied: a send hands
+// over the ownership of a pointer. cselect() waits on several queues and fds,
+// and ceventloop is a reactor that dispatches their readiness to callbacks.
 #pragma GCC visibility push(default)
 
-/**
- * @file cthreadcomm.h
- * @brief Thread-safe message passing primitives for communication between
- * threads
- *
- * This header has three thread-safe ways to pass messages:
- * - ccircq: a fixed-size queue whose send blocks while it is
- *   full, which is how it applies backpressure.
- * - cdynmq: a queue with no size limit (a linked list) whose
- *   send never blocks.
- * - cchan: two-way communication between an owner thread and a worker
- *   thread.
- *
- * Every operation is zero-copy, it hands over the ownership of a pointer
- * instead of copying the data.
- */
-
-/** @brief Opaque handle to a circular queue */
+// Opaque handles of the three kinds of queue.
 typedef struct ccircq ccircq;
 
-/** @brief Opaque handle to a dynamic queue */
 typedef struct cdynmq cdynmq;
 
-/** @brief Opaque handle to a two-way cchan */
 typedef struct cchan cchan;
 
-/**
- * @brief Message structure for zero-copy message passing
- *
- * A message hands over the ownership of its data pointer. When a send
- * succeeds the library sets the sender's data pointer to NULL and the
- * receiver becomes the owner, so the receiver must free the memory.
- */
-typedef struct cmessage_t {
-  void *data;  /**< Pointer to the message data (a send transfers ownership) */
-  size_t size; /**< Size of the data in bytes */
-} cmessage_t;
+// A message. A successful send sets the sender's data to NULL and the receiver
+// owns (and frees) it. data NULL with size 0 is a valid sentinel message; data
+// NULL with a size, or a pointer with size 0, is refused.
+typedef struct cmessage {
+  void *data;
+  size_t size;
+} cmessage;
 
-/* ========================================================================== */
-/*                          CIRCULAR QUEUE FUNCTIONS                          */
-/* ========================================================================== */
-
-/**
- * @brief Create a circular queue with custom memory management
- *
- * Creates a fixed-size queue backed by a circular buffer. A send blocks while
- * the queue is full and waits for free space.
- *
- * @param max_size Maximum number of messages the queue can hold, from 1 to
- * SIZE_MAX / sizeof(cmessage_t). A larger value gives ccol_invalid_args: the
- * queue lives in one array of max_size * sizeof(cmessage_t) bytes and that
- * multiplication would overflow.
- * @param mmgmt_procs Custom memory management procedures, or NULL to use the
- * default malloc and free
- * @param err_str Optional pointer that gets an error string on failure. Pass
- * NULL to ignore it.
- *
- * @return Pointer to the new circular queue, or NULL on failure
- *
- * @note All operations on this queue are thread-safe
- * @note You must destroy the queue with ccircq_destroy() once
- * you are done with it
- *
- * @see ccircq_create
- * @see ccircq_destroy
- */
-ccircq *ccircq_create_mp(size_t max_size, ccol_memmgmt_procs_t *mmgmt_procs,
+// Creates a circular queue of at most max_size messages (1 to
+// SIZE_MAX / sizeof(cmessage), since the queue is one array). mmgmt_procs is
+// your allocator, or NULL for malloc and free. On failure it gives NULL and an
+// error string in *err_str when err_str isn't NULL. Destroy it with
+// ccircq_destroy().
+ccircq *ccircq_create_mp(size_t max_size, ccol_memmgmt_procs *mmgmt_procs,
                          char **err_str);
 
-/**
- * @brief Create a circular queue with default memory management
- *
- * Creates a circular queue that uses the standard malloc and free.
- *
- * @param max_size Maximum number of messages that the queue can hold
- * @param err_str Optional pointer that gets an error string on failure
- *
- * @return Pointer to the new circular queue, or NULL on failure
- */
+// ccircq_create_mp() with the default allocator, for a caller with no
+// allocator of its own. It evaluates to the queue or NULL.
 #define ccircq_create(max_size, err_str) \
   ccircq_create_mp((max_size), NULL, (err_str))
 
-/**
- * @brief Destroy a circular queue (internal function)
- *
- * @param cq Circular queue to destroy
- *
- * @warning Do not call this function directly. Use the
- * ccircq_destroy() macro.
- */
-void __ccircq_destroy(ccircq *cq);
+// Internal: destroys cq; ccircq_destroy() calls it and then clears the pointer.
+// Use the macro instead.
+void ccircq__destroy(ccircq *cq);
 
-/**
- * @brief Destroy a circular queue and set the pointer to NULL
- *
- * Frees every resource of the queue through __ccircq_destroy(),
- * which asserts if the queue still holds messages or if a watcher still
- * watches it. A watcher is a cselect() call, a cselect_timed() call,
- * or an ceventloop registration (ceventloop_add with
- * ccircq_selectable or cchan_selectable). Drain the queue,
- * call ceventloop_remove(), and only then destroy the queue; letting
- * every cselect() and cselect_timed() call that watches this queue
- * return works as well.
- *
- * That sequence is safe as written. ceventloop_remove() doesn't wait for
- * a callback it already handed to a reactor thread, so such a callback can be
- * inside this queue when the removal returns, but this destroy blocks until
- * every one of those callbacks is done with the queue and frees the queue
- * only after that.
- *
- * The destroy counts the messages left in the queue only once those
- * callbacks have finished. A write callback that was already running when
- * ceventloop_remove() returned can still send after that, and its
- * message then makes the destroy assert. So when a write registration
- * watches the queue, remove it first, wait for its on_removed callback, and
- * then drain and destroy the queue.
- *
- * A callback that the loop runs for a different registration can run this
- * whole sequence for this queue, whatever num_reactor_threads is. A dispatch
- * the loop collected for this queue but hasn't started yet doesn't hold up
- * the destroy, and it never runs its callback after the removal.
- *
- * @param cq Circular queue to destroy. The macro sets it to NULL afterwards.
- *
- * @warning The macro does not free the messages that stay in the queue
- * @warning Do not destroy a queue that a cselect() call, a
- * cselect_timed() call, or an ceventloop registration watches. The
- * watcher's waiter node points to this queue's mutex, so that would be a
- * use-after-free, and the function asserts against it just as it asserts
- * against a queue that isn't empty.
- * @warning Do not call this from inside an ceventloop callback that
- * dispatches this same queue, since the destroy would wait for that very
- * callback. It is a caller error and the program stops through
- * _ccol_fatal_err(). Destroy the queue from a thread that doesn't run one of
- * its callbacks.
- * @warning Do not hold an application lock across this call if one of this
- * queue's callbacks takes that lock: the destroy waits for the callback,
- * and the callback would wait for the lock.
- * @note You can call this with a NULL pointer
- * @note The macro evaluates cq exactly once, and cq must be a modifiable
- * lvalue such as a variable or an array element
- */
+// Destroys the queue and sets cq to NULL, so a dangling pointer can't be used
+// again. cq is evaluated once and must be a modifiable lvalue; NULL is fine.
+// Messages left in the queue aren't freed, and it asserts when the queue isn't
+// empty or a cselect() call or a ceventloop registration still watches it,
+// because the watcher points at the queue's mutex. So drain it and call
+// ceventloop_remove() first. The destroy waits for any callback of this queue
+// that was already running when the remove returned, and counts the messages
+// only after that; a write callback can still send in that time, so with a
+// write registration wait for its on_removed before you drain and destroy. A
+// callback of another registration may run this whole sequence. Destroying from
+// a callback that dispatches this same queue is a fatal error, and holding a
+// lock that one of its callbacks takes deadlocks.
 #define ccircq_destroy(cq) \
-  _ccircq_destroy_impl(cq, _ccol_uniq(__ccol_cq_destroy_slot, __COUNTER__))
+  ccircq__destroy_impl(cq, ccol__uniq(ccol__cq_destroy_slot, __COUNTER__))
 
-/* Internal body of ccircq_destroy. slot is a name from
- * _ccol_uniq(), so the macro can nest inside the argument of another destroy
- * macro and stay -Wshadow clean. The argument is evaluated exactly once. */
-#define _ccircq_destroy_impl(cq, slot) \
+// Internal: the body of ccircq_destroy(), which calls ccircq__destroy(*slot)
+// and clears the pointer. slot comes from ccol__uniq(), so destroy macros can
+// nest without -Wshadow warnings, and cq is evaluated once.
+#define ccircq__destroy_impl(cq, slot) \
   do {                                 \
     __typeof__(cq) *slot = &(cq);      \
-    __ccircq_destroy(*slot);           \
+    ccircq__destroy(*slot);            \
     *slot = NULL;                      \
   } while (0)
 
-/**
- * @brief Send a message to the queue (it blocks, zero-copy)
- *
- * Blocks until the queue has free space and then hands the ownership of the
- * message data to the queue. On success it sets msg->data to NULL.
- *
- * @param cq Circular queue to send to
- * @param msg Message to send. On success the ownership of the data moves to
- * the queue.
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if cq or msg is NULL, if msg->data is NULL while
- * msg->size is not 0, or if msg->data is not NULL while msg->size is 0
- * @return ccol_not_permitted if sends on the queue are turned off
- *
- * @note The function waits with no time limit for free space, or for sends
- * on the queue to be turned off.
- * @note Each time it wakes up, the function checks again whether sends are
- * on
- * @note On failure, the caller keeps the ownership of msg->data
- * @note msg->data == NULL with msg->size == 0 is valid (a sentinel message)
- * @note msg->data == NULL with msg->size > 0 is not valid, and neither is
- * msg->data != NULL with msg->size == 0, because a live pointer must carry a
- * payload
- *
- * @see ccircq_try_send
- * @see ccircq_timed_send
- */
-ccol_retval_t ccircq_send(ccircq *cq, cmessage_t *msg);
+// Sends msg, the send for a producer that should wait while the queue is full
+// (that's the backpressure). It waits with no time limit for room or for sends
+// to be turned off. On success msg->data becomes NULL and the queue owns it; on
+// failure you keep it. It gives ccol_success, ccol_invalid_args (NULL cq or
+// msg, or a data/size pair that doesn't match), or ccol_not_permitted when
+// sends are off.
+ccol_retval ccircq_send(ccircq *cq, cmessage *msg);
 
-/**
- * @brief Try to send a message with no block (zero-copy)
- *
- * Tries to send the message and returns ccol_container_full at
- * once if the queue is full. On success the ownership of msg->data moves to
- * the queue.
- *
- * @param cq Circular queue to send to
- * @param msg Message to send. On success the ownership of the data moves to
- * the queue.
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if cq or msg is NULL, if msg->data is NULL while
- * msg->size is not 0, or if msg->data is not NULL while msg->size is 0
- * @return ccol_not_permitted if sends on the queue are turned off
- * @return ccol_container_full if the queue is full
- *
- * @note The function never blocks
- * @note On failure, the caller keeps the ownership of msg->data
- *
- * @see ccircq_send
- * @see ccircq_timed_send
- */
-ccol_retval_t ccircq_try_send(ccircq *cq, cmessage_t *msg);
+// Like ccircq_send(), for a producer that must never block: it gives
+// ccol_container_full when the queue is full.
+ccol_retval ccircq_try_send(ccircq *cq, cmessage *msg);
 
-/**
- * @brief Send a message with a timeout (it blocks, zero-copy)
- *
- * Blocks for at most the given timeout while it waits for free space. If
- * space frees up in time it sends the message and hands over the ownership,
- * and if the timeout ends or sends are turned off it returns the matching
- * error code.
- *
- * @param cq Circular queue to send to
- * @param msg Message to send. On success the ownership of the data moves to
- * the queue.
- * @param timeout_us The longest time to wait, in microseconds, measured from
- * the call. 0 doesn't wait, and the call then does exactly what
- * ccircq_try_send() does and returns its result. A value too large to
- * form a deadline, such as UINT64_MAX, saturates to the latest deadline the
- * clock can hold, which in practice is a wait with no end, and never wraps
- * into the past.
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if cq or msg is NULL, if msg->data is NULL while
- * msg->size is not 0, or if msg->data is not NULL while msg->size is 0
- * @return ccol_not_permitted if sends on the queue are turned off
- * @return ccol_container_full if timeout_us is 0 and the queue is full
- * @return ccol_timed_out if the timeout ends before free space arrives
- * @return ccol_unexpected_failure if the wait fails with an error other than a
- * timeout; errno then holds that error
- *
- * @note The function blocks for at most the duration of the timeout
- * @note Each time it wakes up, the function checks again whether sends are
- * on
- * @note On failure, the caller keeps the ownership of msg->data
- * @note The timeout is measured against CLOCK_MONOTONIC, so changing the
- * system's wall clock (an administrator, NTP, or a virtual machine that
- * resumes) doesn't make it longer or shorter; the call waits for the
- * duration the caller gave.
- *
- * @see ccircq_send
- * @see ccircq_try_send
- */
-ccol_retval_t ccircq_timed_send(ccircq *cq, cmessage_t *msg,
-                                uint64_t timeout_us);
+// Like ccircq_send(), for a producer that may wait but not for ever: it waits
+// at most timeout_us microseconds on CLOCK_MONOTONIC, so a wall clock step
+// doesn't change it. 0 does exactly what ccircq_try_send() does, and a value
+// too large for a deadline (UINT64_MAX) saturates, which is a wait with no end.
+// It also gives ccol_timed_out, or ccol_unexpected_failure with errno set when
+// the wait itself fails.
+ccol_retval ccircq_timed_send(ccircq *cq, cmessage *msg, uint64_t timeout_us);
 
-/**
- * @brief Receive a message from the queue (it blocks, zero-copy)
- *
- * Blocks until a message arrives and then hands the ownership of its data to
- * the caller in target_buf.
- *
- * @param cq Circular queue to receive from
- * @param target_buf Buffer that receives the message, and with it the
- * ownership of the data.
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if cq or target_buf is NULL
- *
- * @note The function blocks with no time limit while it waits for a message.
- * @note The function stays blocked while sends on the queue are off
- * @note The caller gets the ownership of target_buf->data and must free it
- *
- * @see ccircq_try_recv
- * @see ccircq_timed_recv
- */
-ccol_retval_t ccircq_recv(ccircq *cq, cmessage_t *target_buf);
+// Receives a message into target_buf, for a consumer with nothing else to do:
+// it waits with no time limit, and you then own target_buf->data. It gives
+// ccol_success or ccol_invalid_args. Turning sends off doesn't wake it.
+ccol_retval ccircq_recv(ccircq *cq, cmessage *target_buf);
 
-/**
- * @brief Try to receive a message with no block (zero-copy)
- *
- * Tries to receive a message and returns ccol_container_empty at
- * once if the queue is empty. On success the ownership of the message data
- * moves to the caller.
- *
- * @param cq Circular queue to receive from
- * @param target_buf Buffer that receives the message, and with it the
- * ownership of the data.
- *
- * @return ccol_success on success. The caller must free target_buf->data.
- * @return ccol_invalid_args if cq or target_buf is NULL
- * @return ccol_container_empty if the queue is empty
- *
- * @note The function never blocks
- * @note On success, the caller gets the ownership of target_buf->data
- *
- * @see ccircq_recv
- * @see ccircq_timed_recv
- */
-ccol_retval_t ccircq_try_recv(ccircq *cq, cmessage_t *target_buf);
+// Like ccircq_recv(), for a consumer that must not block (after cselect(), or
+// in a loop callback): it gives ccol_container_empty instead of waiting.
+ccol_retval ccircq_try_recv(ccircq *cq, cmessage *target_buf);
 
-/**
- * @brief Receive a message with a timeout (it blocks, zero-copy)
- *
- * Blocks for at most the given timeout while it waits for a message. If one
- * arrives in time it is received and its ownership moves to the caller, and
- * if the timeout ends the function returns ccol_timed_out.
- *
- * @param cq Circular queue to receive from
- * @param target_buf Buffer that receives the message, and with it the
- * ownership of the data.
- * @param timeout_us The longest time to wait, in microseconds, measured from
- * the call. 0 doesn't wait, and the call then does exactly what
- * ccircq_try_recv() does and returns its result. A value too large to
- * form a deadline, such as UINT64_MAX, saturates to the latest deadline the
- * clock can hold, which in practice is a wait with no end, and never wraps
- * into the past.
- *
- * @return ccol_success on success. The caller must free target_buf->data.
- * @return ccol_invalid_args if cq or target_buf is NULL
- * @return ccol_container_empty if timeout_us is 0 and the queue is empty
- * @return ccol_timed_out if the timeout ends before a message arrives
- * @return ccol_unexpected_failure if the wait fails with an error other than a
- * timeout; errno then holds that error
- *
- * @note The function blocks for at most the duration of the timeout
- * @note On success, the caller gets the ownership of target_buf->data
- * @note The timeout is measured against CLOCK_MONOTONIC, so changing the
- * system's wall clock (an administrator, NTP, or a virtual machine that
- * resumes) doesn't make it longer or shorter; the call waits for the
- * duration the caller gave.
- *
- * @see ccircq_recv
- * @see ccircq_try_recv
- */
-ccol_retval_t ccircq_timed_recv(ccircq *cq, cmessage_t *target_buf,
-                                uint64_t timeout_us);
+// Like ccircq_recv(), for a consumer that also has other work: it waits at
+// most timeout_us microseconds, with the rules of ccircq_timed_send(). 0 acts
+// as ccircq_try_recv(), and it can give ccol_timed_out or
+// ccol_unexpected_failure.
+ccol_retval ccircq_timed_recv(ccircq *cq, cmessage *target_buf,
+                              uint64_t timeout_us);
 
-/**
- * @brief Turn off sends on the queue
- *
- * Stops every new send and wakes each thread blocked inside a send, so those
- * senders return ccol_not_permitted. Receives are not affected.
- *
- * A queue whose sends are off is ready for the write direction of
- * cselect() and of a ceventloop registration, the same way a pipe
- * whose reader has gone is ready for POLLOUT. The function wakes every write
- * waiter, and the try_send the waiter then makes returns ccol_not_permitted
- * at once.
- *
- * @param cq Circular queue that gets sends turned off
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if cq is NULL
- *
- * @note The function wakes every blocked sender at once with a broadcast
- * @note ccircq_enable_sending() turns sends on again
- * @note Receives are not affected
- *
- * @see ccircq_enable_sending
- */
-ccol_retval_t ccircq_disable_sending(ccircq *cq);
+// Turns sends off, so an owner can stop new work while consumers drain what is
+// queued. Every blocked sender wakes and gives ccol_not_permitted; receives go
+// on. A queue with sends off counts as ready for the write direction of
+// cselect() and of a loop registration, the way POLLOUT is set on a pipe whose
+// reader is gone, so the waiter's send fails at once. Gives ccol_success or
+// ccol_invalid_args.
+ccol_retval ccircq_disable_sending(ccircq *cq);
 
-/**
- * @brief Turn on sends on the queue
- *
- * Turns sends back on after a call turned them off, and wakes every thread
- * blocked waiting to send so those senders can go on.
- *
- * @param cq Circular queue that gets sends turned on
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if cq is NULL
- *
- * @note The function wakes every blocked sender with a broadcast
- * @note A thread can try to send at once if the queue has free space
- * @note From this call on, a full queue is not ready for the write direction
- * of cselect() or of a ceventloop registration until it has room
- *
- * @see ccircq_disable_sending
- */
-ccol_retval_t ccircq_enable_sending(ccircq *cq);
+// Turns sends back on after ccircq_disable_sending() and wakes every blocked
+// sender. A full queue is then not ready for writing until it has room. Gives
+// ccol_success or ccol_invalid_args.
+ccol_retval ccircq_enable_sending(ccircq *cq);
 
-/**
- * @brief Get the current message count of the queue
- *
- * Gives the number of messages the queue holds at the moment.
- *
- * @param cq Circular queue to ask
- *
- * @return Number of messages in the queue, or (size_t)-1 on an error
- *
- * @note The count is a thread-safe snapshot
- * @note A return value of (size_t)-1 means an error (a NULL queue)
- */
+// Gives a snapshot of the number of queued messages, or (size_t)-1 for a NULL
+// queue.
 size_t ccircq_msg_count(ccircq *cq);
 
-/* ========================================================================== */
-/*                          DYNAMIC QUEUE FUNCTIONS                           */
-/* ========================================================================== */
+// Creates a dynamic queue (a doubly-linked list), for a producer that must
+// never block: its send fails only for lack of memory or at ccol_max_elem_count
+// messages. The other arguments and the failure report are as for
+// ccircq_create_mp(). Destroy it with cdynmq_destroy().
+cdynmq *cdynmq_create_mp(ccol_memmgmt_procs *mmgmt_procs, char **err_str);
 
-/**
- * @brief Create a dynamic queue with custom memory management
- *
- * Creates a queue with no size limit on top of a doubly-linked list. A send
- * never blocks, but it fails if memory can't be allocated, and the queue can
- * grow up to ccol_max_elem_count messages.
- *
- * @param mmgmt_procs Custom memory management procedures, or NULL to use the
- * default malloc and free
- * @param err_str Optional pointer that gets an error string on failure. Pass
- * NULL to ignore it.
- *
- * @return Pointer to the new dynamic queue, or NULL on failure
- *
- * @note A send never blocks; only the free memory limits it.
- * @note The maximum size is ccol_max_elem_count, defined in common.h
- * @note You must destroy the queue with cdynmq_destroy() once you
- * are done with it
- *
- * @see cdynmq_create
- * @see cdynmq_destroy
- */
-cdynmq *cdynmq_create_mp(ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
-
-/**
- * @brief Create a dynamic queue with default memory management
- *
- * Creates a dynamic queue that uses the standard malloc and free.
- *
- * @param err_str Optional pointer that gets an error string on failure
- *
- * @return Pointer to the new dynamic queue, or NULL on failure
- */
+// cdynmq_create_mp() with the default allocator. It evaluates to the queue or
+// NULL.
 #define cdynmq_create(err_str) cdynmq_create_mp(NULL, (err_str))
 
-/**
- * @brief Destroy a dynamic queue (internal function)
- *
- * @param dq Dynamic queue to destroy
- *
- * @warning Do not call this function directly. Use the
- * cdynmq_destroy() macro.
- */
-void __cdynmq_destroy(cdynmq *dq);
+// Internal: destroys dq; cdynmq_destroy() calls it and then clears the pointer.
+// Use the macro instead.
+void cdynmq__destroy(cdynmq *dq);
 
-/**
- * @brief Destroy a dynamic queue and set the pointer to NULL
- *
- * Frees every resource of the queue, every node of the linked list included,
- * through __cdynmq_destroy(), which asserts if the queue still
- * holds messages or if a watcher still watches it. A watcher is a
- * cselect() call, a cselect_timed() call, or an ceventloop
- * registration (ceventloop_add with cdynmq_selectable). Drain
- * the queue, call ceventloop_remove(), and only then destroy the queue;
- * letting every cselect() and cselect_timed() call that watches this
- * queue return works as well.
- *
- * That sequence is safe as written. ceventloop_remove() doesn't wait for
- * a callback it already handed to a reactor thread, so such a callback can be
- * inside this queue when the removal returns, but this destroy blocks until
- * every one of those callbacks is done with the queue and frees the queue
- * only after that.
- *
- * The destroy counts the messages left in the queue only once those
- * callbacks have finished. A write callback that was already running when
- * ceventloop_remove() returned can still send after that, and its
- * message then makes the destroy assert. So when a write registration
- * watches the queue, remove it first, wait for its on_removed callback, and
- * then drain and destroy the queue.
- *
- * A callback that the loop runs for a different registration can run this
- * whole sequence for this queue, whatever num_reactor_threads is. A dispatch
- * the loop collected for this queue but hasn't started yet doesn't hold up
- * the destroy, and it never runs its callback after the removal.
- *
- * @param dq Dynamic queue to destroy. The macro sets it to NULL afterwards.
- *
- * @warning The macro does not free the messages that stay in the queue
- * @warning Do not destroy a queue that a cselect() call, a
- * cselect_timed() call, or an ceventloop registration watches. The
- * watcher's waiter node points to this queue's mutex, so that would be a
- * use-after-free, and the function asserts against it just as it asserts
- * against a queue that isn't empty.
- * @warning Do not call this from inside an ceventloop callback that
- * dispatches this same queue, since the destroy would wait for that very
- * callback. It is a caller error and the program stops through
- * _ccol_fatal_err(). Destroy the queue from a thread that doesn't run one of
- * its callbacks.
- * @warning Do not hold an application lock across this call if one of this
- * queue's callbacks takes that lock: the destroy waits for the callback,
- * and the callback would wait for the lock.
- * @note You can call this with a NULL pointer
- * @note The macro evaluates dq exactly once, and dq must be a modifiable
- * lvalue such as a variable or an array element
- */
+// Destroys the queue and its nodes and sets dq to NULL (dq is evaluated once),
+// with every rule of ccircq_destroy(): it asserts on a queue that isn't empty
+// or is still watched, waits for callbacks already running, and is fatal from a
+// callback that dispatches this queue.
 #define cdynmq_destroy(dq) \
-  _cdynmq_destroy_impl(dq, _ccol_uniq(__ccol_dq_destroy_slot, __COUNTER__))
+  cdynmq__destroy_impl(dq, ccol__uniq(ccol__dq_destroy_slot, __COUNTER__))
 
-/* Internal body of cdynmq_destroy. slot is a name from
- * _ccol_uniq(), so the macro can nest inside the argument of another destroy
- * macro and stay -Wshadow clean. The argument is evaluated exactly once. */
-#define _cdynmq_destroy_impl(dq, slot) \
+// Internal: the body of cdynmq_destroy(), like ccircq__destroy_impl().
+#define cdynmq__destroy_impl(dq, slot) \
   do {                                 \
     __typeof__(dq) *slot = &(dq);      \
-    __cdynmq_destroy(*slot);           \
+    cdynmq__destroy(*slot);            \
     *slot = NULL;                      \
   } while (0)
 
-/**
- * @brief Send a message to the dynamic queue (no block, zero-copy)
- *
- * Sends a message without blocking. It allocates a new list node, puts the
- * message at the tail of the queue and hands the ownership of msg->data to
- * the queue.
- *
- * @param dq Dynamic queue to send to
- * @param msg Message to send. On success the ownership of the data moves to
- * the queue.
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if dq or msg is NULL, if msg->data is NULL while
- * msg->size is not 0, or if msg->data is not NULL while msg->size is 0
- * @return ccol_not_permitted if sends on the queue are turned off
- * @return ccol_container_full if the queue holds ccol_max_elem_count messages
- * @return ccol_not_enough_memory if the allocation of the node fails
- *
- * @note The function never blocks; it returns at once with a success code
- * or an error code.
- * @note On failure, the caller keeps the ownership of msg->data
- * @note There is no blocking send and no send with a timeout, since the
- * queue has no size limit by design.
- * @note Only ccol_max_elem_count and the free memory limit the queue
- * @note msg->data == NULL with msg->size == 0 is valid (a sentinel message)
- * @note msg->data == NULL with msg->size > 0 is not valid, and neither is
- * msg->data != NULL with msg->size == 0, because a live pointer must carry a
- * payload
- *
- * @see cdynmq_recv
- */
-ccol_retval_t cdynmq_send(cdynmq *dq, cmessage_t *msg);
+// Appends msg without blocking, the only send an unbounded queue needs. The
+// queue owns msg->data on success and you keep it on failure. It gives
+// ccol_success, ccol_invalid_args, ccol_not_permitted when sends are off,
+// ccol_container_full at ccol_max_elem_count messages, or
+// ccol_not_enough_memory.
+ccol_retval cdynmq_send(cdynmq *dq, cmessage *msg);
 
-/**
- * @brief Receive a message from the dynamic queue (it blocks, zero-copy)
- *
- * Blocks until a message arrives, then takes it off the head of the queue
- * and hands its ownership to the caller.
- *
- * @param dq Dynamic queue to receive from
- * @param target_buf Buffer that receives the message, and with it the
- * ownership of the data.
- *
- * @return ccol_success on success. The caller must free target_buf->data.
- * @return ccol_invalid_args if dq or target_buf is NULL
- *
- * @note The function blocks with no time limit while it waits for a message.
- * @note The function stays blocked while sends on the queue are off
- * @note The caller gets the ownership of target_buf->data and must free it
- *
- * @see cdynmq_try_recv
- * @see cdynmq_timed_recv
- */
-ccol_retval_t cdynmq_recv(cdynmq *dq, cmessage_t *target_buf);
+// Receives the message at the head into target_buf, for a consumer with
+// nothing else to do: it waits with no time limit, and you then own
+// target_buf->data. Turning sends off doesn't wake it.
+ccol_retval cdynmq_recv(cdynmq *dq, cmessage *target_buf);
 
-/**
- * @brief Try to receive a message with no block (zero-copy)
- *
- * Tries to receive a message and returns ccol_container_empty at
- * once if the queue is empty.
- *
- * @param dq Dynamic queue to receive from
- * @param target_buf Buffer that receives the message, and with it the
- * ownership of the data.
- *
- * @return ccol_success on success. The caller must free target_buf->data.
- * @return ccol_invalid_args if dq or target_buf is NULL
- * @return ccol_container_empty if the queue is empty
- *
- * @note The function never blocks
- * @note On success, the caller gets the ownership of target_buf->data
- *
- * @see cdynmq_recv
- * @see cdynmq_timed_recv
- */
-ccol_retval_t cdynmq_try_recv(cdynmq *dq, cmessage_t *target_buf);
+// Like cdynmq_recv(), for a consumer that must not block: it gives
+// ccol_container_empty instead of waiting.
+ccol_retval cdynmq_try_recv(cdynmq *dq, cmessage *target_buf);
 
-/**
- * @brief Receive a message with a timeout (it blocks, zero-copy)
- *
- * Blocks for at most the given timeout while it waits for a message. If one
- * arrives in time it is received and its ownership moves to the caller.
- *
- * @param dq Dynamic queue to receive from
- * @param target_buf Buffer that receives the message, and with it the
- * ownership of the data.
- * @param timeout_us The longest time to wait, in microseconds, measured from
- * the call. 0 doesn't wait, and the call then does exactly what
- * cdynmq_try_recv() does and returns its result. A value too large to
- * form a deadline, such as UINT64_MAX, saturates to the latest deadline the
- * clock can hold, which in practice is a wait with no end, and never wraps
- * into the past.
- *
- * @return ccol_success on success. The caller must free target_buf->data.
- * @return ccol_invalid_args if dq or target_buf is NULL
- * @return ccol_container_empty if timeout_us is 0 and the queue is empty
- * @return ccol_timed_out if the timeout ends before a message arrives
- * @return ccol_unexpected_failure if the wait fails with an error other than a
- * timeout; errno then holds that error
- *
- * @note The function blocks for at most the duration of the timeout
- * @note On success, the caller gets the ownership of target_buf->data
- * @note The timeout is measured against CLOCK_MONOTONIC, so changing the
- * system's wall clock (an administrator, NTP, or a virtual machine that
- * resumes) doesn't make it longer or shorter; the call waits for the
- * duration the caller gave.
- *
- * @see cdynmq_recv
- * @see cdynmq_try_recv
- */
-ccol_retval_t cdynmq_timed_recv(cdynmq *dq, cmessage_t *target_buf,
-                                uint64_t timeout_us);
+// Like cdynmq_recv(), for a consumer that also has other work: it waits at
+// most timeout_us microseconds, with the rules of ccircq_timed_recv().
+ccol_retval cdynmq_timed_recv(cdynmq *dq, cmessage *target_buf,
+                              uint64_t timeout_us);
 
-/**
- * @brief Turn off sends on the dynamic queue
- *
- * Stops every new send. A dynamic queue never has blocked senders the way a
- * circular queue can, because its send never blocks, so this call only
- * affects the sends that come later.
- *
- * A queue whose sends are off is ready for the write direction of
- * cselect() and of a ceventloop registration, the same way a pipe
- * whose reader has gone is ready for POLLOUT. The function wakes every write
- * waiter, and the send the waiter then makes returns ccol_not_permitted at
- * once.
- *
- * @param dq Dynamic queue that gets sends turned off
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if dq is NULL
- *
- * @note cdynmq_enable_sending() turns sends on again
- * @note Receives are not affected
- *
- * @see cdynmq_enable_sending
- */
-ccol_retval_t cdynmq_disable_sending(cdynmq *dq);
+// Turns sends off, so an owner can stop new work. No sender ever blocks on a
+// dynamic queue, so it only affects later sends; the write readiness rule of
+// ccircq_disable_sending() applies. Gives ccol_success or ccol_invalid_args.
+ccol_retval cdynmq_disable_sending(cdynmq *dq);
 
-/**
- * @brief Turn on sends on the dynamic queue
- *
- * Turns sends back on after a call turned them off.
- *
- * @param dq Dynamic queue that gets sends turned on
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if dq is NULL
- *
- * @see cdynmq_disable_sending
- */
-ccol_retval_t cdynmq_enable_sending(cdynmq *dq);
+// Turns sends back on after cdynmq_disable_sending(). Gives ccol_success or
+// ccol_invalid_args.
+ccol_retval cdynmq_enable_sending(cdynmq *dq);
 
-/**
- * @brief Get the current message count of the dynamic queue
- *
- * Gives the number of messages the queue holds at the moment.
- *
- * @param dq Dynamic queue to ask
- *
- * @return Number of messages in the queue, or (size_t)-1 on an error
- *
- * @note The count is a thread-safe snapshot
- * @note A return value of (size_t)-1 means an error (a NULL queue)
- */
+// Gives a snapshot of the number of queued messages, or (size_t)-1 for a NULL
+// queue.
 size_t cdynmq_msg_count(cdynmq *dq);
 
-/* ========================================================================== */
-/*                            CHANNEL FUNCTIONS                               */
-/* ========================================================================== */
-
-/**
- * @brief Create a two-way cchan with custom memory management
- *
- * Creates a cchan, a pair of circular queues that carries two-way
- * communication between an owner thread and the worker threads. The thread
- * that calls this function becomes the owner, and on every call the channel
- * picks the direction itself from the calling thread's ID.
- *
- * @param max_size Maximum number of messages each direction can hold. Each
- * direction is one circular queue, so the bound is the same as for the
- * max_size of ccircq_create_mp: SIZE_MAX / sizeof(cmessage_t).
- * @param mmgmt_procs Custom memory management procedures, or NULL to use the
- * default malloc and free
- * @param err_str Optional pointer that gets an error string on failure. Pass
- * NULL to ignore it.
- *
- * @return Pointer to the new cchan, or NULL on failure
- *
- * @note The channel holds two circular queues: cchan_owner_to_workers and
- * cchan_workers_to_owner
- * @note The thread that creates the channel is the owner, and every other
- * thread is a worker.
- * @note The channel picks the direction itself from the ID of the thread
- * @note You must destroy the cchan with cchan_destroy() once
- * you are done with it
- * @note The owner thread must stay alive for as long as the cchan is
- * in use. The channel routes a message by comparing the calling thread's ID
- * with the ID it took at creation, and once the first owner exits the OS can
- * give the same thread-ID value to a new, unrelated thread, which the channel
- * then silently routes as the owner too.
- *
- * @see cchan_create
- * @see cchan_destroy
- */
-cchan *cchan_create_mp(size_t max_size, ccol_memmgmt_procs_t *mmgmt_procs,
+// Creates a cchan, for two-way traffic between an owner thread and its
+// workers: two circular queues of at most max_size messages each,
+// cchan_owner_to_workers and cchan_workers_to_owner. The calling thread becomes
+// the owner and every other thread is a worker; each call picks its direction
+// from the caller's thread ID, so no call names one. The owner must stay alive
+// while the channel is in use, since the OS can give its ID to a new thread,
+// which would then be routed as the owner. Other arguments as for
+// ccircq_create_mp(). Destroy it with cchan_destroy().
+cchan *cchan_create_mp(size_t max_size, ccol_memmgmt_procs *mmgmt_procs,
                        char **err_str);
 
-/**
- * @brief Create a two-way cchan with default memory management
- *
- * Creates a cchan that uses the standard malloc and free.
- *
- * @param max_size Maximum number of messages that each direction can hold
- * @param err_str Optional pointer that gets an error string on failure
- *
- * @return Pointer to the new cchan, or NULL on failure
- */
+// cchan_create_mp() with the default allocator. It evaluates to the channel or
+// NULL.
 #define cchan_create(max_size, err_str) \
   cchan_create_mp((max_size), NULL, (err_str))
 
-/**
- * @brief Destroy a cchan (internal function)
- *
- * @param ch Channel to destroy
- *
- * @warning Do not call this function directly. Use the cchan_destroy()
- * macro.
- */
-void __cchan_destroy(cchan *ch);
+// Internal: destroys ch; cchan_destroy() calls it and then clears the pointer.
+// Use the macro instead.
+void cchan__destroy(cchan *ch);
 
-/**
- * @brief Destroy a cchan and set the pointer to NULL
- *
- * Frees every resource of the cchan, both of its circular queues
- * included, through __cchan_destroy(), which asserts if a queue below
- * the channel still holds messages or if a watcher still watches a
- * direction. A watcher is a cselect() call, a cselect_timed() call,
- * or an ceventloop registration (ceventloop_add with
- * cchan_selectable). Drain both directions, call
- * ceventloop_remove(), and only then destroy the channel; letting every
- * cselect() and cselect_timed() call that watches one of the
- * directions return works as well.
- *
- * That sequence is safe as written. ceventloop_remove() doesn't wait for
- * a callback it already handed to a reactor thread, so such a callback can be
- * inside one of the channel's queues when the removal returns, but this
- * destroy blocks until every one of those callbacks is done with that queue
- * and frees the queue only after that.
- *
- * A callback that the loop runs for a different registration can run this
- * whole sequence for this channel, whatever num_reactor_threads is. A
- * dispatch the loop collected for the channel but hasn't started yet doesn't
- * hold up the destroy, and it never runs its callback after the removal.
- *
- * @param ch Channel to destroy. The macro sets it to NULL afterwards.
- *
- * @warning The macro does not free messages left in either direction
- * @warning Do not destroy a cchan that a cselect() call, a
- * cselect_timed() call, or an ceventloop registration watches. The
- * watcher's waiter node points to the mutex of the queue below the channel,
- * so that would be a use-after-free, and the function asserts against it
- * just as it asserts against messages left in one of the directions.
- * @warning Do not call this from inside an ceventloop callback that
- * dispatches one of this cchan's directions, since the destroy would
- * wait for that very callback. It is a caller error and the program stops
- * through _ccol_fatal_err().
- * @warning Do not hold an application lock across this call if one of this
- * cchan's callbacks takes that lock: the destroy waits for the
- * callback, and the callback would wait for the lock.
- * @note You can call this with a NULL pointer
- * @note The macro evaluates ch exactly once, and ch must be a modifiable
- * lvalue such as a variable or an array element
- */
+// Destroys the channel and both its queues and sets ch to NULL (ch is
+// evaluated once), with every rule of ccircq_destroy() applied to each
+// direction: drain both and remove every registration first, and never call it
+// from a callback that dispatches one of its directions.
 #define cchan_destroy(ch) \
-  _cchan_destroy_impl(ch, _ccol_uniq(__cchan_destroy_slot, __COUNTER__))
+  cchan__destroy_impl(ch, ccol__uniq(cchan__destroy_slot, __COUNTER__))
 
-/* Internal body of cchan_destroy. slot is a name from _ccol_uniq(),
- * so the macro can nest inside the argument of another destroy macro and
- * stay -Wshadow clean. The argument is evaluated exactly once. */
-#define _cchan_destroy_impl(ch, slot) \
+// Internal: the body of cchan_destroy(), like ccircq__destroy_impl().
+#define cchan__destroy_impl(ch, slot) \
   do {                                \
     __typeof__(ch) *slot = &(ch);     \
-    __cchan_destroy(*slot);           \
+    cchan__destroy(*slot);            \
     *slot = NULL;                     \
   } while (0)
 
-/**
- * @brief Send a message through the cchan (it blocks, zero-copy)
- *
- * The function picks the queue itself, from the thread that calls it:
- * - the owner thread sends to the cchan_owner_to_workers queue
- * - a worker thread sends to the cchan_workers_to_owner queue
- *
- * @param ch Channel to send through
- * @param msg Message to send. On success the ownership of the data moves to
- * the channel.
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if ch or msg is NULL, if msg->data is NULL while
- * msg->size is not 0, or if msg->data is not NULL while msg->size is 0
- * @return ccol_not_permitted if sends on the chosen direction are turned off
- *
- * @note The function blocks until the chosen queue has free space
- * @note The function picks the direction itself from the ID of the thread
- * @note On failure, the caller keeps the ownership of msg->data
- *
- * @see cchan_try_send
- * @see cchan_timed_send
- * @see cchan_recv
- */
-ccol_retval_t cchan_send(cchan *ch, cmessage_t *msg);
+// The channel versions of the ccircq send and receive calls, with the same
+// uses and results, so owner and workers need no direction argument. The owner
+// sends to cchan_owner_to_workers and receives from cchan_workers_to_owner, and
+// a worker the other way around.
+ccol_retval cchan_send(cchan *ch, cmessage *msg);
 
-/**
- * @brief Try to send a message with no block (zero-copy)
- *
- * Tries to send the message through the queue the channel picks
- * itself, and returns at once if that queue is full.
- *
- * @param ch Channel to send through
- * @param msg Message to send. On success the ownership of the data moves to
- * the channel.
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if ch or msg is NULL, if msg->data is NULL while
- * msg->size is not 0, or if msg->data is not NULL while msg->size is 0
- * @return ccol_not_permitted if sends on the chosen direction are turned off
- * @return ccol_container_full if the chosen queue is full
- *
- * @note The function never blocks
- * @note The function picks the direction itself from the ID of the thread
- *
- * @see cchan_send
- * @see cchan_timed_send
- */
-ccol_retval_t cchan_try_send(cchan *ch, cmessage_t *msg);
+ccol_retval cchan_try_send(cchan *ch, cmessage *msg);
 
-/**
- * @brief Send a message with a timeout (it blocks, zero-copy)
- *
- * Blocks for at most the given timeout while it waits for free space in the
- * queue the channel picks itself.
- *
- * @param ch Channel to send through
- * @param msg Message to send. On success the ownership of the data moves to
- * the channel.
- * @param timeout_us The longest time to wait, in microseconds, measured from
- * the call. 0 doesn't wait, and the call then does exactly what
- * cchan_try_send() does and returns its result. A value too large to
- * form a deadline, such as UINT64_MAX, saturates to the latest deadline the
- * clock can hold, which in practice is a wait with no end, and never wraps
- * into the past.
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if ch or msg is NULL, if msg->data is NULL while
- * msg->size is not 0, or if msg->data is not NULL while msg->size is 0
- * @return ccol_not_permitted if sends on the chosen direction are turned off
- * @return ccol_container_full if timeout_us is 0 and the chosen queue is full
- * @return ccol_timed_out if the timeout ends before free space arrives
- * @return ccol_unexpected_failure if the wait fails with an error other than a
- * timeout; errno then holds that error
- *
- * @note The function blocks for at most the duration of the timeout
- * @note The function picks the direction itself from the ID of the thread
- * @note The timeout is measured against CLOCK_MONOTONIC, so changing the
- * system's wall clock (an administrator, NTP, or a virtual machine that
- * resumes) doesn't make it longer or shorter; the call waits for the
- * duration the caller gave.
- *
- * @see cchan_send
- * @see cchan_try_send
- */
-ccol_retval_t cchan_timed_send(cchan *ch, cmessage_t *msg, uint64_t timeout_us);
+ccol_retval cchan_timed_send(cchan *ch, cmessage *msg, uint64_t timeout_us);
 
-/**
- * @brief Receive a message from the cchan (it blocks, zero-copy)
- *
- * The function picks the queue itself, from the thread that calls it:
- * - the owner thread receives from the cchan_workers_to_owner queue
- * - a worker thread receives from the cchan_owner_to_workers queue
- *
- * @param ch Channel to receive from
- * @param target_buf Buffer that receives the message, and with it the
- * ownership of the data.
- *
- * @return ccol_success on success. The caller must free target_buf->data.
- * @return ccol_invalid_args if ch or target_buf is NULL
- *
- * @note The function blocks until a message arrives in the chosen queue
- * @note The function picks the direction itself from the ID of the thread
- * @note The caller gets the ownership of target_buf->data and must free it
- *
- * @see cchan_try_recv
- * @see cchan_timed_recv
- * @see cchan_send
- */
-ccol_retval_t cchan_recv(cchan *ch, cmessage_t *target_buf);
+ccol_retval cchan_recv(cchan *ch, cmessage *target_buf);
 
-/**
- * @brief Try to receive a message with no block (zero-copy)
- *
- * Tries to receive a message right away from the queue the channel picks
- * itself, and returns at once if that queue is empty.
- *
- * @param ch Channel to receive from
- * @param target_buf Buffer that receives the message, and with it the
- * ownership of the data.
- *
- * @return ccol_success on success. The caller must free target_buf->data.
- * @return ccol_invalid_args if ch or target_buf is NULL
- * @return ccol_container_empty if the chosen queue is empty
- *
- * @note The function never blocks
- * @note The function picks the direction itself from the ID of the thread
- *
- * @see cchan_recv
- * @see cchan_timed_recv
- */
-ccol_retval_t cchan_try_recv(cchan *ch, cmessage_t *target_buf);
+ccol_retval cchan_try_recv(cchan *ch, cmessage *target_buf);
 
-/**
- * @brief Receive a message with a timeout (it blocks, zero-copy)
- *
- * Blocks for at most the given timeout while it waits for a message in the
- * queue the channel picks itself.
- *
- * @param ch Channel to receive from
- * @param target_buf Buffer that receives the message, and with it the
- * ownership of the data.
- * @param timeout_us The longest time to wait, in microseconds, measured from
- * the call. 0 doesn't wait, and the call then does exactly what
- * cchan_try_recv() does and returns its result. A value too large to
- * form a deadline, such as UINT64_MAX, saturates to the latest deadline the
- * clock can hold, which in practice is a wait with no end, and never wraps
- * into the past.
- *
- * @return ccol_success on success. The caller must free target_buf->data.
- * @return ccol_invalid_args if ch or target_buf is NULL
- * @return ccol_container_empty if timeout_us is 0 and the chosen queue is empty
- * @return ccol_timed_out if the timeout ends before a message arrives
- * @return ccol_unexpected_failure if the wait fails with an error other than a
- * timeout; errno then holds that error
- *
- * @note The function blocks for at most the duration of the timeout
- * @note The function picks the direction itself from the ID of the thread
- * @note The timeout is measured against CLOCK_MONOTONIC, so changing the
- * system's wall clock (an administrator, NTP, or a virtual machine that
- * resumes) doesn't make it longer or shorter; the call waits for the
- * duration the caller gave.
- *
- * @see cchan_recv
- * @see cchan_try_recv
- */
-ccol_retval_t cchan_timed_recv(cchan *ch, cmessage_t *target_buf,
-                               uint64_t timeout_us);
+ccol_retval cchan_timed_recv(cchan *ch, cmessage *target_buf,
+                             uint64_t timeout_us);
 
-/**
- * @brief Direction for the control operations of a cchan
- */
-typedef enum cchan_direction_t {
-  cchan_owner_to_workers = 0, /**< Messages from the owner to the workers */
-  cchan_workers_to_owner      /**< Messages from the workers to the owner */
-} cchan_direction_t;
+// The two directions of a cchan, for the control calls below.
+typedef enum cchan_direction {
+  cchan_owner_to_workers = 0,
+  cchan_workers_to_owner
+} cchan_direction;
 
-/**
- * @brief Turn off sends on one direction of a cchan
- *
- * Stops every new send on the given direction and wakes each thread blocked
- * inside a send on it. That direction's queue is then ready for a write
- * selectable of cselect() and for a write registration of a
- * ceventloop, and the send the waiter makes returns ccol_not_permitted
- * at once, as with ccircq_disable_sending().
- *
- * @param ch Channel to change
- * @param d Direction that gets sends turned off (cchan_owner_to_workers or
- * cchan_workers_to_owner)
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if ch is NULL or d is not valid
- *
- * @note The function wakes every blocked sender on the given direction
- * @note cchan_enable_sending() turns sends on again
- * @note The other direction is not affected
- *
- * @see cchan_enable_sending
- */
-ccol_retval_t cchan_disable_sending(cchan *ch, cchan_direction_t d);
+// Turns sends on direction d off or back on, so one side can stop new work, as
+// ccircq_disable_sending() and ccircq_enable_sending() do; the other direction
+// isn't touched. Both give ccol_invalid_args for a NULL ch or a bad d.
+ccol_retval cchan_disable_sending(cchan *ch, cchan_direction d);
 
-/**
- * @brief Turn on sends on one direction of a cchan
- *
- * Turns sends on the given direction back on after a call turned them off,
- * and wakes every thread blocked waiting to send.
- *
- * @param ch Channel to change
- * @param d Direction that gets sends turned on (cchan_owner_to_workers or
- * cchan_workers_to_owner)
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if ch is NULL or d is not valid
- *
- * @note The function wakes every blocked sender with a broadcast
- * @note A thread can try to send right away if the queue has free space
- * @note The other direction is not affected
- *
- * @see cchan_disable_sending
- */
-ccol_retval_t cchan_enable_sending(cchan *ch, cchan_direction_t d);
+ccol_retval cchan_enable_sending(cchan *ch, cchan_direction d);
 
-/**
- * @brief Get the current message count of one cchan direction
- *
- * Gives the number of messages the given direction's queue holds at the
- * moment.
- *
- * @param ch Channel to ask
- * @param d Direction to ask about (cchan_owner_to_workers or
- * cchan_workers_to_owner)
- *
- * @return Number of messages in the given direction, or (size_t)-1 on an error
- *
- * @note The count is a thread-safe snapshot
- * @note A return value of (size_t)-1 means an error: the cchan is
- * NULL, or the direction is not valid.
- */
-size_t cchan_msg_count(cchan *ch, cchan_direction_t d);
+// Gives a snapshot of the message count of direction d, or (size_t)-1 for a
+// NULL ch or a bad d.
+size_t cchan_msg_count(cchan *ch, cchan_direction d);
 
-/* ========================================================================== */
-/*                             CSELECT API */
-/* ========================================================================== */
-
-/**
- * @brief Type tag of a selectable for cselect
- */
+// The kind of object a cselectable holds.
 typedef enum {
-  cselectable_type_ccircq, /**< Holds a ccircq pointer */
-  cselectable_type_cdynmq, /**< Holds a cdynmq pointer  */
-  cselectable_type_fd,     /**< Holds a raw file descriptor     */
-} cselectable_type_t;
+  cselectable_type_ccircq,
+  cselectable_type_cdynmq,
+  cselectable_type_fd,
+} cselectable_type;
 
-/**
- * @brief The direction that a cselectable_t waits on
- *
- * cselect_read waits until the queue holds at least one message to
- * receive. cselect_write waits until a send on the queue doesn't have to
- * wait, which means the queue has room for at least one send or its sends
- * are turned off. For a ccircq the test is msg_count < max_size
- * || writing_disabled. For a cdynmq it is writing_disabled ||
- * msg_count < ccol_max_elem_count, where ccol_max_elem_count is the same
- * ccol_container_full ceiling that cdynmq_send() applies. A queue
- * whose sends are off is ready the same way a pipe whose reader has gone is
- * ready for POLLOUT, and the caller's send then returns ccol_not_permitted at
- * once.
- *
- * cselect() neither consumes nor reserves either direction, so once it
- * wakes the caller makes the call itself: ccircq_try_recv or
- * cdynmq_try_recv after a win on the read direction, and
- * ccircq_try_send or cdynmq_send after a win on the write
- * direction. As with POSIX select(2) a TOCTOU race is possible, and that's
- * why that call must not block.
- */
+// The direction a selectable waits on. cselect_read waits for a message to
+// receive. cselect_write waits until a send doesn't have to wait: the queue has
+// room (a ccircq below max_size, a cdynmq below ccol_max_elem_count) or its
+// sends are off, in which case the send gives ccol_not_permitted at once.
+// cselect() neither consumes nor reserves anything, so after it wakes you make
+// the non-blocking call yourself (ccircq_try_recv(), cdynmq_try_recv(),
+// ccircq_try_send() or cdynmq_send()) and check its result; another thread can
+// win the race in between, as with select(2).
 typedef enum {
-  cselect_read,  /**< Wait for one readable message or more      */
-  cselect_write, /**< Wait for space to send one message or more */
-} cselect_dir_t;
+  cselect_read,
+  cselect_write,
+} cselect_dir;
 
-/**
- * @brief Tagged union for one queue that cselect watches
- *
- * Build one with ccircq_selectable(q, dir),
- * cdynmq_selectable(q, dir), or cchan_selectable(ch, dir).
- * Pass cselect_read to wait for a message to arrive, or cselect_write
- * to wait until the queue has room. For a channel, the right queue below it
- * is found when the selectable is built, from the calling thread's ID, the
- * same way cchan_recv() and cchan_send() find it.
- *
- * Whatever the type of selectable, cselect() never does the receive or
- * the send itself and only reports readiness. See the documentation of
- * cselect().
- */
+// One queue or fd that cselect() and ceventloop watch. Build it with
+// ccircq_selectable(), cdynmq_selectable(), cselectable_fd() or
+// cchan_selectable(). fd must be at least 0.
 typedef struct {
-  cselectable_type_t type;
-  cselect_dir_t dir;
+  cselectable_type type;
+  cselect_dir dir;
   union {
     ccircq *cq;
     cdynmq *dq;
-    int fd; /**< In use when type == cselectable_type_fd. It must be >= 0. */
+    int fd;
   };
-} cselectable_t;
+} cselectable;
 
-/** @brief Build a selectable from a ccircq pointer
- *
- *  @param q_       ccircq pointer to watch
- *  @param sel_dir  cselect_read or cselect_write
- */
+// Build a selectable from a ccircq or a cdynmq pointer and a direction, for
+// cselect() or ceventloop_add(). Each evaluates to a cselectable value.
 #define ccircq_selectable(q_, sel_dir) \
-  ((cselectable_t){                    \
-      .type = cselectable_type_ccircq, .dir = (sel_dir), .cq = (q_)})
+  ((cselectable){.type = cselectable_type_ccircq, .dir = (sel_dir), .cq = (q_)})
 
-/** @brief Build a selectable from a cdynmq pointer
- *
- *  @param q_       cdynmq pointer to watch
- *  @param sel_dir  cselect_read or cselect_write
- */
 #define cdynmq_selectable(q_, sel_dir) \
-  ((cselectable_t){                    \
-      .type = cselectable_type_cdynmq, .dir = (sel_dir), .dq = (q_)})
+  ((cselectable){.type = cselectable_type_cdynmq, .dir = (sel_dir), .dq = (q_)})
 
-/** @brief Build a selectable from a raw file descriptor
- *
- *  When the array holds at least one fd selectable, cselect uses
- *  epoll(7) internally and bridges the queue selectables of the same array
- *  with one eventfd(2) per waiter, so a single epoll_wait call reports the
- *  readiness of fds and queues alike.
- *
- *  cselect() never reads from the fd or writes to it, it only reports
- *  readiness (see the documentation of cselect()), and the caller then
- *  does its own read(2), recv(2), write(2), or send(2) on fd_.
- *
- *  @param fd_      File descriptor to watch (it must be >= 0)
- *  @param sel_dir  cselect_read  -> EPOLLIN (readable)
- *                  cselect_write -> EPOLLOUT (writable)
- *
- *  @note A read selectable always also has EPOLLRDHUP, EPOLLERR, and EPOLLHUP.
- *        A write selectable always also has EPOLLERR and EPOLLHUP.
- */
+// Build a selectable from an fd and a direction, so cselect() and the loop can
+// watch fds beside queues. It evaluates to a cselectable value. cselect_read
+// watches EPOLLIN and cselect_write EPOLLOUT; both also get EPOLLERR and
+// EPOLLHUP, and a read selectable EPOLLRDHUP. The library only reports
+// readiness; you do the read or write on the fd.
 #define cselectable_fd(fd_, sel_dir) \
-  ((cselectable_t){.type = cselectable_type_fd, .dir = (sel_dir), .fd = (fd_)})
+  ((cselectable){.type = cselectable_type_fd, .dir = (sel_dir), .fd = (fd_)})
 
-/**
- * @brief Give a cselectable_t for a cchan, in the direction that
- *        the caller asks for, with the queue resolved for the thread that
- *        calls it.
- *
- * The direction picks the queue, and with it the waiter list that
- * cselect() uses internally:
- *
- *   cselect_read: the owner reads from workers_to_owner_cq, and a worker
- *                     reads from owner_to_workers_cq. This is the same as
- *                     cchan_recv.
- *   cselect_write: the owner writes to owner_to_workers_cq, and a worker
- *                     writes to workers_to_owner_cq. This is the same as
- *                     cchan_send.
- *
- * The queue is resolved once, from the identity of the calling thread, and
- * from then on the cselectable_t watches that one queue, whichever thread
- * later waits on it or runs a callback for it.
- *
- * Readiness of the resolved queue works as for any other queue selectable:
- * the caller has to do the receive or the send itself, because cselect()
- * and ceventloop only report that the queue is ready.
- *
- * Once cselect() returns on the thread that built the selectable,
- * cchan_try_recv() and cchan_try_send() resolve to the same
- * queue, and so do ccircq_try_recv() and ccircq_try_send() on
- * sel.cq.
- *
- * Inside an ceventloop callback, use ccircq_try_recv() and
- * ccircq_try_send() on the cq of the cselectable_t the callback
- * receives, never a cchan_* call. The callback runs on one of the loop's
- * threads, which the channel counts as a worker whoever built the
- * selectable, so a cchan_* call there resolves for a worker, and for a
- * selectable the owner built that's the other queue. For example, a
- * selectable the owner built for cselect_read watches
- * workers_to_owner_cq, but a cchan_try_recv() in its on_readable
- * callback receives from owner_to_workers_cq instead:
- * it takes a message the owner sent to its workers and leaves the message
- * that made the callback run in the queue.
- *
- * @param ch  Channel to resolve. A NULL value gives a selectable that
- * cselect() refuses.
- * @param dir cselect_read or cselect_write
- * @return cselectable_t that holds the ccircq for that
- * direction
- */
-cselectable_t cchan_selectable(cchan *ch, cselect_dir_t dir);
+// Gives a selectable for the queue of ch that the calling thread reads from
+// (cselect_read, like cchan_recv()) or writes to (cselect_write, like
+// cchan_send()). The queue is resolved once, here, and the selectable keeps
+// watching it whichever thread waits on it later. In an event loop callback,
+// receive or send with ccircq_try_recv() or ccircq_try_send() on sel.cq, never
+// a cchan_ call: the loop's threads count as workers, so a cchan_ call there
+// can pick the other queue. A NULL ch gives a selectable that cselect()
+// refuses.
+cselectable cchan_selectable(cchan *ch, cselect_dir dir);
 
-/**
- * @brief Wait until one of n selectables becomes readable or writable
- *
- * Blocks until at least one selectable is ready for its own direction, then
- * sets *ready_index and returns. cselect() never does the receive or the
- * send itself, for a queue selectable or for an fd selectable, so right after
- * the call returns the caller must do its own receive or send on the
- * selectable that won: ccircq_try_recv(), cdynmq_try_recv(),
- * ccircq_try_send(), or cdynmq_send() for a queue selectable,
- * and read(2), recv(2), write(2), or send(2) on selectables[*ready_index].fd
- * for an fd selectable. This contract is TOCTOU-safe and the same for both
- * directions. Another consumer or producer can win the race between the
- * return of cselect() and the caller's own call, so that call must not
- * block and the caller must check its result.
- *
- * One array can mix read selectables and write selectables, since each
- * selectable in it can have any direction.
- *
- * When several selectables are ready they share the calls fairly. Each call
- * checks the selectables in rotation order, starting from an index that moves
- * on with every call the thread makes, and a ready fd selectable takes part
- * in that check the same way a ready queue does. So every selectable that
- * stays ready wins its share of the calls, and a ready selectable is only a
- * few calls behind any other: an fd that a worker watches for a stop request
- * gets reported even though a queue next to it never runs empty. Which of
- * several ready selectables a given call reports is not specified, so a
- * caller that needs a priority between them must check the more important
- * one itself.
- *
- * The function allocates one waiter node on the heap per selectable. Any
- * number of threads can call cselect on the same queue at the same time,
- * with no fixed limit on the number of waiters. For each message a producer
- * sends, and for each slot it frees, the library wakes exactly one waiter,
- * never all of them at once. A woken caller can leave without acting on that
- * queue, when its deadline ends, when another selectable of the same array
- * wins, or when the call fails, and such a caller hands the wake on to the
- * next waiter if the queue is still ready for that direction, so no waiter
- * stays parked on a queue that holds something for it.
- *
- * This call does the same work as
- * cselect_timed(ready_index, n, selectables, UINT64_MAX).
- *
- * @param ready_index The function sets this to the index of the selectable
- *                    that became ready. It is valid only when the function
- *                    returns ccol_success.
- * @param n           Number of selectables, from 1 to INT_MAX. Internally the
- * library passes the index of the matched selectable through a plain int, so
- * a larger n is refused because it could truncate *ready_index. It must also
- * be at most SIZE_MAX / sizeof(waiter node), since this call keeps its
- * waiter nodes in one allocation of n nodes. No realistic caller gets near
- * either ceiling.
- * @param selectables Array of n cselectable_t values to watch
- *
- * @return ccol_success           A selectable is ready, and *ready_index is
- *                                set. The caller must then do its own receive
- *                                or send. See above.
- * @return ccol_invalid_args      An argument is NULL or zero, n is too large
- *                                (see the n parameter above), a queue
- *                                selectable holds a NULL queue pointer, an
- *                                fd selectable has fd < 0, or the type or the
- *                                dir value is unknown.
- * @return ccol_not_enough_memory An allocation failed: the waiter nodes
- *                                (one node for each selectable), or, with
- *                                fd selectables, the state of the fds or
- *                                the event buffer of the wait. Any waiter
- *                                node that the call linked is unlinked
- *                                again, and no message moves.
- * @return ccol_unexpected_failure A system call failed: poll, epoll_create1,
- *                                eventfd, or epoll_ctl, or the
- *                                initialisation of the internal mutex or
- *                                condition variable. An fd selectable that
- *                                is not open, or that names a file that
- *                                epoll(7) cannot watch, gives this code on
- *                                every call; see the note below.
- *
- * @note If the array holds no fd selectable, the function uses only POSIX
- *       condition variables and makes no system call beyond those of a
- *       normal queue operation.
- * @note If the array holds at least one fd selectable, the function first
- *       asks poll(2), without waiting, which fds are ready, so a call that
- *       finds a ready selectable at once makes one poll call and nothing
- *       else for its fds. Only a call that has to wait uses epoll(7) and
- *       eventfd(2) internally on Linux, and kqueue(2) on the BSDs and macOS.
- *       That's why every fd must name a file that epoll(7) can watch, such
- *       as a socket, a pipe, a FIFO, a terminal or an eventfd. A regular
- *       file or a directory is refused with EPERM the way epoll_ctl refuses
- *       it, and the call returns ccol_unexpected_failure, where poll(2) and
- *       select(2) would report such a file as always ready.
- */
-ccol_retval_t cselect(size_t *ready_index, size_t n,
-                      cselectable_t *selectables);
+// Waits until one of the n selectables is ready for its own direction and sets
+// *ready_index; the caller then makes its own non-blocking receive, send, read
+// or write and checks its result. An array may mix directions, queues and fds.
+// Ready selectables share the calls fairly: each call scans in rotation order
+// from a start that moves per call, so a selectable that stays ready wins its
+// share. Which one a call reports isn't specified. Each producer action wakes
+// exactly one waiter, and a waiter that leaves without acting hands the wake
+// on. n goes from 1 to INT_MAX. It gives ccol_success, ccol_invalid_args (a
+// NULL or zero argument, a NULL queue, a negative fd, an unknown type or dir),
+// ccol_not_enough_memory (nothing linked stays linked, no message moves), or
+// ccol_unexpected_failure when a system call or a primitive init fails. Without
+// fds it uses only condition variables. With fds it first asks poll(2) without
+// waiting and uses epoll (kqueue on the BSDs and macOS) only when it must wait,
+// so every fd must be something epoll can watch: a regular file or a directory
+// gives ccol_unexpected_failure. Same as cselect_timed() with UINT64_MAX.
+ccol_retval cselect(size_t *ready_index, size_t n, cselectable *selectables);
 
-/**
- * @brief Wait with a timeout until one of n selectables becomes readable or
- * writable
- *
- * Does the same work as cselect(), except that the call returns
- * ccol_timed_out when no selectable becomes ready within timeout_us
- * microseconds.
- *
- * @param ready_index The function sets this to the index of the selectable
- *                    that became ready. It is valid when the function returns
- *                    ccol_success. The function does not change it on
- *                    ccol_timed_out, ccol_invalid_args,
- *                    ccol_not_enough_memory, or ccol_unexpected_failure.
- * @param n           Number of selectables. See the n parameter of
- *                    cselect for the exact bound.
- * @param selectables Array of n cselectable_t values to watch
- * @param timeout_us  Maximum time to wait, in microseconds. UINT64_MAX waits
- *                    with no time limit, as cselect does. 0 polls
- *                    without blocking, and the poll still reports a
- *                    selectable (a queue or an fd) that is ready at the
- *                    moment of the call. Any other value waits at least that
- *                    long before the call reports a timeout, even when it's
- *                    longer than a single kernel wait can take (INT_MAX
- *                    milliseconds).
- *                    A value too large to form a deadline saturates to the
- *                    latest deadline the clock can hold, and never wraps
- *                    into the past.
- *
- * @return ccol_success           A selectable is ready, and *ready_index is
- *                                set.
- * @return ccol_timed_out         timeout_us ended and no selectable became
- *                                ready. The function does not change
- *                                *ready_index.
- * @return ccol_invalid_args      The same conditions as cselect
- * @return ccol_not_enough_memory The same conditions as cselect
- * @return ccol_unexpected_failure A system call failed, as with
- *                                cselect; or the array
- *                                holds no fd selectable, timeout_us is not
- *                                UINT64_MAX, and the timed wait on the
- *                                condition variable reported an unexpected
- *                                system error.
- *
- * @note The deadline uses CLOCK_MONOTONIC, so changing the system time
- *       doesn't change the timeout.
- * @note With no fd selectable in the array, the function uses
- *       pthread_cond_timedwait on a CLOCK_MONOTONIC condition variable. With
- *       at least one fd selectable, it passes the time that is left to each
- *       epoll_wait call, rounded up to a whole millisecond, and once the
- *       deadline has passed it looks at every selectable one more time, with
- *       a poll or an epoll_wait call with a timeout of 0, before it reports
- *       ccol_timed_out.
- */
-ccol_retval_t cselect_timed(size_t *ready_index, size_t n,
-                            cselectable_t *selectables, uint64_t timeout_us);
+// cselect() with a limit of timeout_us microseconds on CLOCK_MONOTONIC, after
+// which it gives ccol_timed_out and leaves *ready_index alone. UINT64_MAX waits
+// with no limit, and 0 polls once, still reporting what is ready at the moment
+// of the call. Any other value waits at least that long, even past the INT_MAX
+// milliseconds of one kernel wait, and looks once more at every selectable
+// before it reports a timeout. It also gives ccol_unexpected_failure when the
+// timed condition wait fails.
+ccol_retval cselect_timed(size_t *ready_index, size_t n,
+                          cselectable *selectables, uint64_t timeout_us);
 
-/**
- * @brief Short form: call cselect with the list of selectables in line
- *
- * Builds the array of selectables from its variadic arguments, computes the
- * count at compile time and hands everything to cselect. The macro's
- * result is the ccol_retval_t that cselect returns.
- *
- * Each argument must be a cselectable_t value, usually built by
- * ccircq_selectable(), cdynmq_selectable(), or
- * cchan_selectable(), with a dir of cselect_read or
- * cselect_write. Each argument is evaluated exactly once.
- *
- * Example:
- * @code
- *   size_t idx;
- *   ccol_retval_t r = cselect_va(&idx,
- *       ccircq_selectable(q0, cselect_read),
- *       cchan_selectable(ch, cselect_read));
- *   if (r == ccol_success) {
- *       // Do the receive that fits the selectable that won.
- *       // For example, ccircq_try_recv(q0, &msg).
- *   }
- * @endcode
- *
- * @note The macro uses a GCC and Clang statement expression, so it is not
- * valid under strict ISO C.
- */
-#define cselect_va(ready_index, ...)                                   \
-  __extension__({                                                      \
-    cselectable_t _cqsel_arr[] = {__VA_ARGS__};                        \
-    cselect((ready_index), sizeof(_cqsel_arr) / sizeof(_cqsel_arr[0]), \
-            _cqsel_arr);                                               \
+// cselect() and cselect_timed() with the selectables in line, for a fixed set
+// written at the call site, for example cselect_va(&idx,
+// ccircq_selectable(q0, cselect_read), cchan_selectable(ch, cselect_read)).
+// They evaluate to the ccol_retval of the call, and each argument is evaluated
+// once. They use a statement expression, so they need GNU C.
+#define cselect_va(ready_index, ...)                                       \
+  __extension__({                                                          \
+    cselectable cselect__arr[] = {__VA_ARGS__};                            \
+    cselect((ready_index), sizeof(cselect__arr) / sizeof(cselect__arr[0]), \
+            cselect__arr);                                                 \
   })
 
-/**
- * @brief Short form: call cselect_timed with the list of selectables in
- * line
- *
- * Works like cselect_va(), but calls cselect_timed and passes it
- * timeout_us, in microseconds.
- *
- * Example:
- * @code
- *   size_t idx;
- *   ccol_retval_t r = cselect_timed_va(&idx, 500000,
- *       ccircq_selectable(q0, cselect_read),
- *       cchan_selectable(ch, cselect_read));
- * @endcode
- *
- * @note The macro uses a GCC and Clang statement expression, so it is not
- * valid under strict ISO C.
- */
-#define cselect_timed_va(ready_index, timeout_us, ...)                       \
-  __extension__({                                                            \
-    cselectable_t _cqsel_arr[] = {__VA_ARGS__};                              \
-    cselect_timed((ready_index), sizeof(_cqsel_arr) / sizeof(_cqsel_arr[0]), \
-                  _cqsel_arr, (timeout_us));                                 \
+#define cselect_timed_va(ready_index, timeout_us, ...)            \
+  __extension__({                                                 \
+    cselectable cselect__arr[] = {__VA_ARGS__};                   \
+    cselect_timed((ready_index),                                  \
+                  sizeof(cselect__arr) / sizeof(cselect__arr[0]), \
+                  cselect__arr, (timeout_us));                    \
   })
 
-/* ========================================================================== */
-/*                             EVENT_LOOP API                                 */
-/* ========================================================================== */
+// A long-lived reactor. Exactly one poller thread waits on epoll (kqueue on the
+// BSDs and macOS), on purpose: many threads waiting on one epoll set all wake
+// for one event, and EPOLLEXCLUSIVE doesn't help with that. With
+// num_reactor_threads > 1 the callbacks run on a separate pool of dispatch
+// workers, and two things still hold. The callbacks of one registration never
+// run at the same time, and neither do the read and the write registration of
+// one fd, so state shared across both directions of an fd needs no lock. And a
+// removed registration's fd number can be reused at once: a dispatch checks
+// liveness right before it calls a callback, so a stale dispatch does nothing,
+// and the loop never collects a second dispatch for an entry that has one in
+// flight, which makes ceventloop_modify from a callback safe. In every
+// configuration the calls that take a ceventloop_reg resolve it through a
+// generation-tagged slot table first, so threads may race them on one handle,
+// or use it long after a remove, and the loser just gets ccol_invalid_args (or
+// generation 0). Like cselect(), the loop only reports readiness; your callback
+// does the receive or the send.
+typedef struct ceventloop__s ceventloop__s;
 
-/**
- * @brief Opaque ceventloop structure
- *
- * A long-lived reactor built on epoll(7) that the caller changes one step at
- * a time. In every configuration exactly ONE dedicated poller thread calls
- * epoll_wait, and that is part of the design, not an implementation detail:
- * when more than one thread calls epoll_wait on one shared epoll instance, a
- * single ready event wakes every blocked thread, a real kernel-level
- * thundering herd that costs measurable tail latency for a workload with few
- * concurrent operations. EPOLLEXCLUSIVE does NOT help here, which is easy to
- * miss, because it is about one target fd registered in several SEPARATE
- * epoll instances and not about many threads sharing one instance. See
- * num_reactor_threads on ceventloop_create_mp for how the loop
- * spreads DISPATCH over many threads while only one thread polls.
- *
- * A registration is built from the same cselectable_t type that cselect
- * uses (cselectable_fd, ccircq_selectable,
- * cdynmq_selectable, cchan_selectable). Like cselect,
- * ceventloop never does the receive or the send itself for any type of
- * selectable, and the caller always makes its own call from inside the
- * callback: read(), recv(), ccircq_try_recv(), or
- * cdynmq_try_recv(). See the documentation of ceventloop_add.
- *
- * With num_reactor_threads > 1 the callbacks run on separate worker threads
- * instead of on the poller, and two correctness properties hold there that a
- * single-threaded reactor gets for free, because it has only one caller.
- * They are:
- *  - The loop never runs the callbacks of one registration concurrently with
- *    each other. It goes further than that: a read registration and a write
- *    registration that share an fd never run at the same time either, so a
- *    pair of callbacks that shares state across both directions of one fd,
- *    one TLS connection object for example, needs no lock of its own.
- *  - You can remove a registration and reuse its fd number for a new,
- *    unrelated registration even while a worker thread is inside a dispatch
- *    that points to the old one. A dispatch always checks liveness right
- *    before it calls a callback, so a stale pointer to a removed
- *    registration is a safe no-op: never a use-after-free, and the loop
- *    never sends that callback to the new registration. For the same reason
- *    the loop never collects a second registration for the same entry while
- *    an earlier one is in flight (queued or running). Application code can
- *    therefore call ceventloop_modify from inside a callback that is in
- *    flight, a supported and common pattern, without racing a second
- *    dispatch that the loop collects at the same moment for that same
- *    registration.
- *
- * A third property holds in every configuration, whatever num_reactor_threads
- * is. Different threads can call ceventloop_modify,
- * ceventloop_pause, ceventloop_resume, ceventloop_remove, and
- * ceventloop_reg_generation at the same time on the very same
- * ceventloop_reg, for example one thread removing a registration while
- * another races it and tries to change it or ask about it. In fact a thread
- * can make such a call at any time at all, however long ago another thread
- * called ceventloop_remove() on that registration. Every use of a
- * ceventloop_reg handle goes through the loop's generation-tagged slot table
- * before the library dereferences anything (see the doc comment of
- * ceventloop_reg), so a stale or already removed handle is detected every
- * time and is never a use-after-free. The side that loses the race just sees
- * a registration that is already removed and gets ccol_invalid_args, or
- * generation 0. See ceventloop_reg_generation() for the identity token
- * this gives the caller, which a registration can use for its own defensive
- * bookkeeping across the reuse of an fd. That's a separate concern from the
- * two guarantees above, which always hold whether or not a caller ever reads
- * the token.
- */
-typedef struct _ceventloop_s _ceventloop_s;
-
-/**
- * @brief Opaque ceventloop handle.
- *
- * ceventloop is an opaque VALUE handle that packs a slot index and a
- * generation into one value. It is not a pointer: never cast it to or from
- * void*, never compare it through a pointer cast, and never treat it as an
- * address. Compare it directly against CEVENTLOOP_NULL, or use it in
- * a truthiness check, since CEVENTLOOP_NULL is 0 and `if (!loop)` is
- * a correct test for "no loop". The library resolves every use of a
- * ceventloop through a slot table it owns before it touches the struct
- * _ceventloop_s* behind the handle, so it always detects a handle whose
- * slot is free or holds an unrelated, later loop, and it never dereferences
- * freed memory or the memory of the wrong object. See the doc comment of
- * ceventloop_destroy for what that function does with a stale handle.
- */
+// The loop handle: a slot index and a generation packed into a value. It isn't
+// a pointer, so never cast it. Compare it with CEVENTLOOP_NULL (0). Every use
+// is resolved through the library's slot table, so a stale handle is detected
+// and never dereferenced.
 typedef uint64_t ceventloop;
 
-/** @brief Sentinel value for "no loop", the ceventloop equivalent of
- * NULL.
- */
+// "No loop", the failure value of a create.
 #define CEVENTLOOP_NULL ((ceventloop)0)
 
-/**
- * @brief Opaque handle to a single ceventloop registration.
- *
- * ceventloop_reg is an opaque VALUE handle that packs a slot index and a
- * generation into one value, and it belongs to the one ceventloop that
- * gave it out. It is not a pointer: never cast it to or from void*, never
- * compare it through a pointer cast, and never treat it as an address.
- * Compare it directly against CEVENTLOOP_REG_NULL, or use it in a
- * truthiness check, since CEVENTLOOP_REG_NULL is 0. The library resolves
- * every use of a ceventloop_reg through that loop's reg slot table before it
- * touches the struct behind the handle, so it always detects a handle whose
- * slot is free. The slot becomes free when ceventloop_remove runs, from
- * this thread or from another thread racing it, and the matching entry point
- * then returns ccol_invalid_args (0 for ceventloop_reg_generation)
- * instead of a use-after-free. It's the same handle design as
- * ceventloop, scoped to one loop instead of the whole process.
- */
+// The handle of one registration, the same design as ceventloop scoped to one
+// loop. Its slot is freed by ceventloop_remove, after which every call with it
+// gives ccol_invalid_args (generation 0).
 typedef uint64_t ceventloop_reg;
 
-/** @brief Sentinel value for "no registration", the ceventloop_reg
- * equivalent of NULL. */
+// "No registration", the failure value of ceventloop_add.
 #define CEVENTLOOP_REG_NULL ((ceventloop_reg)0)
 
-/**
- * @brief Callback that the loop calls when a registration becomes readable
- *
- * For every type of selectable the callback only reports readiness, and the
- * reactor never does the receive itself. For an fd selectable the callback
- * makes its own read() or recv() call on sel->fd. For a queue selectable (a
- * circq, a dynq, or a queue that comes from a channel) it makes its own
- * ccircq_try_recv() or cdynmq_try_recv() call on sel->cq or
- * sel->dq, and for a queue from a channel that means ccircq_try_recv()
- * on sel->cq, never cchan_try_recv() (see cchan_selectable).
- * In both cases another consumer may already have taken the data. That
- * TOCTOU race is part of the design and the same contract as the write
- * direction of cselect, so the callback's receive can find nothing and
- * the callback must cope with that.
- *
- * For a queue selectable one notification doesn't always mean exactly one
- * message: several sends can outrun the dispatch and the callback then sees
- * them as a single notification. A callback that receives one message per
- * call still drains a burst, because as long as the queue stays ready after a
- * callback that moved at least one message the loop dispatches the listeners
- * again. A callback can also receive in a loop until the call returns
- * ccol_container_empty, which drains a burst in fewer dispatches.
- *
- * Every callback of the three dispatch types (this one,
- * ceventloop_writable_fn_t and ceventloop_error_fn_t) gets the handle of its
- * own registration in reg. That's exactly the value ceventloop_add returns for
- * the registration, and the callback can pass it to ceventloop_remove,
- * ceventloop_pause, ceventloop_resume, ceventloop_modify and
- * ceventloop_reg_generation. It holds even for a dispatch that runs before
- * ceventloop_add has returned to its caller, which can happen with
- * num_reactor_threads > 1 when the selectable is already ready at registration
- * time, so a callback never has to read the handle from storage that the adding
- * thread writes after the call returns.
- *
- * @param loop The ceventloop that owns this registration
- * @param reg  The handle of this registration, as ceventloop_add returns
- *             it
- * @param sel  The cselectable_t this registration comes from. sel->dir is
- *             the registration's current direction, which a
- *             ceventloop_modify call can change after
- *             ceventloop_add.
- * @param arg  The opaque pointer that the caller gave to ceventloop_add
- */
-typedef void (*ceventloop_readable_fn_t)(ceventloop loop, ceventloop_reg reg,
-                                         cselectable_t *sel, void *arg);
+// Runs when a registration becomes readable. The callback does its own read()
+// or recv() on sel->fd, or its own ccircq_try_recv() or cdynmq_try_recv() on
+// sel->cq or sel->dq (for a channel queue that's ccircq_try_recv(), never
+// cchan_try_recv()), and copes with finding nothing, since another consumer may
+// have won. Several sends can collapse into one notification; as long as a
+// callback moved a message and the queue is still ready, the loop dispatches
+// again, so receiving one message per call still drains a burst. reg is the
+// registration's own handle, valid even in a dispatch that runs before
+// ceventloop_add has returned. sel->dir is the current direction (modify can
+// change it), and arg is what you passed to ceventloop_add. The same parameters
+// apply to the writable and error callbacks.
+typedef void (*ceventloop_readable_fn)(ceventloop loop, ceventloop_reg reg,
+                                       cselectable *sel, void *arg);
 
-/**
- * @brief Callback that the loop calls when a registration becomes writable
- *
- * The callback never gets a payload. For an fd selectable the caller makes
- * its own write() or send() call. For a queue selectable the registration
- * only signals that the queue may have room or that its sends are turned off
- * (the send then returns ccol_not_permitted), and the callback has to call
- * ccircq_try_send or cdynmq_send itself; for a queue from a
- * channel that's ccircq_try_send on sel->cq, never
- * cchan_try_send (see cchan_selectable). A TOCTOU race is
- * possible, the same contract as a win on the write direction of
- * cselect.
- *
- * @param loop The ceventloop that owns this registration
- * @param reg  The handle of this registration; see ceventloop_readable_fn_t
- * @param sel  The cselectable_t that this registration comes from
- * @param arg  The opaque pointer that the caller gave to ceventloop_add
- */
-typedef void (*ceventloop_writable_fn_t)(ceventloop loop, ceventloop_reg reg,
-                                         cselectable_t *sel, void *arg);
+// Runs when a registration becomes writable. The callback does its own write()
+// or send(), or for a queue its own ccircq_try_send() or cdynmq_send() (the
+// queue may have room, or its sends may be off and the send gives
+// ccol_not_permitted). The race is the same as for the write side of cselect().
+typedef void (*ceventloop_writable_fn)(ceventloop loop, ceventloop_reg reg,
+                                       cselectable *sel, void *arg);
 
-/**
- * @brief Callback that the loop calls on a fatal condition of a registration
- *
- * For an fd selectable this callback runs for every condition the
- * registration's direction has no other handler for. EPOLLERR and EPOLLHUP
- * come here whenever the direction isn't also ready, and for a
- * read-direction registration with on_readable == NULL so does the close or
- * shutdown of the peer's end, which is EPOLLRDHUP (an ordinary TCP close()
- * raises it without EPOLLHUP).
- *
- * If the direction does have its own handler, that handler takes the event
- * whenever the direction is ready as well. Data can arrive together with the
- * error, and a read-direction registration with on_readable set then gets
- * on_readable instead of on_error, so the bytes that arrived before the peer
- * went away are delivered. A write-direction registration with on_writable
- * set gets on_writable for the same reason. When both directions are
- * registered on one fd the loop judges each direction on its own, and each
- * can get an error dispatch. A queue selectable never produces an error
- * condition and never calls this callback.
- *
- * A registration with on_error == NULL gets EPOLLERR and EPOLLHUP through its
- * own direction's handler instead, the way libevent and libuv deliver them:
- * on_readable for a read registration, on_writable for a write registration.
- * That handler's read(), recv(), write() or send() then reports the
- * condition, -1 with the error in errno or 0 for an end of file. A read or a
- * write on a socket also clears a pending socket error, so a transient error
- * (the ICMP port unreachable that a connected UDP socket reports as
- * ECONNREFUSED, say) costs one failed receive, and the datagrams arriving
- * after it reach on_readable as usual. When both directions of one fd have
- * such a handler, one event reaches both: on_readable first and then
- * on_writable, one after the other on the same thread, and each sees
- * whatever the other left of the condition.
- *
- * @note A registration can carry on_error alone and leave the on_readable or
- * on_writable of its own direction NULL. That's how a caller says "tell me
- * when this fd dies, I don't want to read it or write to it". Both
- * directions fully support this shape, and on a socket, a pipe, a FIFO or a
- * terminal the loop never arms such a registration for the readiness it has
- * no handler for; on either end of a pipe the condition it reports is the
- * close of the other end. A healthy socket is writable from the moment it is
- * registered, so an error-only registration on the write direction costs
- * nothing until something goes wrong.
- *
- * @warning An error is level-triggered like every other condition here: the
- * loop keeps reporting it and keeps calling on_error (or the direction's
- * handler when on_error is NULL) until a call removes or pauses the
- * registration, or until the condition clears. A hang-up stays true, so a
- * pipe whose writer closed or a socket whose peer is gone keeps reporting
- * it, and a read() keeps returning 0. A handler that neither removes the
- * registration nor clears the condition some other way is therefore called
- * many times. A handler that reads an end of file must remove the
- * registration (or pause it), exactly as for any other readiness it leaves
- * in place. Remove it before you close the fd; see ceventloop_remove.
- * On the BSDs and macOS an error-only registration may hear each error or
- * hang-up only once, when it happens, instead of on every wait, because the
- * kernel filter watching it there can be edge-triggered; a handler that
- * removes or pauses the registration behaves the same on every system.
- *
- * @param loop The ceventloop that owns this registration
- * @param reg  The handle of this registration; see ceventloop_readable_fn_t
- * @param sel  The cselectable_t that this registration comes from
- * @param arg  The opaque pointer that the caller gave to ceventloop_add
- */
-typedef void (*ceventloop_error_fn_t)(ceventloop loop, ceventloop_reg reg,
-                                      cselectable_t *sel, void *arg);
+// Runs on a condition that the registration's direction has no other handler
+// for. EPOLLERR and EPOLLHUP come here when the direction isn't also ready, and
+// so does EPOLLRDHUP (a peer's close) for a read registration with no
+// on_readable. When the direction is ready too, its own handler wins, so bytes
+// that arrived before the error are still delivered. With on_error NULL, an
+// error or hang-up goes to the direction's handler, as libevent and libuv do,
+// and that handler's read or write reports it; a read or write also clears a
+// socket error, so a transient one costs one failed receive. With handlers for
+// both directions one event reaches on_readable and then on_writable. Queue
+// selectables never get here. A registration may carry only on_error, to hear
+// that an fd died. Conditions are level-triggered: the loop keeps reporting one
+// until it clears or you remove or pause the registration, so a handler that
+// reads an end of file must remove the registration (before closing the fd). On
+// the BSDs and macOS an error-only registration may hear each condition only
+// once.
+typedef void (*ceventloop_error_fn)(ceventloop loop, ceventloop_reg reg,
+                                    cselectable *sel, void *arg);
 
-/**
- * @brief Callback that the loop calls when it can prove that the caller can
- * free arg
- *
- * The loop calls this callback exactly once for every registration it really
- * put into an ceventloop, and never for a ceventloop_add call that
- * failed. It happens on one of two occasions. The first is when a thread
- * calls ceventloop_remove() for this registration (any thread, even one
- * inside this same registration's on_readable, on_writable, or on_error
- * callback) and then every dispatch of the registration that was in flight,
- * or that the loop had already collected for dispatch at that moment,
- * finishes. The second is a destroy of the owning ceventloop while this
- * registration is live.
- *
- * Of the four callback types this is the only asynchronous one: the loop
- * never calls it from inside ceventloop_remove(), and it can run a while
- * after that call returns. The delay is bounded, and with
- * num_reactor_threads == 1 it runs at the next point between two batches on
- * the reactor thread. See the note of ceventloop_remove() for why the
- * caller can't free arg's memory as soon as the removal returns.
- * ceventloop_destroy() works differently: before it returns it calls,
- * from inside the call, every on_removed that is still due, which covers a
- * registration live at the destroy and a removed one whose on_removed hasn't
- * run yet.
- *
- * The callback runs on the thread doing the reclamation, which is the
- * reactor thread for an ordinary removal and the thread that called
- * ceventloop_destroy for a registration live at a destroy. That thread
- * holds none of this module's internal locks, so on_removed can always take
- * an application lock of its own, even one that the other callbacks of this
- * registration take too.
- *
- * Calling ceventloop_destroy() on the owning loop from on_removed is
- * fatal (_ccol_fatal_err()). On an ordinary removal on_removed runs on the
- * reactor thread, where a destroy of its own loop is refused, and during a
- * destroy the handle is already destroyed.
- *
- * A registration can set on_removed to NULL and then gets the same contract
- * as every other callback type: nothing is promised about when a stale
- * callback still in flight is done with arg, beyond the weaker promise in the
- * documentation of ceventloop_remove(), which is weaker by design.
- *
- * @param arg The opaque pointer that the caller gave to ceventloop_add
- */
-typedef void (*ceventloop_removed_fn_t)(void *arg);
+// Runs exactly once for every registration that was really added, when the
+// loop can prove that you may free arg: after a ceventloop_remove (from any
+// thread, a callback of the same registration included) once every dispatch in
+// flight or already collected has finished, or during a destroy of the loop. It
+// never runs inside ceventloop_remove, but on the reactor thread a bounded time
+// later; ceventloop_destroy runs every due one before it returns. The thread
+// holds no lock of this module, so on_removed may take any lock of yours.
+// Destroying the owning loop from it is fatal. With on_removed NULL you get
+// only the weaker promise of ceventloop_remove().
+typedef void (*ceventloop_removed_fn)(void *arg);
 
-/**
- * @brief Group of callbacks for one ceventloop_add call
- *
- * Each of on_readable, on_writable, and on_error can be NULL. For an fd
- * selectable the loop doesn't arm a direction that has no handler of its
- * own, so a NULL on_readable or on_writable costs no dispatch at all, since
- * the loop never makes a dispatch that nothing can use. A condition that
- * reaches such a direction, like the peer closing or an error, goes to
- * on_error, and with on_error NULL an error or a hang-up goes to the
- * direction's handler instead (see ceventloop_error_fn_t). A producer that only
- * writes, for example, can pass NULL for on_error and see an error as its
- * own write() failing in on_writable.
- *
- * An fd event that none of the registration's handlers can take is dropped,
- * and the loop also stops watching that registration, because a hang-up can
- * stay true and a level-triggered epoll would report it again on every
- * wait. Only a registration with neither its direction's handler nor
- * on_error ends up there, for example a read registration with both
- * on_readable and on_error NULL whose peer hangs up. The registration stays
- * registered, and a registration for the other direction of the same fd is
- * still watched. ceventloop_resume() and a successful
- * ceventloop_modify() arm it again, whether the modify changes the
- * direction or keeps it.
- *
- * on_removed can be NULL too, because some args need no notice at all before
- * the caller frees them, an arg on the stack or one the program owns
- * statically for example. A caller may also have its own way of knowing when
- * a free is safe, for instance the registration can destroy arg well after
- * ceventloop_remove() returns instead of at the moment it returns.
- */
+// The callbacks of one registration, each of which may be NULL. For an fd the
+// loop doesn't arm a direction without a handler of its own. An fd event that
+// no handler can take is dropped and the loop stops watching that registration
+// (a hang-up would otherwise repeat on every wait) until ceventloop_resume() or
+// a successful ceventloop_modify(). on_removed may be NULL when arg needs no
+// notice before it's freed.
 typedef struct ceventloop_handlers {
-  ceventloop_readable_fn_t
-      on_readable; /**< EPOLLIN|EPOLLRDHUP, or a queue message */
-  ceventloop_writable_fn_t on_writable; /**< EPOLLOUT, or room in the queue */
-  ceventloop_error_fn_t
-      on_error; /**< EPOLLERR|EPOLLHUP (fd selectables only) */
-  ceventloop_removed_fn_t on_removed; /**< Runs when nothing points to arg */
-} ceventloop_handlers_t;
+  ceventloop_readable_fn on_readable;
+  ceventloop_writable_fn on_writable;
+  ceventloop_error_fn on_error;
+  ceventloop_removed_fn on_removed;
+} ceventloop_handlers;
 
-/**
- * @brief Create a ceventloop with custom memory management
- *
- * Creates a long-lived epoll instance and starts the threads that drive it
- * at once, so every thread is ready to dispatch events as soon as this
- * call returns. It works like cthrpool_create in that respect: the pool is
- * ready to work the moment you get the handle.
- *
- * num_reactor_threads == 1 gives a pure single-thread reactor, where that one
- * thread calls epoll_wait AND runs every callback in line.
- * num_reactor_threads > 1 starts exactly ONE dedicated thread that calls
- * epoll_wait, never more (the doc comment of the ceventloop struct
- * explains why), plus (num_reactor_threads - 1) worker threads that run the
- * callbacks. So the total OS thread count for a given num_reactor_threads is
- * always exactly that value, and the parameter means the same thing for
- * resource use in both configurations.
- *
- * In the first configuration a registration's callback runs on the poller
- * thread, and in the second on one of the worker threads. Callback code
- * can't tell the difference, since ceventloop_readable_fn_t,
- * ceventloop_writable_fn_t, and ceventloop_error_fn_t have no way to read it.
- * One rule holds for both kinds of thread: do not call
- * ceventloop_shutdown from inside a callback, because that's a
- * self-join hazard. See the doc comment of ceventloop_shutdown.
- *
- * num_reactor_threads == 1 costs exactly what a plain single-threaded loop
- * costs, because the loop never creates the dispatch pool and the code path
- * is the same. Above one thread, a single dedicated poller is what keeps tail
- * latency low when few operations run together, while N threads all calling
- * epoll_wait on the same set of fds make a real kernel thundering herd. That
- * comes from the kernel, not from this module's code; see the doc comment of
- * the ceventloop struct. The separate dispatch pool keeps the overall
- * multi-threaded dispatch throughput up under real concurrent load.
- *
- * The registry of fds and entries is lock-striped: it holds num_lock_stripes
- * independent pairs of a mutex and a chmap, and each pair guards its own
- * subset of the registrations, with no overlap between subsets. One real fd,
- * or the private bridge fd of one queue registration or one cchan
- * registration, is handled by exactly one stripe and is never split across
- * two. A value of 1 gives one registry lock for the whole loop and costs only
- * one more step through an array. A larger value lets ceventloop_add,
- * ceventloop_remove, and ceventloop_modify calls for different fds
- * and registrations run in parallel instead of queueing on one lock, at the
- * cost of num_lock_stripes mutexes and chmaps that the loop allocates up
- * front. This is independent of num_reactor_threads: the stripe count
- * controls contention on the registry, and the thread count controls how
- * much dispatch runs in parallel.
- *
- * @param max_events_per_wait Size of the poller thread's epoll_wait batch
- * buffer. It must be from 1 to INT_MAX and small enough that
- * max_events_per_wait * sizeof(struct epoll_event) doesn't overflow size_t;
- * for a value outside that range this function returns
- * CEVENTLOOP_NULL. The
- * library narrows the value to epoll_wait's int maxevents parameter and sizes
- * the poller thread's events buffer from it. It bounds how many ready events
- * one epoll_wait call drains, not how many registrations the loop can hold.
- * @param num_lock_stripes Number of independent lock stripes for the registry
- * of fds and entries. It must be >= 1, and 1 means one registry lock for the
- * whole loop. A larger value lowers the contention of ceventloop_add,
- * ceventloop_remove, and ceventloop_modify across many different
- * fds and registrations under concurrent use. There is no upper bound.
- * @param num_reactor_threads Total number of OS threads that poll and
- * dispatch for this loop. It must be >= 1. A value of 1 means a pure
- * single-thread reactor where one thread polls and dispatches in line, and
- * any larger value means exactly one dedicated polling thread plus
- * (num_reactor_threads - 1) dispatch worker threads. See the doc comment of
- * the ceventloop struct for the two correctness guarantees, which hold
- * for every value.
- * @param mmgmt_procs Custom memory management procedures, or NULL to use the
- * default malloc and free
- * @param err_str Optional pointer that gets an error string on failure. Pass
- * NULL to ignore it.
- *
- * @return New ceventloop handle, or CEVENTLOOP_NULL on failure.
- * The call fails on invalid arguments, on a failed allocation, and when
- * epoll_create1, eventfd, or pthread_create fails. It also fails when the
- * process has no thread-specific key left for the two keys that every loop's
- * dispatch uses (the library creates them once per process and doesn't try
- * again), and once the library's process-exit destructors have run and the
- * last loop is gone, for example when it is called from an application
- * destructor that runs after them.
- *
- * @see ceventloop_create
- * @see ceventloop_destroy
- */
+// Creates a loop and starts its threads, so it's ready to dispatch when the
+// call returns. num_reactor_threads is the total thread count: 1 means one
+// thread polls and runs every callback (no dispatch pool at all), and more
+// means one poller plus num_reactor_threads - 1 dispatch workers. Never call
+// ceventloop_shutdown from a callback. The registry of fds and entries has
+// num_lock_stripes (at least 1) independent mutex and map pairs, and each fd or
+// queue bridge belongs to one stripe, so add, remove and modify for different
+// fds run in parallel. max_events_per_wait (1 to INT_MAX) sizes the poller's
+// batch buffer. It gives CEVENTLOOP_NULL on bad arguments, a failed allocation
+// or system call, when the process has no thread-specific key left for the two
+// keys every loop needs (created once per process), and after the library's
+// exit destructors have released the slot table.
 ceventloop ceventloop_create_mp(size_t max_events_per_wait,
                                 size_t num_lock_stripes,
                                 size_t num_reactor_threads,
-                                ccol_memmgmt_procs_t *mmgmt_procs,
+                                ccol_memmgmt_procs *mmgmt_procs,
                                 char **err_str);
 
-/**
- * @brief Create a ceventloop with default memory management
- *
- * Short form of ceventloop_create_mp with mmgmt_procs = NULL.
- */
+// ceventloop_create_mp() with the default allocator. It evaluates to the handle
+// or CEVENTLOOP_NULL.
 #define ceventloop_create(max_events_per_wait, num_lock_stripes,  \
                           num_reactor_threads, err_str)           \
   ceventloop_create_mp((max_events_per_wait), (num_lock_stripes), \
                        (num_reactor_threads), NULL, (err_str))
 
-/**
- * @brief Register a selectable with the event loop
- *
- * Takes the same cselectable_t type as cselect, so you can build sel
- * directly with cselectable_fd, ccircq_selectable,
- * cdynmq_selectable, or cchan_selectable.
- *
- * One registration covers exactly one direction, sel.dir. A caller that
- * wants both directions live on one fd at the same time, like a full-duplex
- * pipe, calls ceventloop_add twice and gets two independent handles. A
- * caller that wants one registration to change direction over time, like a
- * connecting socket (write interest until the connect finishes, read
- * interest after that), uses one registration and ceventloop_modify.
- * The function refuses a second selectable for a direction already in use on
- * the same fd, such as two read registrations on one fd; the call then
- * returns CEVENTLOOP_REG_NULL and err_str names the cause (see the return
- * value below).
- *
- * Queue and cchan selectables have no such restriction. You can make
- * any number of ceventloop_add calls for the same queue and direction,
- * in one ceventloop or in several, and mix them with a cselect()
- * call running at the same time on the same queue and direction. All of them
- * are live together and each gets its turn, the same guarantee cselect
- * gives: any number of threads can watch one queue at the same time.
- *
- * When a message arrives while several such listeners are registered, the
- * library wakes exactly one listener per producer call and per consumer
- * call, never all of them at once, since that would be a thundering herd.
- * When the woken listener's callback returns, the listener checks whether
- * the queue is still ready for its direction and, if it is, hands the wake on
- * to the next listener in line. A cselect() caller that wakes and leaves
- * without acting on the queue hands the wake on the same way, and so does a
- * registration that is removed, or whose loop is shut down or destroyed,
- * before it acted on its wake. A registration of a loop that is shut down
- * takes no further wakes. So no wake is lost, and the library never skips a
- * live listener for ever.
- *
- * A registration whose callback moved at least one message is dispatched
- * again for as long as the queue stays ready for its direction (for a read
- * registration the queue holds fewer messages after the callback than
- * before, and for a write registration it holds more). This holds for each
- * registration on its own, wherever it sits in the line and whatever the
- * queue's other listeners do, so a backlog drains without another send or
- * receive even when each callback receives one message, and a listener that
- * declines the queue never holds up one that takes it.
- * A registration whose callback neither receives nor sends hands the wake
- * on, and a wake that every listener declines stops once it has visited each
- * of them, so listeners that ignore a ready queue don't spin. A write
- * registration whose callback sends on every call is dispatched again for as
- * long as the queue has room, exactly like a writable fd, so remove it when
- * it has nothing to send. A queue whose sends are turned off is ready for a
- * write registration. Turning sends off wakes the registration once, and a
- * registration added while sends are off is woken once as soon as it's
- * added. Its send then returns ccol_not_permitted and moves nothing, so the
- * wake is handed on as described above, and the registration is woken again
- * only by a later event on the queue, such as a receive or another change of
- * the send state.
- *
- * The registration is live, and its callbacks can run, before this call
- * returns: with num_reactor_threads > 1 a callback can run on a dispatch
- * worker while the calling thread is still inside this function, for example
- * when the fd is already ready. Each callback gets its own registration's
- * handle as its reg parameter, so it never has to read this call's return
- * value from storage that the calling thread writes afterwards.
- *
- * @param loop     ceventloop to register with
- * @param sel      What to watch; see above.
- * @param handlers Group of callbacks, each of which can be NULL.
- * @param arg      Opaque pointer the loop passes to every callback of this
- *                 registration
- * @param err_str  Optional pointer that gets an error string on failure, and
- *                 NULL on success
- *
- * @return New registration handle, or CEVENTLOOP_REG_NULL on failure. On
- * failure, when err_str is not NULL, *err_str names the cause with one
- * message per class. A loop that is shut down (ceventloop_shutdown())
- * refuses every registration with a message containing "shut down", because
- * nothing in it dispatches any more. A direction that another registration on
- * the same fd already holds gives a message containing
- * "direction already in use";
- * no retry can succeed there. A failed allocation gives a message containing
- * "failed to allocate", and a failed system call (epoll_ctl, eventfd, or the
- * initialisation of a mutex or a condition variable) gives one containing
- * "a system call failed". An fd naming a regular file or a directory always
- * fails in that last way, since epoll(7) can't watch such a file (epoll_ctl
- * fails with EPERM). An invalid or stale loop handle and malformed arguments
- * have messages of their own.
- *
- * @note The function is thread-safe: you can call it at the same time as
- *       ceventloop_remove and ceventloop_modify, and also from
- *       inside a callback that runs on the reactor thread.
- *
- * @see ceventloop_remove
- * @see ceventloop_modify
- */
-ceventloop_reg ceventloop_add(ceventloop loop, cselectable_t sel,
-                              ceventloop_handlers_t handlers, void *arg,
+// Registers sel with the loop for one direction, sel.dir, so its readiness
+// reaches your callbacks, and gives the handle. For both directions of one fd,
+// add twice; to change direction over time, use ceventloop_modify. A second
+// registration for a direction already in use on the same fd is refused. Queues
+// have no such limit: any number of registrations, in any loops, and cselect()
+// calls can watch one queue. Each producer or consumer call wakes exactly one
+// listener; after its callback, a listener hands the wake on while the queue is
+// still ready, and so does one that is removed or whose loop shuts down before
+// it acted. A registration whose callback moved a message is dispatched again
+// while the queue stays ready, and a wake that every listener declines stops
+// after visiting each once. A write registration that always sends is
+// dispatched while the queue has room, like a writable fd. Sends turned off
+// wake a write registration once. The registration is live before the call
+// returns, so a callback may run first; it gets its handle as reg. On failure
+// it gives CEVENTLOOP_REG_NULL and *err_str names the class: "shut down",
+// "direction already in use", "failed to allocate", or "a system call failed"
+// (a regular file or a directory always fails that way). Thread-safe, also from
+// a callback.
+ceventloop_reg ceventloop_add(ceventloop loop, cselectable sel,
+                              ceventloop_handlers handlers, void *arg,
                               char **err_str);
 
-/**
- * @brief Identity token that the caller can read for the fd below a
- * registration
- *
- * The value only goes up and is unique across the whole loop. The new-entry
- * path of ceventloop_add makes it once, when the library first registers
- * the fd that reg belongs to (which can also be the bridge fd of a queue or a
- * cchan), and every registration on that fd shares it for as long as
- * the fd lives. It survives a ceventloop_modify call, because a change
- * of direction keeps the same fd and the same connection, and a read and a
- * write registration on one fd share one generation as well, since they are
- * one logical connection.
- *
- * The token exists for a caller's defensive bookkeeping across the reuse of
- * an fd. A caller holding a connection object across several asynchronous
- * steps can stamp it with the generation it reads right after
- * ceventloop_add returns, read the generation again later, and compare
- * the two to see whether it is still working with the same logical
- * connection. Correctness doesn't depend on the token, because the
- * ceventloop dispatch checks a registration's liveness before calling
- * any callback, every time, whether or not a caller ever calls this
- * function. See the doc comment of the ceventloop struct.
- *
- * You can call this function at any time on any ceventloop_reg value that
- * ceventloop_add ever gave out for this loop, including one that has
- * already been removed, whether by an earlier call on this thread or by a
- * call on another thread racing this one right now. reg is resolved through
- * the loop's generation-tagged slot table before anything is dereferenced,
- * so a stale or already removed handle is always detected and reports
- * generation 0, never a use-after-free.
- *
- * @param loop ceventloop that owns reg
- * @param reg Registration to ask about
- * @return The generation value, or 0. The function gives 0 when reg is
- * CEVENTLOOP_REG_NULL, when reg has already been removed, when loop is
- * CEVENTLOOP_NULL, and when loop is stale or already destroyed. The
- * counter starts at 1, so 0 is never a valid generation for a real
- * registration.
- */
+// An identity token for the fd behind reg, for your own bookkeeping across fd
+// reuse. It's unique in the loop, made when the fd is first registered, shared
+// by every registration on that fd and kept across ceventloop_modify. Stamp a
+// connection with it after the add and compare later. Correctness never depends
+// on it. It gives 0 (never a real generation) for a NULL, removed or stale reg
+// or loop, whatever thread removed it.
 uint64_t ceventloop_reg_generation(ceventloop loop, ceventloop_reg reg);
 
-/**
- * @brief Change the direction of an fd registration that already exists
- *
- * Works only on an fd. A registration that comes from a queue selectable or
- * a cchan selectable gets ccol_invalid_args, because a queue
- * selectable's direction is part of its identity; remove such a registration
- * and add it again instead.
- *
- * On success the function changes the registration's cselectable_t.dir,
- * and later callbacks see the new value in their sel parameter. It moves the
- * registration to the other slot of its fd and computes the fd's combined
- * epoll interest mask again, with no moment where the fd isn't registered. A
- * reg the loop stopped watching because it got an event none of its
- * handlers could take (see ceventloop_handlers_t) is watched again in its new
- * direction. A call whose new_dir is reg's current direction changes nothing
- * else, but it does make such a reg watched again.
- *
- * @param loop    ceventloop that owns the registration
- * @param reg     Registration to change
- * @param new_dir cselect_read or cselect_write
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if loop is CEVENTLOOP_NULL, a stale
- * handle, or a handle that a call already destroyed; if reg is
- * CEVENTLOOP_REG_NULL, or does not resolve for another reason (a call on
- * this thread or on another thread that races it can already have removed
- * reg); if reg is a queue registration or a cchan registration; or if
- * new_dir is not valid.
- * @return ccol_not_permitted if another registration on the same fd already
- * holds the target direction
- *
- * @note The function is thread-safe: you can call it at the same time as
- *       ceventloop_remove, and also from inside a callback that runs on
- *       the reactor thread.
- */
-ccol_retval_t ceventloop_modify(ceventloop loop, ceventloop_reg reg,
-                                cselect_dir_t new_dir);
+// Changes the direction of an fd registration (a queue's direction is part of
+// its identity, so a queue gives ccol_invalid_args; remove and add instead).
+// Later callbacks see the new sel->dir. The fd's interest mask is recomputed
+// with no moment where the fd isn't registered. It also re-arms a registration
+// that stopped being watched (see ceventloop_handlers), even when new_dir is
+// the current direction. It gives ccol_success, ccol_invalid_args for a bad or
+// stale loop or reg, a queue registration or a bad new_dir, and
+// ccol_not_permitted when another registration on the fd holds new_dir.
+// Thread-safe, also from a callback.
+ccol_retval ceventloop_modify(ceventloop loop, ceventloop_reg reg,
+                              cselect_dir new_dir);
 
-/**
- * @brief Stop the delivery of events for an fd registration for a time, and
- *        keep the registration
- *
- * Works only on an fd, with the same restriction as ceventloop_modify.
- * ceventloop_remove unregisters reg completely and defers the free,
- * while ceventloop_pause keeps reg whole: the registration keeps its
- * slot on the fd's entry, counts in ceventloop_reg_count, and keeps the
- * same ceventloop_reg_generation. The function only recomputes the fd's
- * combined epoll interest mask and leaves reg out of it. While reg is paused
- * no on_readable, on_writable, or on_error callback runs for it, the same as
- * after a removal. The other direction on the same fd, if there is one, is
- * not affected.
- *
- * For callers that bring the same logical registration back later, this is
- * the cheap replacement for a ceventloop_remove followed later by a
- * ceventloop_add, for example a connection that goes to a worker thread
- * for blocking body I/O and then comes back to the reactor for its next
- * request. The pause needs no heap allocation and no free, and causes no
- * churn in the fd registry's chmap. With one reactor thread
- * (num_reactor_threads == 1) it costs one epoll_ctl call, where a
- * remove-then-add pair costs two, DEL and then ADD.
- *
- * With more than one reactor thread the dispatch worker re-arms
- * EPOLLONESHOT once more after a paused callback returns. That's harmless:
- * ceventloop's internal re-arm helper always recomputes the mask from
- * live state, so the extra re-arm applies the same mask (which leaves reg
- * out) and brings back no race. Pause and resume avoid the allocation and the
- * registry churn in that configuration too.
- *
- * Pausing a reg that is already paused succeeds and does nothing.
- *
- * @param loop ceventloop that owns the registration
- * @param reg  Registration to pause
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if loop is CEVENTLOOP_NULL, a stale
- * handle, or a handle that a call already destroyed; if reg is
- * CEVENTLOOP_REG_NULL, or does not resolve for another reason (a call on
- * this thread or on another thread that races it can already have removed
- * reg); or if reg is a queue registration or a cchan registration.
- *
- * @note The function is thread-safe: you can call it at the same time as
- *       ceventloop_remove, and also from inside a callback that runs on
- *       the reactor thread.
- *
- * @see ceventloop_resume
- * @see ceventloop_remove
- */
-ccol_retval_t ceventloop_pause(ceventloop loop, ceventloop_reg reg);
+// Stops event delivery for an fd registration and keeps it whole: its slot,
+// its count in ceventloop_reg_count and its generation stay, and only the fd's
+// interest mask leaves it out. No callback runs for it while paused; the other
+// direction of the fd isn't touched. It's the cheap form of a remove followed
+// by an add (no allocation, no registry churn, one epoll_ctl on one thread).
+// Pausing a paused registration succeeds. Results as for ceventloop_modify()
+// without ccol_not_permitted.
+ccol_retval ceventloop_pause(ceventloop loop, ceventloop_reg reg);
 
-/**
- * @brief Start the delivery of events again for a registration that
- *        ceventloop_pause paused
- *
- * Recomputes the fd's combined epoll interest mask and puts reg back into
- * it. It also re-arms a reg that the loop stopped watching because it got an
- * event none of its handlers could take (see ceventloop_handlers_t). Resuming
- * a reg that is neither paused nor stopped that way, such as one that was
- * never paused or one already resumed, succeeds and does nothing, which is
- * the same rule as in ceventloop_modify: a call that asks for the state
- * the object already has does nothing and succeeds.
- *
- * @param loop ceventloop that owns the registration
- * @param reg  Registration to resume
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if loop is CEVENTLOOP_NULL, a stale
- * handle, or a handle that a call already destroyed; if reg is
- * CEVENTLOOP_REG_NULL, or does not resolve for another reason; or if reg
- * is a queue registration or a cchan registration. This can happen,
- * for example, when the connection closes while the caller still believes it
- * owns a paused registration to resume.
- *
- * @note The function is thread-safe: you can call it at the same time as
- *       ceventloop_remove, and also from inside a callback that runs on
- *       the reactor thread.
- *
- * @see ceventloop_pause
- */
-ccol_retval_t ceventloop_resume(ceventloop loop, ceventloop_reg reg);
+// Puts a paused registration back into the fd's interest mask, and re-arms one
+// that stopped being watched. Resuming anything else succeeds and does nothing.
+// It gives ccol_invalid_args for a bad or stale loop or reg (the connection may
+// have closed meanwhile) or a queue registration.
+ccol_retval ceventloop_resume(ceventloop loop, ceventloop_reg reg);
 
-/**
- * @brief Remove the registration of a selectable from the event loop
- *
- * You can call this function from inside a callback of the very registration
- * you are removing (a registration that removes itself on an error is a
- * common pattern), from any other thread, and even while a dispatch for the
- * same registration is in flight. Once this call returns the loop never
- * calls a callback for this registration again, including one it has already
- * collected but not started; with num_reactor_threads > 1 such a callback is
- * sitting in a dispatch worker thread's queue.
- *
- * This call does not wait, though, for a dispatch that is in flight when it
- * is made. A caller that must not free the memory arg points to while that
- * dispatch still runs (the usual case for an arg that isn't fully
- * self-contained, such as one a callback dereferences) needs the on_removed
- * callback of ceventloop_handlers_t, set in the ceventloop_add call,
- * which runs asynchronously at the moment the free is provably safe.
- * ceventloop_remove itself never blocks on on_removed or on that
- * in-flight dispatch, because blocking there would risk a lock order cycle:
- * the dispatch's callback can need an application lock while the caller of
- * this function holds a different one.
- *
- * A caller that is sure no callback can be in flight at the moment of the
- * removal, for example when it removes from inside that exact
- * registration's callback or the loop never dispatched the registration, can
- * free arg immediately and doesn't need on_removed at all.
- *
- * The function doesn't close an fd and doesn't change a queue's lifetime. It
- * frees only the ceventloop's own registration bookkeeping, in line
- * with the contract of cselectable_fd, under which the caller owns
- * the fd.
- *
- * Remove every registration of an fd before you close the fd, which libevent
- * and libuv require too. Once the last of them is removed the loop has
- * already stopped watching the fd by the time this call returns, and the fd
- * number is free: a new registration of the same fd, or of a new descriptor
- * reusing the number, is independent of the removed one, and nothing the
- * loop still does for the removed registration (a dispatch in flight, or the
- * later release of its bookkeeping) changes how the new one is watched. A
- * registration whose fd was closed first holds the number until it is
- * removed, and meanwhile a ceventloop_add of a descriptor that reuses
- * the number fails with ccol_not_permitted for the direction the stale
- * registration holds, and can fail with ccol_unexpected_failure for the
- * other direction.
- *
- * For a queue selectable or a cchan selectable the loop finishes its
- * own bookkeeping for that queue before this call returns: it unlinks the
- * registration's waiter from the queue and frees the registration
- * bookkeeping. A dispatch in flight is a separate matter, because its
- * callback holds the selectable the loop gave it and reaches the queue
- * through it. Unlike for arg above, the caller needs no on_removed handshake
- * for the queue, since destroying the queue waits for any such callback to
- * finish with it; see ccircq_destroy. The ordinary sequence
- * (drain, remove, destroy) is therefore safe from any thread that doesn't
- * itself run one of this registration's callbacks, a callback of another
- * registration on the same loop included.
- *
- * @param loop ceventloop that owns the registration
- * @param reg  Registration to remove
- *
- * You can call this function more than once on the same reg, either one call
- * after the other or with calls that really run at the same time on
- * different threads. Neither is ever a use-after-free, but they return
- * different values.
- *
- * A call that starts strictly after an earlier ceventloop_remove() on
- * the same reg has returned doesn't resolve reg_h at all, because the
- * earlier call freed reg's slot before returning, so it gets
- * ccol_invalid_args. That's the same result that
- * ceventloop_modify(), ceventloop_pause(), ceventloop_resume(),
- * and ceventloop_reg_generation() document for an already removed reg.
- *
- * A call that really races another ceventloop_remove() on the same reg
- * is different: its own resolve can succeed because the other call hasn't
- * freed reg's slot yet. In that narrow window it sees that reg already
- * carries the removed mark, does nothing, and returns ccol_success.
- *
- * @return ccol_success on success, including the call that loses the race
- * in the window above.
- * @return ccol_invalid_args if loop is CEVENTLOOP_NULL, a stale
- * handle, or a handle that a call already destroyed; or if reg is
- * CEVENTLOOP_REG_NULL, or does not resolve for another reason, for example
- * because an earlier call that already returned removed it.
- *
- * @note The function is thread-safe
- *
- * @see ceventloop_removed_fn_t
- */
-ccol_retval_t ceventloop_remove(ceventloop loop, ceventloop_reg reg);
+// Removes a registration. It may run from the registration's own callback,
+// from any thread, and during a dispatch of it. After it returns the loop calls
+// none of its callbacks again, collected ones included, but it doesn't wait for
+// a dispatch already running: to free an arg that a callback uses, wait for
+// on_removed (waiting here could deadlock on your locks). From the
+// registration's own callback, or when it was never dispatched, you may free
+// arg at once. It never closes the fd. Remove every registration of an fd
+// before you close it; once the last one is gone the loop has stopped watching
+// the fd, so the number can be registered again independently. A registration
+// whose fd was closed first keeps the number, and an add that reuses it fails.
+// For a queue the waiter is unlinked before the call returns, and destroying
+// the queue waits for a callback still running, so drain, remove, destroy is
+// safe from any thread that isn't running one of its callbacks. It gives
+// ccol_success (also for a call that races another remove of the same reg) or
+// ccol_invalid_args for a bad or stale loop or reg, including one an earlier
+// call already removed.
+ccol_retval ceventloop_remove(ceventloop loop, ceventloop_reg reg);
 
-/**
- * @brief Number of ceventloop_reg handles that are registered now
- *
- * Counts live registrations, meaning those from a ceventloop_add call
- * that haven't been removed yet, not the entries of the epoll interest list,
- * so one fd with both directions registered counts as 2.
- *
- * @param loop ceventloop to ask
- * @return Count of registrations, or (size_t)-1 if loop is
- * CEVENTLOOP_NULL, a stale handle, or a handle that a call already
- * destroyed.
- */
+// Gives the number of live registrations (one fd with both directions counts
+// 2), or (size_t)-1 for a bad or stale loop.
 size_t ceventloop_reg_count(ceventloop loop);
 
-/**
- * @brief Stop the poller thread of the reactor and its dispatch worker
- *        threads, if it has any
- *
- * You can call this function more than once, or not at all before
- * ceventloop_destroy, since that macro calls it internally when needed.
- * It blocks until it has joined the poller thread and, with
- * num_reactor_threads > 1, until every dispatch worker has finished its
- * current job and been joined too. It's a graceful drain, not a cancel:
- * after this call returns no dispatch can be in flight, the same guarantee
- * num_reactor_threads == 1 gives.
- *
- * From then on no queue registration of loop takes a wake from its queue,
- * and a wake it was holding goes to the queue's next listener, so the
- * queue's other listeners keep getting every message. Each registration
- * stays in place until ceventloop_remove() or ceventloop_destroy(),
- * which still runs its on_removed, and a later ceventloop_add() on loop
- * is refused.
- *
- * @param loop ceventloop to shut down
- *
- * @return ccol_success on success
- * @return ccol_invalid_args if loop is CEVENTLOOP_NULL, or if loop is
- * a stale handle or a handle that a call already destroyed
- * @return ccol_not_permitted if the call comes from inside a callback running
- * on one of this loop's threads: the poller or, for num_reactor_threads > 1,
- * a dispatch worker. See the warning below.
- *
- * @warning Do not call this from inside a callback running on one of this
- * loop's threads. That call would join the thread from itself, which is
- * undefined behaviour and gives EDEADLK, so the function detects the case and
- * refuses it with ccol_not_permitted rather than leave a caller a way to
- * trigger undefined behaviour. Move the shutdown to another thread, or do it
- * after the callback returns.
- */
-ccol_retval_t ceventloop_shutdown(ceventloop loop);
+// Stops the poller and the dispatch workers and joins them, after each finishes
+// its current job, so no dispatch is in flight when it returns. It may be
+// called more than once; ceventloop_destroy calls it when needed. From then on
+// the loop's queue registrations take no wake (one they held goes to the
+// queue's next listener), registrations stay until removed or destroyed, and
+// ceventloop_add is refused. It gives ccol_success, ccol_invalid_args for a bad
+// or stale loop, or ccol_not_permitted from a callback on one of the loop's
+// threads, which would join itself.
+ccol_retval ceventloop_shutdown(ceventloop loop);
 
-/**
- * @brief Internal destroy. Use the ceventloop_destroy() macro.
- *
- * Shuts the reactor thread down, unless a call already did, and then frees
- * every registration that is left.
- *
- * The shutdown is the same graceful drain as ceventloop_shutdown(): the
- * callbacks the loop already collected run, and loop stays a live handle for
- * them until the drain ends. So a callback can call ceventloop_remove(),
- * ceventloop_pause(), ceventloop_resume(),
- * ceventloop_modify() and ceventloop_add() on loop during the
- * destroy, with the same results as during ceventloop_shutdown(). That
- * makes the documented way to close a connection from its own callback
- * (remove every registration of it, close the fd, free arg) safe while
- * another thread destroys the loop: once the removals return, no callback of
- * those registrations runs again. When the drain ends loop stops resolving,
- * and every later call on it fails the way it does for a destroyed handle.
- * For a registration
- * backed by a queue it first unlinks the registration from that queue's
- * waiter list, so a queue that outlives this ceventloop is never left
- * with a waiter pointer to nowhere.
- *
- * The reverse order is the caller's job. Before destroying a queue that was
- * registered with ccircq_selectable, cdynmq_selectable, or
- * cchan_selectable, the caller must remove the registration with
- * ceventloop_remove(), or else every cselect() and
- * cselect_timed() call that watches the queue must have returned.
- * Destroying the queue before that is a caller bug, which
- * ccircq_destroy(), cdynmq_destroy(), and
- * cchan_destroy() detect and assert against. Without that assert the
- * waiter node would still be linked and pointing to the queue's mutex, which
- * the destroy is about to free.
- *
- * loop must be a live handle: one that ceventloop_create or
- * ceventloop_create_mp gave out and that hasn't been destroyed yet. A
- * stale handle is a fatal error. A handle is stale when an earlier, finished
- * call to this function destroyed it, or when another thread is destroying it
- * right now in a race with this call. A forged or garbage value is a fatal
- * error too.
- * In those cases the function calls _ccol_fatal_err(), which aborts with
- * SIGABRT, instead of risking a use-after-free or a double free. The rule
- * covers both a plain double destroy one after the other and a concurrent
- * one that overlaps in time. CEVENTLOOP_NULL (0) is the one
- * exception and stays a silent no-op, which fits the ceventloop_destroy
- * idiom of setting the handle to the invalid value.
- *
- * Calling this on loop from inside a callback that runs on one of loop's
- * threads (the poller thread or, for num_reactor_threads > 1, a dispatch
- * worker) is a fatal error for the same reason. The call would have to join
- * that thread through an internal ceventloop_shutdown, and it would also
- * free every registration and the loop struct itself while a callback is
- * still running on that thread, which is a use-after-free and not only a
- * deadlock. Move the destroy to another thread, or do it after the callback
- * returns.
- *
- * @param loop ceventloop to destroy
- *
- * @warning Do not call this function directly. Use the
- * ceventloop_destroy() macro.
- */
-void __ceventloop_destroy(ceventloop loop);
+// Internal: destroys the loop; ceventloop_destroy() calls it and then clears
+// the handle. It shuts the loop down (the same drain as ceventloop_shutdown,
+// with loop still resolving, so a callback can remove its registrations, close
+// its fd and free arg while another thread destroys the loop), then frees every
+// registration left, unlinking queue registrations from their queues and
+// running every due on_removed. After the drain the handle stops resolving. A
+// stale, racing or forged handle is a fatal error (CEVENTLOOP_NULL is a no-op),
+// and so is a call from a callback on one of the loop's threads. Destroy a
+// watched queue only after removing its registration; the queue destroy
+// asserts otherwise.
+void ceventloop__destroy(ceventloop loop);
 
-/**
- * @brief RAII cleanup function. Use it with _ccol_destructor.
- *
- * Calling this on an *lp that is already CEVENTLOOP_NULL does
- * nothing. Calling it on a stale handle that isn't CEVENTLOOP_NULL
- * and was already destroyed through another path is the same fatal misuse
- * that __ceventloop_destroy documents.
- */
-static inline __attribute__((always_inline)) void ___ceventloop_destroy(
+// Internal: the cleanup handler of the _scoped macros. NULL does nothing. gcov
+// can't count the closing brace of this always-inline function at -O3, hence
+// the marker on that one line; don't copy it to a line a test can reach.
+static inline __attribute__((always_inline)) void ceventloop__destroy_cleanup(
     ceventloop *lp) {
   if (lp && *lp) {
-    __ceventloop_destroy(*lp);
+    ceventloop__destroy(*lp);
     *lp = CEVENTLOOP_NULL;
   }
-  /* gcov can't count the closing brace of this always-inline function at
-   * -O3, although its body runs, so the coverage report leaves that one line
-   * out. Don't copy the marker to a line that a test can reach. */
 } /* LCOV_EXCL_LINE */
 
-/**
- * @brief Destroy a ceventloop and set the handle to
- * CEVENTLOOP_NULL
- *
- * Blocks until every in-flight resolved use of this handle has finished. Do
- * not call it concurrently with another call on the same handle; as the doc
- * comment of __ceventloop_destroy explains, that is a fatal error, not a
- * silent race.
- *
- * @param loop ceventloop to destroy. The macro sets it to
- * CEVENTLOOP_NULL afterwards.
- *
- * @note You can call this with a CEVENTLOOP_NULL handle
- * @warning Do not call this on loop from inside a callback that is being
- * dispatched on one of loop's threads. That's a self-destroy hazard, the
- * destroy-side twin of ceventloop_shutdown's self-join hazard, and it is
- * a fatal error that aborts with SIGABRT, neither a silent no-op nor a
- * deadlock. Move the destroy to another thread, or do it after the
- * callback returns.
- *
- * @note The macro evaluates loop exactly once, and loop must be a modifiable
- * lvalue such as a variable or an array element
- */
+// Destroys the loop and sets loop to CEVENTLOOP_NULL, so the stale handle
+// isn't used again (loop is evaluated once and must be a modifiable lvalue;
+// CEVENTLOOP_NULL is fine). It waits for every resolved use of the handle to
+// finish. A concurrent call on the same handle, and a call from one of the
+// loop's own callbacks, are fatal errors.
 #define ceventloop_destroy(loop) \
-  _ceventloop_destroy_impl(loop, \
-                           _ccol_uniq(__ceventloop_destroy_slot, __COUNTER__))
+  ceventloop__destroy_impl(loop, \
+                           ccol__uniq(ceventloop__destroy_slot, __COUNTER__))
 
-/* Internal body of ceventloop_destroy. slot is a name from
- * _ccol_uniq(), so the macro can nest inside the argument of another destroy
- * macro and stay -Wshadow clean. The argument is evaluated exactly once. */
-#define _ceventloop_destroy_impl(loop, slot) \
+// Internal: the body of ceventloop_destroy(), like ccircq__destroy_impl().
+#define ceventloop__destroy_impl(loop, slot) \
   do {                                       \
     __typeof__(loop) *slot = &(loop);        \
-    __ceventloop_destroy(*slot);             \
+    ceventloop__destroy(*slot);              \
     *slot = CEVENTLOOP_NULL;                 \
   } while (0)
 
-/**
- * @brief Declare a ceventloop variable that has no value yet
- *
- * Follow it with a ceventloop_construct or ceventloop_create call.
- */
+// Declares a loop handle named name, to be created later; the _scoped form
+// starts at CEVENTLOOP_NULL and destroys the loop at the end of the scope.
 #define ceventloop_declare(name) ceventloop name
 
-/**
- * @brief Declare a variable that is destroyed at the end of its scope
- */
-#define ceventloop_declare_scoped(name) \
-  ceventloop name _ccol_destructor(___ceventloop_destroy) = CEVENTLOOP_NULL
+#define ceventloop_declare_scoped(name)                           \
+  ceventloop name ccol__destructor(ceventloop__destroy_cleanup) = \
+      CEVENTLOOP_NULL
 
-/**
- * @brief Declare and initialize in one step. On failure, call _ccol_fatal_err.
- *
- * Example:
- * @code
- * ceventloop_construct(loop, 32, 1, 1);
- * cselectable_t sel = cselectable_fd(fd, cselect_read);
- * ceventloop_reg r = ceventloop_add(loop, sel, handlers, NULL, NULL);
- * // ... Remove r with ceventloop_remove() before you destroy loop ...
- * ceventloop_destroy(loop);
- * @endcode
- *
- * @param name               Name of the variable for the ceventloop
- *                            handle
- * @param max_events_per_wait Size of the epoll_wait batch buffer. The value
- *                            must be from 1 to INT_MAX, and small enough
- *                            that max_events_per_wait *
- *                            sizeof(struct epoll_event) does not overflow
- *                            size_t.
- * @param num_lock_stripes   Number of lock stripes for the registry of fds
- *                           and entries. The value must be >= 1, and a value
- *                           of 1 means one registry lock for the whole loop.
- * @param num_reactor_threads Number of background reactor threads. The value
- *                           must be >= 1, and a value of 1 means one thread
- *                           that polls and dispatches in line.
- */
-#define ceventloop_construct(name, max_events_per_wait, num_lock_stripes, \
-                             num_reactor_threads)                         \
-  ceventloop name = CEVENTLOOP_NULL;                                      \
-  do {                                                                    \
-    char *_evl_err = NULL;                                                \
-    (name) = ceventloop_create((max_events_per_wait), (num_lock_stripes), \
-                               (num_reactor_threads), &_evl_err);         \
-    if (!(name)) {                                                        \
-      _ccol_fatal_err("ceventloop_construct('%s'): %s", #name,            \
-                      _evl_err ? _evl_err : "unknown error");             \
-    }                                                                     \
+// Declares a loop named name and creates it with ceventloop_create(), stopping
+// the program with ccol__fatal_err() on failure, for code that can't go on
+// without its loop. The _scoped form also destroys it at the end of the scope.
+// For example ceventloop_construct(loop, 32, 1, 1), then add, remove every
+// registration, and ceventloop_destroy(loop).
+#define ceventloop_construct(name, max_events_per_wait, num_lock_stripes,   \
+                             num_reactor_threads)                           \
+  ceventloop name = CEVENTLOOP_NULL;                                        \
+  do {                                                                      \
+    char *ceventloop__err = NULL;                                           \
+    (name) = ceventloop_create((max_events_per_wait), (num_lock_stripes),   \
+                               (num_reactor_threads), &ceventloop__err);    \
+    if (!(name)) {                                                          \
+      ccol__fatal_err("ceventloop_construct('%s'): %s", #name,              \
+                      ceventloop__err ? ceventloop__err : "unknown error"); \
+    }                                                                       \
   } while (0)
 
-/**
- * @brief Declare, initialize, and destroy at the end of the scope. On
- *        failure, call _ccol_fatal_err.
- *
- * @param name               Name of the variable for the ceventloop
- *                            handle
- * @param max_events_per_wait Size of the epoll_wait batch buffer. The value
- *                            must be from 1 to INT_MAX, and small enough
- *                            that max_events_per_wait *
- *                            sizeof(struct epoll_event) does not overflow
- *                            size_t.
- * @param num_lock_stripes   Number of lock stripes for the registry of fds
- *                           and entries. The value must be >= 1, and a value
- *                           of 1 means one registry lock for the whole loop.
- * @param num_reactor_threads Number of background reactor threads. The value
- *                           must be >= 1, and a value of 1 means one thread
- *                           that polls and dispatches in line.
- */
-#define ceventloop_construct_scoped(name, max_events_per_wait,               \
-                                    num_lock_stripes, num_reactor_threads)   \
-  ceventloop name _ccol_destructor(___ceventloop_destroy) = CEVENTLOOP_NULL; \
-  do {                                                                       \
-    char *_evl_err = NULL;                                                   \
-    (name) = ceventloop_create((max_events_per_wait), (num_lock_stripes),    \
-                               (num_reactor_threads), &_evl_err);            \
-    if (!(name)) {                                                           \
-      _ccol_fatal_err("ceventloop_construct_scoped('%s'): %s", #name,        \
-                      _evl_err ? _evl_err : "unknown error");                \
-    }                                                                        \
+#define ceventloop_construct_scoped(name, max_events_per_wait,              \
+                                    num_lock_stripes, num_reactor_threads)  \
+  ceventloop name ccol__destructor(ceventloop__destroy_cleanup) =           \
+      CEVENTLOOP_NULL;                                                      \
+  do {                                                                      \
+    char *ceventloop__err = NULL;                                           \
+    (name) = ceventloop_create((max_events_per_wait), (num_lock_stripes),   \
+                               (num_reactor_threads), &ceventloop__err);    \
+    if (!(name)) {                                                          \
+      ccol__fatal_err("ceventloop_construct_scoped('%s'): %s", #name,       \
+                      ceventloop__err ? ceventloop__err : "unknown error"); \
+    }                                                                       \
   } while (0)
 
 #pragma GCC visibility pop

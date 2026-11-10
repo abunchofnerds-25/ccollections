@@ -18,7 +18,7 @@ path prefix. A route either gets the whole body in memory
 
 You usually create the server (chttpsvr_create(3) or
 chttpsvr_construct(3)), register routes and middleware, start it with
-a chttpsvr_config_t (chttpsvr_start(3)), wait with
+a chttpsvr_config (chttpsvr_start(3)), wait with
 chttpsvr_engine_wait(3) and then destroy it (chttpsvr_destroy(3)).
 .fi
 .SS "Handles"
@@ -31,7 +31,7 @@ destroy that races the first, and a destroy from a handler or a
 middleware of the same server stop the process.
 
 A sub-router (chttpsvr_subrouter(3)) belongs to its server. A
-chttpsvr_req_t and a chttpsvr_resp_t belong to one request, and they and
+chttpsvr_req and a chttpsvr_resp belong to one request, and they and
 every pointer that a chttpsvr_req_* function gives you are valid only
 while the handler or middleware call runs.
 .fi
@@ -66,7 +66,7 @@ A request that finds the worker queue full gets 503 with Retry-After.
 A malformed or unsupported request is refused before any middleware
 or handler sees it, for example with 505 for an HTTP major version
 other than 1, 400 for an invalid Host and 501 for a transfer coding
-other than chunked. The limits of chttpsvr_config_t bound the header
+other than chunked. The limits of chttpsvr_config bound the header
 size, the body size, the memory that bodies hold, the time and the
 rate of each transfer, and the number of connections, and every
 duration field is a uint64_t count of microseconds. After a rejection
@@ -117,7 +117,7 @@ thread, and routes and middleware may be registered before or after
 the server starts. A handler must not destroy, stop or restart its
 own server, and it must not call chttpsvr_engine_wait(3); it calls
 chttpsvr_engine_stop(3) and returns instead. chttpsvr_stop(3) is not
-async-signal-safe. A chttpsvr_req_t and a chttpsvr_resp_t are used only
+async-signal-safe. A chttpsvr_req and a chttpsvr_resp are used only
 on the thread that runs their handler.
 .fi
 .SH "SEE ALSO"

@@ -7,19 +7,19 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-ccol_retval_t chttpcli_do(chttpcli cli,
-                          const chttp_request_t *req,
-                          chttpcli_response_t **resp_out);
+ccol_retval chttpcli_do(chttpcli cli,
+                          const chttp_request *req,
+                          chttpcli_response **resp_out);
 .fi
 .SH DESCRIPTION
 .nf
 This function takes a pool slot, blocking while every slot is in use.
 It then runs the HTTP request synchronously, buffers the whole response
-body and stores a heap-allocated chttpcli_response_t in *resp_out.
+body and stores a heap-allocated chttpcli_response in *resp_out.
 
 *resp_out is set to NULL first, before any other work, and it stays
 NULL on every return that is not a success. So you can always call
-chttpcli_resp_free(resp) after this call, whatever ccol_retval_t it
+chttpcli_resp_free(resp) after this call, whatever ccol_retval it
 returns, and you don't have to initialize your own pointer before the
 call. After a success the caller owns *resp_out and must free it with
 chttpcli_resp_free when done.
@@ -47,7 +47,7 @@ A redirect from https to http is followed by default. That is what
 curl does, whose CURLOPT_REDIR_PROTOCOLS permits both schemes, and what
 the Go net/http client does.
 
-Set chttp_request_t.prevent_tls_downgrade_on_redirect to refuse such a
+Set chttp_request.prevent_tls_downgrade_on_redirect to refuse such a
 redirect instead. The client then reports ccol_http_invalid_url and
 opens no plaintext connection. Weigh that against the default: the
 peer that sent the Location picks the downgrade, and once a chain
@@ -429,7 +429,7 @@ ccol_http_transfer_aborted
        does not follow the grammar of RFC 9112 section 7.1.1, for
        example when it holds a control byte.
 
-       Or a streaming chttpcli_write_fn_t returned a value other than
+       Or a streaming chttpcli_write_fn returned a value other than
        the number of bytes it was given.
 
        Over https://, this code also covers a connection that closes

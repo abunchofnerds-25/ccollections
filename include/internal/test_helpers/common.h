@@ -24,75 +24,51 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file test_helpers/common.h
- * @brief INTERNAL ONLY. The test-only check of the fork-handler order, and
- * the counters of the close-on-exec gate.
- *
- * src/common.c defines the recorder, and every module that registers a
- * fork-prepare handler (clogger, cthreadcomm, cthreadpool, chttpserver and
- * chttpclient) reports to it. It also defines the counters that the tests of
- * the close-on-exec gate read.
- *
- * All of it exists only in a build that defines RUNNING_UNIT_TESTS. Every test
- * suite defines it and the shipped library never does, so none of this is
- * installed or exported.
- */
-
+// Internal only: the test-only check of the fork-handler order, and the
+// counters of the close-on-exec gate. src/common.c defines them, and only a
+// build with RUNNING_UNIT_TESTS has them, so none of this ships.
 #include <common.h>
 #include <stdatomic.h>
 
 #ifdef RUNNING_UNIT_TESTS
-/*
- * The order of the fork-prepare handlers, checked rather than assumed.
- *
- * Every module here that registers a pthread_atfork() prepare handler takes
- * its own locks in that handler and holds them until after the fork, so the
- * handlers' locks nest in the order the handlers run, which is the reverse
- * of registration order. The module the embedding program happens to use
- * first decides the registration order, so each module forces its
- * dependencies to register ahead of it.
- *
- * Two handlers must never run in opposite relative orders in two different
- * forks. If they do, their locks nest both ways and the cycle is real, not
- * something a detector made up.
- *
- * Each handler reports itself here when it starts, and we record the order
- * of each pair and refuse a later contradiction, so the test suites check
- * that property on every fork they make instead of a comment just claiming
- * it. Only the test binaries get this code; the shipped library has none of
- * it.
- */
+// The modules that register a fork-prepare handler. Each handler takes its
+// module's locks and holds them across the fork, so the locks nest in the order
+// the handlers run (the reverse of registration). Two handlers that run in
+// opposite relative orders in two forks make a real lock cycle, so each handler
+// reports itself to the recorder below and a contradiction ends the process.
 typedef enum {
-  _ccol_atfork_module_clogger = 0,
-  _ccol_atfork_module_cthreadcomm,
-  _ccol_atfork_module_cthreadpool,
-  _ccol_atfork_module_chttpserver,
-  _ccol_atfork_module_chttpclient,
-  _ccol_atfork_module_count
-} _ccol_atfork_module_t;
+  ccol__atfork_module_clogger = 0,
+  ccol__atfork_module_cthreadcomm,
+  ccol__atfork_module_cthreadpool,
+  ccol__atfork_module_chttpserver,
+  ccol__atfork_module_chttpclient,
+  ccol__atfork_module_count
+} ccol__atfork_module;
 
-void _ccol_atfork_order_record(_ccol_atfork_module_t ccol_module);
+// Records that the prepare handler of ccol_module started. Every module's
+// prepare handler calls it in a test build, so a lock cycle between two
+// handlers fails the run instead of hanging a fork one day. It aborts when the
+// order of any pair contradicts an earlier fork, or when the handler runs after
+// the close-on-exec gate.
+void ccol__atfork_order_record(ccol__atfork_module ccol_module);
 
-/* Starts a new sequence, so the next record is the first handler of a
- * fork. The parent and child handlers that the recorder registers call it
- * after every fork, and a test that records sequences with no fork in
- * between calls it between two sequences. */
-void _ccol_atfork_order_reset(void);
+// Starts a new sequence, so the next record counts as the first handler of a
+// fork. The recorder's own parent and child handlers call it after every fork;
+// a test that records sequences with no fork between calls it itself.
+void ccol__atfork_order_reset(void);
 
-#if defined(_CCOL_CLOEXEC_GATE)
-/* How many times a thread entered and left the close-on-exec gate, so a test
- * can check that every creation site uses it and leaves it on every path. */
-extern atomic_ulong _ccol_cloexec_gate_enters_for_tests;
-extern atomic_ulong _ccol_cloexec_gate_leaves_for_tests;
+#if defined(CCOL__CLOEXEC_GATE)
+// How many times a thread entered and left the close-on-exec gate, so a test
+// can check that every creation site uses it and leaves it on every path.
+extern atomic_ulong ccol__cloexec_gate_enters_for_tests;
+extern atomic_ulong ccol__cloexec_gate_leaves_for_tests;
 
-/* True from the prepare handler of the gate until the parent or the child
- * handler, so a test can see whether the gate already ran in the current
- * fork. */
-extern bool _ccol_cloexec_gate_prepared_for_tests;
+// True from the gate's prepare handler until its parent or child handler, so a
+// test can see whether the gate already ran in the current fork.
+extern bool ccol__cloexec_gate_prepared_for_tests;
 
-/* How many times the prepare handler of the gate started. It counts before
- * the handler waits, so a test sees a fork() that waits at the gate. */
-extern atomic_ulong _ccol_cloexec_gate_prepares_for_tests;
-#endif /* _CCOL_CLOEXEC_GATE */
-#endif /* RUNNING_UNIT_TESTS */
+// How many times the gate's prepare handler started. It counts before the wait,
+// so a test sees a fork() that waits at the gate.
+extern atomic_ulong ccol__cloexec_gate_prepares_for_tests;
+#endif
+#endif

@@ -22,14 +22,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* The number of threads of the test process, on every supported system.
- * Linux lists them in /proc/self/task, FreeBSD gives one kern.proc record
- * per thread, OpenBSD gives one record for the process plus one per thread,
- * and macOS lists them with task_threads(). Under qemu-user the Linux count
- * includes the emulator's own threads too, so a test compares the count with
- * a baseline it took itself and never with a constant.
- */
-
+// The number of threads of the test process: /proc/self/task on Linux,
+// kern.proc on the BSDs, task_threads() on macOS. Under qemu-user the count
+// includes the emulator's threads, so compare with a baseline, never with a
+// constant.
 #ifndef CCOL_TESTS_TEST_THREADS_H
 #define CCOL_TESTS_TEST_THREADS_H
 
@@ -50,9 +46,10 @@ SOFTWARE.
 #endif
 
 #ifdef __OpenBSD__
-/* The kern.proc records of this process, one for the process itself (its
- * p_tid is -1) and one per thread. Returns the number of records, or -1, and
- * the caller frees *out. */
+// Reads the kern.proc records of this process into *out: one for the process
+// (p_tid -1) and one per thread. test_thread_count() uses it on OpenBSD. It
+// gives the record count or -1; the caller frees *out. The buffer has room for
+// 16 threads that start between the two sysctl calls.
 static inline int test_openbsd_proc_records(struct kinfo_proc **out) {
   int mib[6] = {CTL_KERN,
                 KERN_PROC,
@@ -63,7 +60,6 @@ static inline int test_openbsd_proc_records(struct kinfo_proc **out) {
   size_t len = 0;
   *out = NULL;
   if (sysctl(mib, 6, NULL, &len, NULL, 0) != 0) return -1;
-  /* Room for threads that start between the two calls. */
   len += 16 * sizeof(struct kinfo_proc);
   struct kinfo_proc *kp = malloc(len);
   if (!kp) return -1;
@@ -77,14 +73,14 @@ static inline int test_openbsd_proc_records(struct kinfo_proc **out) {
 }
 #endif
 
-/* The thread count, or -1 when the system does not report it. */
+// Gives the number of threads of the process, or -1 when the system doesn't
+// report it. Tests use it to see that a teardown joined every thread.
 static inline int test_thread_count(void) {
 #ifdef __FreeBSD__
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID | KERN_PROC_INC_THREAD,
                 (int)getpid()};
   size_t len = 0;
   if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) return -1;
-  /* Room for threads that start between the two calls. */
   len += 16 * sizeof(struct kinfo_proc);
   struct kinfo_proc *kp = malloc(len);
   if (!kp) return -1;
@@ -122,4 +118,4 @@ static inline int test_thread_count(void) {
 #endif
 }
 
-#endif /* CCOL_TESTS_TEST_THREADS_H */
+#endif

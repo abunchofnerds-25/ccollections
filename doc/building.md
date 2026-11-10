@@ -66,15 +66,15 @@ The build leaves these files in the top directory:
 
 | File | What it is |
 |---|---|
-| `libccollections.so.1.0.0` | the shared library |
-| `libccollections.so.1` | the SONAME link, which programs record |
+| `libccollections.so.2.0.0` | the shared library |
+| `libccollections.so.2` | the SONAME link, which programs record |
 | `libccollections.so` | the development link that `-lccollections` finds |
 | `libccollections.a` | the static archive |
 | `ccollections.pc` | the `pkg-config` metadata |
 
-On macOS the three shared library files are `libccollections.1.0.0.dylib`,
-`libccollections.1.dylib` and `libccollections.dylib`, and the install name
-that programs record is `$(LIBDIR)/libccollections.1.dylib`.
+On macOS the three shared library files are `libccollections.2.0.0.dylib`,
+`libccollections.2.dylib` and `libccollections.dylib`, and the install name
+that programs record is `$(LIBDIR)/libccollections.2.dylib`.
 
 The compiler is `gcc` on Linux and the system `cc` everywhere else. If you
 want a different one, set it on the command line or in the environment:
@@ -226,6 +226,29 @@ whatever order your `-I` flags are in.
 Include only the headers you use. `cvector.h`, `chashmap.h` and `cbstmap.h`
 pull in the shared iteration API (`citerators.h`) by themselves.
 
+The headers are for C programs. They have no `extern "C"` block, and the
+typed macros rest on `_Generic` and statement expressions, which C++ doesn't
+have, so a C++ program can't use the library through them.
+
+`common.h` tells you which release the headers belong to, and
+`ccol_version()` which release the program actually runs with. The two can
+differ, since every `2.x` release has the same SONAME:
+
+```c
+#include <stdio.h>
+#include <ccollections/common.h>
+
+int main(void) {
+  printf("built with %s, running with %s\n", CCOL_VERSION_STRING,
+         ccol_version_string());
+  return ccol_version() >= CCOL_VERSION_NUMBER ? 0 : 1;
+}
+```
+
+`CCOL_VERSION_NUMBER` and `ccol_version()` pack the release as `0xMMmmpp`,
+so `2.1.0` is `0x020100` and releases compare as plain numbers. See
+[ccol_version(3)](https://abunchofnerds-25.github.io/ccollections/man/common/ccol_version.3.html).
+
 ## Linking
 
 `pkg-config` gives you the right flags:
@@ -243,7 +266,7 @@ gcc -std=gnu11 -o myapp myapp.c -lccollections
 ```
 
 If you installed into a non-standard prefix and the program can't find
-`libccollections.so.1` at run time, add that `lib` directory to the
+`libccollections.so.2` at run time, add that `lib` directory to the
 loader's search path, with `LD_LIBRARY_PATH` or with an rpath such as
 `-Wl,-rpath,$HOME/.local/lib`. On macOS a program finds the library through
 its install name, which is the `LIBDIR` of the install.
@@ -388,7 +411,7 @@ the wrong size; the link fails with an undefined reference that names the
 layout your code expected, for example:
 
 ```
-undefined reference to `_cmempool_built_with_compact_layout'
+undefined reference to `cmempool__built_with_compact_layout'
 ```
 
 Rebuild whichever side is wrong. A file that declares no such buffer
@@ -454,7 +477,7 @@ every later command in the tree until a `make clean` or a new value of the
 switch.
 
 A reduced build can't take the place of a full build. It has the same
-SONAME (`libccollections.so.1`) but exports fewer symbols, so a program that
+SONAME (`libccollections.so.2`) but exports fewer symbols, so a program that
 was linked with a full build won't start with a reduced one. Reduced builds
 are meant for a library that you build and embed yourself, and that's why
 `make install` refuses a reduced build unless you confirm that the

@@ -1,0 +1,563 @@
+/* The stylesheet of the GitHub Pages site: the front page and the 404 page
+ * that build_pages_site.py writes, and the man pages that build_man_html.py
+ * renders with mandoc. It styles the classes mandoc writes and the frame of
+ * site_layout.py. Colors follow the light or dark setting of the reader's
+ * system. */
+:root {
+  --bg: #ffffff;
+  --bg-soft: #f6f7f9;
+  --fg: #1a1d23;
+  --muted: #5d6573;
+  --rule: #e3e6eb;
+  --accent: #1d5fd1;
+  --accent-soft: #e8f0fd;
+  --code-bg: #f4f5f7;
+  --tok-comment: #6a737d;
+  --tok-string: #0a7a3e;
+  --tok-number: #b35900;
+  --tok-pre: #8a3ffc;
+  --tok-keyword: #c0245b;
+  --tok-type: #1d5fd1;
+  --tok-call: #6f42c1;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216;
+    --bg-soft: #161a20;
+    --fg: #e4e7eb;
+    --muted: #9aa3ae;
+    --rule: #262c34;
+    --accent: #6ea8ff;
+    --accent-soft: #17243a;
+    --code-bg: #161a20;
+    --tok-comment: #8b949e;
+    --tok-string: #7ee2a8;
+    --tok-number: #f0a35e;
+    --tok-pre: #c9a2ff;
+    --tok-keyword: #ff7b9c;
+    --tok-type: #79b8ff;
+    --tok-call: #d2a8ff;
+  }
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+html {
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  margin: 0;
+  font: 16px/1.6 var(--sans);
+  background: var(--bg);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+main {
+  flex: 1;
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 4rem;
+}
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+h1, h2, h3 {
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+code, pre, .Li {
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+code {
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.tok-c { color: var(--tok-comment); font-style: italic; }
+.tok-s { color: var(--tok-string); }
+.tok-n { color: var(--tok-number); }
+.tok-p { color: var(--tok-pre); }
+.tok-k { color: var(--tok-keyword); font-weight: 550; }
+.tok-t { color: var(--tok-type); }
+.tok-f { color: var(--tok-call); }
+
+/* Header, breadcrumbs and footer of every page */
+header.top {
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.bar {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+header.top .bar {
+  height: 3.5rem;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 650;
+  color: var(--fg);
+  margin-right: auto;
+  white-space: nowrap;
+}
+.brand:hover {
+  text-decoration: none;
+}
+header.top nav {
+  display: flex;
+  gap: 1.25rem;
+  font-size: 0.925rem;
+  overflow-x: auto;
+}
+header.top nav a {
+  color: var(--muted);
+  white-space: nowrap;
+}
+header.top nav a:hover,
+header.top nav a[aria-current="page"] {
+  color: var(--fg);
+  text-decoration: none;
+}
+nav.crumbs {
+  font-size: 0.875rem;
+  color: var(--muted);
+  margin-bottom: 1.25rem;
+}
+nav.crumbs a {
+  color: var(--muted);
+}
+nav.crumbs a:hover {
+  color: var(--accent);
+}
+nav.crumbs .sep {
+  margin: 0 0.5rem;
+  opacity: 0.6;
+}
+footer.bottom {
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+footer.bottom .bar {
+  padding-top: 1.25rem;
+  padding-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+footer.bottom a {
+  color: var(--muted);
+  margin-left: auto;
+}
+
+/* Page headings shared by the manual pages */
+.page-title {
+  font-size: 2rem;
+  margin: 0 0 0.5rem;
+  overflow-wrap: anywhere;
+}
+.kicker {
+  margin: 0 0 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.lede {
+  color: var(--muted);
+  font-size: 1.075rem;
+  max-width: 44rem;
+}
+
+/* Front page */
+.hero {
+  padding: 3rem 0 2rem;
+  max-width: 46rem;
+}
+.hero h1 {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 2.6rem;
+  margin: 0 0 0.75rem;
+}
+.hero h1 img {
+  width: 76px;
+  height: 76px;
+  flex: none;
+}
+.hero p {
+  font-size: 1.15rem;
+  color: var(--muted);
+  margin: 0 0 1.75rem;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.button {
+  display: inline-block;
+  padding: 0.6rem 1.1rem;
+  border-radius: 8px;
+  border: 1px solid var(--rule);
+  color: var(--fg);
+  font-weight: 550;
+  font-size: 0.95rem;
+}
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+@media (prefers-color-scheme: dark) {
+  .button.primary {
+    color: #0f1216;
+  }
+}
+.button:hover {
+  text-decoration: none;
+  border-color: var(--accent);
+}
+.home h2 {
+  font-size: 1.35rem;
+  margin: 3rem 0 1rem;
+}
+.home p.section-lede {
+  color: var(--muted);
+  margin-top: -0.5rem;
+  max-width: 44rem;
+}
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.facts li {
+  border-left: 2px solid var(--accent);
+  padding: 0.1rem 0 0.1rem 0.9rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+.facts strong {
+  display: block;
+  color: var(--fg);
+  font-weight: 600;
+}
+.modules {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.9rem;
+}
+.card {
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  background: var(--bg);
+  transition: border-color 0.15s;
+}
+.card:hover {
+  border-color: var(--accent);
+}
+.card h3 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.975rem;
+}
+.card h3 a {
+  color: var(--fg);
+}
+.card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.925rem;
+  flex: 1;
+}
+.card .links {
+  font-size: 0.85rem;
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.35rem;
+}
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 2rem;
+  align-items: start;
+}
+.split pre {
+  margin: 0;
+}
+.doclist {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+.doclist a {
+  font-weight: 550;
+}
+.doclist span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.925rem;
+}
+@media (max-width: 48rem) {
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hero h1 {
+    font-size: 2rem;
+    gap: 0.75rem;
+  }
+  .hero h1 img {
+    width: 56px;
+    height: 56px;
+  }
+}
+
+/* Manual index */
+nav.toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1.5rem 0 1rem;
+}
+nav.toc a {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--fg);
+}
+nav.toc a:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+section.mod h2 {
+  font-size: 1.2rem;
+  font-family: var(--mono);
+  margin: 2.5rem 0 0.75rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--rule);
+  scroll-margin-top: 4.5rem;
+}
+dl.index {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 0.35rem 1.5rem;
+  margin: 0;
+}
+dl.index dt {
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+dl.index dd {
+  margin: 0;
+  color: var(--muted);
+}
+@media (max-width: 40rem) {
+  dl.index {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  dl.index dd {
+    margin: 0 0 0.6rem 1rem;
+  }
+}
+
+/* A manual page: the mandoc text and the list of its module's pages */
+.man-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 15rem;
+  gap: 3rem;
+  align-items: start;
+}
+article.man {
+  max-width: 50rem;
+}
+.man-side {
+  position: sticky;
+  top: 4.5rem;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+  font-size: 0.85rem;
+  border-left: 1px solid var(--rule);
+  padding-left: 1.25rem;
+}
+.man-side h2 {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  margin: 0 0 0.5rem;
+}
+.man-side ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.man-side li {
+  padding: 0.12rem 0;
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.man-side a {
+  color: var(--muted);
+}
+.man-side a:hover {
+  color: var(--accent);
+}
+.man-side [aria-current="page"] {
+  color: var(--fg);
+  font-weight: 600;
+}
+@media (max-width: 60rem) {
+  .man-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .man-side {
+    position: static;
+    max-height: none;
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+    padding: 1.25rem 0 0;
+    columns: 2 12rem;
+  }
+}
+
+/* The classes that mandoc writes */
+h2.Sh {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin: 2.25rem 0 0.6rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--rule);
+}
+h3.Ss {
+  font-size: 1.05rem;
+  margin: 1.75rem 0 0.5rem;
+}
+h2.Sh a.permalink, h3.Ss a.permalink {
+  color: inherit;
+}
+.Sh, .Ss {
+  scroll-margin-top: 4.5rem;
+}
+.Bd-indent, .Bl-tag > dd {
+  margin-left: 1.75rem;
+}
+dl.Bl-tag > dt {
+  font-weight: 600;
+  margin-top: 0.6rem;
+}
+a.Xr b {
+  font-weight: 600;
+}
+pre.prose {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--fg);
+}
+@media (max-width: 40rem) {
+  pre.prose {
+    font-size: 0.78rem;
+  }
+  header.top .bar {
+    gap: 1rem;
+  }
+  header.top nav {
+    gap: 0.85rem;
+    font-size: 0.85rem;
+  }
+  .brand {
+    font-size: 0.95rem;
+  }
+}
+@media (max-width: 26rem) {
+  .brand span {
+    display: none;
+  }
+}
+
+/* 404 page */
+.notfound {
+  padding: 4rem 0;
+  max-width: 36rem;
+}
+.notfound h1 {
+  font-size: 2rem;
+  margin: 0 0 0.75rem;
+}
+.notfound p {
+  color: var(--muted);
+}
+
+/* The filter box of the manual index */
+input.filter {
+  width: 100%;
+  max-width: 28rem;
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  margin-bottom: 0.5rem;
+}
+input.filter:focus {
+  outline: 2px solid var(--accent-soft);
+  border-color: var(--accent);
+}
+[hidden] {
+  display: none !important;
+}

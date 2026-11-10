@@ -226,7 +226,7 @@ Every typed macro calls a raw function:
 
 The macros are the convenient layer. They take values of the declared
 types and any failure stops the program. The raw functions take `cmap_pair`
-arguments (a pointer and a size) and return a `ccol_retval_t` that you
+arguments (a pointer and a size) and return a `ccol_retval` that you
 check, so you use them when a failure is something you expect and want to
 handle. If you're writing a library of your own on top of this one, the
 raw functions are usually the right layer, because a library rarely gets
@@ -276,10 +276,10 @@ After that the program stops with SIGABRT.
 
 Expected failures are values: a key that may not be in the map, a queue
 that may be empty, a server that may be down. The library reports them as a
-`ccol_retval_t`, which is `0` (`ccol_success`) on success and a negative
+`ccol_retval`, which is `0` (`ccol_success`) on success and a negative
 code otherwise, such as `ccol_key_not_found`, `ccol_timed_out` or
 `ccol_http_connection_failed`. The values don't change during the whole
-`1.x` series, and [ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html) lists all
+`2.x` series, and [ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html) lists all
 of them. `ccol_retval_to_str` gives you the name of a value for a message:
 
 ```c
@@ -292,7 +292,7 @@ of them. `ccol_retval_to_str` gives you the name of a value for a message:
 static int port_of(chmap services, const char *name, int fallback) {
     cmap_pair key = { (void *)name, strlen(name) + 1 };
     int port;
-    ccol_retval_t rv = chashmap_get_elem_copy(services, &key, &port, sizeof(port));
+    ccol_retval rv = chashmap_get_elem_copy(services, &key, &port, sizeof(port));
     if (rv == ccol_key_not_found)
         return fallback;
     if (rv != ccol_success) {
@@ -398,10 +398,10 @@ No call takes a `struct timespec` or a `time_t`.
 int main(void) {
     ccircq *q = ccircq_create(8, NULL);
     if (!q) return 1;
-    cmessage_t msg;
+    cmessage msg;
 
     /* 0 microseconds: do not wait; this behaves like the try_ call. */
-    ccol_retval_t rv = ccircq_timed_recv(q, &msg, 0);
+    ccol_retval rv = ccircq_timed_recv(q, &msg, 0);
     printf("timeout 0      -> %s\n", ccol_retval_to_str(rv));
 
     /* 50 ms, written in microseconds. */

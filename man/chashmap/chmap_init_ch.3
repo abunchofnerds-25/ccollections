@@ -32,7 +32,7 @@ chmap_construct_ch_scoped(3).
 .SH PARAMETERS
 .nf
 hm_name              The already declared map handle to create the map into
-custom_hashing_proc  A ccol_hashing_proc_t, or NULL to use the map's own
+custom_hashing_proc  A ccol_hashing_proc, or NULL to use the map's own
                      hashing for the declared key type
 .fi
 .SH RETURN VALUE
@@ -60,7 +60,7 @@ which end of the result carries the entropy.
 .fi
 .SH NOTES
 .nf
-Stops the program through _ccol_fatal_err() if the creation fails
+Stops the program through ccol__fatal_err() if the creation fails
 Uses the default allocator and CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
 buckets
 A float or double key is canonicalized before the procedure sees it, so

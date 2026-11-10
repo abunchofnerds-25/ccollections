@@ -12,7 +12,7 @@ cthrpool_construct(name, num_threads, queue_capacity);
 .SH DESCRIPTION
 .nf
 Declares a cthrpool variable called name and initialises it with
-cthrpool_create(), and calls _ccol_fatal_err() if the creation fails.
+cthrpool_create(), and calls ccol__fatal_err() if the creation fails.
 
 queue_capacity selects the queue mode:
   0                       ->  unbounded queue. submit never blocks on
@@ -28,12 +28,12 @@ queue_capacity selects the queue mode:
 name            Variable name for the pool handle.
 num_threads     Number of worker threads to create (must be >= 1).
 queue_capacity  Maximum pending tasks (0 for unbounded). The macro
-                calls _ccol_fatal_err() for ccol_invalid_size, as it
+                calls ccol__fatal_err() for ccol_invalid_size, as it
                 does for every other failure of the creation.
 .fi
 .SH NOTES
 .nf
-The macro calls _ccol_fatal_err() on failure, so call cthrpool_create()
+The macro calls ccol__fatal_err() on failure, so call cthrpool_create()
 directly if you must handle an error gracefully.
 .fi
 .SH EXAMPLES

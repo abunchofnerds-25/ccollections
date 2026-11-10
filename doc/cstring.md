@@ -166,7 +166,7 @@ The settings example below does exactly this.
 ## When an error must not stop the program
 
 When an allocation fails, the `cstr_*` macros that can fail stop the
-program through `_ccol_fatal_err()`. If you have to recover from that, call
+program through `ccol__fatal_err()`. If you have to recover from that, call
 the functions under the macros instead, which return a status code. Code
 that ends up inside a library is better off with these too, since the
 library's caller decides what a failure means:
@@ -421,6 +421,6 @@ Raw functions (they give a status and do not stop the program):
 Related guides:
 [Vectors](cvector.md),
 [Hash maps](chashmap.md),
-[Design of the type-safe macros](design.md),
+[How the library works](design.md),
 [Memory management](memory.md),
 [Concurrency](concurrency.md)

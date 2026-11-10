@@ -34,7 +34,7 @@ cbmap_construct_cc_scoped(3).
 .nf
 hm_name                 The map handle that the caller declared earlier,
                         which receives the new map
-custom_comparison_proc  A ccol_comparison_proc_t, or NULL for the
+custom_comparison_proc  A ccol_comparison_proc, or NULL for the
                         default order for the declared key type
 .fi
 .SH RETURN VALUE
@@ -63,7 +63,7 @@ it; the procedure decides the order of the keys and nothing else.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through _ccol_fatal_err() if the creation
+The macro stops the program through ccol__fatal_err() if the creation
 fails, and it uses the default allocator. The procedure must stay callable
 for the whole life of the map.
 

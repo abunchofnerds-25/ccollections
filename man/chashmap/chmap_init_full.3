@@ -30,12 +30,12 @@ chmap_construct_full_scoped(3).
 .SH PARAMETERS
 .nf
 hm_name              The already declared map handle to create the map into
-mmgmt_procs          Pointer to a ccol_memmgmt_procs_t, or NULL for the
+mmgmt_procs          Pointer to a ccol_memmgmt_procs, or NULL for the
                      default allocator
-custom_hashing_proc  A ccol_hashing_proc_t, or NULL to use the map's own
+custom_hashing_proc  A ccol_hashing_proc, or NULL to use the map's own
                      hashing for the declared key type
 custom_key_equality_proc
-                     A ccol_key_equality_proc_t, or NULL to use the map's
+                     A ccol_key_equality_proc, or NULL to use the map's
                      own key comparison
 .fi
 .SH RETURN VALUE
@@ -66,13 +66,13 @@ procedures; see chashmap_create_full(3).
 .fi
 .SH NOTES
 .nf
-Stops the program through _ccol_fatal_err() if the creation fails; call
+Stops the program through ccol__fatal_err() if the creation fails; call
 chashmap_create_full(3) directly when a failure has to be handled instead
 of being fatal
 Uses CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets; call
 chashmap_create_full(3) for a different initial bucket count
 The macro copies the memory management procedures into the map, so your
-own ccol_memmgmt_procs_t doesn't need to outlive the call. Those
+own ccol_memmgmt_procs doesn't need to outlive the call. Those
 procedures, the hashing procedure and the key equality procedure must
 stay callable for the whole life of the map
 A custom hashing procedure leaves the implementation that the map picks
@@ -81,7 +81,7 @@ procedure selects separate chaining
 .fi
 .SH EXAMPLES
 .nf
-ccol_memmgmt_procs_t procs = {
+ccol_memmgmt_procs procs = {
     .malloc = my_malloc, .calloc = my_calloc,
     .realloc = my_realloc, .free = my_free,
 };

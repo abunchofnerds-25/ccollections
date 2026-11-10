@@ -106,7 +106,7 @@ int main(void) {
 If the contention starts to hurt, give each worker its own map and merge
 the maps at the end, which needs no lock at all.
 
-`common.h` also has thin wrappers around pthreads (`_ccol_mutex_t` and
+`common.h` also has thin wrappers around pthreads (`ccol__mutex` and
 friends). They are there to make the library easier to port to other
 systems and they aren't part of the API, so protect your own data with
 pthreads or `<threads.h>` directly like the example does.
@@ -151,7 +151,7 @@ static void *producer(void *arg) {
         char *text = malloc(32);
         if (!text) abort();
         snprintf(text, 32, "producer %d item %d", id, i);
-        cmessage_t msg = { text, strlen(text) + 1 };
+        cmessage msg = { text, strlen(text) + 1 };
         if (ccircq_send(queue, &msg) != ccol_success)
             free(text);                  /* after a failed send, we own it */
     }
@@ -169,7 +169,7 @@ int main(void) {
             started++;
 
     for (int got = 0; got < started * PER_PRODUCER; got++) {
-        cmessage_t msg;
+        cmessage msg;
         if (ccircq_recv(queue, &msg) != ccol_success) break;
         puts((char *)msg.data);
         free(msg.data);                  /* the receiver owns the data */

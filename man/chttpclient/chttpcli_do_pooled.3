@@ -7,15 +7,15 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-ccol_retval_t chttpcli_do_pooled(chttpcli cli,
-                                 const chttp_request_t *req,
-                                 chttpcli_response_t **resp_out);
+ccol_retval chttpcli_do_pooled(chttpcli cli,
+                                 const chttp_request *req,
+                                 chttpcli_response **resp_out);
 .fi
 .SH DESCRIPTION
 .nf
 This is a thin wrapper over chttpcli_do_async that submits the
 request to the shared engine and blocks until it finishes. It returns
-the same ccol_retval_t and takes resp_out the same way as
+the same ccol_retval and takes resp_out the same way as
 chttpcli_do, but the connect, the write and the read run on the
 engine's reactor threads and not on the caller's thread. Any number of
 callers on any number of chttpcli handles share one small, fixed-size

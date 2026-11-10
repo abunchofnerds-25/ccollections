@@ -24,7 +24,7 @@ s   cstr lvalue to destroy, such as a variable or an element of an
 .nf
 A call with a NULL pointer is safe and does nothing.
 The internal buffer and the container are freed with the allocator that
-created the string, which is the custom ccol_memmgmt_procs_t given to
+created the string, which is the custom ccol_memmgmt_procs given to
 cstring_create_full(), or free() when none was given.
 .fi
 .SH EXAMPLES

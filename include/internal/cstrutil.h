@@ -24,43 +24,23 @@
 
 #pragma once
 
-/**
- * @file cstrutil.h
- * @brief INTERNAL ONLY. Allocator-aware string helpers that this library's
- *        own modules share.
- *
- * None of this is public interface, since no program uses libccollections
- * through these helpers. That's why the library never installs this header
- * and the header carries no visibility block.
- */
+// INTERNAL ONLY. Allocator-aware string helpers that the modules of this
+// library share. No program uses the library through them, so the header is
+// never installed and has no visibility block.
 
 #include <common.h>
 #include <string.h>
 
-/**
- * @brief A strdup variant that uses the custom memory management procs
- *
- * Copies the input string with the custom allocation function and returns
- * the copy.
- *
- * @param mp Pointer to the custom memory management procs
- * @param input The input string. A NULL input gives a NULL result and we
- * never call strlen(NULL), which is undefined behavior. So a caller can pass
- * on a string that an earlier allocation failed to make and check once at the
- * end, instead of checking after every step.
- * @return The pointer to the new buffer that holds the copy of input. The
- * result is NULL if input is NULL, or if the memory allocation fails.
- *
- * Example:
- * @code
- * char* new_copy = ccol_strdup(mp, "hello");
- * @endcode
- */
+// Copies a string through the allocator mp, so a module's copies come from the
+// caller's allocator; strdup() through mp. It gives the copy, or NULL when
+// input is NULL or the allocation fails. A NULL input is allowed so a caller
+// can pass on the result of an earlier failed allocation and check once at the
+// end.
 static inline __attribute__((always_inline)) char *ccol_strdup(
-    ccol_memmgmt_procs_t *mp, const char *input) {
+    ccol_memmgmt_procs *mp, const char *input) {
   if (!input) return NULL;
-  size_t len = strlen(input) + 1;  // Room for the closing '\0'
-  char *result = (char *)_ccol_mem_alloc(mp, len * sizeof(char));
+  size_t len = strlen(input) + 1;
+  char *result = (char *)ccol__mem_alloc(mp, len * sizeof(char));
   if (result) {
     memcpy(result, input, len);
   }

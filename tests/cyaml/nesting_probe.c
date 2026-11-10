@@ -22,15 +22,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe: cyaml_set nests inside its own argument, and inside the
- * argument of another public macro, under -Wshadow -Werror. Every expansion
- * gives its temporaries unique names, so a nested expansion never declares
- * a local that hides one of the enclosing expansion's. Without that, each
- * nesting below would be a -Wshadow error in a caller's build. The Makefile
- * compiles this file with -fsyntax-only and nothing here runs. */
-
+// A compile-time probe that the Makefile builds with -fsyntax-only under
+// -Wshadow -Werror: cyaml_set() nests inside its own argument and inside
+// another public macro's argument. Every expansion names its temporaries
+// uniquely, so none of these nestings is a -Wshadow error in a caller's build.
 #include <cyaml.h>
 
+// Expands nested cyaml_set() calls three ways; nothing here runs.
 void cyaml_nesting_probe(cyaml doc);
 void cyaml_nesting_probe(cyaml doc) {
   (void)cyaml_set(doc, "a", (int)cyaml_set(doc, "b", 1));

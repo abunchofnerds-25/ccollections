@@ -7,7 +7,7 @@
 
 **C Collections** is a C library with the pieces that other languages put in their standard library and C doesn't have: vectors, hash maps, ordered maps, strings, memory pools, thread-safe queues, a thread pool, a structured logger, JSON and YAML, and an HTTP client and server.
 
-If you have used `vector` and `unordered_map` in C++, `ArrayList` and `HashMap` in Java or `list` and `dict` in Python, the containers will look familiar. They are C though, and the compiler deduces your element types in the relevant macros for you automatically.
+If you have used `vector` and `unordered_map` in C++, `ArrayList` and `HashMap` in Java or `list` and `dict` in Python, the containers will look familiar. They are C though, and the compiler deduces your element types in the relevant macros for you automatically. The library is for C programs only; its headers aren't meant to be included from C++.
 
 ```c
 #include <ccollections/chashmap.h>
@@ -83,11 +83,11 @@ You don't need a code generator or any `void *` casts, and there is no runtime h
 
 C has no standard containers, so a lot of projects end up writing their own hash map, and a lot of others pass everything around as `void *` and hope every cast is right.
 
-The macros of this library use the C11 `_Generic` keyword to see the types you declared, so a map from `char *` to `int` stays a map from `char *` to `int` at every call site. You write `chmap_insert(ages, "alice", 31)` and the compiler checks it, and there is no pointer cast to get wrong.
+The macros of this library use the C11 `_Generic` keyword to see the types you declared, so a map from `char *` to `int` stays a map from `char *` to `int` at every call site. You write `chmap_insert(ages, "alice", 31)` and the macro takes the key and value types from the declaration, so there is no pointer cast to get wrong.
 
 All the modules follow the same style. You create a container with `*_construct` and release it with `*_destroy`, so once you know one module the next one is easy to pick up, and the `*_scoped` variants free a container for you when it goes out of scope, which in a function with several return paths is the easiest way not to leak one. Every module accepts your own memory management functions if you want to use them.
 
-The queues, the cache, the logger, the thread pool and the HTTP modules can be shared between threads. The plain containers are not thread-safe on purpose, because that keeps them fast.
+The queues, the cache, the logger, the thread pool and the HTTP modules can be shared between threads. The plain containers have no locks inside, on purpose. Real code combines calls (look a key up and insert it when it's missing, read an element and write it back), and a lock inside each call can't make such a sequence safe. You hold your own lock around the whole sequence, and the containers don't pay for a second one. [Concurrency](doc/concurrency.md) shows how.
 
 Each module has its own test suite, and the suites run on several architectures under Valgrind, AddressSanitizer, UndefinedBehaviorSanitizer and ThreadSanitizer. The parsers are fuzz-tested as well, and every public function and macro has a man page.
 
@@ -125,7 +125,7 @@ Each module has a guide with examples, so you can start with the one you need.
 
 - Linux (glibc or musl), FreeBSD 14 or later, OpenBSD 7.9 or later, or macOS 15 or later
 - GCC 10 or later or Clang 11 or later (Apple clang on macOS), and GNU make (`gmake` on FreeBSD, OpenBSD and macOS)
-- The development packages of OpenSSL, zlib and pthreads
+- The development packages of pthreads, OpenSSL (for the HTTP client and server) and zlib (for the logger); you can leave those modules out and skip their packages, see below
 
 For example, on Debian or Ubuntu:
 
@@ -141,6 +141,17 @@ make test                             # optional: runs all test suites
 sudo make install                     # installs under /usr/local
 make install PREFIX="$HOME/.local"    # or into your own prefix, without sudo
 ```
+
+Five modules are optional, and each one is a switch on the `make` command line: `WITH_CJSON`, `WITH_CYAML`, `WITH_CLOGGER`, `WITH_CHTTPCLIENT` and `WITH_CHTTPSERVER`, all `1` by default. Setting one to `0` leaves the module out together with what it needs, OpenSSL for the HTTP modules and zlib for the logger:
+
+```bash
+make WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0         # no HTTP sub-modules
+
+make WITH_CJSON=0 WITH_CYAML=0 WITH_CLOGGER=0 \    # no 'extra' sub-modules
+     WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0
+```
+
+The HTTP modules write their logs through `clogger`, so it stays in while either of them does. A reduced build is meant to be embedded in your own project, so `make install` asks for `ALLOW_REDUCED_INSTALL=1` before it installs one ([Leaving modules out](doc/building.md#leaving-modules-out) has the details).
 
 The install puts the man pages in place too, so `man cvec_push` works right after it. A build saves its options (`CC`, `EXTRA_CFLAGS` and the module switches), and a later `make install`, with or without `sudo`, installs exactly the library that build made.
 
@@ -217,7 +228,7 @@ This library started as a hobby project on Danis Ozdemir's PC and grew into its 
 - [**Danis Ozdemir**](https://www.linkedin.com/in/danis-o-4a0a8841/)
 - [**Fikri Kahraman**](https://www.linkedin.com/in/fikrikahraman/)
 
-Like most software engineers, the authors don't particularly enjoy writing documentation, so they used [**Claude**](https://claude.ai) to help with it. They also began exploring its use as a contributor, particularly for maintenance tasks following the library's initial release.
+Like most software engineers, the authors don't particularly enjoy writing documentation, so they used [**Claude**](https://claude.ai) to generate it and refine the code comments. They also began exploring its use as a contributor, particularly for security related bug-hunting and maintenance tasks following the library's initial release. Please notice that this is **not** an AI generated library. The authors recently started using AI for polishing it and trying to make it more maintainable along with security scanning.
 
 ---
 

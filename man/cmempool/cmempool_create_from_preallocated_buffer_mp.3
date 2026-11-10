@@ -13,7 +13,7 @@ cmempool *cmempool_create_from_preallocated_buffer_mp(
     size_t elem_size,
     bool fallback_to_dynamic_memory,
     bool single_threaded,
-    ccol_memmgmt_procs_t *mmgmt_procs,
+    ccol_memmgmt_procs *mmgmt_procs,
     char **err);
 .fi
 .SH DESCRIPTION

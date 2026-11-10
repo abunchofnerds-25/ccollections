@@ -13,7 +13,7 @@ ccache_init(name, capacity, getter, setter, evict_cb);
 .nf
 Calls clrucache_create_full() and assigns the result to name, with the
 key type and the value type taken from the companion variables that
-ccache_declare() created. It calls _ccol_fatal_err() when the creation
+ccache_declare() created. It calls ccol__fatal_err() when the creation
 fails.
 .fi
 .SH PARAMETERS
@@ -28,7 +28,7 @@ evict_cb   Eviction callback, or NULL
 .fi
 .SH NOTES
 .nf
-The macro calls _ccol_fatal_err() when an allocation fails, so call
+The macro calls ccol__fatal_err() when an allocation fails, so call
 clrucache_create_full() directly when you must handle an error
 yourself.
 .fi

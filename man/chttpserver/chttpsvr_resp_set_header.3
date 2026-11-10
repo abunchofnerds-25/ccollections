@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp_t *resp,
+ccol_retval chttpsvr_resp_set_header(chttpsvr_resp *resp,
                                         const char *name,
                                         const char *value);
 .fi

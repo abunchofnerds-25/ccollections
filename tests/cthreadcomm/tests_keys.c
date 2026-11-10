@@ -22,13 +22,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* ceventloop creation in a process that has no thread-specific key left
- * to give. A loop's dispatch records the running loop and the running queue
- * on two keys of this module, and that's what lets a callback that destroys
- * its own loop or its own queue fail loudly instead of freeing it under its
- * own dispatch, so a loop that can't have those keys must not be created.
- * The keys are created once per process, which is why this runs in a binary
- * of its own: no other ceventloop call may come first. */
+// ceventloop creation in a process with no thread-specific key left. A dispatch
+// records the running loop and queue on two keys of this module, which is what
+// makes a callback that destroys its own loop or queue fail loudly, so a loop
+// without those keys must not be created. The keys are created once per
+// process, so this runs in a binary of its own where no other ceventloop call
+// comes first.
 
 #include <cthreadcomm.h>
 #include <pthread.h>
@@ -37,13 +36,15 @@ SOFTWARE.
 
 TAU_MAIN()
 
+// The keys the test takes to use up the process's supply.
 enum { MAX_TEST_KEYS = 65536 };
 static pthread_key_t exhausted[MAX_TEST_KEYS];
 
-/* If the loop ignored the failure to create its keys, the create would
- * succeed and its dispatch would set the running loop and queue on whatever
- * key the unset key variables name, which belongs to another component, so
- * this test catches that. */
+// If the create ignored its failed keys it would succeed, and its dispatch
+// would set values on whatever keys the unset variables name, which belong to
+// someone else. A queue needs no key and works here. Giving the keys back
+// doesn't help, since the module never retries the key creation in this
+// process.
 TEST(ceventloop_keys, create_fails_cleanly_when_no_key_is_left) {
   int n = 0;
   while (n < MAX_TEST_KEYS && pthread_key_create(&exhausted[n], NULL) == 0) n++;
@@ -53,18 +54,15 @@ TEST(ceventloop_keys, create_fails_cleanly_when_no_key_is_left) {
   int created = loop != CEVENTLOOP_NULL;
   if (created) ceventloop_destroy(loop);
 
-  /* A queue needs no key, so it works here and its destroy is safe. */
   ccircq *cq = ccircq_create(4, NULL);
   int queue_ok = cq != NULL;
   if (cq) {
-    cmessage_t m = {.data = NULL, .size = 0};
+    cmessage m = {.data = NULL, .size = 0};
     queue_ok = ccircq_send(cq, &m) == ccol_success &&
                ccircq_try_recv(cq, &m) == ccol_success;
     ccircq_destroy(cq);
   }
 
-  /* Giving the keys back doesn't help. Creation keeps failing because the
-   * module doesn't retry the creation of its keys in this process. */
   for (int i = 0; i < n; i++) pthread_key_delete(exhausted[i]);
   char *err_again = NULL;
   ceventloop again = ceventloop_create(8, 1, 1, &err_again);

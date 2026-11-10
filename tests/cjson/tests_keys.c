@@ -22,15 +22,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Parsing in a process that has no thread-specific key left to give. Each
- * thread's node pool and error buffer are freed by the destructor of a key
- * of this module, so a thread that can't arm that key must keep neither of
- * them. Every node goes straight back to the allocator and a failed parse
- * reports a fixed message. The key is created once per process, which is
- * why this runs in its own binary where no other cjson call comes first.
- * The memtest target runs it under valgrind, and valgrind reports any node
- * or buffer that a thread left behind. */
-
+// Parsing in a process with no thread-specific key left to give. A key
+// destructor of this module frees each thread's node pool and error buffer, so
+// a thread that can't arm the key must keep neither: every node goes straight
+// back to the allocator and a failed parse reports a fixed message. The key is
+// created once per process, so this runs in its own binary where no other cjson
+// call comes first. Under valgrind (memtest) a node or buffer left behind is
+// reported.
 #include <cjson.h>
 #include <internal/test_helpers/cjson.h>
 #include <pthread.h>
@@ -40,24 +38,27 @@ SOFTWARE.
 
 TAU_MAIN()
 
+// The keys the test creates until none is left, and the threads it runs.
 enum { MAX_TEST_KEYS = 65536, KEYS_TEST_THREADS = 50 };
 static pthread_key_t exhausted[MAX_TEST_KEYS];
 
-/* Where the compiler emulates thread-local storage (clang and GCC on
- * OpenBSD), the runtime creates one pthread key for all the thread-locals of
- * the process on the first access to any of them, and it aborts when no key
- * is left. A real program has touched some thread-local long before it could
- * use up every key, so the test touches one of its own first. That access
- * creates the runtime's key and has nothing to do with the key of this
- * module. */
+// Where the compiler emulates thread-local storage (OpenBSD), the runtime
+// creates one pthread key on the first access to any thread-local and aborts
+// when none is left. The test touches this one first, as any real program would
+// have long before it used up every key.
 static __thread volatile int runtime_tls_probe;
 
+// What one thread saw: parses that worked, its pool size after the destroy,
+// and whether a failed parse gave the fixed message.
 typedef struct {
   int parsed;
   size_t pool_after_destroy;
   int fixed_message;
 } keys_thread_result_t;
 
+// Parses and destroys a document four times, then makes one parse fail; it's
+// the body of every thread of the test (and of the main thread). arg is the
+// keys_thread_result_t it fills.
 static void *parse_and_destroy(void *arg) {
   keys_thread_result_t *r = (keys_thread_result_t *)arg;
   for (int round = 0; round < 4; round++) {
@@ -76,11 +77,9 @@ static void *parse_and_destroy(void *arg) {
   return NULL;
 }
 
-/* A pool that breaks the rule shows up here in two ways. If node_free() pools
- * a node for a thread whose key is not armed, cjson_debug_pool_size() is above
- * zero after the destroy and the population counter never gets back to zero,
- * and if the error path keeps a buffer for such a thread we get the real
- * message back. */
+// A node pooled for a thread with no armed key leaves the pool size above zero
+// and the population counter never returns to zero; a kept error buffer gives
+// back the real message instead of the fixed one.
 TEST(cjson_pool_keys, threads_without_a_key_keep_no_nodes_and_no_buffer) {
   runtime_tls_probe = 1;
   int n = 0;
@@ -97,7 +96,6 @@ TEST(cjson_pool_keys, threads_without_a_key_keep_no_nodes_and_no_buffer) {
   }
   for (int i = 0; i < started; i++) pthread_join(tids[i], NULL);
 
-  /* The main thread takes the same path. */
   keys_thread_result_t main_result;
   memset(&main_result, 0, sizeof(main_result));
   parse_and_destroy(&main_result);
@@ -114,5 +112,5 @@ TEST(cjson_pool_keys, threads_without_a_key_keep_no_nodes_and_no_buffer) {
   REQUIRE_EQ(main_result.parsed, 4);
   REQUIRE_EQ(main_result.pool_after_destroy, (size_t)0);
   REQUIRE_TRUE(main_result.fixed_message);
-  REQUIRE_EQ(atomic_load(&_cjson_pool_population_for_tests), 0L);
+  REQUIRE_EQ(atomic_load(&cjson__pool_population_for_tests), 0L);
 }

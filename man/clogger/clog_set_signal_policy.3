@@ -1,6 +1,6 @@
 .TH CLOG_SET_SIGNAL_POLICY 3 "2026-10-14" "c_collections" "C Collections Library - Functions"
 .SH NAME
-clog_set_signal_policy, clog_signal_policy_t \- choose what the logger may do about SIGPIPE and SIGXFSZ
+clog_set_signal_policy, clog_signal_policy \- choose what the logger may do about SIGPIPE and SIGXFSZ
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -10,9 +10,9 @@ C Collections (libccollections, \-lccollections)
 typedef enum {
     CLOG_SIGNALS_AUTO      = 0,   /* the default */
     CLOG_SIGNALS_UNTOUCHED = 1,
-} clog_signal_policy_t;
+} clog_signal_policy;
 
-ccol_retval_t clog_set_signal_policy(clog_signal_policy_t policy);
+ccol_retval clog_set_signal_policy(clog_signal_policy policy);
 .fi
 .SH DESCRIPTION
 .nf

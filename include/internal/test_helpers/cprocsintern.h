@@ -24,34 +24,26 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file test_helpers/cprocsintern.h
- * @brief INTERNAL ONLY. The test-only hooks of the procs intern table.
- *
- * src/common.c defines them, and the tests of tests/common use them to count,
- * empty and slow down the slots of the table.
- *
- * All of it exists only in a build that defines RUNNING_UNIT_TESTS. Every test
- * suite defines it and the shipped library never does, so none of this is
- * installed or exported.
- */
+// Internal: the test-only hooks of the procs intern table. src/common.c
+// defines them and tests/common uses them to count, empty and slow down the
+// slots. They exist only under RUNNING_UNIT_TESTS.
 
 #include <internal/cprocsintern.h>
 
 #ifdef RUNNING_UNIT_TESTS
-/* How many slots hold a copy. */
-size_t _ccol_procs_intern_used_for_tests(void);
-/* Empties every slot from index keep onward. Tests call it only while no
- * object holds a pointer into those slots. */
-void _ccol_procs_intern_truncate_for_tests(size_t keep);
-/* While this is non-zero, a thread that claims a slot sleeps for this many
- * microseconds before writing the copy, so a test can have other threads run
- * into the slot while it's being written. */
-extern _Atomic unsigned _ccol_procs_intern_claim_delay_us_for_tests;
-/* How many times a lookup met a slot that another thread was still writing. */
-extern _Atomic unsigned _ccol_procs_intern_writing_sightings_for_tests;
-/* While this and the delay are both non-zero, a thread that claims a slot
- * waits until the sightings reach this count before it writes the copy, and
- * the delay only bounds that wait. */
-extern _Atomic unsigned _ccol_procs_intern_claim_wait_sightings_for_tests;
+// Gives how many slots of the intern table hold a copy, so a test can check
+// that a content takes exactly one slot.
+size_t ccol__procs_intern_used_for_tests(void);
+// Empties every slot from index keep onward, so tests can fill the table
+// without leaving it full for later tests. Call it only while no object holds
+// a pointer into those slots.
+void ccol__procs_intern_truncate_for_tests(size_t keep);
+// While non-zero, a thread that claims a slot sleeps this many microseconds
+// before it writes the copy, so other threads run into a slot being written.
+extern _Atomic unsigned ccol__procs_intern_claim_delay_us_for_tests;
+// How many times a lookup met a slot that another thread was still writing.
+extern _Atomic unsigned ccol__procs_intern_writing_sightings_for_tests;
+// While this and the delay are both non-zero, a claiming thread waits until
+// the sightings reach this count before it writes; the delay bounds the wait.
+extern _Atomic unsigned ccol__procs_intern_claim_wait_sightings_for_tests;
 #endif /* RUNNING_UNIT_TESTS */

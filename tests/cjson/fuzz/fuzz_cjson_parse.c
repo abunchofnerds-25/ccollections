@@ -22,38 +22,25 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/*
- * A libFuzzer target for the JSON parser of cjson.c, cjson_parse_n_mp(),
- * that also covers the DOM's two serializers and cjson_clone(). It drives
- * all of them directly from whatever DOM shape the parser builds out of the
- * fuzz input, so a run does more than exercise the parser. A document that
- * is malformed but that the parser accepted goes back out through
- * cjson_serialize() and cjson_serialize_pretty(), and we also check that
- * cjson_clone() doesn't crash on such a document.
- *
- * fuzz_cjson_path.c is the sibling target. It covers the OTHER hand-written
- * parser of cjson, the dot-separated path navigation grammar that
- * cjson_get(), cjson_set() and cjson_delete() read, and this target never
- * gets there.
- */
-
+// A libFuzzer target for cjson_parse_n_mp() that also drives both serializers
+// and cjson_clone() on whatever DOM the parser builds, and checks that every
+// rendering parses back to the same document. fuzz_cjson_path.c covers the path
+// grammar, which this target never reaches.
 #include <cjson.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* Re-parses text that this library just emitted. A failure here is a defect
- * in the library and never in the fuzz input, because the input was already
- * accepted and this text is our own rendering of that document. Calling the
- * serializer alone would only catch a serializer that CRASHES, and not one
- * that emits text which looks well formed but which the matching parser
- * then refuses. In production that disagreement is silent: a caller stores
- * the serialized form, reads it back and gets a parse error for a document
- * this library wrote. */
+// Re-parses text that the library just emitted and aborts when it doesn't parse
+// or doesn't give the same compact rendering (every member, key byte, value and
+// member order) as the first parse, compact. style names the rendering in the
+// report. A failure is always a library defect: the input was already accepted
+// and the text is our own rendering of it. A NULL text means an allocation
+// failed and is skipped.
 static void assert_reparses(const char *style, const char *text,
                             const char *compact) {
-  if (!text) return; /* an allocation failed; that is not a round-trip fault */
+  if (!text) return;
   char *err = NULL;
   cjson again = cjson_parse(text, &err);
   if (!again) {
@@ -63,12 +50,6 @@ static void assert_reparses(const char *style, const char *text,
             style, err ? err : "(no error string)", text);
     abort();
   }
-  /* The text must also mean the same document, so we compare the compact
-   * rendering of the re-parsed tree with the compact rendering of the first
-   * one. Every member, every key byte, every value and the order of the
-   * members needs to survive. A parser that repairs or merges what it reads,
-   * or a serializer that changes a value, fails here even though the
-   * re-parse above succeeds. */
   char *again_compact = cjson_serialize(again);
   if (again_compact && compact && strcmp(again_compact, compact) != 0) {
     fprintf(stderr,
@@ -81,6 +62,8 @@ static void assert_reparses(const char *style, const char *text,
   cjson_destroy(again);
 }
 
+// The entry point libFuzzer calls with each input: parses it and round-trips
+// the compact, pretty and cloned forms through assert_reparses().
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   char *err = NULL;
   cjson root = cjson_parse_n_mp((const char *)data, size, &err, NULL);

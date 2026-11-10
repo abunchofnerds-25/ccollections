@@ -31,9 +31,9 @@ cbmap_construct_full_scoped(3).
 .nf
 hm_name                 The map handle that the caller declared earlier,
                         which receives the new map
-mmgmt_procs             Pointer to a ccol_memmgmt_procs_t, or NULL for the
+mmgmt_procs             Pointer to a ccol_memmgmt_procs, or NULL for the
                         default allocator
-custom_comparison_proc  A ccol_comparison_proc_t, or NULL for the
+custom_comparison_proc  A ccol_comparison_proc, or NULL for the
                         default order for the declared key type
 .fi
 .SH RETURN VALUE
@@ -57,10 +57,10 @@ replaces.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through _ccol_fatal_err() if the creation
+The macro stops the program through ccol__fatal_err() if the creation
 fails.
 
-If the caller passes a ccol_memmgmt_procs_t, none of its four members may
+If the caller passes a ccol_memmgmt_procs, none of its four members may
 be NULL. The map copies the procedures into itself, but the procedures and
 the comparison procedure must stay callable for the whole life of the map.
 
@@ -72,7 +72,7 @@ by the type-inferred macros alone.
 .fi
 .SH EXAMPLES
 .nf
-ccol_memmgmt_procs_t procs = {
+ccol_memmgmt_procs procs = {
     .malloc = my_malloc, .calloc = my_calloc,
     .realloc = my_realloc, .free = my_free,
 };

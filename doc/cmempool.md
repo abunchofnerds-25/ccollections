@@ -78,7 +78,7 @@ The message is a static string, so don't free it.
 
 The pool gets its memory from `malloc` and `free`. To give it your own
 allocator, call `cmempool_create_mp()` instead: it takes the same arguments
-and a `ccol_memmgmt_procs_t *` just before the error pointer. Every
+and a `ccol_memmgmt_procs *` just before the error pointer. Every
 constructor of this module comes in these two forms.
 
 `cmempool_free_entry()` and `cmempool_destroy()` are macros that
@@ -511,7 +511,7 @@ it has no reserve.
 
 ## Using a pool as the allocator of other containers
 
-Every container in this library takes a `ccol_memmgmt_procs_t *`, and a
+Every container in this library takes a `ccol_memmgmt_procs *`, and a
 pool (usually a ranged one) can supply the functions behind it. The full
 pattern is in [Memory management](memory.md).
 

@@ -22,13 +22,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Pool creation in a process that has no thread-specific key left to give.
- * A pool's workers record themselves on a key of this module, and that key
- * is what makes a task that destroys its own pool fail loudly instead of
- * freeing the pool under its own worker. A pool that can't get the key must
- * therefore not be created at all. The key is created once per process, so
- * this runs in its own binary where no other cthrpool call comes first. */
-
+// Pool creation in a process with no thread-specific key left. Workers mark
+// themselves on a key of this module, which is what makes a task that destroys
+// its own pool fail loudly, so a pool that can't get the key must not be
+// created. The key is created once per process, so this runs in its own binary
+// where no other cthrpool call comes first.
 #include <cthreadpool.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -37,23 +35,28 @@ SOFTWARE.
 
 TAU_MAIN()
 
+// Counts the calls of app_destructor, the destructor of the test's own key.
 static atomic_int app_destructor_calls;
 
+// Counts its calls; it must never run, since a worker that set its pool on the
+// test's key by mistake would make it run at thread exit.
 static void app_destructor(void *value) {
   (void)value;
   atomic_fetch_add(&app_destructor_calls, 1);
 }
 
+// A task that does nothing, submitted to a pool that the create
+// should have refused.
 static void noop_task(void *arg) { (void)arg; }
 
+// The keys the test takes to use up every key of the process.
 enum { MAX_TEST_KEYS = 65536 };
 static pthread_key_t exhausted[MAX_TEST_KEYS];
 
-/* If the pool ignored the failure to create its key, the create would
- * succeed and the workers would set their pool on whatever key the unset
- * key variable happens to name. That is somebody else's key (here the one
- * this test created first), and its destructor would get the pool when each
- * worker exits. */
+// Without the check, the create succeeds and the workers set their pool on
+// whatever key the unset key variable names, here the test's own key, whose
+// destructor then gets the pool. The failure must also stay after the keys are
+// free again, since the module never retries the key.
 TEST(cthrpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
   pthread_key_t app_key;
   int app_key_ok = pthread_key_create(&app_key, app_destructor) == 0;
@@ -62,7 +65,6 @@ TEST(cthrpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
 
   char *err = NULL;
   cthrpool p = cthrpool_create(1, 0, &err);
-  /* cthrpool_destroy clears the handle, so we keep the outcome first. */
   int created = p != CTHRPOOL_NULL;
   if (created) {
     cthrpool_submit(p, noop_task, NULL, NULL);
@@ -70,8 +72,6 @@ TEST(cthrpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
     cthrpool_destroy(p);
   }
 
-  /* The keys are free again but the failure stays, because the module
-   * doesn't try to create its key a second time in this process. */
   for (int i = 0; i < n; i++) pthread_key_delete(exhausted[i]);
   char *err_again = NULL;
   cthrpool again = cthrpool_create(1, 0, &err_again);

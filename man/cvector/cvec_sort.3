@@ -64,7 +64,7 @@ accepts every element type and falls back to byte-wise equality, because
 equality can come from the bytes of an element but an order can't.
 
 When the internal temporary buffer of the sort can't be allocated, the
-macro calls _ccol_fatal_err(), as every other type-inferred macro in
+macro calls ccol__fatal_err(), as every other type-inferred macro in
 cvector.h that changes a vector does (cvec_push, cvec_reserve,
 cvec_append_array and the others). The vector is then left completely
 unsorted.

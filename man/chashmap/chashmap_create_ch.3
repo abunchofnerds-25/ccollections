@@ -9,7 +9,7 @@ C Collections (libccollections, \-lccollections)
 
 chmap chashmap_create_ch(size_t initial_bucket_array_size,
                          ccol_data_type key_type, ccol_data_type val_type,
-                         ccol_hashing_proc_t custom_hashing_proc, char **err);
+                         ccol_hashing_proc custom_hashing_proc, char **err);
 .fi
 .SH DESCRIPTION
 .nf
@@ -66,7 +66,7 @@ NULL on failure, with *err set to an error string when err is non-NULL.
 .SH NOTES
 .nf
 A failure is reported, not fatal; the chmap_construct_ch(3) macro layer
-calls _ccol_fatal_err() instead
+calls ccol__fatal_err() instead
 .fi
 .SH "SEE ALSO"
 .BR chashmap_create (3),

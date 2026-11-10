@@ -113,11 +113,12 @@ build_tsan:
 # its own process must never open a logger before its forked scenarios run.
 # nesting_probe.c is compiled twice and never run. The first build nests the
 # logging macros inside the arguments of other macros under -Wshadow, so a
-# local hidden by a nested expansion becomes a hard error. The second build
+# local hidden by a nested expansion becomes a hard error, and under
+# -Wcast-qual, so no expansion drops a const qualifier in a caller's build. The second build
 # is strict ISO C11 with -pedantic-errors, where a call with a format and no
 # argument after it has to compile.
 nesting_probe:
-	$(CC) $(INCLUDES) $(DEFINITIONS) -std=gnu11 -Wall -Wextra -Wshadow -Werror \
+	$(CC) $(INCLUDES) $(DEFINITIONS) -std=gnu11 -Wall -Wextra -Wshadow -Wcast-qual -Werror \
 		-fsyntax-only nesting_probe.c
 	$(CC) $(INCLUDES) $(DEFINITIONS) -DCLOGGER_PROBE_STRICT -std=c11 \
 		-pedantic-errors -Wall -Wextra -Werror -fsyntax-only nesting_probe.c
@@ -132,7 +133,7 @@ test: build nesting_probe
 # fork_safety.* group, and some of them create new pthreads in the child.
 # When the parent has several threads at the moment of the fork(),
 # ThreadSanitizer's default of die_after_fork=1 can make such a child exit
-# normally, so it never reaches its expected _ccol_fatal_err() or SIGABRT and
+# normally, so it never reaches its expected ccol__fatal_err() or SIGABRT and
 # never drives the forked thread at all. The comment on the test_tsan target
 # of tests/chttpclient/Makefile gives the exact mechanism.
 # suppressions=tsan_atfork_lock_order.supp is needed too, because the

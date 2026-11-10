@@ -53,8 +53,8 @@ The macro then rounds the stride of each element up to the same
   buffer declared here names an object that the library defines under
   the name of the setting it was built with, so a mismatch shows up as
   an undefined reference at link time (to
-  _cmempool_built_with_fast_layout or to
-  _cmempool_built_with_compact_layout) and never as a buffer of the
+  cmempool__built_with_fast_layout or to
+  cmempool__built_with_compact_layout) and never as a buffer of the
   wrong size at run time. The two settings differ only for an element
   size that is not already a power of two. With either one the stride
   matches cmempool_create_from_preallocated_buffer_mp() exactly, so

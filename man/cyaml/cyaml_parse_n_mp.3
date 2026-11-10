@@ -8,7 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/cyaml.h>
 
 cyaml cyaml_parse_n_mp(const char *yaml_str, size_t len,
-                       char **err_str, ccol_memmgmt_procs_t *mp);
+                       char **err_str, ccol_memmgmt_procs *mp);
 cyaml cyaml_parse_n(const char *yaml_str, size_t len, char **err_str);
 .fi
 .SH DESCRIPTION

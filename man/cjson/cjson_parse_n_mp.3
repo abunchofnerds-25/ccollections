@@ -8,7 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/cjson.h>
 
 cjson cjson_parse_n_mp(const char *json_str, size_t len,
-                       char **err_str, ccol_memmgmt_procs_t *mp);
+                       char **err_str, ccol_memmgmt_procs *mp);
 /* convenience wrapper; default allocator */
 static inline cjson cjson_parse_n(const char *json_str, size_t len,
                                   char **err_str);

@@ -22,32 +22,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/*
- * A libFuzzer target for cjson's path navigation grammar, that is the
- * dot-separated component syntax of plain keys, '#N' list indices and the
- * '\.' and '\\' escapes, which the "Path syntax" section of cjson.h
- * describes. _cjson_get(), cjson_set() and _cjson_delete() read it through
- * navigate(), path_find_unescaped_dot(), path_find_last_unescaped_dot(),
- * path_unescape_component() and parse_list_index_component() in cjson.c.
- * It's a second hand-written parser in this module, separate from the JSON
- * grammar that fuzz_cjson_parse.c already covers. So this target parses one
- * JSON document once and then fuzzes the PATH string, navigating, changing
- * and deleting against that document over and over.
- *
- * The target splits the fuzz input on the first NUL byte. Everything before
- * that byte is parsed as JSON, and that half draws on the same seed material
- * as the fuzz_cjson_parse corpus, so a mutation can explore malformed JSON
- * and malformed paths together. Everything after the byte is the path
- * string, byte for byte. An input with no NUL byte or with an empty path is
- * skipped, since it adds nothing that fuzz_cjson_parse doesn't already
- * cover.
- */
-
+// A libFuzzer target for the path grammar of cjson (dot-separated keys, #N list
+// indices, the \. and \\ escapes) that cjson_get(), cjson_set() and
+// cjson_delete() read. The input is split on its first NUL byte: the part
+// before it is parsed as JSON (it shares seed material with fuzz_cjson_parse),
+// and the part after it is the path, byte for byte. An input with no NUL or an
+// empty path adds nothing and is skipped.
 #include <cjson.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+// The entry point libFuzzer calls with each input: parses the JSON half, then
+// gets, sets and deletes the path half on it. The last byte of the input picks
+// the C type that cjson_set() receives, so a saved crash replays the same
+// branch.
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   const uint8_t *nul = memchr(data, 0, size);
   if (!nul) return 0;
@@ -72,10 +61,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   cjson got = cjson_get(root, path);
   (void)got;
 
-  /* Drive every C type that cjson_set() accepts and not just one of them.
-   * The last byte of the fuzz input picks the type, and since that choice
-   * is deterministic a saved crash takes the same branch when it's
-   * replayed. */
   switch (path_bytes[path_len - 1] % 5) {
     case 0:
       cjson_set(root, path, (long long)42);

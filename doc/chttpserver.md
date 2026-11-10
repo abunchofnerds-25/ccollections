@@ -23,8 +23,8 @@ also sit in front of this one.
 ```
 
 The header includes `chttp.h`, which holds the types that the server shares
-with the [HTTP client](chttpclient.md): `chttp_method_t`, the
-`CHTTP_STATUS_*` constants and `chttp_tls_config_t`. The module depends on
+with the [HTTP client](chttpclient.md): `chttp_method`, the
+`CHTTP_STATUS_*` constants and `chttp_tls_config`. The module depends on
 OpenSSL, and [Building](building.md) explains that dependency and how to
 build the library without the HTTP modules.
 
@@ -38,7 +38,7 @@ This server answers `GET /hello` and stops when you press Ctrl-C:
 #include <stdlib.h>
 #include <ccollections/chttpserver.h>
 
-static void hello(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
+static void hello(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     (void)ctx;
     const char *name = NULL;
     if (chttpsvr_req_query_one(req, "name", &name) != ccol_success || !name)
@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
     chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
     if (srv == CHTTPSVR_NULL) return 1;
 
-    chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+    chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = "127.0.0.1";
     cfg.port = argc > 1 ? (uint16_t)atoi(argv[1]) : 8080;
     if (chttpsvr_register_handler(srv, CHTTP_GET, "/hello", hello, NULL) !=
@@ -135,11 +135,11 @@ valid until your handler returns, so copy whatever you need to keep.
 
 ## Configure the listener
 
-`chttpsvr_config_t` holds all the settings. Start from
+`chttpsvr_config` holds all the settings. Start from
 `CHTTPSVR_CONFIG_DEFAULT` and change only what you need:
 
 ```c
-chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
 cfg.host = "127.0.0.1";            /* loopback only */
 cfg.port = 8443;
 cfg.worker_thread_count = 8;       /* default: one per CPU core */
@@ -167,7 +167,7 @@ a service that announces its address somewhere else. Once `chttpsvr_start`
 has returned you can ask the server which port it got:
 
 ```c
-chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
 cfg.host = "127.0.0.1";
 cfg.port = 0;
 if (chttpsvr_start(srv, &cfg) == ccol_success) {
@@ -211,14 +211,14 @@ gets `404 Not Found`. A path that matches but with a method that no route
 accepts gets `405 Method Not Allowed` with an `Allow` header. A `GET` route
 also answers `HEAD`: your handler runs as it would for `GET` and the server
 sends the headers without the body. And a method that isn't one of the
-seven methods of `chttp_method_t` (`TRACE`, for example) gets
+seven methods of `chttp_method` (`TRACE`, for example) gets
 `501 Not Implemented`.
 
 `CHTTP_ANY` registers one handler for every method of a pattern, and
 `chttpsvr_req_method(req)` tells you which method came in. The server tries
 the routes of a router in the order you registered them, so register the
 specific methods before a `CHTTP_ANY` fallback on the same pattern. A
-registration with any other value of `chttp_method_t` fails with
+registration with any other value of `chttp_method` fails with
 `ccol_invalid_args`.
 
 A pattern has to start with `/`, must not end with `/` and must not contain
@@ -232,7 +232,7 @@ running. The complete matching rules are in
 ## Read the request
 
 ```c
-chttp_method_t m    = chttpsvr_req_method(req);
+chttp_method m    = chttpsvr_req_method(req);
 const char *path    = chttpsvr_req_path(req);        /* decoded, no query */
 const char *ctype   = chttpsvr_req_header(req, "content-type");  /* any case */
 const char *id      = chttpsvr_req_param(req, "id");
@@ -307,8 +307,8 @@ on. It either calls `next` to continue, or answers the request itself and
 returns:
 
 ```c
-static void require_api_key(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
-                            void *ctx, chttpsvr_next_fn_t next) {
+static void require_api_key(chttpsvr_req *req, chttpsvr_resp *resp,
+                            void *ctx, chttpsvr_next_fn next) {
     const char *key = chttpsvr_req_header(req, "x-api-key");
     if (!key || strcmp(key, ctx) != 0) {
         chttpsvr_resp_set_status(resp, CHTTP_STATUS_UNAUTHORIZED);
@@ -325,7 +325,7 @@ log or a rate limiter written as middleware sees that traffic as well.
 A sub-router groups routes under a path prefix and has its own middleware:
 
 ```c
-chttpsvr_router_t *admin = chttpsvr_subrouter(srv, "/admin");
+chttpsvr_router *admin = chttpsvr_subrouter(srv, "/admin");
 chttpsvr_router_use(admin, require_api_key, "s3cret");
 chttpsvr_router_on(admin, CHTTP_GET,  "/stats",  show_stats,  NULL);  /* /admin/stats */
 chttpsvr_router_on(admin, CHTTP_POST, "/reload", reload_conf, NULL);  /* /admin/reload */
@@ -358,8 +358,8 @@ overwrite each other's values:
 ```c
 static const char user_key;   /* only its address matters */
 
-static void authenticate(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
-                         void *ctx, chttpsvr_next_fn_t next) {
+static void authenticate(chttpsvr_req *req, chttpsvr_resp *resp,
+                         void *ctx, chttpsvr_next_fn next) {
     const user_t *user = find_user(ctx, chttpsvr_req_header(req, "x-api-key"));
     if (!user) {
         chttpsvr_resp_set_status(resp, CHTTP_STATUS_UNAUTHORIZED);
@@ -373,7 +373,7 @@ static void authenticate(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
     next(req, resp);
 }
 
-static void show_stats(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
+static void show_stats(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     (void)ctx;
     const user_t *user = chttpsvr_req_context(req, &user_key);
     chttpsvr_resp_printf(resp, "stats for %s", user->name);
@@ -419,16 +419,16 @@ typedef struct {
 
 /* ---- middleware ---------------------------------------------------- */
 
-static void access_log(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
-                       chttpsvr_next_fn_t next) {
+static void access_log(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
+                       chttpsvr_next_fn next) {
     (void)ctx;
     fprintf(stderr, "%s %s\n", chttp_method_str(chttpsvr_req_method(req)),
             chttpsvr_req_path(req));
     next(req, resp);   /* also runs for 404 and 405 answers */
 }
 
-static void require_token(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
-                          void *ctx, chttpsvr_next_fn_t next) {
+static void require_token(chttpsvr_req *req, chttpsvr_resp *resp,
+                          void *ctx, chttpsvr_next_fn next) {
     const char *expected = ctx;
     const char *auth = chttpsvr_req_header(req, "authorization");
     if (!auth || strcmp(auth, expected) != 0) {
@@ -442,7 +442,7 @@ static void require_token(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
 
 /* ---- handlers ------------------------------------------------------ */
 
-static void send_json(chttpsvr_resp_t *resp, cjson node) {
+static void send_json(chttpsvr_resp *resp, cjson node) {
     char *text = cjson_serialize(node);
     if (!text) {
         chttpsvr_resp_set_status(resp, CHTTP_STATUS_INTERNAL_ERROR);
@@ -452,7 +452,7 @@ static void send_json(chttpsvr_resp_t *resp, cjson node) {
     cjson_serialize_free(text);
 }
 
-static void list_notes(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
+static void list_notes(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     (void)req;
     store_t *st = ctx;
     pthread_mutex_lock(&st->lock);
@@ -460,7 +460,7 @@ static void list_notes(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     pthread_mutex_unlock(&st->lock);
 }
 
-static void get_note(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
+static void get_note(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     store_t *st = ctx;
     const char *id = chttpsvr_req_param(req, "id");
     pthread_mutex_lock(&st->lock);
@@ -472,7 +472,7 @@ static void get_note(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     pthread_mutex_unlock(&st->lock);
 }
 
-static void put_note(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
+static void put_note(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     store_t *st = ctx;
     size_t len = 0;
     const char *body = chttpsvr_req_body(req, &len);
@@ -486,7 +486,7 @@ static void put_note(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     }
     pthread_mutex_lock(&st->lock);
     bool existed = cjson_dictionary_get(st->notes, chttpsvr_req_param(req, "id"));
-    ccol_retval_t rv = cjson_dictionary_set(st->notes,
+    ccol_retval rv = cjson_dictionary_set(st->notes,
                                             chttpsvr_req_param(req, "id"), doc);
     pthread_mutex_unlock(&st->lock);
     if (rv == ccol_invalid_args) {
@@ -500,17 +500,17 @@ static void put_note(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     }
 }
 
-static void delete_note(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
+static void delete_note(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     store_t *st = ctx;
     pthread_mutex_lock(&st->lock);
-    ccol_retval_t rv = cjson_dictionary_remove(st->notes,
+    ccol_retval rv = cjson_dictionary_remove(st->notes,
                                                chttpsvr_req_param(req, "id"));
     pthread_mutex_unlock(&st->lock);
     chttpsvr_resp_set_status(resp, rv == ccol_success ? CHTTP_STATUS_NO_CONTENT
                                                       : CHTTP_STATUS_NOT_FOUND);
 }
 
-static void shutdown_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+static void shutdown_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                              void *ctx) {
     (void)req; (void)ctx;
     chttpsvr_resp_write_str(resp, "bye\n");
@@ -537,7 +537,7 @@ int main(int argc, char **argv) {
 
     /* Any registration can fail, and a server without its token guard must
        not start, so check the result of every registration. */
-    chttpsvr_router_t *api = chttpsvr_subrouter(srv, "/api/v1");
+    chttpsvr_router *api = chttpsvr_subrouter(srv, "/api/v1");
     bool ok =
         chttpsvr_use(srv, access_log, NULL) == ccol_success && api &&
         chttpsvr_router_use(api, require_token, "Bearer secret") == ccol_success &&
@@ -548,7 +548,7 @@ int main(int argc, char **argv) {
         chttpsvr_register_handler(srv, CHTTP_POST, "/admin/shutdown",
                                   shutdown_handler, NULL) == ccol_success;
 
-    chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+    chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = "127.0.0.1";
     cfg.port = argc > 1 ? (uint16_t)atoi(argv[1]) : 8080;
     cfg.max_body_size = 64 * 1024;   /* a note is small; refuse a larger body with 413 */
@@ -624,7 +624,7 @@ uploading the body at all.
 
 static atomic_int uploads_done;
 
-static void upload(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
+static void upload(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     (void)ctx;
     const char *ctype = chttpsvr_req_header(req, "content-type");
     if (ctype && strstr(ctype, "text/html")) {
@@ -644,7 +644,7 @@ static void upload(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     }
 
     if (n < 0) {
-        ccol_retval_t why = chttpsvr_req_stream_error(req);
+        ccol_retval why = chttpsvr_req_stream_error(req);
         if (why == ccol_msg_too_large)
             chttpsvr_resp_set_status(resp, CHTTP_STATUS_PAYLOAD_TOO_LARGE);
         else if (why == ccol_timed_out)
@@ -665,7 +665,7 @@ int main(int argc, char **argv) {
     chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
     if (srv == CHTTPSVR_NULL) return 1;
 
-    chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+    chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = "127.0.0.1";
     cfg.port = argc > 1 ? (uint16_t)atoi(argv[1]) : 8080;
     cfg.max_body_size = 0;                /* no size limit for this route */
@@ -752,11 +752,11 @@ accident. To turn one of them off, use a named constant such as
 
 ## TLS and client certificates
 
-Point `cfg.tls` at a `chttp_tls_config_t` with a certificate and a key and
+Point `cfg.tls` at a `chttp_tls_config` with a certificate and a key and
 the server speaks HTTPS:
 
 ```c
-chttp_tls_config_t tls = {
+chttp_tls_config tls = {
     .cert_path = "/etc/myapp/server.crt",
     .key_path  = "/etc/myapp/server.key",
 };
@@ -802,7 +802,7 @@ static void count_request(void) {
         chttpsvr_engine_stop();
 }
 
-static void public_page(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
+static void public_page(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     (void)ctx;
     /* NULL for a client without a verified certificate. */
     const char *who = chttpsvr_req_peer_cert_subject(req);
@@ -810,7 +810,7 @@ static void public_page(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
     count_request();
 }
 
-static void private_page(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx) {
+static void private_page(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     (void)ctx;
     unsigned char fp[CHTTPSVR_PEER_CERT_SHA256_LEN];
     const char *who = chttpsvr_req_peer_cert_subject(req);
@@ -835,7 +835,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s PORT CERT KEY CLIENT_CA\n", argv[0]);
         return 2;
     }
-    chttp_tls_config_t tls = {
+    chttp_tls_config tls = {
         .cert_path = argv[2],
         .key_path = argv[3],
         .ca_bundle_path = argv[4],     /* turns on client certificates */
@@ -845,7 +845,7 @@ int main(int argc, char **argv) {
     chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
     if (srv == CHTTPSVR_NULL) return 1;
 
-    chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+    chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = "127.0.0.1";
     cfg.port = (uint16_t)atoi(argv[1]);
     cfg.tls = &tls;
@@ -874,7 +874,7 @@ curl --cacert ca.crt --cert alice.crt --key alice.key \
 ```
 
 The bundle may also contain certificate revocation lists, and the server
-then applies them. The fields of `chttp_tls_config_t` are explained in the
+then applies them. The fields of `chttp_tls_config` are explained in the
 [HTTP client guide](chttpclient.md) and in
 [CHTTP_TLS_DEFAULT(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_TLS_DEFAULT.3.html).
 

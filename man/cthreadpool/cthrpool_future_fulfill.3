@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadpool.h>
 
-ccol_retval_t cthrpool_future_fulfill(cthrpool_future_t *f, void *result);
+ccol_retval cthrpool_future_fulfill(cthrpool_future *f, void *result);
 .fi
 .SH DESCRIPTION
 .nf

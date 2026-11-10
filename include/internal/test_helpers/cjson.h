@@ -24,40 +24,28 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file test_helpers/cjson.h
- * @brief INTERNAL ONLY. The test-only hooks of cjson.
- *
- * src/cjson.c defines these hooks and the cjson tests use them to read the
- * node pool and to count work that the public API doesn't show.
- *
- * All of it exists only in a build that defines RUNNING_UNIT_TESTS. Every test
- * suite defines it and the shipped library never does, so none of this is
- * installed or exported.
- */
-
+// INTERNAL ONLY. The test-only hooks of cjson, defined in src/cjson.c. They
+// exist only in a build with RUNNING_UNIT_TESTS, which the shipped library
+// never defines.
 #include <cjson.h>
 #include <stdatomic.h>
 
 #ifdef RUNNING_UNIT_TESTS
-/* How many strings the UTF-8 check of a C string has checked, over all
- * threads. */
-extern atomic_ulong _cjson_utf8_cstr_checks_for_tests;
+// How many C strings the UTF-8 check has checked, over all threads.
+extern atomic_ulong cjson__utf8_cstr_checks_for_tests;
 
-/* How many nodes the cycle check of cjson_list_push() and
- * cjson_dictionary_set() has visited, over all threads. A test reads it
- * before and after a series of inserts to count the work of the search. */
-extern atomic_ulong _cjson_cycle_search_nodes_for_tests;
+// How many nodes the cycle check of cjson_list_push() and
+// cjson_dictionary_set() has visited, over all threads.
+extern atomic_ulong cjson__cycle_search_nodes_for_tests;
 
-/* How many times any thread has taken the pool key lock to arm the key. */
-extern atomic_ulong _cjson_pool_key_lock_count_for_tests;
+// How many times any thread took the pool key lock to arm the key.
+extern atomic_ulong cjson__pool_key_lock_count_for_tests;
 
-/* How many nodes the pools of all threads hold together. A pool that a thread
- * leaves behind at exit stays in this count. */
-extern atomic_long _cjson_pool_population_for_tests;
+// How many nodes the pools of all threads hold together. A pool that a thread
+// leaves behind at exit stays in the count.
+extern atomic_long cjson__pool_population_for_tests;
 
-/* The size of the node-pool free list of the calling thread, so a test can
- * check how the pool evicts a node at its cap and that one thread doesn't
- * see the pool of another. */
+// Gives the size of the calling thread's node pool, so the white-box tests can
+// check the cap and that threads don't share a pool.
 size_t cjson_debug_pool_size(void);
-#endif /* RUNNING_UNIT_TESTS */
+#endif

@@ -159,7 +159,7 @@ typedef struct {
  * drain the harness would stop the process on the very path it was written to
  * survive. */
 static void q_drain(q_state_t *st) {
-  cmessage_t out = {0};
+  cmessage out = {0};
   /* There's no channel arm here. A channel routes by thread identity, so the
    * teardown thread can't receive from the side its peer sent into, and no
    * arm is needed anyway: the one case that uses a channel sends exactly as
@@ -246,9 +246,9 @@ static void *chan_setup(size_t n) {
 
 static void circq_roundtrip_run(void *state, size_t n) {
   q_state_t *st = state;
-  cmessage_t msg = {.data = st->payload, .size = st->payload_size};
+  cmessage msg = {.data = st->payload, .size = st->payload_size};
   for (size_t i = 0; i < n; i++) {
-    cmessage_t out = {0};
+    cmessage out = {0};
     if (ccircq_send(st->cq, &msg) != ccol_success)
       bench_die("circular queue send failed");
     if (ccircq_recv(st->cq, &out) != ccol_success)
@@ -264,9 +264,9 @@ static void circq_roundtrip_run(void *state, size_t n) {
 
 static void dynq_roundtrip_run(void *state, size_t n) {
   q_state_t *st = state;
-  cmessage_t msg = {.data = st->payload, .size = st->payload_size};
+  cmessage msg = {.data = st->payload, .size = st->payload_size};
   for (size_t i = 0; i < n; i++) {
-    cmessage_t out = {0};
+    cmessage out = {0};
     if (cdynmq_send(st->dq, &msg) != ccol_success)
       bench_die("dynamic queue send failed");
     if (cdynmq_recv(st->dq, &out) != ccol_success)
@@ -292,7 +292,7 @@ typedef struct {
 static void *chan_peer_consumer(void *arg) {
   chan_arg_t *a = arg;
   for (size_t i = 0; i < a->n; i++) {
-    cmessage_t out = {0};
+    cmessage out = {0};
     if (cchan_recv(a->ch, &out) != ccol_success)
       bench_die("channel receive failed");
     bench_sink(out.data);
@@ -313,7 +313,7 @@ static void chan_pc_run(void *state, size_t n) {
   if (pthread_create(&peer, NULL, chan_peer_consumer, &arg) != 0)
     bench_die("channel peer thread could not be started");
   for (size_t i = 0; i < n; i++) {
-    cmessage_t msg = {.data = st->payload, .size = st->payload_size};
+    cmessage msg = {.data = st->payload, .size = st->payload_size};
     if (cchan_send(st->ch, &msg) != ccol_success)
       bench_die("channel send failed");
   }
@@ -348,8 +348,8 @@ static void *pc_producer(void *arg) {
    * nothing gets allocated inside the measured loop. A fresh allocation per
    * message would measure the allocator and not the queue. */
   for (size_t i = 0; i < a->n; i++) {
-    cmessage_t msg = {.data = a->seed_payload, .size = BENCH_MSG_SIZE};
-    ccol_retval_t r = ccircq_send(a->cq, &msg);
+    cmessage msg = {.data = a->seed_payload, .size = BENCH_MSG_SIZE};
+    ccol_retval r = ccircq_send(a->cq, &msg);
     if (r == ccol_not_permitted) break;
     if (r != ccol_success) bench_die("circular queue send failed");
   }
@@ -359,7 +359,7 @@ static void *pc_producer(void *arg) {
 static void *pc_consumer(void *arg) {
   pc_arg_t *a = arg;
   for (size_t i = 0; i < a->n; i++) {
-    cmessage_t out = {0};
+    cmessage out = {0};
     if (ccircq_recv(a->cq, &out) != ccol_success)
       bench_die("circular queue receive failed");
     bench_sink(out.data);
@@ -591,9 +591,9 @@ static void *dynq_mt_setup(size_t n, unsigned threads) {
 static void circq_roundtrip_mt_run(void *state, size_t n) {
   q_mt_state_t *st = state;
   void **mine = &st->payloads[bench_thread_index()];
-  cmessage_t msg = {.data = *mine, .size = BENCH_MSG_SIZE};
+  cmessage msg = {.data = *mine, .size = BENCH_MSG_SIZE};
   for (size_t i = 0; i < n; i++) {
-    cmessage_t out = {0};
+    cmessage out = {0};
     if (ccircq_send(st->q->cq, &msg) != ccol_success)
       bench_die("circular queue send failed");
     if (ccircq_recv(st->q->cq, &out) != ccol_success)
@@ -607,9 +607,9 @@ static void circq_roundtrip_mt_run(void *state, size_t n) {
 static void dynq_roundtrip_mt_run(void *state, size_t n) {
   q_mt_state_t *st = state;
   void **mine = &st->payloads[bench_thread_index()];
-  cmessage_t msg = {.data = *mine, .size = BENCH_MSG_SIZE};
+  cmessage msg = {.data = *mine, .size = BENCH_MSG_SIZE};
   for (size_t i = 0; i < n; i++) {
-    cmessage_t out = {0};
+    cmessage out = {0};
     if (cdynmq_send(st->q->dq, &msg) != ccol_success)
       bench_die("dynamic queue send failed");
     if (cdynmq_recv(st->q->dq, &out) != ccol_success)

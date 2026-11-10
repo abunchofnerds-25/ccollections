@@ -7,11 +7,11 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chashmap.h>
 
-chmap_redeclare(hm_name, key_t, val_t);
+chmap_redeclare(hm_name, KeyT, ValT);
 .fi
 .SH DESCRIPTION
 .nf
-Declares the companion type variables that carry key_t and val_t for a
+Declares the companion type variables that carry KeyT and ValT for a
 hash map handle that already exists. It declares no handle and neither
 creates nor destroys a map; the only thing it declares again is the type
 information that the type-inferred macros need.
@@ -32,8 +32,8 @@ value is a char * that the map stores by contents.
 .SH PARAMETERS
 .nf
 hm_name  Name of the existing map handle
-key_t    Key type the map was created with
-val_t    Value type the map was created with
+KeyT    Key type the map was created with
+ValT    Value type the map was created with
 .fi
 .SH RETURN VALUE
 .nf
@@ -60,7 +60,7 @@ struct that holds the array works
 .nf
 Do not declare a value type whose width differs from the stored one.
 chmap_get(3) and chmap_get_ptr(3) catch such a width at run time, describe
-the size mismatch and stop the program through _ccol_fatal_err(). A
+the size mismatch and stop the program through ccol__fatal_err(). A
 mismatch between two types of the same width goes unnoticed, so the
 types here are a promise that you keep yourself and the compiler does
 not check.
@@ -68,7 +68,7 @@ A key of the wrong width is reported instead of accepted, and the raw
 entry points return ccol_invalid_args for it, because the hash of a key
 and its equality test mean something only at the width the map was
 created for. chmap_get(3) and chmap_insert(3) turn that error into
-_ccol_fatal_err(). chmap_get_ptr(3) and chmap_remove(3) report it
+ccol__fatal_err(). chmap_get_ptr(3) and chmap_remove(3) report it
 without stopping: chmap_get_ptr(3) gives a NULL result and
 chmap_remove(3) gives the return code.
 .fi

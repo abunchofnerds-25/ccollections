@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cjson.h>
 
-void cjson_serialize_free_mp(char *s, ccol_memmgmt_procs_t *mp);
+void cjson_serialize_free_mp(char *s, ccol_memmgmt_procs *mp);
 /* convenience wrapper; default allocator */
 static inline void cjson_serialize_free(char *s);
 .fi

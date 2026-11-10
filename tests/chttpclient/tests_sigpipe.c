@@ -22,23 +22,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* This binary runs with SIGPIPE at its default disposition, which ends the
- * process, and it has to stay a binary of its own: tests.c ignores SIGPIPE for
- * the whole process, and an ignored SIGPIPE is thrown away when it is raised,
- * so a write that raises it can't be seen there.
- *
- * It checks two things. The client, async engine included, leaves the
- * disposition of SIGPIPE the way the application set it, and no write of the
- * client raises SIGPIPE once the server is gone. SIGPIPE is blocked around each
- * operation, so a raised one stays pending instead of killing the process, and
- * a failure is one failed test rather than a dead binary. A Tier 1 write runs
- * on the calling thread, which asks sigpending(2). An async write runs on an
- * engine thread; every such thread inherits the blocked mask of the thread that
- * started the engine, and the test reads the pending set of every thread of the
- * process, from /proc on Linux and from the kern.proc sysctl (one record per
- * thread) on FreeBSD. macOS raises every SIGPIPE on the process, so there the
- * process's pending set is the whole answer.
- */
+// This binary runs with SIGPIPE at its default disposition, so it must stay a
+// binary of its own: tests.c ignores SIGPIPE, and an ignored SIGPIPE is thrown
+// away when it is raised, so nothing could see it there.
+//
+// It checks that the client (the async engine included) leaves the disposition
+// of SIGPIPE as the application set it, and that no client write raises SIGPIPE
+// once the server is gone. SIGPIPE is blocked around each operation, so a
+// raised one stays pending and a failure is one failed test, not a dead binary.
+// A Tier 1 write runs on the calling thread, which asks sigpending(2). An async
+// write runs on an engine thread, which inherits the blocked mask of the thread
+// that started the engine, so the test reads the pending set of every thread of
+// the process.
 
 #include <chttpclient.h>
 #include <dirent.h>
@@ -66,16 +61,22 @@ SOFTWARE.
 
 TAU_MAIN()
 
+// Puts SIGPIPE back to its default action before any test runs, because the
+// tests are about a SIGPIPE that would end the process.
 __attribute__((constructor)) static void _setup(void) {
   signal(SIGPIPE, SIG_DFL);
 }
 
+// Tells whether SIGPIPE has the default action; every test checks that the
+// library left it so.
 static bool _sigpipe_has_default_disposition(void) {
   struct sigaction sa;
   if (sigaction(SIGPIPE, NULL, &sa) != 0) return false;
   return sa.sa_handler == SIG_DFL;
 }
 
+// Blocks SIGPIPE in the calling thread and saves the old mask in *old, so a
+// SIGPIPE raised during a test stays pending instead of ending the process.
 static void _block_sigpipe(sigset_t *old) {
   sigset_t set;
   sigemptyset(&set);
@@ -83,8 +84,9 @@ static void _block_sigpipe(sigset_t *old) {
   pthread_sigmask(SIG_BLOCK, &set, old);
 }
 
-/* Tells whether a SIGPIPE is pending for the calling thread or the process, and
- * consumes it if so. The signal must be blocked. */
+// Tells whether a SIGPIPE is pending for the calling thread or the process,
+// and consumes it if so, so the next test starts clean. SIGPIPE must be
+// blocked.
 static bool _take_pending_sigpipe(void) {
   sigset_t pending;
   sigemptyset(&pending);
@@ -94,17 +96,19 @@ static bool _take_pending_sigpipe(void) {
   return raised;
 }
 
-/* Tells whether any thread of the process, or the process itself, has a SIGPIPE
- * pending. *threads_seen counts the threads read, so a scan that read nothing
- * can't pass for a clean one. */
 #ifdef __FreeBSD__
+// Tells whether any thread of the process, or the process itself, has a SIGPIPE
+// pending; the async test needs it because engine threads do the writes.
+// *threads_seen counts the threads read, so a scan that read nothing can't pass
+// for a clean one. There's one version per system: FreeBSD reads the kern.proc
+// sysctl (one record per thread, with room for threads that start between the
+// two calls) plus sigpending().
 static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   *threads_seen = 0;
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID | KERN_PROC_INC_THREAD,
                 (int)getpid()};
   size_t len = 0;
   if (sysctl(mib, 4, NULL, &len, NULL, 0) != 0) return false;
-  /* Room for threads that start between the two calls. */
   len += 16 * sizeof(struct kinfo_proc);
   struct kinfo_proc *kp = malloc(len);
   if (!kp) return false;
@@ -125,8 +129,8 @@ static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   return found;
 }
 #elif defined(__OpenBSD__)
-/* Each thread's record holds the signals pending for that thread and for the
- * process. */
+// The OpenBSD version: reads every thread's record, which holds the signals
+// pending for that thread and for the process.
 static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   *threads_seen = 0;
   struct kinfo_proc *kp;
@@ -142,9 +146,9 @@ static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   return found;
 }
 #elif defined(__APPLE__)
-/* macOS raises every SIGPIPE on the process and never on a single thread, so
- * whichever thread wrote, the pending set sigpending() gives while the signal
- * is blocked has it. The thread count stands for the threads read. */
+// The macOS version: asks sigpending(), which is the whole answer because
+// macOS raises every SIGPIPE on the process. The thread count stands for the
+// threads read.
 static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   int n = test_thread_count();
   *threads_seen = n > 0 ? n : 0;
@@ -153,6 +157,8 @@ static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   return sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1;
 }
 #else
+// The Linux version: reads SigPnd and ShdPnd of every thread under
+// /proc/self/task.
 static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   unsigned long long bit = 1ULL << (SIGPIPE - 1);
   bool found = false;
@@ -184,16 +190,12 @@ static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
 }
 #endif
 
-/* ========================================================================== */
-/*                A SERVER THAT REFUSES THE BODY OF A REQUEST                 */
-/* ========================================================================== */
-
+// A Unix-socket server that takes one connection and refuses its request body.
+// accepted is set once it read the request head. With hold set it answers
+// nothing and keeps the request in flight until release is set, then closes.
 typedef struct {
   int listen_fd;
-  /* Set once the server has read the request head. */
   atomic_int accepted;
-  /* When true the server leaves the request unanswered until release is set,
-     and then it closes. */
   bool hold;
   atomic_int release;
   char path[64];
@@ -202,7 +204,8 @@ typedef struct {
   bool thread_started;
 } refusing_server;
 
-/* Reads up to the end of the request head, for ten seconds at most. */
+// Reads from c up to the end of the request head, for ten seconds at most, so
+// the refusing server answers only once the client has sent the head.
 static void _read_request_head(int c) {
   char buf[4096];
   size_t total = 0;
@@ -217,7 +220,8 @@ static void _read_request_head(int c) {
   }
 }
 
-/* Reads and throws away until the peer closes, for ten seconds at most. */
+// Reads from c and throws the bytes away until the peer closes, for ten
+// seconds at most, so the refusing server closes only after the client.
 static void _drain_until_eof(int c) {
   char buf[4096];
   for (;;) {
@@ -227,18 +231,13 @@ static void _drain_until_eof(int c) {
   }
 }
 
-/* Accepts one connection and refuses its request body, so the client faces a
-   peer that has stopped reading while it still has body bytes to send.
-
-   It reads the whole head of a request that expects 100-continue, answers 100
-   Continue and shuts its read side down. On a Unix domain socket every later
-   client write then fails with EPIPE (the error that raises SIGPIPE), without a
-   poll of the client seeing an error or a hang-up first. The client sends no
-   body byte before the answer, so its first body write always hits the shut
-   side. After that the server waits for the client to close.
-
-   With hold set it answers nothing at all and keeps the request in flight until
-   release is set, then closes. */
+// Runs a refusing_server: reads the head of a request that expects
+// 100-continue, answers 100 Continue and shuts its read side down. On a Unix
+// socket every later client write then fails with EPIPE (the error that raises
+// SIGPIPE), and since the client sends no body byte before the answer, its
+// first body write hits the shut side. Then it waits for the client to close.
+// With hold set it only waits for release and closes. Sets s->accepted once it
+// read the head.
 static void *_refusing_server_main(void *arg) {
   refusing_server *s = arg;
   struct pollfd p = {.fd = s->listen_fd, .events = POLLIN};
@@ -265,6 +264,10 @@ static void *_refusing_server_main(void *arg) {
   return NULL;
 }
 
+// Starts a refusing_server for a test: binds it to a fresh socket path named
+// after tag, builds its http+unix:// URL (the path needs no escape apart from
+// '/') and starts its thread. hold picks the holding mode. Tells whether it all
+// worked.
 static bool _refusing_server_start(refusing_server *s, const char *tag,
                                    bool hold) {
   memset(s, 0, sizeof(*s));
@@ -273,7 +276,6 @@ static bool _refusing_server_start(refusing_server *s, const char *tag,
   snprintf(s->path, sizeof(s->path), "/tmp/chttpcli_sigpipe_%s_%d.sock", tag,
            (int)getpid());
   unlink(s->path);
-  /* Apart from '/', the path only holds characters that need no escape. */
   size_t o = (size_t)snprintf(s->url, sizeof(s->url), "http+unix://");
   for (const char *c = s->path; *c && o + 4 < sizeof(s->url); ++c) {
     if (*c == '/') {
@@ -298,6 +300,8 @@ static bool _refusing_server_start(refusing_server *s, const char *tag,
   return s->thread_started;
 }
 
+// Stops a refusing_server at the end of a test: releases and joins its thread,
+// closes the listener and removes the socket file.
 static void _refusing_server_stop(refusing_server *s) {
   atomic_store(&s->release, 1);
   if (s->thread_started) pthread_join(s->tid, NULL);
@@ -305,54 +309,57 @@ static void _refusing_server_stop(refusing_server *s) {
   unlink(s->path);
 }
 
-/* Once its last user is gone the engine stops on a thread of its own.
-   We wait for that stop, with a bound, so nothing of the engine is left at
-   process exit. */
+// Waits, with a bound, until the engine has stopped, and tells whether it did.
+// The engine stops on a thread of its own once its last user is gone, and
+// nothing of it may be left at exit.
 static bool _wait_for_engine_stop(void) {
-  for (int i = 0; i < 10000 && _chttpcli_engine_ref_count_for_tests() > 0;
+  for (int i = 0; i < 10000 && chttpcli__engine_ref_count_for_tests() > 0;
        ++i) {
     struct timespec ms = {0, 1000000L};
     nanosleep(&ms, NULL);
   }
-  if (_chttpcli_engine_ref_count_for_tests() > 0) return false;
-  _chttpcli_engine_wait_for_quiescence_for_tests();
-  return !_chttpcli_engine_running_for_tests();
+  if (chttpcli__engine_ref_count_for_tests() > 0) return false;
+  chttpcli__engine_wait_for_quiescence_for_tests();
+  return !chttpcli__engine_running_for_tests();
 }
 
+// The body size of the test POSTs, large enough that the body can't go out
+// before the server's answer.
 #define SIGPIPE_TEST_BODY_LEN (64u * 1024u)
 
-static chttp_request_t *_large_post(const char *url, char **body_out) {
+// Builds a POST of SIGPIPE_TEST_BODY_LEN bytes to url, the request whose body
+// the refusing server won't read. The body buffer goes to *body_out, which the
+// caller frees; gives NULL when an allocation fails.
+static chttp_request *_large_post(const char *url, char **body_out) {
   char *body = malloc(SIGPIPE_TEST_BODY_LEN);
   *body_out = body;
   if (!body) return NULL;
   memset(body, 'b', SIGPIPE_TEST_BODY_LEN);
-  chttp_request_body_t b =
+  chttp_request_body b =
       CHTTP_BODY(body, SIGPIPE_TEST_BODY_LEN, "application/octet-stream");
   return chttp_request_create(CHTTP_POST, url, &b, NULL);
 }
 
 TEST(chttpcli_sigpipe, the_binary_runs_with_the_default_disposition) {
-  /* Every other test here would be vacuous with SIGPIPE ignored. */
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
 }
 
+// The server's listener stays open until the end, so a request it never
+// accepted would wait for ever; the request timeout makes that a failure.
 TEST(chttpcli_sigpipe, a_sync_write_to_a_refusing_server_raises_no_sigpipe) {
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
   refusing_server srv;
   bool server_up = _refusing_server_start(&srv, "sync", false);
   chttpcli cli = chttpcli_create(NULL);
-  /* The refusing server takes one connection and its listener stays open
-     until the end of the test, so a request it never accepted would wait for
-     ever; the timeout makes that a failure. */
   if (cli != CHTTPCLI_NULL) (void)chttpcli_set_request_timeout(cli, 30000000);
   char *body = NULL;
-  chttp_request_t *req = server_up ? _large_post(srv.url, &body) : NULL;
+  chttp_request *req = server_up ? _large_post(srv.url, &body) : NULL;
   if (req) req->expect_continue = true;
 
   sigset_t old;
   _block_sigpipe(&old);
-  chttpcli_response_t *resp = NULL;
-  ccol_retval_t rv = ccol_unexpected_failure;
+  chttpcli_response *resp = NULL;
+  ccol_retval rv = ccol_unexpected_failure;
   if (req && cli != CHTTPCLI_NULL) rv = chttpcli_do(cli, req, &resp);
   bool raised = _take_pending_sigpipe();
   pthread_sigmask(SIG_SETMASK, &old, NULL);
@@ -371,10 +378,11 @@ TEST(chttpcli_sigpipe, a_sync_write_to_a_refusing_server_raises_no_sigpipe) {
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
 }
 
-/* The async engine stops once no request is in flight, and an exiting thread
-   takes a pending signal away with it. So a second request, which a holding
-   server leaves unanswered, keeps the engine and its threads alive until the
-   scan of the pending signals has run. */
+// The async engine stops once no request is in flight, and an exiting thread
+// takes a pending signal away with it. So a second request, which a holding
+// server leaves unanswered, keeps the engine and its threads alive until the
+// scan of the pending signals has run. The engine threads inherit the blocked
+// mask of the thread that makes the first call.
 TEST(chttpcli_sigpipe,
      the_async_engine_keeps_the_disposition_and_no_write_raises_it) {
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
@@ -382,22 +390,17 @@ TEST(chttpcli_sigpipe,
   bool server_up = _refusing_server_start(&srv, "async", false);
   bool holder_up = _refusing_server_start(&holder, "hold", true);
   chttpcli cli = chttpcli_create(NULL);
-  /* The refusing server takes one connection and its listener stays open
-     until the end of the test, so a request it never accepted would wait for
-     ever; the timeout makes that a failure. */
   if (cli != CHTTPCLI_NULL) (void)chttpcli_set_request_timeout(cli, 30000000);
   char *body = NULL;
-  chttp_request_t *req =
+  chttp_request *req =
       server_up && holder_up ? _large_post(srv.url, &body) : NULL;
   if (req) req->expect_continue = true;
-  chttp_request_t *hold_req =
+  chttp_request *hold_req =
       req ? chttp_request_create(CHTTP_GET, holder.url, NULL, NULL) : NULL;
 
-  /* The first call starts the engine, and every thread it starts inherits this
-     mask. */
   sigset_t old;
   _block_sigpipe(&old);
-  cthrpool_future_t *hold_f = NULL;
+  cthrpool_future *hold_f = NULL;
   if (hold_req && cli != CHTTPCLI_NULL)
     hold_f = chttpcli_do_async(cli, hold_req);
   bool default_after_engine_start = _sigpipe_has_default_disposition();
@@ -407,11 +410,11 @@ TEST(chttpcli_sigpipe,
   }
   bool held = atomic_load(&holder.accepted) != 0;
 
-  cthrpool_future_t *f = NULL;
+  cthrpool_future *f = NULL;
   if (held) f = chttpcli_do_async(cli, req);
-  ccol_retval_t rv = ccol_unexpected_failure;
+  ccol_retval rv = ccol_unexpected_failure;
   if (f) {
-    chttpcli_async_result_t *r = chttpcli_async_result_get(f);
+    chttpcli_async_result *r = chttpcli_async_result_get(f);
     if (r) {
       rv = r->rv;
       chttpcli_resp_free(r->resp);
@@ -424,7 +427,7 @@ TEST(chttpcli_sigpipe,
 
   atomic_store(&holder.release, 1);
   if (hold_f) {
-    chttpcli_async_result_t *r = chttpcli_async_result_get(hold_f);
+    chttpcli_async_result *r = chttpcli_async_result_get(hold_f);
     if (r) {
       chttpcli_resp_free(r->resp);
       chttpcli_async_result_free(r);

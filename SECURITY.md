@@ -2,11 +2,11 @@
 
 ## Supported versions
 
-We fix security problems in the current `1.x` release line, and the fix
-only goes into the newest `1.x` patch release. As soon as a newer patch
+We fix security problems in the current `2.x` release line, and the fix
+only goes into the newest `2.x` patch release. As soon as a newer patch
 release exists, the older one gets no extended support.
 
-The SONAME of the shared library is `libccollections.so.1`, so every `1.x`
+The SONAME of the shared library is `libccollections.so.2`, so every `2.x`
 release drops in for any earlier one and you never have to relink your
 application to apply a security update.
 
@@ -70,7 +70,7 @@ these findings are in scope:
   otherwise any http or https server would get a request-forgery primitive
   against every local socket the calling process can reach, so any way past
   that rule is in scope.
-- A way past `chttp_request_t.prevent_tls_downgrade_on_redirect` when a
+- A way past `chttp_request.prevent_tls_downgrade_on_redirect` when a
   caller has set it. With that field set, a chain that starts on `https` must
   stay on `https`.
 - A data race or a deadlock in any module that we document as thread-safe.
@@ -81,7 +81,7 @@ intended behavior and not a defect:
 - `ccol_fatal_err()` stops the process on a programming error, for example a
   type that doesn't match in a container macro, or a key passed to a `_get`
   macro that isn't in the container. That's the documented contract of the
-  macro layer, and the raw function layer returns a `ccol_retval_t` instead
+  macro layer, and the raw function layer returns a `ccol_retval` instead
   and never stops the process.
 - Anything that needs a `fork()` while a `cthreadpool`, `cthreadcomm`,
   `clogger`, `chttpserver` or `chttpclient` handle created before that
@@ -93,7 +93,7 @@ intended behavior and not a defect:
   precondition, like using a key whose type doesn't match the type given
   when the container was constructed.
 - `chttpclient` following a redirect from `https` to `http` while
-  `chttp_request_t.prevent_tls_downgrade_on_redirect` is left at its default
+  `chttp_request.prevent_tls_downgrade_on_redirect` is left at its default
   of false. That default matches curl, whose `CURLOPT_REDIR_PROTOCOLS`
   permits both schemes, and the Go `net/http` client. Set the field wherever
   a downgrade isn't acceptable for your deployment.

@@ -22,29 +22,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* The thread-local storage model of the library's thread-local fast paths
- * (the per-thread cache of cmempool, the pin stripe of cpintable, the date
- * cache of chttpserver and the pipe flag of clogger).
- *
- * initial-exec resolves a thread-local at load time, so an access is a
- * single load relative to the thread pointer. But it also marks the whole
- * library as needing static thread-local storage, and a dlopen() of it then
- * has to fit the library's thread-local block into the reserve the loader
- * keeps for late loads. glibc keeps about 1.6 KiB there and we fit, while
- * FreeBSD keeps 128 bytes unless the program's environment sets
- * LD_STATIC_TLS_EXTRA, and we need 384 or more there. The general model goes
- * through __tls_get_addr on every access and a dlopen() never fails for it,
- * but it costs the thread-safe path of cmempool a third to two thirds of its
- * throughput (more on FreeBSD), and the pool is then slower than malloc. TLS
- * descriptors (-mtls-dialect=gnu2) win back about a third of that on Linux,
- * and FreeBSD's loader on x86-64 refuses them. For a library that programs
- * link rather than dlopen(), initial-exec is clearly the better default.
- *
- * CMEMPOOL_DYNAMIC_TLS picks the general model when it is 1 and
- * initial-exec when it is 0. A build that doesn't set it gets initial-exec
- * with glibc and on FreeBSD, and the general model everywhere else. Include
- * this file after a header of the C library, since that header is what
- * defines __GLIBC__. */
+// The thread-local storage model of the per-thread fast paths (the cmempool
+// thread cache, the cpintable pin stripe, the chttpserver date cache and the
+// clogger pipe flag). initial-exec makes each access one load, but it marks
+// the whole library as needing static TLS, and a dlopen() must then fit our
+// TLS block into the small reserve the loader keeps (glibc has room; FreeBSD
+// needs LD_STATIC_TLS_EXTRA). The general model never fails a dlopen() but
+// makes the thread-safe cmempool path slower than malloc.
+//
+// CMEMPOOL_DYNAMIC_TLS 1 picks the general model and 0 picks initial-exec.
+// When it isn't set we use initial-exec with glibc and on FreeBSD, and the
+// general model everywhere else. Include this file after a C library header,
+// because that header defines __GLIBC__.
 
 #ifndef CCOL_INTERNAL_CTLSMODEL_H
 #define CCOL_INTERNAL_CTLSMODEL_H
@@ -57,22 +46,16 @@ SOFTWARE.
 #endif
 #endif
 
-/* macOS releases the thread-local storage (__thread) of an exiting thread
- * before it runs the pthread key destructors, so a destructor that reads a
- * __thread variable there gets a new, zeroed copy and the state it was
- * supposed to drain is lost. OpenBSD emulates thread-local storage with a
- * pthread key of its own, which keeps a thread's storage through one round
- * of key destructors and frees it in the next one, so a destructor that sets
- * its key again and runs a second round reads a zeroed copy there. Under
- * _CCOL_EMULATE_DARWIN_TLS every module whose key destructor drains
- * per-thread state keeps that state in a heap block whose pointer is the
- * key's value, and the destructor drains the block it gets as its argument.
- * Everywhere else the state stays in __thread variables. The switch turns on
- * by itself on macOS and OpenBSD, and the Linux and FreeBSD test suites set
- * it to run that form. */
+// macOS frees the __thread storage of an exiting thread before the pthread
+// key destructors run, and OpenBSD's emulated TLS is gone after one round of
+// destructors, so a destructor that reads a __thread variable there sees a
+// zeroed copy. Under CCOL__EMULATE_DARWIN_TLS every module that drains
+// per-thread state from a key destructor keeps that state in a heap block whose
+// pointer is the key's value. It turns on by itself on macOS and OpenBSD; the
+// Linux and FreeBSD suites set it to test that form.
 #if (defined(__APPLE__) || defined(__OpenBSD__)) && \
-    !defined(_CCOL_EMULATE_DARWIN_TLS)
-#define _CCOL_EMULATE_DARWIN_TLS 1
+    !defined(CCOL__EMULATE_DARWIN_TLS)
+#define CCOL__EMULATE_DARWIN_TLS 1
 #endif
 
 #endif /* CCOL_INTERNAL_CTLSMODEL_H */

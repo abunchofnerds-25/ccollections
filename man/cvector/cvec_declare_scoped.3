@@ -67,7 +67,7 @@ to leave the block, use cvec_declare(3).
 .fi
 .SH EXAMPLES
 .nf
-void load(bool use_pool, ccol_memmgmt_procs_t *pool) {
+void load(bool use_pool, ccol_memmgmt_procs *pool) {
     cvec_declare_scoped(vec, int);
 
     if (use_pool) {

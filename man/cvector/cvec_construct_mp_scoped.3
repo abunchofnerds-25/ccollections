@@ -19,7 +19,7 @@ companion type variables are initialized to NULL here, while
 cvec_construct_mp(3) leaves them indeterminate on purpose. Everything
 else cvec_construct_mp(3) documents holds here too, including the
 private copy of the procedure table that the vector keeps and the stop of
-the program through _ccol_fatal_err() on a failed creation.
+the program through ccol__fatal_err() on a failed creation.
 
 The variable is set to NULL before the vector is created, which makes the
 handler safe on a path that leaves the block between the declaration and
@@ -36,7 +36,7 @@ those functions must be callable at the end of the scope.
 .nf
 v       Name of the vector variable to declare and create
 type    Element type, for example int, double or struct foo
-mprocs  Pointer to a ccol_memmgmt_procs_t. Its malloc, calloc, realloc
+mprocs  Pointer to a ccol_memmgmt_procs. Its malloc, calloc, realloc
         and free members must all be set. Pass NULL for the default
         allocator.
 .fi
@@ -48,7 +48,7 @@ an expression.
 .SH NOTES
 .nf
 When the vector can't be created the macro stops the program through
-_ccol_fatal_err(), with a message that names v and the underlying error.
+ccol__fatal_err(), with a message that names v and the underlying error.
 
 The macro relies on the cleanup attribute and so needs GCC or Clang. On a
 toolchain without that attribute, use cvec_construct_mp(3) with an
@@ -70,7 +70,7 @@ to leave the block, use cvec_construct_mp(3).
 .fi
 .SH EXAMPLES
 .nf
-void process(ccol_memmgmt_procs_t *procs) {
+void process(ccol_memmgmt_procs *procs) {
     cvec_construct_mp_scoped(vec, int, procs);
 
     cvec_push(vec, 42);

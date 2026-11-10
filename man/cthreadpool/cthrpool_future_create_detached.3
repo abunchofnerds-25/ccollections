@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadpool.h>
 
-cthrpool_future_t *cthrpool_future_create_detached(char **err_str);
+cthrpool_future *cthrpool_future_create_detached(char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
@@ -37,7 +37,7 @@ err_str   Optional pointer to receive an error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-Returns a new cthrpool_future_t handle (not yet done) on success.
+Returns a new cthrpool_future handle (not yet done) on success.
 Returns NULL on allocation failure.
 .fi
 .SH "SEE ALSO"

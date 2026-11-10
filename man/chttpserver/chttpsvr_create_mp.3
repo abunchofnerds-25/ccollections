@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-chttpsvr chttpsvr_create_mp(ccol_memmgmt_procs_t *mprocs,
+chttpsvr chttpsvr_create_mp(ccol_memmgmt_procs *mprocs,
                             clog cl,
                             char **err_str);
 .fi

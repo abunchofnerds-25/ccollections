@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-ccol_retval_t chttpsvr_req_set_context(chttpsvr_req_t *req,
+ccol_retval chttpsvr_req_set_context(chttpsvr_req *req,
                                        const void *key, void *value);
 .fi
 .SH DESCRIPTION
@@ -72,8 +72,8 @@ only while the chain runs.  It takes no lock.
 .nf
 static const char user_key; /* its address is the key */
 
-static void auth_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
-                    chttpsvr_next_fn_t next) {
+static void auth_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
+                    chttpsvr_next_fn next) {
   user_t *user = lookup_user(ctx, chttpsvr_req_header(req, "authorization"));
   if (!user) {
     chttpsvr_resp_set_status(resp, 401);
@@ -88,7 +88,7 @@ static void auth_mw(chttpsvr_req_t *req, chttpsvr_resp_t *resp, void *ctx,
   release_user(user);
 }
 
-static void profile_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+static void profile_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                             void *ctx) {
   (void)ctx;
   user_t *user = chttpsvr_req_context(req, &user_key);

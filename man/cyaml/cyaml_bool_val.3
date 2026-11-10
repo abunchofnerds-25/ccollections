@@ -12,7 +12,7 @@ bool cyaml_bool_val(cyaml node);
 .SH DESCRIPTION
 .nf
 Returns the C bool that node stores.  The function calls
-_ccol_fatal_err() when node is NULL and when node is not of type
+ccol__fatal_err() when node is NULL and when node is not of type
 CYAML_BOOL.
 .fi
 .SH PARAMETERS

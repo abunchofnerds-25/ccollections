@@ -14,14 +14,14 @@ Every release has a number of the form `MAJOR.MINOR.PATCH`:
 | An added function, macro or type | `MINOR` | does not change |
 | A removal, or a change to an interface | `MAJOR` | changes |
 
-The SONAME only holds `MAJOR`, so every `1.x` release is
-`libccollections.so.1`, and a program built against one `1.x` release runs
-with every later `1.x` release without a relink.
+The SONAME only holds `MAJOR`, so every `2.x` release is
+`libccollections.so.2`, and a program built against one `2.x` release runs
+with every later `2.x` release without a relink.
 
 ## Source compatibility
 
-Code that compiles against `1.0` compiles as it is against every later
-`1.x` release. Within `1.x` nothing in an installed header is removed,
+Code that compiles against `2.0` compiles as it is against every later
+`2.x` release. Within `2.x` nothing in an installed header is removed,
 renamed or given a different meaning, so:
 
 - No function or macro is removed.
@@ -31,35 +31,53 @@ renamed or given a different meaning, so:
 
 ## Binary compatibility
 
-A program linked against `libccollections.so.1` runs with every later
-`1.x` release, because within `1.x`:
+A program linked against `libccollections.so.2` runs with every later
+`2.x` release, because within `2.x`:
 
 - No exported symbol is removed, and no exported symbol changes its
   signature.
 - No public struct changes its size or its layout. That rules out a change
   that looks harmless too: a configuration struct that you fill by value,
-  like `chttpsvr_config_t`, `chttp_tls_config_t`, `clog_rotation_cfg_t` or
-  `clog_async_cfg_t`, never gets a new field in `1.x`. A new field changes
+  like `chttpsvr_config`, `chttp_tls_config`, `clog_rotation_cfg` or
+  `clog_async_cfg`, never gets a new field in `2.x`. A new field changes
   the size of the struct and breaks every program that allocates one, so
   such a struct only grows in a new major version. That limits how the API
   can grow, but it's the price of letting you declare and fill these
   structs yourself.
-- No enumerator changes its numeric value. Every `ccol_retval_t` value is set
+- No enumerator changes its numeric value. Every `ccol_retval` value is set
   explicitly, and `ccol_success` is `0`.
 
-Some exported symbols have names that start with an underscore. Don't call
-them by name. They are exported because the typed macros expand into calls
-to them (and in one case into a reference to a link-time marker object), so
-your compiled code refers to them directly, and they have the same
-guarantee as every other exported symbol.
+Some exported symbols have a double underscore after their prefix, such as
+`cvector__destroy` or `csort__merge_sort`. That's how the library marks a
+name as internal. Don't call them by name. They are exported because the
+typed macros expand into calls to them (and in one case into a reference to
+a link-time marker object), so your compiled code refers to them directly,
+and they have the same guarantee as every other exported symbol. No name of
+the library, public or internal, begins with an underscore or takes any
+other form that ISO C reserves for the compiler and the C library, and none
+ends in `_t` or `_MAX`, which POSIX reserves for the system's headers, so no
+macro, type or symbol of theirs can stand in for one of ours.
+
+Every exported symbol carries the version node `CCOL_2`. Your program
+records each symbol it uses together with that node, for example
+`cvector_push_back@CCOL_2`, and the dynamic loaders of glibc and FreeBSD
+bind such a reference only to a definition with the same node. Another
+versioned library that exports a function of the same name can't take the
+call. A library without any version information can, which is how ELF
+loaders keep old binaries working, and musl and OpenBSD don't look at
+versions at all. The library binds its own calls to its exported functions
+when it's linked, so on every system an object loaded ahead of it can't
+take over a call that the library makes itself. On macOS a program records
+the library of every symbol it imports, which gives the same protection
+without versions.
 
 ## Behavioral compatibility
 
 The promise is about behavior as well as the shape of the interface.
-Within `1.x` none of these change:
+Within `2.x` none of these change:
 
-- The `ccol_retval_t` that a given input produces, and which conditions are
-  fatal (the library calls `_ccol_fatal_err()` and does not return).
+- The `ccol_retval` that a given input produces, and which conditions are
+  fatal (the library calls `ccol__fatal_err()` and does not return).
 - Which operations invalidate an iterator or a pointer to an element.
 - The ownership rules for keys, values and nodes, including which calls hand
   you a borrowed reference and which calls take ownership.
@@ -68,7 +86,7 @@ Within `1.x` none of these change:
 - When the library calls an allocator that you supplied.
 - The documented thread-safety class of each type.
 
-Performance is left off this list on purpose. A `1.x` release may replace
+Performance is left off this list on purpose. A `2.x` release may replace
 an algorithm or a data structure with a faster one, as long as everything
 above stays true.
 
@@ -98,12 +116,20 @@ CI runs separate checks on every push and every pull request:
 ```bash
 make check_namespace   # each exported symbol, public macro, typedef,
                        # enumerator and struct/union/enum tag has
-                       # its namespace prefix
+                       # its namespace prefix, and no name in the
+                       # headers or sources is one that ISO C
+                       # reserves or the compiler predefines
 make check_abi         # the exported ABI matches the baseline under abi/
 make check_layout      # each public struct and union has the recorded
                        # LP64 layout on this system
 make check_dso_unload  # fork() works after a dlopen(), a use and a
                        # dlclose() of the library
+make check_symbol_binding  # every exported symbol carries the
+                           # version node, and a preloaded library
+                           # that defines the same functions catches
+                           # no call of the library (and, where the
+                           # loader reads versions, none of the
+                           # program)
 ```
 
 `check_abi` compares the list of exported symbols, which is the same on

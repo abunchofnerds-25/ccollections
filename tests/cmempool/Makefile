@@ -36,7 +36,7 @@ test: build
 	./tests_unload
 
 # die_after_fork=0 is needed because several tests here fork and the child then
-# runs into a _ccol_assert() abort that the test expects. With the
+# runs into a ccol__assert() abort that the test expects. With the
 # ThreadSanitizer default such a child would exit silently, and a test of a
 # fatal path would end up checking nothing.
 test_tsan: build_tsan

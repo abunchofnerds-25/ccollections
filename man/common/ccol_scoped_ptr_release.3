@@ -44,7 +44,7 @@ call name is NULL, so every later call just returns NULL again.
 .nf
 #include <stdlib.h>
 
-char *build(ccol_memmgmt_procs_t *mp) {
+char *build(ccol_memmgmt_procs *mp) {
   ccol_scoped_ptr_mp(buf, char, mp);
   buf = mp ? mp->malloc(128) : malloc(128);
   if (!buf) return NULL;

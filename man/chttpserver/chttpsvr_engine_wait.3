@@ -34,7 +34,7 @@ through a release or through chttpsvr_engine_stop().
 
 Do not call it from a request handler or a middleware that runs on
 the worker pool of ANY chttpsvr instance.  That is a FATAL error: the
-library calls _ccol_fatal_err(), which means abort() and SIGABRT, and
+library calls ccol__fatal_err(), which means abort() and SIGABRT, and
 reports it at once instead of hanging.  The worker pool of that
 server can never finish draining while the request in flight is
 blocked here waiting for the engine to exit, and that would deadlock

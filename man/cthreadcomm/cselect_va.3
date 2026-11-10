@@ -12,7 +12,7 @@ cselect_timed_va(ready_index, timeout_us, ...);
 .fi
 .SH DESCRIPTION
 .nf
-cselect_va() builds a cselectable_t array from its variadic
+cselect_va() builds a cselectable array from its variadic
 arguments, counts the elements at compile time and passes everything
 to cselect().
 
@@ -20,7 +20,7 @@ cselect_timed_va() does the same but calls cselect_timed() with
 the timeout_us you give, in microseconds: UINT64_MAX waits forever, 0
 polls, and any other value sets a deadline.
 
-Each variadic argument must be a cselectable_t value, normally made
+Each variadic argument must be a cselectable value, normally made
 with ccircq_selectable(), cdynmq_selectable(),
 cchan_selectable() or cselectable_fd(), with a dir of
 cselect_read or cselect_write. Both macros evaluate each
@@ -38,7 +38,7 @@ fair rotation described in cselect(3), not always the first one in
 the argument list.
 
 Each macro expands to a GCC and Clang statement expression with a value
-of type ccol_retval_t, so you can use it in an assignment or in a
+of type ccol_retval, so you can use it in an assignment or in a
 condition.
 .fi
 .SH PARAMETERS
@@ -48,7 +48,7 @@ ready_index  A size_t * that receives the 0-based index of the ready
              ccol_success.
 timeout_us   Microseconds to wait; UINT64_MAX waits forever. Only
              cselect_timed_va() takes this parameter.
-\&...          One or more cselectable_t values; at least one is
+\&...          One or more cselectable values; at least one is
              required.
 .fi
 .SH RETURN VALUE
@@ -87,14 +87,14 @@ both GCC and Clang.
 size_t idx;
 
 /* Two circular queues and a cchan, all read-wait: */
-ccol_retval_t r = cselect_va(&idx,
+ccol_retval r = cselect_va(&idx,
     ccircq_selectable(q0, cselect_read),
     ccircq_selectable(q1, cselect_read),
     cchan_selectable(ch, cselect_read));
 if (r == ccol_success) {
     printf("ready selectable: %zu\en", idx);
     /* claim the message from whichever selectable won, for example: */
-    cmessage_t msg;
+    cmessage msg;
     if (idx == 0 && ccircq_try_recv(q0, &msg) == ccol_success)
         free(msg.data);
 }

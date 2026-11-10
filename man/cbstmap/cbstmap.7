@@ -30,11 +30,11 @@ the contract of a comparison procedure.
 There are two layers in the API. The type-inferred macros, such as
 cbmap_construct(3), cbmap_insert(3), cbmap_get(3), cbmap_get_ptr(3) and
 cbmap_remove(3), keep the key type and the value type with the handle and
-stop the program through _ccol_fatal_err() on a hard error. The raw
+stop the program through ccol__fatal_err() on a hard error. The raw
 functions, cbstmap_create_full(3), cbstmap_insert_elem(3),
 cbstmap_get_elem_ref(3), cbstmap_get_elem_copy(3) and
 cbstmap_delete_elem(3), take each key and value as a cmap_pair and return
-a ccol_retval_t. The typed layer also has cbmap_destroy(3), cbmap_size(3)
+a ccol_retval. The typed layer also has cbmap_destroy(3), cbmap_size(3)
 and cbmap_reset(3), short names for cbstmap_destroy(3),
 cbstmap_elem_count(3) and cbstmap_reset(3).
 .fi

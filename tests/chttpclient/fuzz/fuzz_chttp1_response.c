@@ -22,19 +22,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/*
- * The libFuzzer target for chttp1_parser.c in response mode, which is the
- * grammar chttpclient.c itself drives and starts with a status line instead of
- * a request line. The driver that feeds the input in fragments is in
- * fuzz_common.h, and fuzz_chttp1_request.c is the sibling target for request
- * mode.
- */
+// The libFuzzer target for chttp1_parser.c in response mode, the grammar that
+// chttpclient.c drives. The fragmenting driver is in fuzz_common.h, and
+// fuzz_chttp1_request.c is the sibling target for request mode.
 
 #include <string.h>
 
 #include "fuzz_common.h"
 
-static int on_header(chttp1_parser_t *p, const char *name, size_t name_len,
+// Parser callbacks that accept everything, because the fuzzer only looks for
+// crashes and leaks. They read and change no state.
+static int on_header(chttp1_parser *p, const char *name, size_t name_len,
                      const char *value, size_t value_len) {
   (void)p;
   (void)name;
@@ -44,41 +42,42 @@ static int on_header(chttp1_parser_t *p, const char *name, size_t name_len,
   return 0;
 }
 
-static int on_headers_complete(chttp1_parser_t *p) {
+static int on_headers_complete(chttp1_parser *p) {
   (void)p;
   return CHTTP1_HEADERS_HAS_BODY;
 }
 
-static int on_body(chttp1_parser_t *p, const char *at, size_t len) {
+static int on_body(chttp1_parser *p, const char *at, size_t len) {
   (void)p;
   (void)at;
   (void)len;
   return 0;
 }
 
-static int on_message_complete(chttp1_parser_t *p) {
+static int on_message_complete(chttp1_parser *p) {
   (void)p;
   return 0;
 }
 
-static const chttp1_settings_t g_settings = {
+// The response-mode callbacks.
+static const chttp1_settings g_settings = {
     .on_header = on_header,
     .on_headers_complete = on_headers_complete,
     .on_body = on_body,
     .on_message_complete = on_message_complete,
 };
 
+// The libFuzzer entry point: parses data[0..size) as a response, fed in random
+// fragments, to find crashes and leaks. It then calls chttp1_parser_finish(),
+// which runs the completion of an EOF-framed body (no Content-Length, not
+// chunked) that execute alone never confirms. Always gives 0.
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-  chttp1_parser_t parser;
+  chttp1_parser parser;
   chttp1_parser_init(&parser, &g_settings);
   parser.data = NULL;
 
   fuzz_feed_fragmented(&parser, data, size);
 
-  /* We also run the completion path of a body that EOF frames, a response with
-   * no Content-Length and no chunked Transfer-Encoding, which is a real and
-   * common shape. The parser only confirms it through chttp1_parser_finish(),
-   * never through chttp1_parser_execute() alone. */
   chttp1_parser_finish(&parser);
   return 0;
 }

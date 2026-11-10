@@ -7,8 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadcomm.h>
 
-ccol_retval_t ceventloop_modify(ceventloop loop, ceventloop_reg reg,
-                        cselect_dir_t new_dir);
+ccol_retval ceventloop_modify(ceventloop loop, ceventloop_reg reg,
+                        cselect_dir new_dir);
 .fi
 .SH DESCRIPTION
 .nf
@@ -77,7 +77,7 @@ callback running on one of the reactor threads.
 .fi
 .SH EXAMPLES
 .nf
-ceventloop_handlers_t handlers = { .on_writable = on_connected, .on_readable = on_data };
+ceventloop_handlers handlers = { .on_writable = on_connected, .on_readable = on_data };
 ceventloop_reg reg = ceventloop_add(loop, cselectable_fd(sock, cselect_write),
                                     handlers, ctx, NULL);
 /* ... inside on_connected, after the non-blocking connect finishes ... */

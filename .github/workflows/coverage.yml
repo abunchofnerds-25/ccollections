@@ -3,12 +3,12 @@ name: Coverage
 # Runs on every push to main, which is what a merged pull request makes, and
 # publishes the GitHub Pages site: the rendered man pages under man/, which
 # the guides under doc/ link to, the merged coverage report under coverage/,
-# a front page and the Google Search Console verification file. A repository
-# has one Pages site and a deployment replaces all of it, so every part is
-# built here and goes out together. Pushes to other branches and pull requests
-# don't start it on purpose: a full run builds and runs every module suite
-# again under gcov instrumentation, and only the state of main is worth
-# publishing.
+# a front page, a 404 page, the sitemap and the Google Search Console
+# verification file. A repository has one Pages site and a deployment
+# replaces all of it, so every part is built here and goes out together.
+# Pushes to other branches and pull requests don't start it on purpose: a
+# full run builds and runs every module suite again under gcov
+# instrumentation, and only the state of main is worth publishing.
 on:
   push:
     branches: [main]
@@ -39,7 +39,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # The whole history, so that every address in the sitemap carries the
+      # date of the last commit that changed its page.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y lcov libssl-dev zlib1g-dev mandoc
@@ -74,16 +78,10 @@ jobs:
           path: coverage_site/html
           retention-days: 30
 
+      # The front page, the man pages, the coverage report, a 404 page, the
+      # sitemap and the Search Console verification file, in pages_site/.
       - name: Put the site together
-        run: |
-          rm -rf pages_site
-          mkdir pages_site
-          cp -R man_html pages_site/man
-          cp -R coverage_site/html pages_site/coverage
-          cp ci_scripts/pages_index.html pages_site/index.html
-          # Google Search Console proves that we own the site by fetching this
-          # file from the root of it, so it must stay there under this name.
-          cp ci_scripts/googlee0970a6a6d6890ca.html pages_site/
+        run: make pages_site
 
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0

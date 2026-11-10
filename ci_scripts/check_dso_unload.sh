@@ -119,10 +119,10 @@ cat > "$tmp/probe.c" <<'PROBE'
 /* This probe reaches the pool with dlsym and does not link against it. The
  * only reference that this process holds to the library is therefore the one
  * that dlclose() drops. */
-typedef cthrpool (*create_fn)(size_t, size_t, ccol_memmgmt_procs_t *, char **);
+typedef cthrpool (*create_fn)(size_t, size_t, ccol_memmgmt_procs *, char **);
 typedef void (*destroy_fn)(cthrpool);
 typedef cmempool *(*mp_create_fn)(size_t, size_t, bool, bool,
-                                      ccol_memmgmt_procs_t *, char **);
+                                      ccol_memmgmt_procs *, char **);
 typedef void *(*mp_alloc_fn)(cmempool *);
 typedef void (*mp_free_fn)(cmempool *, void *);
 typedef void (*mp_destroy_fn)(cmempool *);
@@ -239,7 +239,7 @@ int main(int argc, char **argv) {
       return 2;
     }
     create = (create_fn)(unsigned long)dlsym(h, "cthrpool_create_mp");
-    destroy = (destroy_fn)(unsigned long)dlsym(h, "__cthrpool_destroy");
+    destroy = (destroy_fn)(unsigned long)dlsym(h, "cthrpool__destroy");
     if (!create || !destroy) {
       fprintf(stderr, "dlsym failed: %s\n", dlerror());
       return 2;
@@ -273,8 +273,8 @@ int main(int argc, char **argv) {
     }
     mp_create = (mp_create_fn)(unsigned long)dlsym(h, "cmempool_create_mp");
     mp_alloc = (mp_alloc_fn)(unsigned long)dlsym(h, "cmempool_alloc_entry");
-    mp_free = (mp_free_fn)(unsigned long)dlsym(h, "_cmempool_free_entry");
-    mp_destroy = (mp_destroy_fn)(unsigned long)dlsym(h, "_cmempool_destroy");
+    mp_free = (mp_free_fn)(unsigned long)dlsym(h, "cmempool__free_entry");
+    mp_destroy = (mp_destroy_fn)(unsigned long)dlsym(h, "cmempool__destroy");
     if (!mp_create || !mp_alloc || !mp_free || !mp_destroy) {
       fprintf(stderr, "dlsym failed: %s\n", dlerror());
       return 2;

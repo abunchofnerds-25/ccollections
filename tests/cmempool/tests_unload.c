@@ -22,10 +22,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* What the thread cache of a thread-safe pool does after the module unloads.
- * The unload deletes the cache's thread-specific key and a process can't
- * undo that, so these tests live in a binary of their own and no other test
- * of the suite runs with the cache gone. */
+// What the thread cache of a thread-safe pool does after the module unloads.
+// The unload deletes the cache's thread-specific key and a process can't undo
+// that, so these tests have a binary of their own.
 
 #include <cmempool.h>
 #include <internal/test_helpers/cmempool.h>
@@ -34,14 +33,16 @@ SOFTWARE.
 
 TAU_MAIN()
 
+// Arguments and results of pool_user().
 typedef struct {
   cmempool *mp;
   int failed_allocs;
   size_t thread_magazines;
 } user_args_t;
 
-/* Takes entries from the pool and gives them back, then records how many
- * magazines this thread holds before it exits. */
+// Thread body of the unload test: allocates and frees 100 entries of a->mp,
+// counting failures, then records how many magazines this thread holds before
+// it exits.
 static void *pool_user(void *arg) {
   user_args_t *a = (user_args_t *)arg;
   for (int i = 0; i < 100; i++) {
@@ -52,39 +53,33 @@ static void *pool_user(void *arg) {
     }
     cmempool_free_entry(a->mp, e);
   }
-  a->thread_magazines = _cmempool_thread_magazines_for_tests();
+  a->thread_magazines = cmempool__thread_magazines_for_tests();
   return NULL;
 }
 
-/* After the unload no thread builds a magazine. If a thread built one with
- * no value on the deleted key, nothing would drain it when that thread
- * exits, so the pool would count it as live for ever and the memtest of this
- * binary would report it as lost. And if we didn't refuse
- * a magazine to a thread that can't arm the key, the thread below would hold
- * one, and the pool would go on counting it after the join. */
+// After the unload no thread may build a magazine: nothing would drain it at
+// thread exit, the pool would count it as live forever and memtest would
+// report it lost.
 TEST(mempool_unload, no_thread_cache_is_built_after_the_module_unloads) {
   char *err = NULL;
   cmempool *mp = cmempool_create(64, 32, false, false, &err);
   REQUIRE_NE((void *)mp, (void *)NULL);
 
-  /* Before the unload this thread gets a magazine. */
   void *e = cmempool_alloc_entry(mp);
   bool got_first = e != NULL;
   if (e) cmempool_free_entry(mp, e);
-  size_t mags_before_unload = _cmempool_live_magazines_for_tests(mp);
+  size_t mags_before_unload = cmempool__live_magazines_for_tests(mp);
 
-  /* The unload drains this thread and deletes the key. */
-  _cmempool_unload_cache_for_tests();
-  size_t mags_after_unload = _cmempool_live_magazines_for_tests(mp);
-  size_t own_after_unload = _cmempool_thread_magazines_for_tests();
+  cmempool__unload_cache_for_tests();
+  size_t mags_after_unload = cmempool__live_magazines_for_tests(mp);
+  size_t own_after_unload = cmempool__thread_magazines_for_tests();
 
   user_args_t args = {.mp = mp};
   pthread_t t;
   int created = pthread_create(&t, NULL, pool_user, &args);
   if (created == 0) pthread_join(t, NULL);
-  size_t mags_after_join = _cmempool_live_magazines_for_tests(mp);
+  size_t mags_after_join = cmempool__live_magazines_for_tests(mp);
 
-  /* With no magazine this thread keeps working through the locked path. */
   int own_failed = 0;
   for (int i = 0; i < 100; i++) {
     void *x = cmempool_alloc_entry(mp);
@@ -94,12 +89,11 @@ TEST(mempool_unload, no_thread_cache_is_built_after_the_module_unloads) {
     }
     cmempool_free_entry(mp, x);
   }
-  size_t own_after_use = _cmempool_thread_magazines_for_tests();
+  size_t own_after_use = cmempool__thread_magazines_for_tests();
   size_t used_at_end = cmempool_used_count(mp);
 
-  /* A pool created after the unload has no cache, so no reserve either. */
   cmempool *late = cmempool_create(64, 32, false, false, &err);
-  size_t late_reserve = late ? _cmempool_reserve_for_tests(late) : 1;
+  size_t late_reserve = late ? cmempool__reserve_for_tests(late) : 1;
   if (late) cmempool_destroy(late);
   cmempool_destroy(mp);
 

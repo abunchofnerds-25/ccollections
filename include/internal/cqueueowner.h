@@ -24,41 +24,26 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file cqueueowner.h
- * @brief INTERNAL ONLY. Sends by the owner of a queue whose sending is off.
- *
- * Once ccircq_disable_sending() or cdynmq_disable_sending() runs,
- * every later send is refused. A module that owns a queue and turns sending
- * off to stop new work may still have to put one last control message behind
- * what the queue already accepted, a flush request that tells it when that
- * work is done for example, so these functions send whether sending is on or
- * off. Keep them for that last control message; anything else sent this way
- * would slip past the switch that the owner turned off on purpose. None of
- * this is public interface and the library never installs this header.
- */
+// Internal only. Sends by the owner of a queue whose sending is off. After
+// ccircq_disable_sending() or cdynmq_disable_sending() every send is refused,
+// but an owner that turned sending off to stop new work may have to put one
+// last control message behind what the queue already accepted (a flush request,
+// for example). These functions send whether sending is on or off. Use them for
+// that last control message only, since anything else sent this way slips past
+// the switch the owner turned off on purpose. Never installed.
 
 #include <cthreadcomm.h>
 
-/**
- * Sends msg to cq whether sending is on or off, and waits at most
- * timeout_us microseconds for room (0 doesn't wait). On success it owns
- * msg->data, the same way ccircq_send() does.
- *
- * @return ccol_success, ccol_timed_out (or ccol_container_full when
- *         timeout_us is 0) when no room appeared in time,
- *         ccol_unexpected_failure when the wait itself failed, or
- *         ccol_invalid_args.
- */
-ccol_retval_t ccircq_owner_send(ccircq *cq, cmessage_t *msg,
-                                uint64_t timeout_us);
+// Sends msg to cq whether sending is on or off, for the owner's last control
+// message after it turned sends off. It waits at most timeout_us microseconds
+// for room (0 doesn't wait). On success the queue owns msg->data, as with
+// ccircq_send(). It gives ccol_success, ccol_timed_out when no room appeared in
+// time (ccol_container_full when timeout_us is 0), ccol_unexpected_failure when
+// the wait itself failed, or ccol_invalid_args.
+ccol_retval ccircq_owner_send(ccircq *cq, cmessage *msg, uint64_t timeout_us);
 
-/**
- * Sends msg to dq whether sending is on or off. On success it owns
- * msg->data, the same way cdynmq_send() does.
- *
- * @return ccol_success, ccol_container_full when the queue holds
- *         ccol_max_elem_count messages, ccol_not_enough_memory, or
- *         ccol_invalid_args.
- */
-ccol_retval_t cdynmq_owner_send(cdynmq *dq, cmessage_t *msg);
+// Sends msg to dq whether sending is on or off, for the owner's last control
+// message after it turned sends off. On success the queue owns msg->data, as
+// with cdynmq_send(). It gives ccol_success, ccol_container_full at
+// ccol_max_elem_count messages, ccol_not_enough_memory, or ccol_invalid_args.
+ccol_retval cdynmq_owner_send(cdynmq *dq, cmessage *msg);

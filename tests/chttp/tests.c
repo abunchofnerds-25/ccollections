@@ -42,10 +42,7 @@ SOFTWARE.
 
 TAU_MAIN()
 
-/* ========================================================================== */
-/*                     BASE64 ENCODE: RFC 4648 TEST VECTORS                  */
-/* ========================================================================== */
-
+// Base64 encode
 TEST(base64_encode, rfc4648_vectors) {
   struct {
     const char *input;
@@ -92,15 +89,6 @@ TEST(base64_encode, null_data_with_nonzero_len_fails) {
 }
 
 TEST(base64_encode, length_large_enough_to_overflow_is_rejected) {
-  /* enc_len = ((len+2)/3)*4 needs an overflow check before we allocate
-   * enc_len+1 bytes. Without it a caller's len that is big enough to wrap
-   * size_t goes through, the wrapped allocation is tiny and the code writes far
-   * past its end.
-   *
-   * len is close to SIZE_MAX on purpose, far above anything a real caller asks
-   * this function to encode. We pass a real pointer, not NULL, which nothing
-   * dereferences, because the rejection must come before anything touches
-   * *data*, not only before the allocation. */
   char dummy = 0;
   REQUIRE_EQ((void *)chttp_base64_encode(&dummy, SIZE_MAX - 1, NULL), NULL);
 }
@@ -110,7 +98,7 @@ TEST(base64_encode, embedded_nul_bytes_round_trip_via_out_len) {
   size_t out_len = 0;
   char *enc = chttp_base64_encode(raw, sizeof(raw), &out_len);
   REQUIRE_NE((void *)enc, NULL);
-  REQUIRE_EQ(out_len, strlen(enc)); /* encoded text itself has no NULs */
+  REQUIRE_EQ(out_len, strlen(enc));
 
   size_t dec_len = 0;
   unsigned char *dec = (unsigned char *)chttp_base64_decode(enc, &dec_len);
@@ -121,10 +109,7 @@ TEST(base64_encode, embedded_nul_bytes_round_trip_via_out_len) {
   free(dec);
 }
 
-/* ========================================================================== */
-/*                     BASE64 DECODE: RFC 4648 TEST VECTORS                  */
-/* ========================================================================== */
-
+// Base64 decode
 TEST(base64_decode, rfc4648_vectors) {
   struct {
     const char *input;
@@ -166,14 +151,11 @@ TEST(base64_decode, invalid_character_fails) {
 }
 
 TEST(base64_decode, misplaced_padding_fails) {
-  REQUIRE_EQ((void *)chttp_base64_decode("=AAA", NULL), NULL);  // pad at k=0
-  REQUIRE_EQ((void *)chttp_base64_decode("A=AA", NULL), NULL);  // pad at k=1
-  REQUIRE_EQ((void *)chttp_base64_decode("AB=A", NULL),
-             NULL);  // data after pad
-  REQUIRE_EQ((void *)chttp_base64_decode("A===", NULL),
-             NULL);  // pad at k=1 in last group
-  REQUIRE_EQ((void *)chttp_base64_decode("AAA=BBBB", NULL),
-             NULL);  // pad in non-last group
+  REQUIRE_EQ((void *)chttp_base64_decode("=AAA", NULL), NULL);
+  REQUIRE_EQ((void *)chttp_base64_decode("A=AA", NULL), NULL);
+  REQUIRE_EQ((void *)chttp_base64_decode("AB=A", NULL), NULL);
+  REQUIRE_EQ((void *)chttp_base64_decode("A===", NULL), NULL);
+  REQUIRE_EQ((void *)chttp_base64_decode("AAA=BBBB", NULL), NULL);
 }
 
 TEST(base64_decode, valid_padding_variants_succeed) {
@@ -192,9 +174,8 @@ TEST(base64_decode, valid_padding_variants_succeed) {
   free(dec);
 }
 
-/* RFC 4648 SS3.5: the bits of a padded final group that no output byte holds
- * must be zero. "QQ==" is the only way to spell "A", while "QR==" sets a bit
- * the decoded byte doesn't carry, and so do "AB==" and "ABC=". */
+// RFC 4648 section 3.5: "QQ==" is the only spelling of "A". "QR==", "AB==" and
+// "ABC=" set bits that no decoded byte carries.
 TEST(base64_decode, nonzero_padding_bits_fail) {
   size_t out_len = (size_t)-1;
   char *dec = (char *)chttp_base64_decode("QQ==", &out_len);
@@ -209,9 +190,8 @@ TEST(base64_decode, nonzero_padding_bits_fail) {
   REQUIRE_EQ((void *)chttp_base64_decode("Zm9vYh==", NULL), NULL);
 }
 
-/* A padded final group decodes exactly when the bits no output byte holds are
- * zero, and what it decodes to encodes back to the same text. The sweep goes
- * over every "XY==" and every "XYZ=". */
+// Sweeps every "XY==" and "XYZ=": a group decodes exactly when its unused bits
+// are zero, and what it decodes to encodes back to the same text.
 TEST(base64_decode, only_the_canonical_final_group_decodes) {
   static const char alphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -252,12 +232,8 @@ TEST(base64_decode, out_len_is_optional) {
   free(dec);
 }
 
-/* ========================================================================== */
-/*                     BASIC AUTH: RFC 7617                                  */
-/* ========================================================================== */
-
+// Basic auth (RFC 7617)
 TEST(basic_auth, rfc7617_example) {
-  /* The canonical example of RFC 7617. */
   char *auth = chttp_basic_auth("Aladdin", "open sesame");
   REQUIRE_NE((void *)auth, NULL);
   REQUIRE_STREQ(auth, "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
@@ -298,12 +274,6 @@ TEST(basic_auth, null_username_or_password_fails) {
 }
 
 TEST(basic_auth, username_containing_a_colon_is_rejected) {
-  /* RFC 7617 SS2 makes the colon the only delimiter of the encoded
-   * "user-id:password" string and a recipient splits at the FIRST colon, so a
-   * user-id that contains one can't travel as itself. Without this rejection
-   * the pair "user:with:colons" and "pw" encodes a credential that decodes to
-   * the user-id "user" and the password "with:colons:pw", which is another
-   * identity than the one the caller asked for. */
   REQUIRE_EQ((void *)chttp_basic_auth("user:with:colons", "pw"), NULL);
   REQUIRE_EQ((void *)chttp_basic_auth(":", ""), NULL);
   REQUIRE_EQ((void *)chttp_basic_auth("trailing:", "pw"), NULL);
@@ -311,11 +281,6 @@ TEST(basic_auth, username_containing_a_colon_is_rejected) {
 }
 
 TEST(basic_auth, two_distinct_credentials_cannot_encode_identically) {
-  /* The colon joins the two parts, so the pair "admin:x" and "" gives the same
-   * bytes as the pair "admin" and "x:". Accepting the first pair would let one
-   * header value stand for two different credentials, so we refuse the username
-   * with a colon in it, while a password with a colon is built exactly as the
-   * caller asked. */
   REQUIRE_EQ((void *)chttp_basic_auth("admin:x", ""), NULL);
 
   char *auth = chttp_basic_auth("admin", "x:");
@@ -330,8 +295,6 @@ TEST(basic_auth, two_distinct_credentials_cannot_encode_identically) {
 }
 
 TEST(basic_auth, password_containing_colons_round_trips) {
-  /* Everything after the first colon is the password, so a password full of
-   * colons needs no escaping and keeps working. */
   char *auth = chttp_basic_auth("user", "pa:ss:word");
   REQUIRE_NE((void *)auth, NULL);
 
@@ -345,9 +308,6 @@ TEST(basic_auth, password_containing_colons_round_trips) {
 }
 
 TEST(basic_auth, a_control_character_in_either_part_is_refused) {
-  /* RFC 7617 SS2 forbids a CTL (0x00 to 0x1F, 0x7F) in the user-id and in the
-   * password, and a tab is a CTL too. Any other byte is accepted, UTF-8
-   * included. */
   static const char *const bad[] = {"a\tb",  "a\rb", "a\nb",
                                     "a\001", "\037", "a\177b"};
   for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
@@ -366,36 +326,28 @@ TEST(basic_auth, a_control_character_in_either_part_is_refused) {
 }
 
 TEST(basic_auth, length_sum_large_enough_to_overflow_is_rejected) {
-  /* combined_len = user_len + 1 + pass_len needs an overflow check before we
-   * allocate combined_len+1 bytes. Without it two separate lengths from the
-   * caller that add up to near SIZE_MAX go through, the allocation wraps and
-   * the code writes far past it.
-   *
-   * Both fake lengths are huge on purpose, not just one of them, like in
-   * base64_encode.length_large_enough_to_overflow_is_rejected. The strings we
-   * pass are real, short and not NULL, because the rejection must happen before
-   * any snprintf call, not only before the allocation. */
-  bool rejected = _chttp_basic_auth_overflow_guard_for_tests(
+  bool rejected = chttp__basic_auth_overflow_guard_for_tests(
       NULL, "user", SIZE_MAX / 2, "pass", SIZE_MAX / 2);
   REQUIRE_TRUE(rejected);
 }
 
 TEST(basic_auth, ordinary_small_lengths_still_work) {
-  /* The same helper with real strings nowhere near an overflow and their own
-   * real lengths, to make sure the guard above has nothing to say about a
-   * username and a password of a normal length. */
-  bool rejected = _chttp_basic_auth_overflow_guard_for_tests(
+  bool rejected = chttp__basic_auth_overflow_guard_for_tests(
       NULL, "user", strlen("user"), "pass", strlen("pass"));
   REQUIRE_FALSE(rejected);
 }
 
-/* ========================================================================== */
-/*                     CUSTOM ALLOCATOR PLUMBING                              */
-/* ========================================================================== */
-
+// Custom allocator plumbing
+//
+// Counts of the allocations and frees that go through the tracked procs below,
+// so a test can check that every allocation came through the caller's procs
+// and was freed.
 static atomic_int g_alloc_count = 0;
 static atomic_int g_free_count = 0;
 
+// Allocators that count into g_alloc_count and g_free_count, so a test can
+// check that every allocation goes through the caller's procs and is freed. A
+// realloc of a non-NULL block counts as one free and one allocation.
 static void *tracked_malloc(size_t sz) {
   atomic_fetch_add(&g_alloc_count, 1);
   return malloc(sz);
@@ -418,10 +370,10 @@ TEST(custom_allocator, encode_decode_and_basic_auth_go_through_procs) {
   atomic_store(&g_alloc_count, 0);
   atomic_store(&g_free_count, 0);
 
-  ccol_memmgmt_procs_t mp = {.malloc = tracked_malloc,
-                             .free = tracked_free,
-                             .calloc = tracked_calloc,
-                             .realloc = tracked_realloc};
+  ccol_memmgmt_procs mp = {.malloc = tracked_malloc,
+                           .free = tracked_free,
+                           .calloc = tracked_calloc,
+                           .realloc = tracked_realloc};
 
   char *enc = chttp_base64_encode_mp(&mp, "foobar", 6, NULL);
   REQUIRE_NE((void *)enc, NULL);
@@ -438,23 +390,26 @@ TEST(custom_allocator, encode_decode_and_basic_auth_go_through_procs) {
   REQUIRE_EQ(atomic_load(&g_alloc_count), atomic_load(&g_free_count));
 }
 
-/* ========================================================================== */
-/*                     OOM INJECTION                                          */
-/* ========================================================================== */
-
-static int g_fail_at_call = -1; /* -1 = never fail */
+// Allocation failure injection
+//
+// The index of the counting_malloc() call that fails (-1 for none), and the
+// running call index. A test resets the index before each run.
+static int g_fail_at_call = -1;
 static atomic_int g_call_index;
 
+// malloc() that gives NULL for call number g_fail_at_call, so a test can fail
+// each allocation of a call in turn. It advances g_call_index.
 static void *counting_malloc(size_t sz) {
   int idx = atomic_fetch_add(&g_call_index, 1);
   if (g_fail_at_call >= 0 && idx == g_fail_at_call) return NULL;
   return malloc(sz);
 }
 
-static ccol_memmgmt_procs_t g_counting_mp = {.malloc = counting_malloc,
-                                             .free = free,
-                                             .calloc = calloc,
-                                             .realloc = realloc};
+// The procs that route malloc through counting_malloc().
+static ccol_memmgmt_procs g_counting_mp = {.malloc = counting_malloc,
+                                           .free = free,
+                                           .calloc = calloc,
+                                           .realloc = realloc};
 
 TEST(oom, base64_encode_alloc_failure) {
   atomic_store(&g_call_index, 0);
@@ -480,10 +435,6 @@ TEST(oom, base64_decode_empty_string_alloc_failure) {
 }
 
 TEST(oom, basic_auth_fails_at_every_allocation_site) {
-  /* chttp_basic_auth_mp makes exactly 3 allocations: the combined "user:pass"
-   * buffer, chttp_base64_encode_mp's output buffer and the final "Basic <b64>"
-   * buffer. We fail each one in turn and check for a clean NULL return and,
-   * under the memtest target, no leak. */
   for (int fail_idx = 0; fail_idx < 3; fail_idx++) {
     atomic_store(&g_call_index, 0);
     g_fail_at_call = fail_idx;
@@ -493,16 +444,12 @@ TEST(oom, basic_auth_fails_at_every_allocation_site) {
   g_fail_at_call = -1;
 }
 
-/* ========================================================================== */
-/*                         chttp_method_str */
-/* ========================================================================== */
-
-/* Every method name the library puts on the wire or into a log line comes
- * from here. The test is driven by an index at run time so the switch really
- * runs. */
+// chttp_method_str
+//
+// The method is picked by an index at run time, so the switch really runs.
 TEST(chttp_method_str, every_method_maps_to_its_own_spelling) {
   static const struct {
-    chttp_method_t m;
+    chttp_method m;
     const char *name;
   } cases[] = {
       {CHTTP_GET, "GET"},         {CHTTP_POST, "POST"},   {CHTTP_PUT, "PUT"},
@@ -519,28 +466,27 @@ TEST(chttp_method_str, every_method_maps_to_its_own_spelling) {
 }
 
 TEST(chttp_method_str, an_out_of_range_method_reports_unknown) {
-  /* chttp_method_t is a plain enum, so a caller can hand it any integer and the
-   * fallback has to hold up. */
-  volatile chttp_method_t bogus = (chttp_method_t)9999;
+  volatile chttp_method bogus = (chttp_method)9999;
   REQUIRE_STREQ(chttp_method_str(bogus), "UNKNOWN");
 }
 
-/* ========================================================================== */
-/*               chttp1_parser: FRAMING AND CONNECTION RULES                  */
-/* ========================================================================== */
-
-/* These cases drive the internal HTTP/1.1 parser that both chttpserver (request
- * mode) and chttpclient (response mode) sit on. Each case runs twice, once with
- * the whole message in one call and once with one byte per call, since a rule
- * that only holds when a boundary happens to fall in a particular place isn't a
- * rule. */
-
+// chttp1_parser framing and connection rules
+//
+// These cases drive the internal HTTP/1.1 parser that chttpserver (request
+// mode) and chttpclient (response mode) sit on. Each case runs twice, with the
+// whole message in one call and one byte per call, so no rule depends on where
+// a read boundary falls.
+//
+// The parser's user data: the body bytes it has delivered so far.
 typedef struct {
   char body[256];
   size_t body_len;
 } _p1_ctx_t;
 
-static int _p1_on_body(chttp1_parser_t *p, const char *at, size_t len) {
+// The on_body callback of the parser tests: appends a body piece to the
+// _p1_ctx_t in p->data, so a test can compare the delivered body. It fails
+// the parse when the piece would overflow the buffer.
+static int _p1_on_body(chttp1_parser *p, const char *at, size_t len) {
   _p1_ctx_t *c = (_p1_ctx_t *)p->data;
   if (c->body_len + len > sizeof(c->body)) return 1;
   memcpy(c->body + c->body_len, at, len);
@@ -548,13 +494,14 @@ static int _p1_on_body(chttp1_parser_t *p, const char *at, size_t len) {
   return 0;
 }
 
-/* Runs msg through a fresh parser of the given mode and returns the first
- * result that isn't CHTTP1_OK, or CHTTP1_OK if the input ran out first.
- * *consumed_out gets the number of bytes of msg the parser used up to that
- * result. */
-static chttp1_errno_t _p1_run(chttp1_parser_t *p, chttp1_settings_t *st,
-                              _p1_ctx_t *c, bool request, const char *msg,
-                              size_t len, bool bytewise, size_t *consumed_out) {
+// Runs msg through a freshly initialized parser of the given mode, whole or one
+// byte at a time, so every framing test covers both read patterns. p, st and c
+// are the caller's storage, so it can inspect the parser afterwards. It gives
+// the first result that isn't CHTTP1_OK (CHTTP1_OK when the input runs out
+// first), and *consumed_out gets the bytes used up to that result.
+static chttp1_errno _p1_run(chttp1_parser *p, chttp1_settings *st, _p1_ctx_t *c,
+                            bool request, const char *msg, size_t len,
+                            bool bytewise, size_t *consumed_out) {
   memset(c, 0, sizeof(*c));
   chttp1_settings_init(st);
   st->on_body = _p1_on_body;
@@ -564,7 +511,7 @@ static chttp1_errno_t _p1_run(chttp1_parser_t *p, chttp1_settings_t *st,
     chttp1_parser_init(p, st);
   p->data = c;
   size_t used = 0;
-  chttp1_errno_t r = CHTTP1_OK;
+  chttp1_errno r = CHTTP1_OK;
   if (bytewise) {
     for (size_t i = 0; i < len; i++) {
       r = chttp1_parser_execute(p, msg + i, 1);
@@ -582,22 +529,24 @@ static chttp1_errno_t _p1_run(chttp1_parser_t *p, chttp1_settings_t *st,
   return r;
 }
 
+// Gives the length of string literal s without its NUL, so tests can pass
+// literals with embedded bytes to the parser.
 #define P1_LEN(s) (sizeof(s) - 1)
 
+// A chunked HTTP/1.0 body followed by a second request: a recipient that
+// de-chunks and keeps the connection would read the second request as one of
+// its own.
 TEST(chttp1_framing, http_1_0_request_with_chunked_te_is_refused) {
-  /* The body below is chunked and a second request follows it. A recipient that
-   * de-chunks and keeps the connection reads that second request as a request
-   * of its own. */
   static const char msg[] =
       "POST /a HTTP/1.0\r\nHost: h\r\nTransfer-Encoding: chunked\r\n"
       "Connection: keep-alive\r\n\r\n"
       "5\r\nhello\r\n0\r\n\r\n"
       "GET /admin HTTP/1.1\r\nHost: h\r\n\r\n";
   for (int bw = 0; bw < 2; bw++) {
-    chttp1_parser_t p;
-    chttp1_settings_t st;
+    chttp1_parser p;
+    chttp1_settings st;
     _p1_ctx_t c;
-    chttp1_errno_t r = _p1_run(&p, &st, &c, true, msg, P1_LEN(msg), bw, NULL);
+    chttp1_errno r = _p1_run(&p, &st, &c, true, msg, P1_LEN(msg), bw, NULL);
     REQUIRE_EQ((int)r, (int)CHTTP1_ERROR);
     REQUIRE_STREQ(p.reason, "Transfer-Encoding in an HTTP/1.0 request");
     REQUIRE_EQ(c.body_len, (size_t)0);
@@ -609,10 +558,10 @@ TEST(chttp1_framing, http_1_1_request_with_chunked_te_is_accepted) {
       "POST /a HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n"
       "5\r\nhello\r\n0\r\n\r\n";
   for (int bw = 0; bw < 2; bw++) {
-    chttp1_parser_t p;
-    chttp1_settings_t st;
+    chttp1_parser p;
+    chttp1_settings st;
     _p1_ctx_t c;
-    chttp1_errno_t r = _p1_run(&p, &st, &c, true, msg, P1_LEN(msg), bw, NULL);
+    chttp1_errno r = _p1_run(&p, &st, &c, true, msg, P1_LEN(msg), bw, NULL);
     REQUIRE_EQ((int)r, (int)CHTTP1_PAUSED);
     REQUIRE_EQ(c.body_len, (size_t)5);
     REQUIRE_TRUE(chttp1_should_keep_alive(&p));
@@ -627,11 +576,11 @@ TEST(chttp1_framing,
       "5\r\nhello\r\n0\r\n\r\n"
       "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nbad";
   for (int bw = 0; bw < 2; bw++) {
-    chttp1_parser_t p;
-    chttp1_settings_t st;
+    chttp1_parser p;
+    chttp1_settings st;
     _p1_ctx_t c;
     size_t used = 0;
-    chttp1_errno_t r = _p1_run(&p, &st, &c, false, msg, P1_LEN(msg), bw, &used);
+    chttp1_errno r = _p1_run(&p, &st, &c, false, msg, P1_LEN(msg), bw, &used);
     REQUIRE_EQ((int)r, (int)CHTTP1_PAUSED);
     REQUIRE_EQ(c.body_len, (size_t)5);
     REQUIRE_EQ(memcmp(c.body, "hello", 5), 0);
@@ -645,17 +594,17 @@ TEST(chttp1_framing, http_1_1_response_with_chunked_te_keeps_alive) {
       "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
       "5\r\nhello\r\n0\r\n\r\n";
   for (int bw = 0; bw < 2; bw++) {
-    chttp1_parser_t p;
-    chttp1_settings_t st;
+    chttp1_parser p;
+    chttp1_settings st;
     _p1_ctx_t c;
-    chttp1_errno_t r = _p1_run(&p, &st, &c, false, msg, P1_LEN(msg), bw, NULL);
+    chttp1_errno r = _p1_run(&p, &st, &c, false, msg, P1_LEN(msg), bw, NULL);
     REQUIRE_EQ((int)r, (int)CHTTP1_PAUSED);
     REQUIRE_TRUE(chttp1_should_keep_alive(&p));
   }
 }
 
-/* One row of the Connection table below: the header lines, and whether the
- * message keeps the connection alive. */
+// One row of the Connection table: the version, the header lines, and whether
+// the message keeps the connection alive.
 typedef struct {
   const char *version;
   const char *conn_lines;
@@ -690,10 +639,10 @@ TEST(chttp1_framing, close_wins_over_keep_alive_for_every_version) {
                              _p1_conn_cases[i].conn_lines);
       REQUIRE_GT(n, 0);
       for (int bw = 0; bw < 2; bw++) {
-        chttp1_parser_t p;
-        chttp1_settings_t st;
+        chttp1_parser p;
+        chttp1_settings st;
         _p1_ctx_t c;
-        chttp1_errno_t r =
+        chttp1_errno r =
             _p1_run(&p, &st, &c, request, msg, (size_t)n, bw, NULL);
         REQUIRE_EQ((int)r, (int)CHTTP1_PAUSED);
         REQUIRE_EQ((int)chttp1_should_keep_alive(&p),
@@ -703,16 +652,19 @@ TEST(chttp1_framing, close_wins_over_keep_alive_for_every_version) {
   }
 }
 
-/* One chunk-size line with its CRLF, to be refused or accepted. ok is the
- * answer in request mode and resp_ok the one in response mode, and they only
- * differ for whitespace between the size and the CRLF. */
+// One chunk-size line with its CRLF. ok is the answer in request mode and
+// resp_ok in response mode; they differ only for whitespace between the size
+// and the CRLF. len is explicit so a line can hold a NUL.
 typedef struct {
   const char *line;
-  size_t len; /* explicit, so a line can hold a NUL */
+  size_t len;
   bool ok;
   bool resp_ok;
 } _p1_chunk_case_t;
 
+// Build a _p1_chunk_case_t row from literal s: P1_CHUNK with the answer ok in
+// both modes, P1_CHUNK_RESP_ONLY for a line only response mode accepts. The
+// length comes from sizeof, so a row may hold a NUL.
 #define P1_CHUNK(s, ok) {s, sizeof(s) - 1, ok, ok}
 #define P1_CHUNK_RESP_ONLY(s) {s, sizeof(s) - 1, false, true}
 
@@ -763,10 +715,10 @@ TEST(chttp1_framing, chunk_extension_follows_the_rfc_9112_grammar) {
       memcpy(msg + len, tail, P1_LEN(tail));
       len += P1_LEN(tail);
       for (int bw = 0; bw < 2; bw++) {
-        chttp1_parser_t p;
-        chttp1_settings_t st;
+        chttp1_parser p;
+        chttp1_settings st;
         _p1_ctx_t c;
-        chttp1_errno_t r = _p1_run(&p, &st, &c, request, msg, len, bw, NULL);
+        chttp1_errno r = _p1_run(&p, &st, &c, request, msg, len, bw, NULL);
         if (request ? _p1_chunk_cases[i].ok : _p1_chunk_cases[i].resp_ok) {
           REQUIRE_EQ((int)r, (int)CHTTP1_PAUSED);
           REQUIRE_EQ(c.body_len, (size_t)5);
@@ -778,16 +730,13 @@ TEST(chttp1_framing, chunk_extension_follows_the_rfc_9112_grammar) {
   }
 }
 
-/* ========================================================================== */
-/*               chttp1_parser: WHAT A BODY STILL OWES                        */
-/* ========================================================================== */
-
+// chttp1_parser: what a body still owes
+//
+// A server asks the kernel to wake it once this many bytes are queued, so the
+// answer must never be more than the framing guarantees.
 TEST(chttp1_framing, body_bytes_still_expected_follows_the_framing) {
-  /* A server waiting for the rest of a body asks the kernel to wake it only
-   * once this many bytes are queued, so the answer must never be more than the
-   * framing guarantees. */
-  chttp1_parser_t p;
-  chttp1_settings_t st;
+  chttp1_parser p;
+  chttp1_settings st;
   _p1_ctx_t c;
   static const char cl_head[] =
       "POST /a HTTP/1.1\r\nHost: h\r\nContent-Length: 10\r\n\r\n";
@@ -805,61 +754,56 @@ TEST(chttp1_framing, body_bytes_still_expected_follows_the_framing) {
   REQUIRE_EQ(
       (int)_p1_run(&p, &st, &c, true, te_head, P1_LEN(te_head), false, NULL),
       (int)CHTTP1_OK);
-  /* On a chunk-size line the next byte may be the last one of the body. */
   REQUIRE_EQ(chttp1_body_bytes_still_expected(&p), (uint64_t)0);
   REQUIRE_EQ((int)chttp1_parser_execute(&p, "5\r\nab", 5), (int)CHTTP1_OK);
   REQUIRE_EQ(chttp1_body_bytes_still_expected(&p), (uint64_t)3);
   REQUIRE_EQ((int)chttp1_parser_execute(&p, "cde", 3), (int)CHTTP1_OK);
   REQUIRE_EQ(chttp1_body_bytes_still_expected(&p), (uint64_t)0);
   REQUIRE_EQ((int)chttp1_parser_execute(&p, "\r\n0\r\n", 5), (int)CHTTP1_OK);
-  /* Same in the trailers. */
   REQUIRE_EQ(chttp1_body_bytes_still_expected(&p), (uint64_t)0);
   REQUIRE_EQ((int)chttp1_parser_execute(&p, "\r\n", 2), (int)CHTTP1_PAUSED);
   REQUIRE_EQ(chttp1_body_bytes_still_expected(&p), (uint64_t)0);
   REQUIRE_EQ(chttp1_body_bytes_still_expected(NULL), (uint64_t)0);
 }
 
-static int _p1_refuse_headers(chttp1_parser_t *p) {
+// A headers-complete callback that refuses every message, so a test can see
+// what the parser reports for a request refused at the end of its head.
+static int _p1_refuse_headers(chttp1_parser *p) {
   (void)p;
   return -1;
 }
 
+// A server lingers before closing exactly when this is true, so it may be false
+// only where nothing more of the message can come.
 TEST(chttp1_framing, request_bytes_may_remain_follows_the_framing) {
-  /* A server does a lingering close exactly when this answers true, so it may
-   * only be false where nothing more of the message can come. */
-  chttp1_parser_t p;
-  chttp1_settings_t st;
+  chttp1_parser p;
+  chttp1_settings st;
   chttp1_settings_init(&st);
-  /* In the head the framing is unknown. */
   chttp1_parser_init_request(&p, &st);
   static const char part[] = "POST /a HTTP/1.1\r\nHost: h\r\n";
-  chttp1_errno_t r0 = chttp1_parser_execute(&p, part, P1_LEN(part));
+  chttp1_errno r0 = chttp1_parser_execute(&p, part, P1_LEN(part));
   bool in_head = chttp1_request_bytes_may_remain(&p);
-  /* A request refused at the end of its head: true only when its framing
-   * announces a body. */
   static const char *heads[4] = {
       "GET /a HTTP/1.1\r\nHost: h\r\n\r\n",
       "POST /a HTTP/1.1\r\nHost: h\r\nContent-Length: 0\r\n\r\n",
       "POST /a HTTP/1.1\r\nHost: h\r\nContent-Length: 9\r\n\r\n",
       "POST /a HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n"};
   bool refused[4];
-  chttp1_errno_t rr[4];
+  chttp1_errno rr[4];
   st.on_headers_complete = _p1_refuse_headers;
   for (int i = 0; i < 4; i++) {
     chttp1_parser_init_request(&p, &st);
     rr[i] = chttp1_parser_execute(&p, heads[i], strlen(heads[i]));
     refused[i] = chttp1_request_bytes_may_remain(&p);
   }
-  /* A complete message gives false. */
   chttp1_settings_init(&st);
   chttp1_parser_init_request(&p, &st);
   static const char whole[] =
       "POST /a HTTP/1.1\r\nHost: h\r\nContent-Length: 2\r\n\r\nab";
-  chttp1_errno_t r1 = chttp1_parser_execute(&p, whole, P1_LEN(whole));
+  chttp1_errno r1 = chttp1_parser_execute(&p, whole, P1_LEN(whole));
   bool done = chttp1_request_bytes_may_remain(&p);
-  /* A body cut short gives true. */
   chttp1_parser_init_request(&p, &st);
-  chttp1_errno_t r2 = chttp1_parser_execute(&p, whole, P1_LEN(whole) - 1);
+  chttp1_errno r2 = chttp1_parser_execute(&p, whole, P1_LEN(whole) - 1);
   bool mid_body = chttp1_request_bytes_may_remain(&p);
   REQUIRE_EQ((int)r0, (int)CHTTP1_OK);
   REQUIRE_TRUE(in_head);
@@ -875,23 +819,18 @@ TEST(chttp1_framing, request_bytes_may_remain_follows_the_framing) {
   REQUIRE_FALSE(chttp1_request_bytes_may_remain(NULL));
 }
 
+// With write_nonblocking every write is now or never: a full socket gives -1
+// and chttp1_stream_timed_out() at once, whatever the timeout. The fd is
+// blocking and each chunk is bigger than the socket buffer, so the send after
+// a successful poll must not block either. Without the flag the last call
+// waits its whole 30 s; without MSG_DONTWAIT the first call blocks until
+// SO_SNDTIMEO (30 s) gives up. The 15 s bound sits between.
 TEST(chttp1_stream, a_nonblocking_write_reports_a_full_socket_as_a_timeout) {
-  /* write_nonblocking makes every write "now or never": once the socket is
-   * full the call returns -1 with chttp1_stream_timed_out() true straight
-   * away, whatever timeout the caller passed. The fd itself is blocking and
-   * each chunk is bigger than the socket buffer, so the attempt after a
-   * successful poll must not block either, since POLLOUT means some room and
-   * not room for the whole chunk. Drop the flag and the last call waits out
-   * its whole 30 s timeout, and without MSG_DONTWAIT on the send the first
-   * call blocks until SO_SNDTIMEO gives up (30 s, the safety net that keeps a
-   * regression from hanging the suite). The correct run takes milliseconds,
-   * and the 15 s bound sits halfway, so a runner that stalls for seconds
-   * can't fail it and neither regression can pass it. */
   int fds[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
   struct timeval sndtimeo = {.tv_sec = 30};
   setsockopt(fds[0], SOL_SOCKET, SO_SNDTIMEO, &sndtimeo, sizeof(sndtimeo));
-  chttp1_stream_t s;
+  chttp1_stream s;
   bool prepared = chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL);
   s.write_nonblocking = true;
   static char chunk[1 << 20];
@@ -917,15 +856,14 @@ TEST(chttp1_stream, a_nonblocking_write_reports_a_full_socket_as_a_timeout) {
   REQUIRE_LT(ms, 15000LL);
 }
 
+// A short write can end inside either part, and resuming from the returned
+// count must reproduce the original bytes exactly.
 TEST(chttp1_stream, writev2_keeps_the_byte_order_across_short_writes) {
-  /* The two parts go out as one byte stream. A short write can end inside
-   * either part, and a caller that resumes from the count it got back must
-   * reproduce the original bytes exactly. */
   int fds[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
   fcntl(fds[0], F_SETFL, O_NONBLOCK);
   fcntl(fds[1], F_SETFL, O_NONBLOCK);
-  chttp1_stream_t s;
+  chttp1_stream s;
   bool prepared = chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL);
   s.fd_nonblocking = true;
   s.write_nonblocking = true;
@@ -943,7 +881,7 @@ TEST(chttp1_stream, writev2_keeps_the_byte_order_across_short_writes) {
                                         B - boff, 1000);
       if (n > 0) {
         sent += (size_t)n;
-        continue; /* read only once the socket is full */
+        continue;
       }
       if (chttp1_stream_timed_out(&s)) blocked++;
     }
@@ -960,14 +898,12 @@ TEST(chttp1_stream, writev2_keeps_the_byte_order_across_short_writes) {
   REQUIRE_TRUE(same);
 }
 
-/* The link sends send(2) and read(2) through these two wrappers (see the
- * Makefile). Each one passes straight through unless a test armed it, and then
- * exactly one call reports EINTR without touching the socket, which is what a
- * signal arriving before the call moved a byte looks like. */
+// The link sends send(2) and read(2) through the two wrappers below (see the
+// Makefile). Each passes through unless a test armed it; then exactly one call
+// fails with EINTR without touching the socket, as a signal before the first
+// byte would. Where the linker has no --wrap, send and read below take every
+// call and the originals come from dlsym(RTLD_NEXT).
 #if defined(TEST_NO_LD_WRAP)
-/* The linker has no --wrap, so send and read below take every call this binary
- * makes, and the original functions come from the C library through
- * dlsym(RTLD_NEXT). */
 static ssize_t __real_send(int fd, const void *buf, size_t len, int flags) {
   static ssize_t (*_Atomic fn)(int, const void *, size_t, int);
   if (!fn)
@@ -983,9 +919,14 @@ static ssize_t __real_read(int fd, void *buf, size_t len) {
 ssize_t __real_send(int fd, const void *buf, size_t len, int flags);
 ssize_t __real_read(int fd, void *buf, size_t len);
 #endif
+// Set by a test to make the next send or read fail once with EINTR.
 static atomic_int _p1_send_eintr_armed;
 static atomic_int _p1_read_eintr_armed;
 
+// The wrappers the link routes send(2) and read(2) through. When a test armed
+// _p1_send_eintr_armed or _p1_read_eintr_armed, the next call clears the flag
+// and fails with EINTR without touching the socket; otherwise it passes
+// through to the real function.
 ssize_t __wrap_send(int fd, const void *buf, size_t len, int flags);
 ssize_t __wrap_send(int fd, const void *buf, size_t len, int flags) {
   if (atomic_exchange(&_p1_send_eintr_armed, 0)) {
@@ -1005,6 +946,8 @@ ssize_t __wrap_read(int fd, void *buf, size_t len) {
 }
 
 #if defined(TEST_NO_LD_WRAP)
+// Without --wrap, these definitions take every send and read of the binary
+// and hand them to the wrappers above.
 ssize_t send(int fd, const void *buf, size_t len, int flags) {
   return __wrap_send(fd, buf, len, flags);
 }
@@ -1013,15 +956,13 @@ ssize_t read(int fd, void *buf, size_t len) {
 }
 #endif
 
+// Without the EINTR retry the first write gives -1 with EINTR and the peer gets
+// nothing. A write may be short (the macOS path gives a blocking socket at most
+// SO_SNDLOWAT bytes), so the test writes until all 5 bytes are out.
 TEST(chttp1_stream, a_write_interrupted_by_a_signal_is_retried) {
-  /* Without the EINTR retry the first write returns -1 with last_errno EINTR
-   * and the peer gets nothing. A write may return a short count (csock.h's
-   * macOS path gives a blocking socket at most SO_SNDLOWAT bytes, and Linux
-   * reports that value as 1), so the test keeps writing until the 5 bytes are
-   * out. */
   int fds[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
-  chttp1_stream_t s;
+  chttp1_stream s;
   bool prepared = chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL);
   atomic_store(&_p1_send_eintr_armed, 1);
   static const char hello[] = "hello";
@@ -1043,14 +984,13 @@ TEST(chttp1_stream, a_write_interrupted_by_a_signal_is_retried) {
   REQUIRE_EQ(memcmp(got, "hello", 5), 0);
 }
 
+// The stream isn't fd_nonblocking, so the read waits in poll(2) and then reads
+// once; without the EINTR retry it gives -1 although the bytes are queued.
 TEST(chttp1_stream, a_blocking_read_interrupted_by_a_signal_is_retried) {
-  /* The stream isn't marked fd_nonblocking, so the read waits in poll(2) and
-   * then reads once. If the EINTR retry goes, the read returns -1 with
-   * last_errno EINTR although the bytes are queued. */
   int fds[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
   REQUIRE_EQ(__real_send(fds[1], "world", 5, MSG_NOSIGNAL), (ssize_t)5);
-  chttp1_stream_t s;
+  chttp1_stream s;
   bool prepared = chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL);
   atomic_store(&_p1_read_eintr_armed, 1);
   char got[8] = {0};
@@ -1065,24 +1005,18 @@ TEST(chttp1_stream, a_blocking_read_interrupted_by_a_signal_is_retried) {
   REQUIRE_EQ(memcmp(got, "world", 5), 0);
 }
 
-/* CHTTP_TLS_DEFAULT and a zero-initialised struct are the two documented ways
- * to say "the defaults", and zero is the strict value of every field. We
- * compare field by field and not with memcmp, because a compound literal leaves
- * the padding between members unspecified. A field added to chttp_tls_config_t
- * has to be added here as well. */
+// Compared field by field, because a compound literal leaves the padding
+// unspecified; a new field of chttp_tls_config must be added here too. It also
+// checks that naming only a CA bundle keeps the client certificate required.
 TEST(tls_config, the_default_macro_is_the_zeroed_struct_field_by_field) {
-  chttp_tls_config_t from_macro = CHTTP_TLS_DEFAULT;
+  chttp_tls_config from_macro = CHTTP_TLS_DEFAULT;
   REQUIRE_EQ((void *)from_macro.cert_path, (void *)NULL);
   REQUIRE_EQ((void *)from_macro.key_path, (void *)NULL);
   REQUIRE_EQ((void *)from_macro.ca_bundle_path, (void *)NULL);
-  /* The int casts are what tau's _Generic printer accepts. */
   REQUIRE_EQ((int)from_macro.insecure_skip_verify, 0);
   REQUIRE_EQ((int)from_macro.insecure_skip_hostname_check, 0);
   REQUIRE_EQ((int)from_macro.client_cert_optional, 0);
 
-  /* A designated initializer that names only a CA bundle, which is the usual
-   * way to set up mutual TLS on a server, keeps the client certificate
-   * required. */
-  chttp_tls_config_t mtls = {.ca_bundle_path = "ca.pem"};
+  chttp_tls_config mtls = {.ca_bundle_path = "ca.pem"};
   REQUIRE_EQ((int)mtls.client_cert_optional, 0);
 }

@@ -24,58 +24,51 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file test_helpers/clrucache.h
- * @brief INTERNAL ONLY. The test-only hooks of clrucache.
- *
- * src/clrucache.c defines these hooks and the clrucache tests call them.
- * They force a failure in the handle table, read the segments and the
- * waiters of a cache, and hold a publishing thread at a chosen point.
- *
- * All of it exists only in a build that defines RUNNING_UNIT_TESTS. Every test
- * suite defines it and the shipped library never does, so none of this is
- * installed or exported.
- */
-
+// INTERNAL ONLY: the test hooks of clrucache. src/clrucache.c defines them so a
+// test can force a failure in the handle table, read the segments and waiters
+// of a cache and hold a publishing thread at a chosen point. They exist only
+// when RUNNING_UNIT_TESTS is defined, which the shipped library never does.
 #include <clrucache.h>
 
 #ifdef RUNNING_UNIT_TESTS
+// The opaque cache, which the hooks below take by pointer.
 struct clrucache;
 
-/* Resolves h to the cache behind it without a pin, so there is no unpin to
- * forget; NULL under the same conditions as the real resolve. */
-struct clrucache *_clrucache_resolve_for_tests(ccache h);
+// Gives the cache behind h with no pin, so a test has no unpin to forget; NULL
+// where the real resolve would fail.
+struct clrucache *clrucache__resolve_for_tests(ccache h);
 
-/* Makes the very next push onto the free list of the handle table behave
- * exactly like an allocation failure, then disarms itself, so a test reaches
- * the recovery of a lost index without a real out-of-memory condition. */
-void _clrucache_force_next_free_index_push_failure_for_tests(void);
+// Makes the next push onto the handle table's free list fail like an
+// allocation, then disarms itself, so a test reaches the recovery of a lost
+// index without a real out-of-memory condition.
+void clrucache__force_next_free_index_push_failure_for_tests(void);
 
-/* The sum of the segment capacities, and the number of segments in
- * *out_segments, so a test can pin how a capacity is split. */
-size_t _clrucache_segment_capacity_sum_for_tests(ccache cache,
+// Gives the sum of the segment capacities and puts the number of segments in
+// *out_segments, so a test can pin how a capacity is split.
+size_t clrucache__segment_capacity_sum_for_tests(ccache cache,
                                                  size_t *out_segments);
 
-/* The number of segments whose map hashes in the keyed mode of chashmap,
- * and the number of segments in *out_segments. */
-size_t _clrucache_keyed_segment_maps_for_tests(ccache cache,
+// Gives the number of segments whose map hashes in chashmap's keyed mode and
+// puts the number of segments in *out_segments, so a test can see the hash
+// flooding defence switch on.
+size_t clrucache__keyed_segment_maps_for_tests(ccache cache,
                                                size_t *out_segments);
 
-/* The indices on the free list of the handle table, and the number of slots
- * the table holds, counting freed slots not reused yet. Read together, they
- * describe the table whatever handles earlier tests held. */
-size_t _clrucache_free_index_count_for_tests(void);
-size_t _clrucache_slot_table_capacity_for_tests(void);
+// Give the number of indices on the handle table's free list and the number of
+// slots the table holds, so a test can see that slots are reused and none is
+// lost, whatever handles earlier tests held.
+size_t clrucache__free_index_count_for_tests(void);
+size_t clrucache__slot_table_capacity_for_tests(void);
 
-/* How many waiter references the entry of key_pair holds right now, or -1
- * when the cache doesn't hold the key, so a test knows that a getter really
- * waits on an operation in flight. */
-int _clrucache_key_waiters_for_tests(ccache cache, const cmap_pair *key_pair);
+// Gives the waiter references the entry of key_pair holds, or -1 when the cache
+// doesn't hold the key, so a test knows that a getter really waits on an
+// operation in flight.
+int clrucache__key_waiters_for_tests(ccache cache, const cmap_pair *key_pair);
 
-/* Makes a thread that publishes an entry hold the mutex of its segment for
- * delay_us more before it wakes the waiters, so another thread can queue for
- * that mutex first. It doesn't disarm itself: a test sets it back to 0. The
- * second call tells whether the publishing thread has entered that delay. */
+// Make a thread that publishes an entry hold its segment's mutex delay_us
+// longer before it wakes the waiters, so a test can queue another thread for
+// that mutex first; the delay stays until the test sets 0. The second call
+// tells whether a publisher has entered the delay.
 void ccache_test_set_post_publish_delay_us(unsigned int delay_us);
 bool ccache_test_post_publish_delay_entered(void);
-#endif /* RUNNING_UNIT_TESTS */
+#endif

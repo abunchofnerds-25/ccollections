@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cyaml.h>
 
-ccol_retval_t cyaml_set(cyaml root, const char *path, val);
+ccol_retval cyaml_set(cyaml root, const char *path, val);
 .fi
 .SH DESCRIPTION
 .nf
@@ -100,7 +100,7 @@ val    C value, whose type is resolved at compile time.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_retval_t: ccol_success on success.
+ccol_retval: ccol_success on success.
 ccol_invalid_args; an empty path, a malformed path component at any
                       position (an empty component: nothing between
                       two dots, a leading dot, or a trailing dot; a

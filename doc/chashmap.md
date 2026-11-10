@@ -427,7 +427,7 @@ The macros stop the program on a hard error such as running out of memory.
 For most code that's the right default, but library code, a server or
 anything else that has to recover should use the raw layer instead. When
 `chashmap_create` and its related functions fail they return `NULL` and an
-error string, and every element function returns a `ccol_retval_t`. Keys
+error string, and every element function returns a `ccol_retval`. Keys
 and values go to the raw layer as a `cmap_pair` (a pointer and a size), so
 it also takes binary keys of any length. `chashmap_get_elem_ref` fills a
 `cmap_pair` that you own with the location and the size of the stored
@@ -466,7 +466,7 @@ int main(void) {
 
         cmap_pair key = {(void *)start, len};
         cmap_pair val;
-        ccol_retval_t rc = chashmap_get_elem_ref(seen, &key, &val);
+        ccol_retval rc = chashmap_get_elem_ref(seen, &key, &val);
         if (rc == ccol_success) {
             int count;
             memcpy(&count, val.ptr, sizeof(count));

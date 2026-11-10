@@ -1,0 +1,61 @@
+.TH CCOL_VERSION 3 "2026-11-09" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_version, ccol_version_string \- version of the library a program
+runs with
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/common.h>
+
+#define CCOL_VERSION_MAJOR  2
+#define CCOL_VERSION_MINOR  0
+#define CCOL_VERSION_PATCH  0
+#define CCOL_VERSION_NUMBER /* 0xMMmmpp, here 0x020000 */
+#define CCOL_VERSION_STRING /* "MAJOR.MINOR.PATCH", here "2.0.0" */
+
+unsigned int ccol_version(void);
+const char *ccol_version_string(void);
+.fi
+.SH DESCRIPTION
+.nf
+The macros give the release of the headers that a program is compiled
+with. The two functions give the release of the shared library that the
+dynamic loader picked when the program started. The two can differ: a
+program built against 2.0.0 runs with every later 2.x release, because
+they all have the SONAME libccollections.so.2.
+
+CCOL_VERSION_NUMBER packs the three numbers as
+(MAJOR << 16) | (MINOR << 8) | PATCH, so two releases compare as plain
+integers. MINOR and PATCH are each below 256.
+
+ccol_version() returns the packed number of the loaded library, in the
+same form as CCOL_VERSION_NUMBER, and ccol_version_string() its text in
+the same form as CCOL_VERSION_STRING.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_version() returns the packed number. ccol_version_string() returns a
+pointer to a string with static storage duration, which never changes
+and must not be freed. Neither function fails.
+.fi
+.SH THREAD SAFETY
+.nf
+Thread-safe. Neither function reads or writes any state.
+.fi
+.SH EXAMPLES
+.nf
+#include <stdio.h>
+#include <ccollections/common.h>
+
+int main(void) {
+  /* A feature that came with 2.1 can be tested at run time. */
+  if (ccol_version() < 0x020100u)
+    printf("library %s is older than 2.1\en", ccol_version_string());
+  printf("built with %s, running with %s\en", CCOL_VERSION_STRING,
+         ccol_version_string());
+  return 0;
+}
+.fi
+.SH "SEE ALSO"
+.BR ccollections (7)

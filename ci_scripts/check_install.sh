@@ -109,6 +109,29 @@ else
 		fail "the example does not load the library from $libdir"
 fi
 
+# The installed header, the installed library and the pkg-config file have to
+# name one release: a program compiled against the header, linked by
+# pkg-config and run against the library sees all three.
+cat > "$tmp/version.c" <<'EOF'
+#include <stdio.h>
+#include <ccollections/common.h>
+int main(void) {
+  printf("%s %s\n", CCOL_VERSION_STRING, ccol_version_string());
+  return ccol_version() == CCOL_VERSION_NUMBER ? 0 : 1;
+}
+EOF
+# shellcheck disable=SC2086
+"$CC" -std=gnu11 $cflags "$tmp/version.c" -o "$tmp/version" $libs $rpath \
+	2>"$tmp/cc.err" || {
+	sed 's/^/  /' "$tmp/cc.err" >&2
+	fail "the version probe does not build against the installed library"
+}
+pc_version=$(pkg-config --modversion ccollections) || fail "pkg-config --modversion failed"
+versions=$(env -u LD_LIBRARY_PATH -u DYLD_LIBRARY_PATH "$tmp/version") ||
+	fail "the installed library reports a version number other than its header's"
+[ "$versions" = "$pc_version $pc_version" ] ||
+	fail "header and library report '$versions', pkg-config '$pc_version'"
+
 # The static link names the archive by its path, because when a shared library
 # and an archive sit in the same directory every linker on these systems picks
 # the shared library for -lccollections.

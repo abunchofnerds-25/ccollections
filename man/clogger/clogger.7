@@ -22,7 +22,7 @@ A logger writes to one of these outputs:
     with optional size rotation, time rotation and gzip compression of
     the rotated files.
 Either kind of logger can log synchronously, or hand its writes to a
-writer thread of its own (async mode, through a clog_async_cfg_t).
+writer thread of its own (async mode, through a clog_async_cfg).
 .fi
 .SS Handles
 .nf
@@ -117,7 +117,7 @@ their timestamps; until then the operator removes or renames them.
 .SS Memory management
 .nf
 clog_create_from_fd_mp(3) and clog_create_from_file_mp(3) take an
-optional ccol_memmgmt_procs_t, and the root logger and every logger
+optional ccol_memmgmt_procs, and the root logger and every logger
 derived from it allocate the shared output state, the write buffers,
 the message buffers and the fields through it.  Two allocations belong
 to the library and not to one logger, so they don't go through it: the

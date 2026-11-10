@@ -22,28 +22,20 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/*
- * Standalone differential-testing helper. It isn't part of the public
- * library surface and it is kept out of `make test` and `make memtest` on
- * purpose; the only thing that calls it is
- * tests/cyaml/differential/compare_pyyaml.py.
- *
- * It reads a YAML document or stream from stdin and dumps the DOM as JSON
- * on stdout, so you can diff it at the value level against an independent
- * YAML implementation (PyYAML, which compare_pyyaml.py drives).
- * tests_spec_suite.c already covers accepting and rejecting, and this
- * program looks one level below that.
- *
- * Exit codes: 0 after a successful parse and dump; 1 on a real parse error,
- * in which case nothing goes to stdout and the message goes to stderr; 2 on
- * a usage error or an environment error (out of memory or bad output).
- */
-
+// A standalone helper for differential testing, kept out of make test and make
+// memtest; only tests/cyaml/differential/compare_pyyaml.py runs it. It reads a
+// YAML document or stream from stdin and prints the DOM as JSON, so the value
+// level can be compared with PyYAML (tests_spec_suite.c covers accept and
+// reject). Exit codes: 0 after a parse and dump, 1 on a parse error (message on
+// stderr, nothing on stdout), 2 on an environment error (out of memory or a
+// failed write).
 #include <cyaml.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+// Prints s as a JSON string with the escapes JSON needs, for scalar values and
+// keys.
 static void json_print_escaped_string(const char *s) {
   putchar('"');
   for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
@@ -74,6 +66,10 @@ static void json_print_escaped_string(const char *s) {
   putchar('"');
 }
 
+// Prints node and everything below it as JSON. NaN and the infinities have no
+// JSON literal, so they go out as the marker strings "__cyaml_nan__",
+// "__cyaml_inf__" and "__cyaml_neg_inf__", which no real string can equal and
+// which compare_pyyaml.py treats specially.
 static void dump_node(cyaml node) {
   switch (cyaml_type(node)) {
     case CYAML_NULL:
@@ -87,12 +83,6 @@ static void dump_node(cyaml node) {
       break;
     case CYAML_FLOAT: {
       double d = cyaml_double_val(node);
-      /* JSON has no literal for NaN or Infinity. If we wrote them as plain
-       * strings they would look exactly like a real CYAML_STRING node on
-       * the comparison side and a real type mismatch would go unnoticed.
-       * So we encode them as a value that no string from a real parse can
-       * ever be equal to, and compare_pyyaml.py treats them as a special
-       * case. */
       if (isnan(d)) {
         fputs("\"__cyaml_nan__\"", stdout);
       } else if (isinf(d)) {
@@ -118,7 +108,7 @@ static void dump_node(cyaml node) {
     case CYAML_DICTIONARY: {
       putchar('{');
       bool first = true;
-      cyaml_dictionary_iter_t it;
+      cyaml_dictionary_iter it;
       for (bool more = cyaml_dictionary_first(node, &it); more;
            more = cyaml_dictionary_next(&it)) {
         if (!first) putchar(',');
@@ -133,6 +123,9 @@ static void dump_node(cyaml node) {
   }
 }
 
+// Reads all of stdin, parses it and prints the tree. A final fflush() and
+// ferror() check catches any failed write (a full disk, say), which is what
+// gives exit code 2 for bad output.
 int main(void) {
   size_t cap = 65536, len = 0;
   char *buf = malloc(cap);
@@ -170,13 +163,6 @@ int main(void) {
   putchar('\n');
   cyaml_destroy(root);
 
-  /* dump_node and putchar above write through buffered stdio (putchar,
-   * fputs and printf) and this function doesn't check any of their return
-   * values one by one. A single fflush() and ferror() check here catches a
-   * failure in any of them, most likely a full disk when stdout goes to a
-   * file. It's what delivers the part of this file's exit code contract
-   * that reads "2 on a usage error or an environment error (out of memory or
-   * bad output)", and nothing else in this function delivers it. */
   if (fflush(stdout) != 0 || ferror(stdout)) {
     fprintf(stderr, "cyaml_to_json: error writing output\n");
     return 2;

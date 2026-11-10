@@ -7,8 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadcomm.h>
 
-ccol_retval_t cchan_timed_recv(cchan *ch,
-                               cmessage_t *target_buf,
+ccol_retval cchan_timed_recv(cchan *ch,
+                               cmessage *target_buf,
                                uint64_t timeout_us);
 .fi
 .SH DESCRIPTION

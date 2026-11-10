@@ -1,6 +1,6 @@
 .TH CSTR_INSERT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_insert \- insert a C string at a position, and call _ccol_fatal_err() on failure
+cstr_insert \- insert a C string at a position, and call ccol__fatal_err() on failure
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -12,7 +12,7 @@ cstr_insert(s, pos, str);
 .SH DESCRIPTION
 .nf
 This macro calls cstring_insert(), and when that call gives anything
-other than ccol_success it calls _ccol_fatal_err().
+other than ccol_success it calls ccol__fatal_err().
 .fi
 .SH PARAMETERS
 .nf

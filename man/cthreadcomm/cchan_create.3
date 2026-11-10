@@ -23,7 +23,7 @@ management procedures.
 .nf
 max_size   Maximum number of messages that each direction can hold.
            Because one circular queue holds each direction, the same
-           SIZE_MAX / sizeof(cmessage_t) bound that
+           SIZE_MAX / sizeof(cmessage) bound that
            ccircq_create(3) documents applies here.
 err_str    Optional pointer for an error string
 .fi

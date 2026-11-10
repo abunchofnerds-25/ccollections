@@ -12,7 +12,7 @@ ccache_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb);
 .SH DESCRIPTION
 .nf
 ccache_declare() and ccache_init() in a single statement. This is the
-usual way to create an LRU cache, and it calls _ccol_fatal_err() when
+usual way to create an LRU cache, and it calls ccol__fatal_err() when
 the creation fails.
 .fi
 .SH PARAMETERS

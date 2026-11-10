@@ -7,8 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clogger.h>
 
-ccol_retval_t clog_set_facility(clog logger,
-                                clog_syslog_facility_t facility);
+ccol_retval clog_set_facility(clog logger,
+                                clog_syslog_facility facility);
 .fi
 .SH DESCRIPTION
 .nf
@@ -42,7 +42,7 @@ Available facility codes (RFC 5424 / RFC 3164):
 .SH PARAMETERS
 .nf
 logger    Logger handle.
-facility  The facility code to use (clog_syslog_facility_t).  A value
+facility  The facility code to use (clog_syslog_facility).  A value
           that the enum does not name (12 to 15, or anything outside
           0 to 23, such as 99 or -1) is refused and the facility stays
           as it is, which keeps the PRI of every record in the range
@@ -51,7 +51,7 @@ facility  The facility code to use (clog_syslog_facility_t).  A value
 .SH RETURN VALUE
 .nf
 ccol_success       The facility is set.
-ccol_invalid_args  clog_syslog_facility_t does not name facility.  The
+ccol_invalid_args  clog_syslog_facility does not name facility.  The
                    facility stays as it is.
 .fi
 .SH NOTES

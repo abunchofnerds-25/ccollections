@@ -1,17 +1,17 @@
 .TH CHTTPCLI_ASYNC_RESULT_FREE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpcli_async_result_free \- free a chttpcli_async_result_t
+chttpcli_async_result_free \- free a chttpcli_async_result
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/chttpclient.h>
 
-void chttpcli_async_result_free(chttpcli_async_result_t *result);
+void chttpcli_async_result_free(chttpcli_async_result *result);
 .fi
 .SH DESCRIPTION
 .nf
-This function frees a chttpcli_async_result_t that
+This function frees a chttpcli_async_result that
 chttpcli_async_result_get returned. It does NOT free result->resp,
 so when result->rv == ccol_success you have to free that first, with
 its own call to chttpcli_resp_free. It does NOT free the future

@@ -22,14 +22,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* A wait for a forked test child that can't outlast the test.
- *
- * A plain waitpid() waits as long as the child lives, so a child stuck on a
- * lock or a lost wakeup holds the whole test binary until the CI job's time
- * limit, and the log never names the test. test_wait_child_bounded() polls
- * the child against CLOCK_MONOTONIC, and once the bound is over it kills the
- * child with SIGKILL, reaps it and says so on stderr. */
-
+// A wait for a forked test child that can't outlast the test, so a stuck child
+// fails its own test instead of holding the binary until the CI time limit.
 #ifndef CCOL_TESTS_TEST_WAIT_H
 #define CCOL_TESTS_TEST_WAIT_H
 
@@ -41,17 +35,20 @@ SOFTWARE.
 #include <sys/wait.h>
 #include <time.h>
 
+// Evaluates to the nanoseconds from timespec T1 to T2, as a long long.
+// test_wait_child_bounded() uses it to compare the time waited with its
+// bound. T1 and T2 are struct timespec lvalues, each evaluated twice.
 #define _diffTimeNsec(T1, T2)                          \
   ((long long)(T2.tv_sec - T1.tv_sec) * 1000000000LL + \
    (T2.tv_nsec - T1.tv_nsec))
 
-/* Waits at most bound_ms for the child pid to end. Returns true when it ended
- * on its own, with its wait status in *status. Returns false when the bound
- * ran out (the child is then killed and reaped, and *status holds SIGKILL) or
- * when waitpid() failed with anything but EINTR. */
+// Waits for the forked child pid, for at most bound_ms, so a stuck child fails
+// its own test. It polls every 100 ms. It gives true when the child ended on
+// its own, with its status in *status. It gives false when waitpid() failed or
+// the bound ran out; then the child is killed with SIGKILL, reaped, and stderr
+// says so.
 static inline bool test_wait_child_bounded(pid_t pid, int bound_ms,
                                            int *status) {
-  // Convert milliseconds to nanoseconds first.
   long long bound_ns = (long long)bound_ms * 1000000LL;
   struct timespec start, now;
   clock_gettime(CLOCK_MONOTONIC, &start);
@@ -67,7 +64,7 @@ static inline bool test_wait_child_bounded(pid_t pid, int bound_ms,
     long long ns = _diffTimeNsec(start, now);
     if (ns >= bound_ns) break;
 
-    struct timespec nap = {0, 100 * 1000 * 1000};  // sleep for 100 microseconds
+    struct timespec nap = {0, 100 * 1000 * 1000};
     nanosleep(&nap, NULL);
   }
 
@@ -79,4 +76,4 @@ static inline bool test_wait_child_bounded(pid_t pid, int bound_ms,
   return false;
 }
 
-#endif /* CCOL_TESTS_TEST_WAIT_H */
+#endif

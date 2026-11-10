@@ -13,12 +13,12 @@ You don't need any of this to use the library. If you pass nothing (or
 ## The allocator table
 
 ```c
-typedef struct ccol_memmgmt_procs_t {
-    ccol_malloc_t  malloc;    /* void *(*)(size_t)          */
-    ccol_free_t    free;      /* void  (*)(void *)          */
-    ccol_calloc_t  calloc;    /* void *(*)(size_t, size_t)  */
-    ccol_realloc_t realloc;   /* void *(*)(void *, size_t)  */
-} ccol_memmgmt_procs_t;
+typedef struct ccol_memmgmt_procs {
+    ccol_malloc  malloc;    /* void *(*)(size_t)          */
+    ccol_free    free;      /* void  (*)(void *)          */
+    ccol_calloc  calloc;    /* void *(*)(size_t, size_t)  */
+    ccol_realloc realloc;   /* void *(*)(void *, size_t)  */
+} ccol_memmgmt_procs;
 ```
 
 Every module that allocates memory takes a pointer to such a table when it
@@ -77,7 +77,7 @@ static void count_free(void *p) {
     free(p);
 }
 
-static ccol_memmgmt_procs_t counting = {
+static ccol_memmgmt_procs counting = {
     .malloc = count_malloc, .free = count_free,
     .calloc = count_calloc, .realloc = count_realloc,
 };
@@ -131,7 +131,7 @@ are safe for concurrent calls.
 For every module except `cmempool`, the last call to your functions
 happens before the object's destroy returns. So the functions have to keep
 working until you have destroyed every object that uses them, and the table
-itself (the `ccol_memmgmt_procs_t` struct) has to stay valid for the same
+itself (the `ccol_memmgmt_procs` struct) has to stay valid for the same
 time unless the module keeps its own copy. `clrucache`, `cjson` and `cyaml`
 do keep a copy, so with them you can release the struct as soon as the call
 that creates the object returns. A `static` table like the ones in these
@@ -220,7 +220,7 @@ static void *arena_realloc(void *old, size_t n) {
 }
 static void arena_free(void *p) { (void)p; }   /* the arena releases all blocks in one step */
 
-static ccol_memmgmt_procs_t arena_procs = {
+static ccol_memmgmt_procs arena_procs = {
     .malloc = arena_malloc, .free = arena_free,
     .calloc = arena_calloc, .realloc = arena_realloc,
 };
@@ -302,7 +302,7 @@ static void pool_free(void *p) {
     crmempool_free_entry(node_pool, p);
 }
 
-static ccol_memmgmt_procs_t pool_procs = {
+static ccol_memmgmt_procs pool_procs = {
     .malloc = pool_malloc, .free = pool_free,
     .calloc = pool_calloc, .realloc = pool_realloc,
 };

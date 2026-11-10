@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/csort.h>
 
-ccol_comparison_proc_t csort_get_default_comparison_proc(dummy_var);
+ccol_comparison_proc csort_get_default_comparison_proc(dummy_var);
 .fi
 .SH DESCRIPTION
 .nf
@@ -40,7 +40,7 @@ A fixed-size char array (char[N]) is not a supported type, and it is a
 different thing from a char* pointer variable, so the macro gives NULL
 for it like for any other unsupported type. The bytes stored inline in
 such an array are not a char* value, while
-_csort_default_string_comparison_proc dereferences a pointer, so its
+csort__default_string_comparison_proc dereferences a pointer, so its
 contract doesn't hold for an array. To sort a collection of fixed-size
 string buffers, write your own comparator and pass it directly to
 cvector_sort_with_comparison_proc() or to csort_sort().
@@ -63,9 +63,9 @@ rvalue such as a cast or a literal is fine, and the expression does not
 need an address.
 
 For a real char* or const char* pointer variable the macro gives
-_csort_default_string_comparison_proc, and that includes a pointer
+csort__default_string_comparison_proc, and that includes a pointer
 variable that is itself const or volatile. For a fixed-size char array
-(char[N]) it gives NULL, not _csort_default_string_comparison_proc. For
+(char[N]) it gives NULL, not csort__default_string_comparison_proc. For
 an enumerated type it gives the comparison function of the standard
 integer type that is compatible with it.
 
@@ -82,8 +82,8 @@ of the element. That matters for a custom getter over a packed buffer.
 .nf
 // Get the comparator for a string
 char* dummy_str;
-ccol_comparison_proc_t cmp = csort_get_default_comparison_proc(dummy_str);
-// cmp now points to _csort_default_string_comparison_proc
+ccol_comparison_proc cmp = csort_get_default_comparison_proc(dummy_str);
+// cmp now points to csort__default_string_comparison_proc
 
 // Get the comparator for a double
 double dummy_double;

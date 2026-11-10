@@ -7,9 +7,9 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-ccol_retval_t chttpcli_do_pooled_streaming(chttpcli cli,
-                                               const chttp_request_t *req,
-                                               chttpcli_write_fn_t write_fn,
+ccol_retval chttpcli_do_pooled_streaming(chttpcli cli,
+                                               const chttp_request *req,
+                                               chttpcli_write_fn write_fn,
                                                void *write_ctx,
                                                int *status_code_out);
 .fi

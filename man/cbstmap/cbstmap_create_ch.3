@@ -7,11 +7,11 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cbstmap.h>
 
-typedef int (*ccol_comparison_proc_t)(const void *first,
+typedef int (*ccol_comparison_proc)(const void *first,
                                       const void *second);
 
 cbmap cbstmap_create_ch(ccol_data_type key_type,
-                        ccol_comparison_proc_t custom_comparison_proc,
+                        ccol_comparison_proc custom_comparison_proc,
                         char **err);
 .fi
 .SH DESCRIPTION
@@ -52,7 +52,7 @@ byte with memcpy, not through a pointer cast to the key type. The
 procedure must stay callable for the whole life of the map.
 
 This function reports a failure to the caller, while the
-cbmap_construct_cc(3) and cbmap_init_cc(3) macros call _ccol_fatal_err()
+cbmap_construct_cc(3) and cbmap_init_cc(3) macros call ccol__fatal_err()
 on a failure.
 
 Destroy the map with cbmap_destroy(3).

@@ -22,19 +22,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* This binary checks what clogger does about SIGXFSZ, which a write to a
- * regular file raises at the process's file size limit (RLIMIT_FSIZE). It
- * runs with SIGXFSZ at its default disposition, which ends the process, and
- * it's a binary of its own because tests.c ignores SIGXFSZ for its whole
- * process, and an ignored SIGXFSZ can't be seen.
- *
- * Opening a regular file under CLOG_SIGNALS_AUTO sets SIG_IGN once for the
- * process, and a policy change and a file size limit are process state as
- * well, so every scenario runs in a forked child of a process that never
- * opens a logger itself. The child reports back over a pipe: 0 for a pass, a
- * positive source line for the check that failed and a negative marker for
- * each phase it completed. */
-
+// Checks what clogger does about SIGXFSZ, which a write to a regular file
+// raises at RLIMIT_FSIZE, with SIGXFSZ at its default disposition. It's a
+// binary of its own because tests.c ignores SIGXFSZ for its whole process. An
+// open under AUTO, a policy change and a size limit are all process state, so
+// every scenario runs in a forked child of a process that never opens a logger.
+// The child reports over a pipe: 0 for a pass, a positive source line for a
+// failed check, a negative marker per completed phase.
 #include <clogger.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -53,8 +47,8 @@ SOFTWARE.
 
 TAU_MAIN()
 
-/* Puts SIGXFSZ back to its default disposition and unblocks it in the
- * calling thread. */
+// Puts SIGXFSZ back to its default disposition and unblocks it on the calling
+// thread, since the binary inherits whatever its parent set.
 static void _sigxfsz_default(void) {
   signal(SIGXFSZ, SIG_DFL);
   sigset_t set;
@@ -63,23 +57,23 @@ static void _sigxfsz_default(void) {
   pthread_sigmask(SIG_UNBLOCK, &set, NULL);
 }
 
+// Resets SIGXFSZ and the other inherited signal state before any test.
 __attribute__((constructor)) static void _setup(void) {
   _sigxfsz_default();
   test_reset_inherited_signals();
 }
 
-/* ========================================================================== */
-/*                         HELPERS                                            */
-/* ========================================================================== */
-
+// Tells whether SIGXFSZ's disposition is handler, so a test can see what the
+// library changed.
 static bool _sigxfsz_is(void (*handler)(int)) {
   struct sigaction sa;
   if (sigaction(SIGXFSZ, NULL, &sa) != 0) return false;
   return !(sa.sa_flags & SA_SIGINFO) && sa.sa_handler == handler;
 }
 
-/* Sets the process's soft file size limit and keeps the hard one.
- * RLIM_INFINITY lifts the soft limit up to the hard one. */
+// Sets the soft file size limit to soft and keeps the hard one (RLIM_INFINITY
+// lifts it to the hard limit), so a scenario can put a log at the limit.
+// Returns whether it worked.
 static bool _set_file_size_limit(rlim_t soft) {
   struct rlimit rl;
   if (getrlimit(RLIMIT_FSIZE, &rl) != 0) return false;
@@ -87,13 +81,15 @@ static bool _set_file_size_limit(rlim_t soft) {
   return setrlimit(RLIMIT_FSIZE, &rl) == 0;
 }
 
+// Gives the size of path, or -1, so a scenario can set the limit relative to
+// what the log holds.
 static off_t _file_size(const char *path) {
   struct stat st;
   return stat(path, &st) == 0 ? st.st_size : -1;
 }
 
-/* Reads at most cap - 1 bytes of path into buf, terminated, and returns the
- * count, or -1. */
+// Reads at most cap - 1 bytes of path into buf, NUL-terminated, and gives the
+// count, or -1.
 static ssize_t _read_file(const char *path, char *buf, size_t cap) {
   int fd = open(path, O_RDONLY | O_CLOEXEC);
   if (fd < 0) return -1;
@@ -109,19 +105,20 @@ static ssize_t _read_file(const char *path, char *buf, size_t cap) {
   return (ssize_t)got;
 }
 
-/* The log file of one scenario. It goes in the working directory so it ends
- * up on the filesystem the tests normally use. */
+// Writes the log path of the scenario tag into buf. The file goes in the
+// working directory, on the filesystem the tests normally use.
 static void _log_path(char *buf, size_t cap, const char *tag) {
   snprintf(buf, cap, "sigxfsz_%s.log", tag);
   (void)unlink(buf);
 }
 
-static const clog_async_cfg_t _async_cfg = {0};
+// An all-default async config for the async scenarios.
+static const clog_async_cfg _async_cfg = {0};
 
-/* ---- child side ---------------------------------------------------------- */
-
+// The write end of the pipe a forked child reports through.
 static int _result_fd = -1;
 
+// Sends one report value v from a child to the parent.
 static void _child_send(int v) {
   ssize_t n;
   do {
@@ -129,6 +126,8 @@ static void _child_send(int v) {
   } while (n < 0 && errno == EINTR);
 }
 
+// Checks cond in a child; on failure it reports the source line and ends the
+// child, since a tau assertion can't run there.
 #define CHILD_CHECK(cond)    \
   do {                       \
     if (!(cond)) {           \
@@ -137,17 +136,19 @@ static void _child_send(int v) {
     }                        \
   } while (0)
 
+// Reports a pass (0) and ends the child.
 static void _child_pass(void) {
   _child_send(0);
   test_child_exit(0);
 }
 
+// Reports that the child completed phase, so a failure shows how far it got.
 static void _child_mark(int phase) { _child_send(-phase); }
 
-/* The file ends with a newline and holds `last`, the record the logger took
- * once the limit was lifted. A synchronous logger names the records that the
- * limit refused with a marker (lost is true), while an async logger keeps
- * them and delivers every one of them once there is room. */
+// Checks that the log at path ends with a newline and holds last, the record
+// taken once the limit was lifted. With lost true (a synchronous logger) it
+// also wants the loss marker for the refused records; an async logger keeps
+// them and delivers them all once there is room.
 static void _child_check_repaired(const char *path, const char *last,
                                   bool lost) {
   static char buf[1 << 16];
@@ -166,18 +167,18 @@ static void _child_check_repaired(const char *path, const char *last,
   }
 }
 
-/* ---- parent side --------------------------------------------------------- */
-
+// What a forked scenario left: its wait status, the values it reported in
+// order, and whether the fork happened.
 typedef struct {
-  int status;    /* from waitpid() */
-  int values[8]; /* what the child sent, in order */
+  int status;
+  int values[8];
   int nvalues;
   bool forked;
 } child_outcome_t;
 
-/* Runs fn in a forked child, collects what it reports and reaps it. The child
- * arms an alarm, so a scenario that hangs dies by SIGALRM and this wait can't
- * last for ever. */
+// Runs scenario fn in a forked child, collects its reports into *out and reaps
+// it. The child arms an alarm, so a scenario that hangs dies by SIGALRM and the
+// wait ends.
 static void _run_child(void (*fn)(void), child_outcome_t *out) {
   memset(out, 0, sizeof(*out));
   int p[2];
@@ -195,7 +196,7 @@ static void _run_child(void (*fn)(void), child_outcome_t *out) {
     _sigxfsz_default();
     alarm(120);
     fn();
-    _child_send(-1000); /* a scenario must end in _child_pass() */
+    _child_send(-1000);
     test_child_exit(1);
   }
   out->forked = true;
@@ -212,18 +213,22 @@ static void _run_child(void (*fn)(void), child_outcome_t *out) {
   }
 }
 
-/* A child passed when the last thing it reported is 0 and no signal killed
- * it. We don't read its exit status since valgrind can replace the exit
- * status of a forked child. */
+// Tells whether a child passed: its last report is 0 and no signal killed it.
+// The exit status isn't used, because valgrind can replace a forked child's
+// status.
 static bool _child_passed(const child_outcome_t *o) {
   return o->forked && !WIFSIGNALED(o->status) && o->nvalues > 0 &&
          o->values[o->nvalues - 1] == 0;
 }
 
+// Tells whether a child was killed by sig, for the scenarios where SIGXFSZ must
+// end it.
 static bool _child_died_of(const child_outcome_t *o, int sig) {
   return o->forked && WIFSIGNALED(o->status) && WTERMSIG(o->status) == sig;
 }
 
+// Prints a failed child's status and reports to stderr, so a failure says what
+// happened.
 static void _print_child(const char *name, const child_outcome_t *o) {
   if (_child_passed(o)) return;
   fprintf(stderr, "%s: forked=%d status=0x%x", name, o->forked, o->status);
@@ -234,23 +239,18 @@ static void _print_child(const char *name, const child_outcome_t *o) {
   fprintf(stderr, "\n");
 }
 
-/* ========================================================================== */
-/*                         SCENARIOS                                          */
-/* ========================================================================== */
-
-/* A synchronous file logger under CLOG_SIGNALS_AUTO, whose open sets SIG_IGN
- * for SIGXFSZ. `extra` is how far past the size of the first record the
- * limit lies. With 0 the next write starts exactly at the limit and fails
- * right away, and with a few bytes the kernel takes part of a record first.
- * Once the limit is lifted the logger closes the fragment and names the
- * loss. */
+// Scenario body: a synchronous file logger under AUTO, whose open sets SIGXFSZ
+// to SIG_IGN. The limit lies extra bytes past the first record: 0 makes the
+// next write start at the limit and fail at once, a few bytes make the kernel
+// take part of a record first. Once the limit is lifted the logger closes the
+// fragment and names the loss.
 static void _sync_auto_body(off_t extra) {
   char path[128];
   _log_path(path, sizeof(path), "sync");
   CHILD_CHECK(_sigxfsz_is(SIG_DFL));
   clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
   CHILD_CHECK(lg != CLOG_NULL);
-  CHILD_CHECK(_sigxfsz_is(SIG_IGN)); /* at the open, before any limit */
+  CHILD_CHECK(_sigxfsz_is(SIG_IGN));
   clog_info(lg, "first record");
   off_t size = _file_size(path);
   CHILD_CHECK(size > 0);
@@ -266,6 +266,8 @@ static void _sync_auto_body(off_t extra) {
   _child_pass();
 }
 
+// The two variants of the synchronous scenario: a short write, and a write that
+// starts at the limit.
 static void _scenario_sync_short_write(void) { _sync_auto_body(10); }
 static void _scenario_sync_write_at_the_limit(void) { _sync_auto_body(0); }
 
@@ -283,8 +285,7 @@ TEST(sigxfsz, sync_file_logger_survives_a_write_that_starts_at_the_limit) {
   REQUIRE_TRUE(_child_passed(&o));
 }
 
-/* The same thing for an async logger, where the writer thread hits the
- * limit. */
+// Scenario: the same for an async logger, whose writer thread hits the limit.
 static void _scenario_async_auto(void) {
   char path[128];
   _log_path(path, sizeof(path), "async");
@@ -318,16 +319,13 @@ TEST(sigxfsz, async_file_logger_survives_the_limit) {
   REQUIRE_TRUE(_child_passed(&o));
 }
 
-/* The writer thread takes back the SIGXFSZ that its own failed write left
- * pending on it. The logger opens under CLOG_SIGNALS_UNTOUCHED so the
- * disposition stays the default one, and then the main thread blocks
- * SIGXFSZ, so a signal the kernel raises on the whole process (FreeBSD) can
- * only reach the writer thread. Phase 1 switches to CLOG_SIGNALS_AUTO, so the
- * writer thread blocks SIGXFSZ before its write at the limit. Phase 2 lifts
- * the limit and switches back to CLOG_SIGNALS_UNTOUCHED, so the writer thread
- * unblocks SIGXFSZ before its next write, and a SIGXFSZ left pending from
- * phase 1 would kill the process there. Phase 3 puts the limit back, and this
- * time the write must raise SIGXFSZ with its default disposition. */
+// Scenario: the writer thread takes back the SIGXFSZ its own failed write left
+// pending. The logger opens under UNTOUCHED (default disposition) and the main
+// thread blocks SIGXFSZ, so a process-wide signal (FreeBSD) can only reach the
+// writer. Phase 1 switches to AUTO, so the writer blocks SIGXFSZ before its
+// write at the limit; phase 2 lifts the limit and switches back, so a pending
+// SIGXFSZ would kill the child at the next write; phase 3 puts the limit back
+// and the write must kill the child with SIGXFSZ.
 static void _scenario_writer_consumes_and_follows_policy(void) {
   char path[128];
   _log_path(path, sizeof(path), "consume");
@@ -363,7 +361,7 @@ static void _scenario_writer_consumes_and_follows_policy(void) {
   CHILD_CHECK(size > 0);
   CHILD_CHECK(_set_file_size_limit((rlim_t)size));
   clog_info(lg, "phase 3");
-  clog_flush(lg); /* raises SIGXFSZ on the writer thread */
+  clog_flush(lg);
   _child_mark(3);
   clog_close(lg);
   _child_pass();
@@ -372,7 +370,6 @@ static void _scenario_writer_consumes_and_follows_policy(void) {
 TEST(sigxfsz, writer_thread_consumes_its_sigxfsz_and_follows_a_policy_change) {
   child_outcome_t o;
   _run_child(_scenario_writer_consumes_and_follows_policy, &o);
-  /* The child dies before it can remove its file. */
   char path[128];
   _log_path(path, sizeof(path), "consume");
   bool ok = _child_died_of(&o, SIGXFSZ) && o.nvalues == 2 &&
@@ -384,8 +381,9 @@ TEST(sigxfsz, writer_thread_consumes_its_sigxfsz_and_follows_a_policy_change) {
   REQUIRE_TRUE(ok);
 }
 
-/* Under CLOG_SIGNALS_UNTOUCHED opening a regular file changes nothing, so a
- * write at the limit raises SIGXFSZ with its default disposition. */
+// Scenario: under UNTOUCHED opening a regular file changes nothing, so a write
+// at the limit kills the child with SIGXFSZ. The file is removed before the
+// limit, since the child dies there.
 static void _scenario_untouched(void) {
   char path[128];
   _log_path(path, sizeof(path), "untouched");
@@ -396,11 +394,10 @@ static void _scenario_untouched(void) {
   clog_info(lg, "first record");
   off_t size = _file_size(path);
   CHILD_CHECK(size > 0);
-  /* We remove the file before the limit, because the process dies at it. */
   CHILD_CHECK(unlink(path) == 0);
   CHILD_CHECK(_set_file_size_limit((rlim_t)size));
   _child_mark(1);
-  clog_info(lg, "record at the limit"); /* raises SIGXFSZ */
+  clog_info(lg, "record at the limit");
   _child_mark(2);
   clog_close(lg);
   _child_pass();
@@ -417,15 +414,17 @@ TEST(sigxfsz, untouched_policy_leaves_sigxfsz_to_the_application) {
   REQUIRE_TRUE(ok);
 }
 
-/* A handler the application installed before the open stays in place and
- * sees the SIGXFSZ of a write at the limit. */
+// SIGXFSZs the application's handler saw.
 static volatile sig_atomic_t _handler_calls;
 
+// The application's SIGXFSZ handler; counts each signal.
 static void _count_sigxfsz(int sig) {
   (void)sig;
   _handler_calls = _handler_calls + 1;
 }
 
+// Scenario: a handler the application installed before the open stays, and it
+// sees the SIGXFSZ of a write at the limit.
 static void _scenario_application_handler_stays(void) {
   char path[128];
   _log_path(path, sizeof(path), "handler");
@@ -459,9 +458,8 @@ TEST(sigxfsz, auto_policy_keeps_a_handler_of_the_application) {
   REQUIRE_TRUE(_child_passed(&o));
 }
 
-/* An ignore the application set stays an ignore, and switching the policy to
- * CLOG_SIGNALS_UNTOUCHED doesn't undo the ignore that an open under
- * CLOG_SIGNALS_AUTO set. */
+// Scenario: an application's ignore stays an ignore, and switching to UNTOUCHED
+// doesn't undo the ignore that an open under AUTO set.
 static void _scenario_ignores_stay(void) {
   char path[128];
   _log_path(path, sizeof(path), "ignores");

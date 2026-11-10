@@ -22,28 +22,23 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe for the logging macros. The Makefile builds it twice
- * with -fsyntax-only and nothing here ever runs.
- *
- * Under -Wshadow -Werror a logging macro nests inside the argument of another
- * logging macro and inside the argument of a value macro of another module,
- * so no expansion may declare a local that hides one of an enclosing
- * expansion.
- *
- * Under -std=c11 -pedantic-errors a call with a format string and nothing
- * after it compiles. The format is the first argument of each macro's
- * variadic part, so no call needs the GNU comma swallow. */
-
+// Compile-time probe of the logging macros; the Makefile builds it twice with
+// -fsyntax-only and nothing runs. Under -Wshadow -Werror the macros nest inside
+// each other and inside a value macro of another module, so no expansion may
+// hide a local of an enclosing one. Under -std=c11 -pedantic-errors
+// (CLOGGER_PROBE_STRICT) a call with only a format string must compile.
 #include <clogger.h>
 #ifndef CLOGGER_PROBE_STRICT
 #include <chashmap.h>
 #endif
 
+// Logs and returns 1, so a log call can sit inside another call's arguments.
 static int clog_probe_side(clog l) {
   clog_debug(l, "side");
   return 1;
 }
 
+// Expands every logging macro, alone and nested, for the probe; it never runs.
 void clog_nesting_probe(clog l, int x, const char *s);
 void clog_nesting_probe(clog l, int x, const char *s) {
   clog_trace(l, "trace");

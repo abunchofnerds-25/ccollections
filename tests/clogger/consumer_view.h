@@ -28,18 +28,11 @@ SOFTWARE.
 #include <clogger.h>
 #include <stddef.h>
 
-/*
- * How an application translation unit, compiled with its own ordinary
- * flags, lays out clog_rotation_cfg_t.
- *
- * consumer_view.c is built WITHOUT the -D_FILE_OFFSET_BITS=64 that the
- * library and the rest of this suite use, which is exactly what a program
- * that includes <clogger.h> with default flags looks like. Both views must
- * describe the same object. If they don't, the library reads a public struct
- * whose layout follows a feature-test macro member by member from the wrong
- * offsets, and the logger silently rotates on a schedule the caller never
- * asked for and turns on options the caller never set.
- */
+// The size, alignment and member offsets of clog_rotation_cfg as one
+// translation unit sees it. consumer_view.c fills it without the
+// -D_FILE_OFFSET_BITS=64 the library uses, and the test compares it with the
+// library's own view: if the two differ, the library reads a caller's config
+// from the wrong offsets.
 typedef struct {
   size_t struct_size;
   size_t struct_align;
@@ -53,17 +46,15 @@ typedef struct {
   size_t sizeof_rotation_interval_us;
 } clogger_consumer_view_t;
 
-/* Fills *out with the view of the struct that this translation unit
- * has. */
+// Fills *out with clog_rotation_cfg's layout as consumer_view.c sees it, so the
+// test can compare it with the suite's view.
 void clogger_consumer_fill_view(clogger_consumer_view_t *out);
 
-/*
- * Opens a rotating file logger whose clog_rotation_cfg_t comes entirely from
- * this translation unit: size rotation at max_file_size bytes, no time
- * rotation, max_rotated_files files kept and no compression. It returns
- * CLOG_NULL after a failure, exactly as clog_create_from_file_mp() does.
- */
+// Opens a file logger at path with a rotation config built entirely in
+// consumer_view.c (size rotation at max_file_size bytes, max_rotated_files
+// kept, no time rotation, no compression), so the test can check that the
+// library reads such a config right. Gives the handle or CLOG_NULL.
 clog clogger_consumer_open_rotating(const char *path, int64_t max_file_size,
                                     int max_rotated_files);
 
-#endif /* CLOGGER_TESTS_CONSUMER_VIEW_H */
+#endif

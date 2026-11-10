@@ -22,17 +22,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe that every public macro of this header nests inside
- * the argument of another public macro, and inside its own argument, under
- * -Wshadow -Werror. The value macros give their temporaries a unique name in
- * each expansion, so a nested expansion never declares a local that hides
- * one of the outer expansion. If they didn't, each nesting below would be a
- * -Wshadow error in a caller's build. The Makefile compiles this file with
- * -fsyntax-only, so nothing here runs. */
-
 #include <chashmap.h>
 #include <cvector.h>
 
+// Checks at compile time that every public value macro nests inside the
+// argument of another public macro, and of itself, under -Wshadow -Werror.
+// Each expansion names its temporaries uniquely, so a nested one never hides
+// a local of the outer one. The Makefile builds this file with -fsyntax-only,
+// so nothing here runs.
 void cvec_nesting_probe(void);
 void cvec_nesting_probe(void) {
   cvec_construct(v, int);

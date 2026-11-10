@@ -24,34 +24,25 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file catfork.h
- * @brief INTERNAL ONLY. Forced fork-handler registration of the modules that
- * other modules depend on.
- *
- * Fork-prepare handlers run in the reverse of their registration order, and
- * every module registers its handlers lazily, on its first use. A module that
- * holds another module's locks inside its own (chttpserver and chttpclient both
- * do this with cthreadcomm, cthreadpool and clogger) has to make those
- * dependencies register before it does, or the two sets of handler locks can
- * nest in opposite orders in two forks and deadlock.
- *
- * Each function below makes its module register its _ccol_at_fork() handlers
- * now, if it hasn't yet, and returns at once when it already has. Call all
- * three before your own _ccol_at_fork(). The doc comment of each definition
- * explains the ordering it protects, and the call site in
- * _chttpsvr_slot_table_init_globals in chttpserver.c describes the deadlock.
- *
- * None of this is public API and the library never installs or exports it. The
- * defining files include this header too, so a changed signature fails the
- * build instead of leaving a stale copy in a caller.
- */
+// Internal only: forced fork-handler registration of the modules that other
+// modules depend on. Prepare handlers run in the reverse of their registration
+// order, and every module registers lazily on first use. A module that holds
+// another module's locks inside its own (chttpserver and chttpclient do this
+// with cthreadcomm, cthreadpool and clogger) must make those dependencies
+// register first, or the two sets of handler locks can nest in opposite orders
+// in two forks and deadlock. Call all three before your own ccol__at_fork().
+// The defining files include this header too, so a changed signature fails
+// the build.
 
-/* cthreadcomm: ceventloop and the queues. */
-void _cthreadcomm_ensure_atfork_registered_before_caller(void);
+// Makes cthreadcomm (ceventloop and the queues) register its fork handlers now,
+// unless it already has. chttpserver and chttpclient call it before their own
+// registration, so cthreadcomm's prepare handler runs after theirs.
+void cthreadcomm__ensure_atfork_registered_before_caller(void);
 
-/* cthreadpool: cthrpool. */
-void _cthrpool_ensure_atfork_registered_before_caller(void);
+// The same for cthreadpool, whose pools chttpserver and chttpclient lock inside
+// their own handlers.
+void cthrpool__ensure_atfork_registered_before_caller(void);
 
-/* clogger: clog. */
-void _clog_ensure_atfork_registered_before_caller(void);
+// The same for clogger, whose loggers chttpserver and chttpclient lock inside
+// their own handlers.
+void clog__ensure_atfork_registered_before_caller(void);

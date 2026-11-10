@@ -7,14 +7,14 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chashmap.h>
 
-chmap_construct_ch(hm_name, key_t, val_t, custom_hashing_proc);
+chmap_construct_ch(hm_name, KeyT, ValT, custom_hashing_proc);
 .fi
 .SH DESCRIPTION
 .nf
 Declares a hash map handle named hm_name, along with the companion type
-variables that pass key_t and val_t on to every later type-inferred
+variables that pass KeyT and ValT on to every later type-inferred
 macro, and creates a map that hashes its keys with custom_hashing_proc
-instead of the map's own hashing for key_t.
+instead of the map's own hashing for KeyT.
 
 It is chmap_construct(3) with a hashing procedure added, and it uses the
 default allocator. chmap_construct_mp(3) swaps the allocator instead,
@@ -22,7 +22,7 @@ chmap_construct_full(3) takes both, and chmap_construct_ch_scoped(3) is
 this macro with a cleanup attribute that destroys the map at scope exit.
 
 A custom procedure only changes how a key is turned into a number. The
-implementation that the map picks from key_t and val_t stays the same,
+implementation that the map picks from KeyT and ValT stays the same,
 and so does the set of keys the map considers equal.
 
 The two-step form is chmap_declare(3) followed by chmap_init_ch(3). Use
@@ -31,12 +31,12 @@ it when a creation failure has to be handled instead of being fatal.
 .SH PARAMETERS
 .nf
 hm_name              Name for the map handle to declare
-key_t                Key type; it tells every later macro how to read a key
-                     and, with val_t, which implementation strategy the map
+KeyT                Key type; it tells every later macro how to read a key
+                     and, with ValT, which implementation strategy the map
                      uses
-val_t                Value type
-custom_hashing_proc  A ccol_hashing_proc_t, or NULL to use the map's own
-                     hashing for key_t
+ValT                Value type
+custom_hashing_proc  A ccol_hashing_proc, or NULL to use the map's own
+                     hashing for KeyT
 .fi
 .SH RETURN VALUE
 .nf
@@ -63,7 +63,7 @@ which end of the result carries the entropy.
 .fi
 .SH NOTES
 .nf
-Stops the program through _ccol_fatal_err() if the creation fails
+Stops the program through ccol__fatal_err() if the creation fails
 Uses the default allocator and CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
 buckets
 A float or double key is canonicalized before the procedure sees it, so

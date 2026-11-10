@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadcomm.h>
 
-ccol_retval_t ccircq_recv(ccircq *cq, cmessage_t *target_buf);
+ccol_retval ccircq_recv(ccircq *cq, cmessage *target_buf);
 .fi
 .SH DESCRIPTION
 .nf

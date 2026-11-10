@@ -24,704 +24,242 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file test_helpers/cthreadcomm.h
- * @brief INTERNAL ONLY. The test-only hooks of cthreadcomm.
- *
- * src/cthreadcomm.c defines these hooks and the cthreadcomm tests call them.
- * They let a test force failures, hold a thread at a chosen point and read
- * state that the public API doesn't show.
- *
- * All of it exists only in a build that defines RUNNING_UNIT_TESTS. Every test
- * suite defines it and the shipped library never does, so none of this is
- * installed or exported.
- */
+// Internal only. The test hooks of cthreadcomm, defined in src/cthreadcomm.c.
+// They force failures, hold a thread at a chosen point, or read state the
+// public API doesn't show. They exist only under RUNNING_UNIT_TESTS, which no
+// shipped build defines. Every "next" hook is one-shot: the call that uses it
+// disarms it, and you call it again to arm another one.
 
 #include <cthreadcomm.h>
 #include <stdatomic.h>
 
 #ifdef RUNNING_UNIT_TESTS
-/**
- * @brief Make the next allocation of an internal ceventloop_reg handle slot
- *        report a failure, for tests.
- *
- * Arms a process-wide one-shot flag that disarms itself. The next time
- * ceventloop_add makes a public ceventloop_reg handle for a new
- * registration, that step fails exactly as a failed growth allocation of the
- * slot table would, whatever allocator the target loop uses, and
- * ceventloop_add returns CEVENTLOOP_REG_NULL with nothing put into
- * the registry.
- *
- * A test can hit that failure every time this way, which fault injection
- * can't easily do: the loop allocates the slot table at a minimum capacity
- * above zero when it is created, and the table shares its allocator with
- * every other allocation of the loop.
- *
- * @note Once the next ceventloop_add call has used the flag it does
- *       nothing more; call this function again to arm another one.
- */
-void _ceventloop_test_force_next_reg_slot_acquire_failure(void);
+// Makes the next ceventloop_add fail at the step that takes the handle slot of
+// the new registration, as a failed slot table growth would, so it gives
+// CEVENTLOOP_REG_NULL with nothing put into the registry. Fault injection can't
+// reach that reliably, since the table starts above zero capacity and shares
+// the loop's allocator.
+void ceventloop__test_force_next_reg_slot_acquire_failure(void);
 
-/**
- * @brief Read the registration count of the whole loop at the exact moment of
- *        the most recent forced slot-acquire failure, for tests.
- *
- * With this a test proves the order inside ceventloop_add directly and
- * every time: reg's handle slot is taken BEFORE reg goes into the registry of
- * fds and queues, not after. Without the value a test can only see the end
- * state, and both orders give the same one, ceventloop_add returning
- * CEVENTLOOP_REG_NULL and ceventloop_reg_count() back at 0, because
- * rolling back a failure after the wiring restores the count too. A snapshot
- * of 0 proves that the loop hadn't counted this call's registration yet, so
- * it hadn't wired it yet when the forced failure happened.
- *
- * @return The snapshot of the most recent forced slot-acquire failure (see
- * _ceventloop_test_force_next_reg_slot_acquire_failure), or 0 if no such
- * failure has happened yet in this process.
- */
-size_t _ceventloop_test_last_forced_slot_acquire_failure_reg_count(void);
+// The loop's registration count at the moment of the last forced slot failure,
+// or 0 when none happened. A 0 proves the slot is taken before the registration
+// is wired, which the end state alone can't show, since a rollback after the
+// wiring restores the count too.
+size_t ceventloop__test_last_forced_slot_acquire_failure_reg_count(void);
 
-/**
- * @brief Install a function that ceventloop_add calls after the new
- *        registration is live and before the call returns, for tests.
- *
- * The hook runs on the thread calling ceventloop_add, once the
- * registration is wired into the loop and can be dispatched but before the
- * handle goes back to the caller, so a hook that waits for one of the
- * registration's callbacks makes that callback run before
- * ceventloop_add returns, every time. Pass NULL to remove the hook.
- *
- * @param hook Function to call, or NULL
- */
-void _ceventloop_test_set_add_before_return_hook(void (*hook)(void));
+// Installs a hook that ceventloop_add calls on its own thread once the
+// registration is live and before the handle goes back, so a hook that waits
+// for a callback makes that callback run before the add returns. NULL removes
+// it.
+void ceventloop__test_set_add_before_return_hook(void (*hook)(void));
 
-/**
- * @brief Show how many dispatch jobs are queued in, or running on, loop's
- *        dispatch_pool, for tests.
- *
- * Gives 0 for a NULL loop and for a loop built with num_reactor_threads ==
- * 1, since that configuration has no dispatch_pool. It is the direct
- * regression check for the EPOLLONESHOT re-arm mechanism: an fd or queue
- * selectable that is ready all the time must not make this count grow
- * without bound while the dispatch_pool workers catch up.
- *
- * @param loop  ceventloop to ask
- * @return      Number of dispatch jobs that wait or that run now
- */
-size_t _ceventloop_dispatch_pool_pending_count_for_tests(ceventloop loop);
+// How many dispatch jobs wait in or run on the loop's dispatch pool (0 for a
+// NULL loop or one with a single reactor thread). A selectable that is always
+// ready must not make it grow without bound; that checks the one-shot re-arm.
+size_t ceventloop__dispatch_pool_pending_count_for_tests(ceventloop loop);
 
-/**
- * @brief Show how many epoll_wait calls loop's poller thread has finished so
- *        far, for tests.
- *
- * A test can catch a busy spin in the reactor with this directly: during a
- * spin the counter jumps far ahead within a short, bounded window, so the
- * test needs no wall-clock or CPU measurement, both of which are flaky. Read
- * the value twice across a bounded interval and compare.
- *
- * @param loop  ceventloop to ask
- * @return      Total count of finished epoll_wait calls, or 0 for a loop
- * handle that is not valid or that is stale.
- */
-uint64_t _ceventloop_poller_iterations_for_tests(ceventloop loop);
+// How many waits the poller thread has finished, 0 for a bad handle. Read it
+// twice over a bounded interval to catch a busy spin without timing anything.
+uint64_t ceventloop__poller_iterations_for_tests(ceventloop loop);
 
-/**
- * @brief Make the next _ccol_cond_var_timedwait call report an unexpected
- *        error (an error other than ETIMEDOUT) in the wait path of
- *        cselect_timed that has no fd selectables, for
- *        tests.
- *
- * Arms a one-shot flag that disarms itself. The condition-variable-only wait
- * of cselect_timed calls _ccol_cond_var_timedwait (a path reachable only
- * with a deadline and no fd selectable in the call), and the next such call
- * reports EINVAL without waiting.
- *
- * That lets a test reach the path where _ccol_cond_var_timedwait itself
- * fails and ccol_unexpected_failure comes back, which no correct call from
- * the library's own deadline computation can reach.
- *
- * @note Once the next such call has used the flag it does nothing more; call
- *       this function again to arm another one.
- */
-void _cselect_test_force_next_condvar_wait_error(void);
+// Makes the next timed condition wait of cselect_timed (a deadline and no fd
+// selectable) fail with EINVAL without waiting, so the
+// ccol_unexpected_failure path can be reached.
+void cselect__test_force_next_condvar_wait_error(void);
 
-/**
- * @brief The same as _cselect_test_force_next_condvar_wait_error, but it
- *        also marks the internal wait as satisfied at the same instant, for
- *        tests.
- *
- * Arms the same one-shot forced EINVAL as
- * _cselect_test_force_next_condvar_wait_error and also sets the internal
- * "ready" flag to true, inside the same critical section that reports the
- * forced error. That imitates a producer whose notify completes correctly an
- * instant before the unrelated forced error shows up.
- *
- * This order of events can really happen in production, because a real
- * _ccol_cond_var_timedwait call always takes its mutex again before it
- * returns, on success and on failure, but a test can't produce it reliably
- * any other way: this hook replaces the real wait call, so it never unlocks
- * the mutex for a producer thread to race into.
- *
- * The property a test checks with it, every time, is that a wakeup racing an
- * unrelated spurious failure of _ccol_cond_var_timedwait counts as a
- * successful wakeup, so cselect_timed scans again and finally succeeds
- * instead of dropping the wakeup and reporting
- * ccol_unexpected_failure.
- *
- * @note Once the next such call has used the flag it does nothing more; call
- *       this function again to arm another one.
- */
-void _cselect_test_force_next_condvar_wait_error_racing_ready(void);
+// Like cselect__test_force_next_condvar_wait_error(), but it also sets the
+// waiter's ready flag in the same critical section, as a producer whose notify
+// lands just before an unrelated wait error. cselect_timed must count that as a
+// wakeup and scan again. The hook replaces the real wait, so it never unlocks
+// the mutex for a real producer to race into.
+void cselect__test_force_next_condvar_wait_error_racing_ready(void);
 
-/**
- * @brief For tests only: delay the next timed-out deregistration of
- *        cselect_timed
- *
- * Arms a one-shot delay that disarms itself. The delay sits between the
- * point where cselect_timed's condition-variable-only wait reports that
- * its deadline ended and the point where the call unlinks its waiter nodes
- * from the queues it watched. A producer's notify that lands in that window
- * goes to a waiter that has already stopped waiting, so the leaving waiter
- * must hand the wake on. In production the window is a few instructions,
- * far too narrow for a test to aim at.
- *
- * @param us Delay in microseconds. A value of 0 disarms a delay that hasn't
- * run yet.
- *
- * @note The next such deregistration uses up the delay; call this function
- * again to arm another one.
- */
-void _cselect_test_delay_next_timed_out_deregister_us(uint32_t us);
+// Sleeps us microseconds between the moment a condition-only cselect_timed
+// wait reports its deadline and the unlinking of its waiters, so a notify can
+// land on a waiter that already left and must hand the wake on. 0 disarms a
+// delay that hasn't run.
+void cselect__test_delay_next_timed_out_deregister_us(uint32_t us);
 
-/**
- * @brief For tests only: make the next initialisation of the wait mutex of a
- *        queue registration fail
- *
- * Arms a one-shot flag that disarms itself, so the next ceventloop_add
- * of a queue or cchan selectable fails as if pthread_mutex_init() had
- * failed. A test can then check the message for a failed system call, which
- * no allocator can force.
- */
-void _ceventloop_test_fail_next_reg_sync_init(void);
+// Makes the next ceventloop_add of a queue or cchan selectable fail as if the
+// wait mutex init had failed, so a test can check the message for a failed
+// system call.
+void ceventloop__test_fail_next_reg_sync_init(void);
 
-/**
- * @brief For tests only: make the next count capped waits of
- *        cselect_timed end at once
- *
- * A single wait of cselect_timed with an fd selectable asks the kernel
- * for at most INT_MAX milliseconds (about 24.8 days), so a longer timeout
- * takes several waits. Each armed count makes one such capped wait return at
- * once with no event, as the real wait does when the capped time runs out,
- * and a test can check that the call waits again instead of reporting a
- * timeout before its deadline.
- *
- * @param count The number of capped waits to end at once. A value of 0
- * disarms the counts that haven't run yet.
- */
-void _cselect_test_short_next_capped_waits(uint32_t count);
+// Ends each of the next count capped waits (at most INT_MAX ms) of
+// cselect_timed at once with no event, as a real capped wait that runs out, so
+// a test can check that the call waits again before its deadline. 0 disarms.
+void cselect__test_short_next_capped_waits(uint32_t count);
 
-/* How many of the counts armed by _cselect_test_short_next_capped_waits()
- * haven't ended a capped wait yet. */
-uint32_t _cselect_test_short_capped_waits_left(void);
+// How many of those counts haven't been used yet.
+uint32_t cselect__test_short_capped_waits_left(void);
 
-/**
- * @brief For tests only: how many times a thread entered the delay that
- *        _cselect_test_delay_next_timed_out_deregister_us armed
- *
- * A test polls this value in a bounded loop to know that the delayed waiter
- * really reached that window, and only then produces the message whose
- * notify has to land inside it, so the test doesn't have to guess with a
- * sleep.
- */
-uint64_t _cselect_test_timed_out_deregister_delay_count(void);
+// How many times a thread entered the delayed deregistration window, so a test
+// can wait for it in a bounded loop instead of sleeping.
+uint64_t cselect__test_timed_out_deregister_delay_count(void);
 
-/**
- * @brief Make the next _ccol_cond_var_timedwait call in the wait loop of
- * ccircq_timed_send report an unexpected error (an error other
- * than ETIMEDOUT), for tests.
- *
- * Works like _cselect_test_force_next_condvar_wait_error, but for
- * ccircq_timed_send: that function's next wait reports EINVAL without
- * waiting, and the flag then disarms itself.
- *
- * @note Once the next such call has used the flag it does nothing more; call
- *       this function again to arm another one.
- * @see _ccircq_test_force_next_send_condvar_wait_error_racing_ready
- */
-void _ccircq_test_force_next_send_condvar_wait_error(void);
+// Makes the next condition wait of ccircq_timed_send fail with EINVAL without
+// waiting.
+void ccircq__test_force_next_send_condvar_wait_error(void);
 
-/**
- * @brief For tests only: widen the window inside _notify_waiter(). The
- *        window starts where a thread already holds a queue's mutex and ends
- *        where this function tries to lock wait_mtx, and the test picks the
- *        new width in microseconds. A value of 0 turns the widening off,
- *        which is the default.
- *
- * A test can then land a concurrent fork() call inside that exact window
- * every time and reproduce the lock-order hazard between the queue's mutex
- * and wait_mtx, which the merged atfork handler of ceventloop and the
- * queue registry exists to prevent. In production the window is normally
- * only a few instructions, too narrow to hit by luck.
- *
- * @warning While armed, the widening applies to every _notify_waiter() call
- * in the whole process, not to one queue, so a test must disarm it with 0
- * when it finishes. Otherwise every later ccircq_send,
- * ccircq_recv, cdynmq_send and every other such call anywhere
- * in the process pays the delay.
- */
-void _notify_waiter_test_set_delay_us(int us);
+// Widens the window in notify_waiter() between holding a queue's mutex and
+// locking wait_mtx by us microseconds (0 turns it off), so a test can land a
+// fork() inside it every time. It applies to every notify of the process, so a
+// test must set 0 when it ends.
+void cthreadcomm__notify_waiter_test_set_delay_us(int us);
 
-/**
- * @brief Make the next internal unpin of a ceventloop_reg sleep for ms
- *        milliseconds while it still holds its resolve pin, for tests.
- *
- * Arms a process-wide one-shot flag that disarms itself. Several public calls
- * resolve a ceventloop_reg and then unpin it (ceventloop_modify,
- * ceventloop_pause, ceventloop_resume, ceventloop_remove, and
- * ceventloop_reg_generation), and the next such call sleeps for ms
- * milliseconds when it gets to the point of releasing its resolve pin.
- *
- * A test can hold a resolve pin open this way, every time, long enough for
- * another thread to run ceventloop_remove on the same registration,
- * which marks it removed and defers it first. That reaches one exact case,
- * where the delivery of an on_removed notification depends on the reactor's
- * bounded reclaim retry instead of on one call's wakeup ping.
- *
- * @param ms  Milliseconds to sleep. A value of 0 turns the delay off, which is
- * the default.
- * @note Once the next unpin has used the flag it does nothing more; call this
- *       function again to arm another one.
- */
-void _ceventloop_test_delay_next_reg_resolve_unpin_ms(uint32_t ms);
+// Makes the next unpin of a ceventloop_reg (modify, pause, resume, remove,
+// reg_generation) sleep ms milliseconds while it holds its resolve pin, so
+// another thread can remove the registration meanwhile. That reaches the case
+// where on_removed depends on the reactor's bounded reclaim retry. 0 disarms.
+void ceventloop__test_delay_next_reg_resolve_unpin_ms(uint32_t ms);
 
-/**
- * @brief For tests only: tell whether an unpin has taken the delay that
- *        _ceventloop_test_delay_next_reg_resolve_unpin_ms armed.
- *
- * The unpin takes the delay after it has read whether the registration is
- * removed and before it releases its resolve pin. So once a test has armed
- * the delay and started the thread that must take it, a true result means
- * that thread holds its pin and has already made that read. A test can poll
- * this function, instead of sleeping for a fixed time, before it races a
- * ceventloop_remove against the pin.
- *
- * @return true when no delay is armed, false while an armed delay waits for
- *         an unpin.
- */
-bool _ceventloop_test_reg_resolve_unpin_delay_taken_for_tests(void);
+// True when no delay is armed. Once the delay above is armed, true means the
+// unpinning thread holds its pin and has read whether the registration is
+// removed, so a test can poll this before it races a remove.
+bool ceventloop__test_reg_resolve_unpin_delay_taken_for_tests(void);
 
-/**
- * @brief For tests only: lock the internal mutex of cq directly, and go around
- *        every function of the public API.
- *
- * A test can keep cq's mutex locked this way for exactly as long as it
- * wants, long enough to land a fork() call inside the window every time,
- * while a real critical section in production is normally only a few
- * instructions and can't be hit by luck. The fork-safety regression test of
- * the queue mutex uses it.
- *
- * @warning This call must always be followed by a
- * _ccircq_test_unlock_mutex_for_tests call on the same cq from the same
- * thread, since nothing else in this file expects a thread to keep holding
- * cq's mutex after this call returns.
- *
- * @see _ccircq_test_unlock_mutex_for_tests
- */
-void _ccircq_test_lock_mutex_for_tests(ccircq *cq);
+// Locks and unlocks cq's mutex directly, so a test can hold it across a fork().
+// Each lock must be followed by the unlock on the same thread.
+void ccircq__test_lock_mutex_for_tests(ccircq *cq);
 
-/**
- * @brief For tests only: unlock the internal mutex of cq. See
- *        _ccircq_test_lock_mutex_for_tests.
- */
-void _ccircq_test_unlock_mutex_for_tests(ccircq *cq);
+void ccircq__test_unlock_mutex_for_tests(ccircq *cq);
 
-/**
- * @brief For tests only: lock the write side of the reg_slot_rwlock of loop
- *        directly, and go around every function of the public API.
- *
- * A test can keep the write side of this rwlock locked this way for exactly
- * as long as it wants, with the lock held by a thread OTHER than the one
- * that calls fork(). It exists for the same reason as
- * _ccircq_test_lock_mutex_for_tests, but covers a ceventloop's
- * reg-slot table instead of a ccircq.
- *
- * @return An opaque pointer to the resolved loop, which you MUST pass to the
- *         matching _ceventloop_test_wrunlock_reg_slot_for_tests
- *         call. It is NULL if loop wasn't valid, in which case nothing was
- *         locked and the matching unlock call with NULL is a safe no-op. It's
- *         deliberately not loop itself, because the unlock side has to use
- *         this exact resolved pointer instead of resolving loop again: a
- *         second resolve from another thread can deadlock against a
- *         concurrent fork() that already holds the
- *         ceventloop_slot_table mutex while it waits for this very write
- *         lock to be released. That deadlock is real and reachable, not a
- *         theoretical concern.
- *
- * @warning This call must always be followed by a
- * _ceventloop_test_wrunlock_reg_slot_for_tests call with its return
- * value, since nothing else in this file expects reg_slot_rwlock to keep a
- * write lock after that call returns.
- *
- * @see _ceventloop_test_wrunlock_reg_slot_for_tests
- */
-void *_ceventloop_test_wrlock_reg_slot_for_tests(ceventloop loop);
+// Write-locks the loop's reg_slot_rwlock directly, so a thread other than the
+// forking one can hold it across a fork(). It gives the resolved loop (NULL for
+// an invalid handle, and then nothing is locked), and the unlock must take that
+// pointer: resolving the handle again can deadlock against a fork() that holds
+// the slot table mutex while it waits for this lock. The unlock with NULL does
+// nothing.
+void *ceventloop__test_wrlock_reg_slot_for_tests(ceventloop loop);
 
-/**
- * @brief For tests only: unlock the write side of reg_slot_rwlock that an
- *        earlier _ceventloop_test_wrlock_reg_slot_for_tests call locked.
- *
- * @param resolved_loop The exact return value of the matching
- *        _ceventloop_test_wrlock_reg_slot_for_tests call, which is NULL
- *        for an invalid loop; NULL here is safe and does nothing.
- *
- * @see _ceventloop_test_wrlock_reg_slot_for_tests
- */
-void _ceventloop_test_wrunlock_reg_slot_for_tests(void *resolved_loop);
+void ceventloop__test_wrunlock_reg_slot_for_tests(void *resolved_loop);
 
-/**
- * @brief For tests only: lock the write side of the rwlock of
- *        ceventloop_slot_table directly, and go around every function of
- *        the public API.
- *
- * A test can keep the write side of this rwlock locked this way for exactly
- * as long as it wants, with the lock held by a thread OTHER than the one
- * that calls fork(). This one covers the process-wide loop table, not the
- * per-loop reg_slot_rwlock that
- * _ceventloop_test_wrlock_reg_slot_for_tests covers. There is no
- * instance handle to resolve here, so it takes no argument, and the matching
- * unlock call needs none of the AB-BA precautions of that other pair.
- *
- * @warning This call must always be followed by a
- * _ceventloop_test_wrunlock_slot_table_for_tests call, since nothing
- * else in this file expects ceventloop_slot_table.rwlock to keep a write
- * lock after that call returns.
- *
- * @see _ceventloop_test_wrunlock_slot_table_for_tests
- */
-void _ceventloop_test_wrlock_slot_table_for_tests(void);
+// Write-locks and unlocks the rwlock of the process-wide loop slot table
+// directly, for the same fork() tests. Each lock must be followed by the
+// unlock.
+void ceventloop__test_wrlock_slot_table_for_tests(void);
 
-/**
- * @brief For tests only: unlock the write side of the rwlock of
- *        ceventloop_slot_table. See
- *        _ceventloop_test_wrlock_slot_table_for_tests.
- */
-void _ceventloop_test_wrunlock_slot_table_for_tests(void);
+void ceventloop__test_wrunlock_slot_table_for_tests(void);
 
-/**
- * @brief For tests only: report whether a cselect() caller is really
- *        linked into cq's read-waiter list right now.
- *
- * The function locks, checks and unlocks on its own. A test that needs a
- * select-waiter thread to get through its own Phase 1 _ccol_mutex_lock and
- * link step polls this value in a bounded loop, instead of guessing that a
- * fixed sleep after pthread_create() gives the OS time to schedule the new
- * thread that far, which the return of pthread_create() doesn't guarantee.
- */
-bool _ccircq_test_has_sel_read_waiter_for_tests(ccircq *cq);
+// Whether a cselect() waiter is linked into cq's read-waiter list, and how
+// many are. A test polls these instead of sleeping after pthread_create(); the
+// link order decides which waiter gets the next notify.
+bool ccircq__test_has_sel_read_waiter_for_tests(ccircq *cq);
 
-/**
- * @brief For tests only: how many cselect() waiter nodes are linked into
- *        cq's read-waiter list right now.
- *
- * Where _ccircq_test_has_sel_read_waiter_for_tests only answers yes or
- * no, this one counts, for tests that need an exact number of cselect()
- * callers to reach their link step and not just one or more. The order in
- * which two waiters link decides which of them gets a producer's next
- * notify, so a test that depends on that order polls this value until each
- * waiter is in place before it starts the next one.
- */
-size_t _ccircq_test_sel_read_waiter_count_for_tests(ccircq *cq);
+size_t ccircq__test_sel_read_waiter_count_for_tests(ccircq *cq);
 
-/**
- * @brief For tests only: how many receivers are parked right now in cq's
- *        read condition variable.
- *
- * A send signals that condition variable only when this count isn't zero. A
- * test that must prove a send really wakes a blocked receiver (and that the
- * receiver didn't just leave on its own timeout) polls this value in a
- * bounded loop until the receiver has registered, and only then sends. A
- * wait site that doesn't register never lets that poll succeed, and that's
- * what keeps such a test from passing while it examines nothing.
- */
-size_t _ccircq_waiting_readers_for_tests(ccircq *cq);
+// How many receivers (or senders) are parked on a queue's condition variable.
+// A send signals only when that count isn't zero, so a test waits for the count
+// before it sends, which also proves the wait site registers.
+size_t ccircq__waiting_readers_for_tests(ccircq *cq);
 
-/**
- * @brief For tests only: how many senders are parked right now in cq's write
- *        condition variable; the send-side twin of
- *        _ccircq_waiting_readers_for_tests.
- */
-size_t _ccircq_waiting_writers_for_tests(ccircq *cq);
+size_t ccircq__waiting_writers_for_tests(ccircq *cq);
 
-/**
- * @brief For tests only: how many receivers are parked right now in dq's
- *        read condition variable; _ccircq_waiting_readers_for_tests for a
- *        dynamic queue.
- */
-size_t _cdynmq_waiting_readers_for_tests(cdynmq *dq);
+size_t cdynmq__waiting_readers_for_tests(cdynmq *dq);
 
-/**
- * @brief The same as _ccircq_test_force_next_send_condvar_wait_error, but
- * it also frees the slot of one queued message at the same instant, for
- * tests.
- *
- * Arms the same one-shot forced EINVAL and also does exactly the bookkeeping
- * of a real receive by a concurrent consumer (it frees one slot and signals
- * write_cond) under the same mutex that reports the forced error. That
- * imitates a consumer whose wakeup completes correctly an instant before the
- * unrelated forced error shows up, so a test can check that the send uses a
- * slot freed this way instead of dropping it and reporting
- * ccol_unexpected_failure.
- *
- * @note Once the next such call has used the flag it does nothing more; call
- *       this function again to arm another one.
- */
-void _ccircq_test_force_next_send_condvar_wait_error_racing_ready(void);
+// Like ccircq__test_force_next_send_condvar_wait_error(), but it also does the
+// work of a concurrent receive (frees one slot and signals write_cond) under
+// the same mutex. The send must use that slot instead of failing.
+void ccircq__test_force_next_send_condvar_wait_error_racing_ready(void);
 
-/**
- * @brief Get the message that the most recent race of
- *        _ccircq_test_force_next_send_condvar_wait_error_racing_ready
- *        freed, for tests.
- *
- * The imitated concurrent consumer's receive (see
- * _ccircq_test_force_next_send_condvar_wait_error_racing_ready) takes a
- * message out of the queue and has nowhere to put it. This function hands
- * that message out exactly once and {NULL, 0} after that, so a test can free
- * its data pointer, matching the ownership a real caller of
- * ccircq_recv or ccircq_try_recv would have.
- *
- * @return The freed message, or {NULL, 0} if no message waits
- */
-cmessage_t _ccircq_test_take_race_freed_msg(void);
+// Hands out, once, the message that the imitated receive above took out of the
+// queue, so the test can free its data; {NULL, 0} after that.
+cmessage ccircq__test_take_race_freed_msg(void);
 
-/**
- * @brief Make the next _ccol_cond_var_timedwait call in the wait loop of
- * ccircq_timed_recv report an unexpected error (an error other
- * than ETIMEDOUT), for tests.
- *
- * Works like _cselect_test_force_next_condvar_wait_error, but for
- * ccircq_timed_recv.
- *
- * @note Once the next such call has used the flag it does nothing more; call
- *       this function again to arm another one.
- * @see _ccircq_test_force_next_recv_condvar_wait_error_racing_ready
- */
-void _ccircq_test_force_next_recv_condvar_wait_error(void);
+// Makes the next condition wait of ccircq_timed_recv fail with EINVAL.
+void ccircq__test_force_next_recv_condvar_wait_error(void);
 
-/**
- * @brief The same as _ccircq_test_force_next_recv_condvar_wait_error, but
- *        it also puts a sentinel message into the queue at the same instant,
- *        for tests.
- *
- * Arms the same one-shot forced EINVAL and also puts a {NULL, 0} sentinel
- * message into the queue, through the same internal path a real concurrent
- * producer's send takes and under the same mutex that reports the forced
- * error. That imitates a producer whose wakeup completes correctly an
- * instant before the unrelated forced error shows up, so a test can check
- * that the library receives a message that arrived this way instead of
- * dropping it and reporting ccol_unexpected_failure.
- *
- * @note Once the next such call has used the flag it does nothing more; call
- *       this function again to arm another one.
- */
-void _ccircq_test_force_next_recv_condvar_wait_error_racing_ready(void);
+// Like the hook above, but it also sends a {NULL, 0} sentinel through the
+// normal send path under the same mutex. The receive must take it instead of
+// failing.
+void ccircq__test_force_next_recv_condvar_wait_error_racing_ready(void);
 
-/**
- * @brief Make the next _ccol_cond_var_timedwait call in the wait loop of
- * cdynmq_timed_recv report an unexpected error (an error other
- * than ETIMEDOUT), for tests.
- *
- * Works like _cselect_test_force_next_condvar_wait_error, but for
- * cdynmq_timed_recv.
- *
- * @note Once the next such call has used the flag it does nothing more; call
- *       this function again to arm another one.
- * @see _cdynmq_test_force_next_recv_condvar_wait_error_racing_ready
- */
-void _cdynmq_test_force_next_recv_condvar_wait_error(void);
+// The two hooks above for cdynmq_timed_recv.
+void cdynmq__test_force_next_recv_condvar_wait_error(void);
 
-/**
- * @brief The same as _cdynmq_test_force_next_recv_condvar_wait_error, but
- *        it also puts a sentinel message into the queue at the same instant,
- *        for tests.
- *
- * Arms the same one-shot forced EINVAL and also puts a {NULL, 0} sentinel
- * message into the queue, through the same internal path a real concurrent
- * producer's send takes and under the same mutex that reports the forced
- * error. That imitates a producer whose wakeup completes correctly an
- * instant before the unrelated forced error shows up, so a test can check
- * that the library receives a message that arrived this way instead of
- * dropping it and reporting ccol_unexpected_failure.
- *
- * @note Once the next such call has used the flag it does nothing more; call
- *       this function again to arm another one.
- */
-void _cdynmq_test_force_next_recv_condvar_wait_error_racing_ready(void);
+void cdynmq__test_force_next_recv_condvar_wait_error_racing_ready(void);
 
-/**
- * @brief Delay the next cascade notification of a queue by us microseconds,
- *        for tests.
- *
- * Arms a process-wide one-shot flag that disarms itself. The next cascade
- * step after a dispatch, for a queue registration or a cchan
- * registration, sleeps for us microseconds after it starts looking at the
- * queue and before it touches the queue's mutex. That widens the window
- * enough for a test to land in it every time, a window in which the library
- * has to hold off a concurrent ceventloop_remove call and the queue
- * destroy that follows right after it.
- *
- * @param us  Microseconds to sleep. A value of 0 disarms the delay.
- */
-void _ceventloop_test_delay_next_queue_cascade_us(uint32_t us);
+// Makes the next cascade step after a queue or cchan dispatch sleep us
+// microseconds after it starts looking at the queue and before it takes the
+// queue's mutex, the window where a concurrent remove and queue destroy must be
+// held off. 0 disarms.
+void ceventloop__test_delay_next_queue_cascade_us(uint32_t us);
 
-/**
- * @brief Read how many cascade steps of a queue started, and how many stopped
- *        to touch the queue, for tests.
- *
- * Both counters are process-wide and only go up. A cascade step adds one to
- * the first when it starts looking at the queue and one to the second when
- * it is done with the queue, so a test can prove that a concurrent
- * ceventloop_remove can't return while a cascade step sits between the
- * two, which is what makes destroying the queue right after that call safe.
- *
- * @param begun     Optional; it gets the count of the steps that started.
- * @param finished  Optional; it gets the count of the steps that finished.
- */
-void _ceventloop_test_queue_cascade_counts(uint64_t *begun, uint64_t *finished);
+// Reads the process-wide counts of cascade steps that started and finished
+// (either pointer may be NULL), so a test can prove a remove never returns
+// while a step is between the two.
+void ceventloop__test_queue_cascade_counts(uint64_t *begun, uint64_t *finished);
 
-/**
- * @brief Read how many wakes the queue notify path delivered through an
- *        eventfd, for tests.
- *
- * The counter is process-wide and only goes up. It counts each write(2) that
- * a send, a receive, a state change or a cascade step makes to the eventfd of
- * a cselect() waiter in epoll mode or of a ceventloop queue
- * registration, but not a ceventloop's own internal eventfds. A test
- * samples it before and after a burst of sends and asserts that a listener
- * with a wake already pending costs no extra write.
- *
- * @return Number of eventfd wakes so far
- */
-uint64_t _cselect_test_eventfd_wake_count(void);
+// How many eventfd writes the queue notify path has made to cselect() waiters
+// and loop queue registrations (not the loop's own eventfds). A listener with a
+// wake already pending must cost no extra write.
+uint64_t cselect__test_eventfd_wake_count(void);
 
-/**
- * @brief Make one later allocation of cselect_timed() fail, for tests.
- *
- * Allocation number index, counting from 1 at this call, fails the way an
- * out-of-memory allocator fails, and the hook then disarms itself; 0 disarms
- * it at once. The count runs across every cselect() and
- * cselect_timed() call in the process.
- *
- * @param index The number of the allocation that fails, or 0
- */
-void _cselect_test_fail_alloc(uint32_t index);
+// Makes allocation number index (counted from 1 across every cselect call of
+// the process) fail, then disarms; 0 disarms at once.
+void cselect__test_fail_alloc(uint32_t index);
 
-/**
- * @brief Read how many epoll sets cselect_timed() created, for tests.
- *
- * The counter is process-wide and only goes up. A call with fd selectables
- * creates a set only when it has to wait, so a call that a ready selectable
- * answers at once leaves it unchanged.
- *
- * @return Number of epoll sets created so far
- */
-uint64_t _cselect_test_poll_sets_created(void);
+// How many poll sets cselect_timed() has created. A call that returns at once
+// creates none.
+uint64_t cselect__test_poll_sets_created(void);
 
-/**
- * @brief Give the lock stripe that an fd selectable maps to, for tests.
- *
- * @param num_stripes The number of stripes of a loop, at least 1
- * @param fd          The fd
- * @return The stripe index, below num_stripes
- */
-size_t _ceventloop_test_stripe_index(size_t num_stripes, int fd);
+// The lock stripe that fd maps to, below num_stripes.
+size_t ceventloop__test_stripe_index(size_t num_stripes, int fd);
 
-/**
- * @brief Make the next count thread marks of the event loop fail, for tests.
- *
- * Each of the next count stores of a thread mark (the poller's, a dispatch
- * job's, or a queue dispatch's) fails the way pthread_setspecific() fails
- * without memory, so the thread keeps the mark in its fallback copy. The
- * count is process-wide.
- *
- * @param count The number of stores that fail
- */
-void _ceventloop_test_fail_next_marks(uint32_t count);
+// Makes the next count stores of a thread mark (poller, dispatch job, queue
+// dispatch) fail as pthread_setspecific() does without memory, so the thread
+// uses its fallback copy.
+void ceventloop__test_fail_next_marks(uint32_t count);
 
-/**
- * @brief Say whether the calling thread carries the mark of the poller or of
- *        a dispatch job of loop, for tests.
- *
- * It's the same answer the self-call guards of ceventloop_shutdown() and
- * ceventloop_destroy() rely on.
- *
- * @param loop The loop
- * @return true inside a callback of loop, false elsewhere and for an invalid
- *         handle
- */
-bool _ceventloop_test_runs_on_loop_thread(ceventloop loop);
+// Whether the calling thread carries the poller or dispatch mark of loop, the
+// answer the self-call guards of shutdown and destroy use.
+bool ceventloop__test_runs_on_loop_thread(ceventloop loop);
 
-/**
- * @brief Say whether the calling thread runs a callback that dispatches the
- *        queue, for tests.
- *
- * A queue's destroy uses this answer to refuse being called from inside such
- * a callback.
- *
- * @param queue The address of a ccircq or a cdynmq
- * @return true inside an event-loop callback of that queue
- */
-bool _ceventloop_test_dispatches_queue(const void *queue);
+// Whether the calling thread runs a callback that dispatches queue (a ccircq
+// or cdynmq), which a queue destroy refuses.
+bool ceventloop__test_dispatches_queue(const void *queue);
 
 #if CCOL_FORK_SAFETY_REQUIRED
-/* Puts the number of registered queue mutexes in *count and the number of
- * entries that removes have examined so far in *remove_probes. Returns true
- * when the registry index of every queue names the position of its entry. */
-bool _ccol_queue_mutex_registry_check_for_tests(size_t *count,
+// Gives the number of registered queue mutexes and the entries that removes
+// have examined so far, and true when each queue's registry index names its
+// entry.
+bool ccol__queue_mutex_registry_check_for_tests(size_t *count,
                                                 uint64_t *remove_probes);
 #endif
 
-/* Makes the next push onto the free list of the loop slot table behave
- * exactly like an allocation failure, then disarms itself, so a test reaches
- * the recovery of a lost index without a real out-of-memory condition. */
-void _ceventloop_force_next_free_index_push_failure_for_tests(void);
+// Makes the next push onto the free list of the loop slot table fail as an
+// allocation would, to reach the recovery of a lost index.
+void ceventloop__force_next_free_index_push_failure_for_tests(void);
 
-/* Makes the next free-index push of a released registration slot report a
- * failure, then disarms itself. The second call gives how many registration
- * slots loop has ever allocated, which a recovered lost index must not make
- * grow. */
-void _ceventloop_force_next_reg_free_index_push_failure_for_tests(void);
-size_t _ceventloop_reg_slot_count_for_tests(ceventloop loop);
+// The same for a released registration slot. The count of registration slots
+// a loop has ever allocated must not grow when a lost index is recovered.
+void ceventloop__force_next_reg_free_index_push_failure_for_tests(void);
+size_t ceventloop__reg_slot_count_for_tests(ceventloop loop);
 
-/* Returns the thread ID of the poller thread of loop, joined or not, so a
- * test can start threads until one carries that ID and prove that the
- * self-call guards don't recognise the poller by its ID. */
-_ccol_thread_id_t _ceventloop_poller_thread_for_tests(ceventloop loop);
+// The thread ID of the loop's poller, joined or not, so a test can start
+// threads until one gets that ID and prove the guards don't go by ID.
+ccol__thread_id ceventloop__poller_thread_for_tests(ceventloop loop);
 
-/* Reads how many event entries the epoch reclaim of loop has freed so far,
- * or 0 for an invalid or stale loop handle. */
-uint64_t _ceventloop_entries_reclaimed_for_tests(ceventloop loop);
+// How many event entries the epoch reclaim has freed, 0 for a bad handle.
+uint64_t ceventloop__entries_reclaimed_for_tests(ceventloop loop);
 
-/* Stores value into the poller batch generation of loop, so a test can put
- * the counter just below a 32-bit boundary and check that a deferred free
- * past that boundary still gets reclaimed. */
-void _ceventloop_set_poller_batch_gen_for_tests(ceventloop loop,
+// Sets the poller batch generation, so a test can start it below a 32-bit
+// boundary and check that a deferred free past it is reclaimed.
+void ceventloop__set_poller_batch_gen_for_tests(ceventloop loop,
                                                 uint64_t value);
 
-/* Reads how many slots the loop handle table holds right now, freed slots
- * not reused yet included, so a test can check that a churn of creates and
- * destroys reuses freed slots. */
-size_t _ceventloop_slot_table_capacity_for_tests(void);
+// How many slots the loop handle table holds, freed ones included, to check
+// that create and destroy churn reuses them.
+size_t ceventloop__slot_table_capacity_for_tests(void);
 
-/* Resolves h through the real resolve, so the pin is real, sets *pinned,
- * waits until the test sets *release and then unpins. A destroy that runs
- * meanwhile can't return while *release is clear. Returns false when h
- * doesn't resolve. */
-bool _ceventloop_resolve_pin_until_for_tests(ceventloop h, atomic_int *pinned,
+// Resolves and pins h for real, sets *pinned, waits for *release and unpins.
+// A destroy meanwhile can't return. False when h doesn't resolve.
+bool ceventloop__resolve_pin_until_for_tests(ceventloop h, atomic_int *pinned,
                                              atomic_int *release);
 
-struct _ceventloop_s;
+struct ceventloop__s;
 
-/* Resolves h to the loop behind it without a pin, so there is no unpin to
- * forget; NULL under the same conditions as the real resolve. */
-struct _ceventloop_s *_ceventloop_resolve_for_tests(ceventloop h);
-#endif /* RUNNING_UNIT_TESTS */
+// Resolves h without a pin (so there's no unpin to forget); NULL when the real
+// resolve would fail.
+struct ceventloop__s *ceventloop__resolve_for_tests(ceventloop h);
+#endif

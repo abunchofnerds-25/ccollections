@@ -21,10 +21,10 @@
 #
 # A record is public when its tag (or, for an anonymous record, the name of
 # the typedef that names it) carries one of the library's namespace prefixes.
-# A name starting with an underscore is an internal record that an installed
-# header has to declare, like the synchronisation wrappers of common.h which
-# wrap pthread types and so differ by system on purpose, and the script leaves
-# those out.
+# A name with a double underscore after its prefix (ccol__cond_var_s) is an
+# internal record that an installed header has to declare, like the
+# synchronisation wrappers of common.h, which wrap pthread types and so differ
+# by system on purpose (some exist on macOS only). The script leaves those out.
 #
 # Usage: ci_scripts/check_public_layout.sh [--update]
 #   Run it from the root of the repository. CLANG names the compiler (default
@@ -118,8 +118,8 @@ function typedef_name(file, ln, col,    line, n, i, c, depth, started, incmt, ta
 }
 
 function public(name) {
-	if (name ~ /^_/) return 0
-	if (name ~ /^(cmessage_t|cthread_pool)$/) return 1
+	if (name ~ /^_/ || name ~ /^[A-Za-z0-9]+__/) return 0
+	if (name ~ /^(cmessage|cthread_pool)$/) return 1
 	return name ~ /^(ccol_|CCOL_|ccollections_|cvec|cvector|chmap|chashmap|cbmap|cbstmap|cstr|cstring|csort|cjson|cyaml|clog|clru|ccache|cmap|cmempool|crmempool|cthreadcomm|ccircq|cdynmq|cchan|ceventloop|cselect|cthreadpool|cthrpool|chttp|ctls|citer)/
 }
 
@@ -198,9 +198,9 @@ END {
 LC_ALL=C sort -t "$(printf '\t')" -k1,1 -k2,2n "$TMP/rows.txt" | cut -f3- \
 	>"$TMP/layout.txt"
 
-if ! grep -q '^record struct ccol_memmgmt_procs_t sizeof=32 align=8$' \
+if ! grep -q '^record struct ccol_memmgmt_procs sizeof=32 align=8$' \
 	"$TMP/layout.txt"; then
-	echo "check_public_layout: the dump does not hold ccol_memmgmt_procs_t" \
+	echo "check_public_layout: the dump does not hold ccol_memmgmt_procs" \
 		"with its LP64 layout, so the parse is not trustworthy." >&2
 	exit 1
 fi

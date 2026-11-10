@@ -24,107 +24,82 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file cdeadline.h
- * @brief INTERNAL ONLY. The conversion of a public timeout, a uint64_t count
- *        of microseconds, into an absolute CLOCK_MONOTONIC deadline and into
- *        the coarser units the system calls take.
- *
- * Every public timeout, interval and duration in the library is a uint64_t
- * count of microseconds, and every module that turns one into a deadline or a
- * millisecond count goes through these helpers so they all saturate the same
- * way. A value too large to represent becomes the largest deadline we can
- * represent (no realistic wait gets there) and never wraps around into the
- * past, because a wrapped deadline would turn a request to wait very long
- * into a wait that ends at once.
- *
- * The arithmetic is all uint64_t whatever the widths of long and time_t, so
- * ILP32 and LP64 give the same results.
- *
- * Internal header: every function is static inline, so it adds no symbol to
- * the library, and make install doesn't install it.
- */
+// Internal only. Turns a public timeout (a uint64_t count of microseconds)
+// into an absolute CLOCK_MONOTONIC deadline, or into the coarser units that
+// system calls take. Every module goes through these helpers so they all
+// saturate the same way: a value too large to represent becomes the largest
+// deadline we can represent, and never wraps into the past, which would turn a
+// very long wait into one that ends at once. All the arithmetic is uint64_t, so
+// ILP32 and LP64 give the same results. Everything is static inline and the
+// header is never installed.
 
 #ifndef CCOL_CDEADLINE_H
 #define CCOL_CDEADLINE_H
 
 #include <limits.h>
+// C23 has bool, true and false as keywords.
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-#include <stdbool.h> /* C23 has bool, true and false as keywords */
+#include <stdbool.h>
 #endif
 #include <stdint.h>
 #include <time.h>
 
-/* Largest value of the signed type time_t, which the C library has no macro
- * for. The shift takes the width of time_t from sizeof, so it gives the right
- * value for the 4-byte time_t of ILP32 and for the 8-byte one of LP64 and of
- * _TIME_BITS=64. */
-#define CCOL_DEADLINE_TIME_T_MAX \
-  ((time_t)(~(uintmax_t)0 >>     \
+// The largest value of time_t, which the C library has no macro for and the
+// saturation of ccol_timespec_add_us() needs. The width comes from sizeof, so
+// it's right for a 4-byte and for an 8-byte time_t.
+#define CCOL_DEADLINE_TIME_T_LIMIT \
+  ((time_t)(~(uintmax_t)0 >>       \
             (sizeof(uintmax_t) * CHAR_BIT - sizeof(time_t) * CHAR_BIT + 1)))
 
-/**
- * Adds us microseconds to *ts. *ts must hold a tv_nsec in [0, 999999999]
- * (what clock_gettime() gives) and a tv_sec that isn't negative. If the sum
- * goes past the largest time_t it saturates at the largest time we can
- * represent.
- */
+// Adds us microseconds to *ts; ccol_deadline_after_us() and the modules that
+// extend a deadline use it. *ts must hold a tv_nsec in [0, 999999999] and a
+// tv_sec that isn't negative (what clock_gettime() gives). A sum past the
+// largest time_t saturates at the largest time we can represent.
 static inline void ccol_timespec_add_us(struct timespec *ts, uint64_t us) {
   uint64_t secs = us / UINT64_C(1000000);
   long nsec = (long)(us % UINT64_C(1000000)) * 1000L;
-  /* Both parts are in [0, 999999999], so the sum fits in a 4-byte long and
-   * can carry at most one whole second. */
   ts->tv_nsec += nsec;
   if (ts->tv_nsec >= 1000000000L) {
     ts->tv_nsec -= 1000000000L;
     secs++;
   }
   uint64_t headroom = ts->tv_sec >= 0
-                          ? (uint64_t)(CCOL_DEADLINE_TIME_T_MAX - ts->tv_sec)
-                          : (uint64_t)CCOL_DEADLINE_TIME_T_MAX;
+                          ? (uint64_t)(CCOL_DEADLINE_TIME_T_LIMIT - ts->tv_sec)
+                          : (uint64_t)CCOL_DEADLINE_TIME_T_LIMIT;
   if (secs > headroom) {
-    ts->tv_sec = CCOL_DEADLINE_TIME_T_MAX;
+    ts->tv_sec = CCOL_DEADLINE_TIME_T_LIMIT;
     ts->tv_nsec = 999999999L;
   } else {
     ts->tv_sec = (time_t)((uint64_t)ts->tv_sec + secs);
   }
 }
 
-/**
- * Sets *abs to the current CLOCK_MONOTONIC time plus us microseconds,
- * saturating the way ccol_timespec_add_us() does. It returns false only if
- * clock_gettime() fails.
- */
+// Sets *abs to now (CLOCK_MONOTONIC) plus us microseconds, saturating like
+// ccol_timespec_add_us(). Every timed wait of the library computes its
+// deadline here. Gives false only when clock_gettime() fails.
 static inline bool ccol_deadline_after_us(uint64_t us, struct timespec *abs) {
   if (clock_gettime(CLOCK_MONOTONIC, abs) != 0) return false;
   ccol_timespec_add_us(abs, us);
   return true;
 }
 
-/**
- * Converts a microsecond count to whole milliseconds rounded UP, so a wait
- * of the result never ends before the input duration has passed and a
- * positive input never turns into 0.
- */
+// Microseconds to whole milliseconds, rounded up, for calls that take
+// milliseconds, so a wait of the result never ends early and a positive input
+// never becomes 0.
 static inline uint64_t ccol_us_to_ms_ceil(uint64_t us) {
   return us / UINT64_C(1000) + (us % UINT64_C(1000) != 0);
 }
 
-/**
- * Converts a microsecond count to whole seconds rounded UP, for the same
- * reasons as ccol_us_to_ms_ceil().
- */
+// Microseconds to whole seconds, rounded up like ccol_us_to_ms_ceil(), for
+// settings that count whole seconds.
 static inline uint64_t ccol_us_to_s_ceil(uint64_t us) {
   return us / UINT64_C(1000000) + (us % UINT64_C(1000000) != 0);
 }
 
-/**
- * Gives the time from now until *deadline in whole milliseconds, rounded UP
- * and capped at INT_MAX, to use as a poll(2) or epoll_wait(2) timeout. A
- * deadline that has passed gives 0, so the poll still looks once without
- * blocking instead of timing out without a look, and a wait of the result
- * never ends before the deadline.
- */
+// Gives the time left until *deadline in milliseconds, rounded up and capped
+// at INT_MAX, for poll(2) or epoll_wait(2). A deadline that has passed gives 0,
+// so the caller still polls once without blocking instead of reporting a
+// timeout without a look.
 static inline int ccol_deadline_remaining_ms_ceil(
     const struct timespec *deadline) {
   struct timespec now;
@@ -132,8 +107,6 @@ static inline int ccol_deadline_remaining_ms_ceil(
   if (deadline->tv_sec < now.tv_sec ||
       (deadline->tv_sec == now.tv_sec && deadline->tv_nsec <= now.tv_nsec))
     return 0;
-  /* Here deadline > now, so the seconds difference isn't negative and the
-   * nanoseconds difference is strictly between -1 and 1 second. */
   uint64_t secs = (uint64_t)deadline->tv_sec - (uint64_t)now.tv_sec;
   if (secs > (uint64_t)INT_MAX / 1000u) return INT_MAX;
   int64_t ns = (int64_t)secs * 1000000000LL +
@@ -142,4 +115,4 @@ static inline int ccol_deadline_remaining_ms_ceil(
   return ms > INT_MAX ? INT_MAX : (int)ms;
 }
 
-#endif /* CCOL_CDEADLINE_H */
+#endif

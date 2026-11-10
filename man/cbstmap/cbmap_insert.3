@@ -14,7 +14,7 @@ cbmap_insert(hm_name, key, val);
 Type-inferred wrapper for cbstmap_insert_elem() that builds the key's
 cmap_pair and the value's cmap_pair from the caller's expressions. When
 the key is already in the map the value is updated and nothing is
-reported; _ccol_fatal_err() is called only on a real failure, which means
+reported; ccol__fatal_err() is called only on a real failure, which means
 ccol_not_enough_memory or ccol_container_full. The tree is rebalanced
 after the insert.
 

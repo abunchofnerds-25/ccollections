@@ -22,19 +22,16 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* This binary runs with SIGPIPE at its default disposition, which ends the
- * process, and it should stay a binary of its own because the other binaries of
- * this directory ignore SIGPIPE for the whole process. An ignored SIGPIPE is
- * thrown away when it is raised, so a write that raises it can't be seen there.
- *
- * It checks two things: that the server leaves the SIGPIPE disposition the way
- * the application set it, and that no write of the server raises SIGPIPE when
- * the peer is gone. Each write test blocks SIGPIPE around the operation and
- * then asks whether one is pending, so a failure is one failed test and not a
- * dead binary. A write(2) or writev(2) to a socket whose peer has closed raises
- * SIGPIPE for the writing thread, while send(2) and sendmsg(2) with
- * MSG_NOSIGNAL don't.
- */
+// This binary runs with SIGPIPE at its default disposition, so it must stay a
+// binary of its own: the other binaries of this directory ignore SIGPIPE, and
+// an ignored SIGPIPE is thrown away when it is raised.
+//
+// It checks that the server leaves the SIGPIPE disposition as the application
+// set it, and that no server write raises SIGPIPE when the peer is gone. Each
+// write test blocks SIGPIPE around the operation and then asks whether one is
+// pending, so a failure is one failed test and not a dead binary. write(2) and
+// writev(2) to a closed peer raise SIGPIPE; send(2) and sendmsg(2) with
+// MSG_NOSIGNAL don't.
 
 #include <chttpserver.h>
 #include <errno.h>
@@ -57,16 +54,22 @@ SOFTWARE.
 
 TAU_MAIN()
 
+// Puts SIGPIPE back to its default action before any test runs, because the
+// tests are about a SIGPIPE that would end the process.
 __attribute__((constructor)) static void _setup(void) {
   signal(SIGPIPE, SIG_DFL);
 }
 
+// Tells whether SIGPIPE has the default action; every test checks that the
+// library left it so.
 static bool _sigpipe_has_default_disposition(void) {
   struct sigaction sa;
   if (sigaction(SIGPIPE, NULL, &sa) != 0) return false;
   return sa.sa_handler == SIG_DFL;
 }
 
+// Blocks SIGPIPE in the calling thread and saves the old mask in *old, so a
+// SIGPIPE raised during a test stays pending instead of ending the process.
 static void _block_sigpipe(sigset_t *old) {
   sigset_t set;
   sigemptyset(&set);
@@ -74,8 +77,9 @@ static void _block_sigpipe(sigset_t *old) {
   pthread_sigmask(SIG_BLOCK, &set, old);
 }
 
-/* Tells whether a SIGPIPE is pending for the calling thread or for the process,
- * and consumes it if so. The signal must be blocked. */
+// Tells whether a SIGPIPE is pending for the calling thread or the process,
+// and consumes it if so, so the next test starts clean. SIGPIPE must be
+// blocked.
 static bool _take_pending_sigpipe(void) {
   sigset_t pending;
   sigemptyset(&pending);
@@ -85,15 +89,16 @@ static bool _take_pending_sigpipe(void) {
   return raised;
 }
 
+// Sleeps for ms milliseconds; the handlers poll their flags with it.
 static void _sleep_ms(long ms) {
   struct timespec ts = {ms / 1000, (ms % 1000) * 1000000L};
   nanosleep(&ts, NULL);
 }
 
-/* A connected pair where fds[1] is already closed, so every write to fds[0]
- * meets a peer that's gone. The pair is made the same way the server makes a
- * connection's socket (ccol_accept_nb): non-blocking, closed on exec, and with
- * SO_NOSIGPIPE on a system that has no MSG_NOSIGNAL. */
+// Gives in *fd one end of a socket pair whose other end is already closed, so
+// a stream write test meets a peer that's gone. The pair is made the way the
+// server makes a connection's socket (non-blocking, close-on-exec, SO_NOSIGPIPE
+// where there's no MSG_NOSIGNAL). Tells whether it worked.
 static bool _pair_with_closed_peer(int *fd) {
   int fds[2];
   if (ccol_socketpair_nb(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return false;
@@ -103,17 +108,16 @@ static bool _pair_with_closed_peer(int *fd) {
 }
 
 TEST(chttpsvr_sigpipe, the_binary_runs_with_the_default_disposition) {
-  /* Every other test in this file is vacuous if SIGPIPE is ignored. */
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
 }
 
-/* chttp1_stream_write() is the single-buffer write of every plaintext
-   connection, including the 100-continue interim line. */
+// chttp1_stream_write() is the single-buffer write of every plaintext
+// connection, the 100-continue interim line included.
 TEST(chttpsvr_sigpipe, a_stream_write_to_a_closed_peer_raises_no_sigpipe) {
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
   int fd = -1;
   REQUIRE_TRUE(_pair_with_closed_peer(&fd));
-  chttp1_stream_t s;
+  chttp1_stream s;
   bool prepared = chttp1_stream_prepare(&s, fd, NULL, 0, NULL);
   sigset_t old;
   _block_sigpipe(&old);
@@ -129,13 +133,13 @@ TEST(chttpsvr_sigpipe, a_stream_write_to_a_closed_peer_raises_no_sigpipe) {
   REQUIRE_EQ(err, EPIPE);
 }
 
-/* chttp1_stream_writev2() is the gather write of every plaintext response, with
-   head and body together. */
+// chttp1_stream_writev2() is the gather write of every plaintext response,
+// head and body together.
 TEST(chttpsvr_sigpipe, a_gather_write_to_a_closed_peer_raises_no_sigpipe) {
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
   int fd = -1;
   REQUIRE_TRUE(_pair_with_closed_peer(&fd));
-  chttp1_stream_t s;
+  chttp1_stream s;
   bool prepared = chttp1_stream_prepare(&s, fd, NULL, 0, NULL);
   sigset_t old;
   _block_sigpipe(&old);
@@ -152,19 +156,16 @@ TEST(chttpsvr_sigpipe, a_gather_write_to_a_closed_peer_raises_no_sigpipe) {
   REQUIRE_EQ(err, EPIPE);
 }
 
-/* ========================================================================== */
-/*                  A RESPONSE TO A CLIENT THAT HAS CLOSED                    */
-/* ========================================================================== */
-
+// Flags shared by the response test and its handlers: the slow handler
+// entered, the client closed, and the probe handler ran and what it saw.
 static atomic_int g_slow_entered;
 static atomic_int g_client_gone;
 static atomic_int g_probe_ran;
 static atomic_int g_probe_saw_sigpipe;
 
-/* Holds the response back until the client has closed, so the write of the
-   response meets a peer that's gone. */
-static void _slow_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
-                          void *ctx) {
+// Answers 64 KiB, but only after the client has closed (g_client_gone), so the
+// write meets a peer that's gone. Sets g_slow_entered first.
+static void _slow_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
   (void)req;
   (void)ctx;
   atomic_store(&g_slow_entered, 1);
@@ -174,12 +175,12 @@ static void _slow_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
   chttpsvr_resp_write(resp, body, sizeof(body));
 }
 
-/* The server runs one worker thread, so this handler runs on the thread that
-   wrote _slow_handler's response, after that write. The worker inherits the
-   blocked SIGPIPE of the thread that started the server, so a SIGPIPE raised by
-   the write is still pending here. */
-static void _probe_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
-                           void *ctx) {
+// Records in g_probe_saw_sigpipe whether a SIGPIPE is pending, sets
+// g_probe_ran and answers "ok". The server has one worker, so this runs on the
+// thread that wrote _slow_handler's response, after that write. The worker
+// inherits the blocked SIGPIPE of the thread that started the server, so a
+// SIGPIPE raised by the write is still pending here.
+static void _probe_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
   (void)req;
   (void)ctx;
   atomic_store(&g_probe_saw_sigpipe, _take_pending_sigpipe() ? 1 : 0);
@@ -187,6 +188,8 @@ static void _probe_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
   chttpsvr_resp_write_str(resp, "ok");
 }
 
+// Connects to the test server's Unix socket at path, with a 10 s read timeout.
+// Gives the socket, or -1.
 static int _connect_unix(const char *path) {
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) return -1;
@@ -203,6 +206,8 @@ static int _connect_unix(const char *path) {
   return fd;
 }
 
+// Sends all of s on fd without raising SIGPIPE, for the test client's requests.
+// Tells whether it all went out.
 static bool _send_all(int fd, const char *s) {
   size_t len = strlen(s), off = 0;
   while (off < len) {
@@ -213,6 +218,8 @@ static bool _send_all(int fd, const char *s) {
   return true;
 }
 
+// SIGPIPE is blocked before the server starts, so every server thread
+// inherits the mask and a raised SIGPIPE stays pending for the probe.
 TEST(chttpsvr_sigpipe,
      starting_keeps_the_disposition_and_no_response_write_raises_it) {
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
@@ -228,7 +235,6 @@ TEST(chttpsvr_sigpipe,
   char host_buf[96];
   snprintf(host_buf, sizeof(host_buf), "unix://%s", sock_path);
 
-  /* Every thread the server starts inherits this mask. */
   sigset_t old;
   _block_sigpipe(&old);
 
@@ -241,7 +247,7 @@ TEST(chttpsvr_sigpipe,
           ccol_success &&
       chttpsvr_register_handler(srv, CHTTP_GET, "/probe", _probe_handler,
                                 NULL) == ccol_success;
-  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = host_buf;
   cfg.worker_thread_count = 1;
   bool started = registered && chttpsvr_start(srv, &cfg) == ccol_success;

@@ -25,770 +25,352 @@ SOFTWARE.
 #pragma once
 
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-#include <stdbool.h> /* bool, true and false are keywords in C23 */
+#include <stdbool.h>
 #endif
 #include <string.h>
 
 #include "common.h"
 
-/* Everything this header declares from here to the end belongs to the public
- * Application Binary Interface (ABI) of libccollections, and the shared
- * library exports all of it. The library is built with -fvisibility=hidden,
- * so a function or an object outside these blocks stays internal: it isn't
- * in the dynamic symbol table, an application linking against the library
- * can't interpose it, and a symbol of the same name in that application
- * can't collide with it. */
+// Everything from here to the matching pop is the public ABI and the shared
+// library exports it. The library builds with -fvisibility=hidden, so anything
+// outside these blocks stays internal.
 #pragma GCC visibility push(default)
 
-/**
- * @file clrucache.h
- * @brief Thread-safe generic Least Recently Used (LRU) cache, with an
- *        optional remote source.
- *
- * A hash map gives the cache O(1) lookup and a doubly-linked list gives it
- * O(1) eviction. All operations are fully thread-safe.
- *
- * A cache that is large enough is split into several segments, each with its
- * own lock. Every key belongs to exactly one segment, picked by a hash of
- * the key, so threads working on keys in different segments don't wait for
- * each other while operations on the same key are serialised, and the
- * guarantees below rest on that. The split starts at 128 entries, the first
- * capacity that gives two segments 64 entries each. Below 128 entries a
- * cache is a single segment and keeps one exact, global least-recently-used
- * order. From 128 entries on, the capacity is divided across the segments
- * and each segment evicts its own least recently used entry. The doc comment
- * of clrucache_create_full() has the details, and clrucache_create_full(3)
- * the measured effect on how full a cache gets.
- *
- * Key concurrency guarantees:
- * - Many getters for the same uncached key coalesce: only one remote fetch
- *   runs, and all the other getters block and get the same result once that
- *   fetch completes.
- * - A getter blocks while a setter for the same key is in progress, so a
- *   getter always reads a consistent value. If the set fails and the key is
- *   then absent from the cache, the getter goes on exactly like a get that
- *   started after the failed set: it runs the remote getter, or joins a
- *   fetch another getter started, or reports ccol_key_not_found when the
- *   cache has no remote getter.
- * - Many setters for the same key are serialized.
- *
- * Set semantics: when a remote setter was given, it is always called before
- * the cache is updated. If the remote call fails the cache isn't updated and
- * clrucache_set_full() returns ccol_unexpected_failure. A failed set does
- * nothing at all to its key: the key keeps its old value and its exact place
- * in the eviction order, so it is neither spared nor moved forward to be the
- * next entry to evict. Every step of a set that can fail for lack of memory,
- * including the copy of the new value, runs before the remote setter, so a
- * ccol_not_enough_memory or ccol_container_full result means the remote
- * setter was never called. Once the remote setter has succeeded, updating
- * the cache can't fail, so the cache never keeps serving a value older than
- * the one the remote store holds.
- *
- * A set takes effect when its remote setter returns. While that call runs,
- * the key keeps its old value, its place in the eviction order and its place
- * in clrucache_size(). An insert of another key that needs room meanwhile
- * evicts the least recently used key, which may be the key being set, and
- * the eviction callback then gets the old value. If the set then fails the
- * key stays evicted; if it succeeds the key comes back with the new value as
- * the most recently used entry, which may evict some other key. The result
- * is always that of the insert followed by the set, and a segment never
- * holds more entries than its capacity.
- *
- * Limitations and caller responsibilities:
- * - The eviction callback runs while the owning segment's lock is held, so
- *   it MUST NOT call back into the cache; that's a deadlock. The callback is
- *   NOT serialised against itself either: two segments can evict at the
- *   same time on two threads, so a callback with state of its own has to
- *   guard that state.
- * - A key of a type the cache doesn't know, such as a struct, is the same
- *   key as another one only when all their bytes are equal. The choice of
- *   segment and the internal map both read every byte of the key, padding
- *   bytes of a struct included, and the cache takes no custom hash or key
- *   equality function, so every byte of a padded key has to be determined.
- *   Through the raw functions, such as clrucache_set_full(), the cache reads
- *   exactly the object key_pair->ptr points at, so zero the whole key object
- *   with memset() before setting its members. Through ccache_get() and
- *   ccache_set() the cache sees the macro's own copy of the key, and C leaves
- *   the padding of a struct copy unspecified. With GCC 11 or later the
- *   macros zero that padding; with any other compiler, use the raw functions
- *   for a padded key.
- */
+// The remote getter type. It's called for a missing key when a remote source
+// exists. On success it allocates the value with the cache's allocator (the
+// custom procs or malloc), stores it in val and returns true; the cache owns
+// the value from then on. On failure it leaves val->ptr NULL and returns false.
+// No cache lock is held during the call, so it may use the cache for other
+// keys, but not for the key it serves and not to destroy the cache, which would
+// deadlock.
+typedef bool (*ccache_remote_getter_fn)(const cmap_pair *key, cmap_pair *val);
 
-/* ========================================================================== */
-/*                         CALLBACK TYPES                                     */
-/* ========================================================================== */
+// The remote setter type: writes key and val to the remote source and returns
+// true on success. No cache lock is held during the call; the rules of the
+// getter about the same key and the destroy apply.
+typedef bool (*ccache_remote_setter_fn)(const cmap_pair *key,
+                                        const cmap_pair *val);
 
-/**
- * @brief Remote getter callback
- *
- * Called when the requested key isn't in the cache and a remote source
- * exists. On success the callback must allocate the value data on the heap,
- * assign that pointer to val->ptr and set val->size to the byte length. The
- * cache takes ownership of val->ptr and frees it with its own allocator,
- * which is the custom ccol_memmgmt_procs_t given to clrucache_create_full,
- * or malloc()/free() if none was given. The callback's allocation MUST use
- * that same allocator: its malloc or calloc when one is configured, plain
- * malloc() otherwise. If it doesn't, the cache's later free of val->ptr
- * corrupts the heap. On failure the callback must leave val->ptr as NULL and
- * return false.
- *
- * No lock of the cache is held during the call, so the callback can use the
- * cache for any OTHER key. It must not call back into the same cache for the
- * key it is serving: a get or a set of that key waits for the operation that
- * runs this callback, which never finishes, and the thread deadlocks against
- * itself. It must not destroy the cache either, because the destroy waits
- * for the call that runs this callback.
- *
- * @param key  Key pair (ptr + size)
- * @param val  Output pair to fill on success (ptr + size)
- * @return true on success, false on failure
- */
-typedef bool (*ccache_remote_getter_fn_t)(const cmap_pair *key, cmap_pair *val);
+// The eviction callback type: gets the key and value of an entry evicted to
+// make room. It runs with the owning segment's lock held, so it must not call
+// back into the cache, and evictions in two segments can run it at the same
+// time.
+typedef void (*ccache_eviction_fn)(const cmap_pair *key, const cmap_pair *val);
 
-/**
- * @brief Remote setter callback
- *
- * Tries to write a key-value pair to the remote source.
- *
- * No lock of the cache is held during the call, so the callback can use the
- * cache for any OTHER key. It must not call back into the same cache for the
- * key it is serving: a get or a set of that key waits for the operation that
- * runs this callback, which never finishes, and the thread deadlocks against
- * itself. It must not destroy the cache either, because the destroy waits
- * for the call that runs this callback.
- *
- * @param key  Key pair (ptr + size)
- * @param val  Value pair (ptr + size)
- * @return true on success, false on failure
- */
-typedef bool (*ccache_remote_setter_fn_t)(const cmap_pair *key,
-                                          const cmap_pair *val);
-
-/**
- * @brief Eviction callback
- *
- * Called when an entry is evicted to make room for a new one. The call is
- * synchronous and the owning segment's lock is held during it, so the
- * callback must not call back into the cache.
- *
- * Only that one segment's lock is held, so two evictions in different
- * segments can run this callback at the same time on two threads. Whatever
- * state the callback keeps of its own needs its own protection.
- *
- * @param key  The key pair of the evicted entry (ptr + size)
- * @param val  The value pair of the evicted entry (ptr + size)
- */
-typedef void (*ccache_eviction_fn_t)(const cmap_pair *key,
-                                     const cmap_pair *val);
-
-/* ========================================================================== */
-/*                         OPAQUE TYPE                                        */
-/* ========================================================================== */
-
-/** @brief Opaque LRU cache structure */
+// The opaque cache: a thread-safe least recently used cache with an optional
+// remote source. A hash map gives O(1) lookup and a linked list O(1) eviction.
+// From a capacity of 128 on, the cache is split into segments with their own
+// locks, each key belongs to one segment by its hash, and each segment evicts
+// its own least recently used entry; below 128 there is one segment and one
+// exact order.
+//
+// Getters of the same missing key join one remote fetch and all get its
+// result. A getter waits while a set of its key runs; when the set fails it
+// starts over as an ordinary miss. Setters of one key are serialized. The
+// remote setter always runs before the cache changes, and every allocation of a
+// set happens before it, so ccol_not_enough_memory or ccol_container_full means
+// the setter never ran. A failed set changes nothing (value and place in the
+// eviction order stay); after a successful setter the cache update can't fail.
+// While the setter runs the key stays an ordinary entry that an insert may
+// evict; a successful set then inserts it again as the newest entry.
+//
+// The eviction callback runs with its segment's lock held and must not call
+// back into the cache; two segments can run it at the same time. A key of a
+// type the cache doesn't know (a struct) is compared by all its bytes, padding
+// included: zero such a key with memset() before using the raw functions.
+// ccache_get() and ccache_set() clear the padding of their own copy with GCC 11
+// or later; with other compilers use the raw functions for padded keys.
 typedef struct clrucache clrucache;
 
-/**
- * @brief Opaque LRU cache handle.
- *
- * ccache is an opaque VALUE handle, not a pointer: it packs a slot index
- * and a generation together. Never cast it to void* or a void* to it, never
- * compare it with a pointer cast, and never treat it as an address. Compare
- * it directly against CCACHE_NULL. CCACHE_NULL is 0, so it
- * also works in a truthiness check and `if (!cache)` is a valid test for an
- * invalid handle. Inside the library every use of a ccache goes through
- * a slot table that the library owns, and the handle is resolved there
- * before the cache object is touched. A handle whose slot has been freed is
- * always detected, and so is a handle whose slot has been reused for a
- * different, later cache, so the library never dereferences freed memory or
- * the memory of the wrong object. See the doc comment of
- * __clrucache_destroy for what happens when a stale handle reaches that
- * function.
- */
+// The handle is an opaque value (slot index plus generation), never a pointer.
+// Compare it with CCACHE_NULL, which is 0, so `if (!cache)` works. Every use
+// goes through the library's slot table, so a freed or reused slot is always
+// detected.
 typedef uint64_t ccache;
 
-/** @brief Sentinel value for "no cache", the ccache equivalent of
- *         NULL. */
+// "No cache": the failure value of a create and what a destroy leaves in the
+// handle, so a handle can be tested for validity.
 #define CCACHE_NULL ((ccache)0)
 
-/* ========================================================================== */
-/*                         CREATION / DESTRUCTION                             */
-/* ========================================================================== */
-
-/**
- * @brief Create an LRU cache
- *
- * The cache holds up to capacity live entries. Below a capacity of 128 it is
- * a single segment, and an insert into a full cache first evicts the least
- * recently used entry of the whole cache. From 128 entries on, the cache is
- * split into segments, each with its own lock, and every key belongs to
- * exactly one segment, picked by a hash of the key. The capacity is divided
- * across the segments, and each segment evicts its own least recently used
- * entry once its own share is full, so the entry that makes room is the
- * oldest inside one segment and not the oldest of the whole cache. Since
- * some segments run fuller than others, eviction starts a little before the
- * cache holds capacity entries, and a full cache holds a few percent less
- * than capacity. clrucache_capacity() reports capacity itself.
- *
- * @param capacity     The total number of live entries the cache holds;
- *                     from 128 on, each segment evicts when its own share is
- *                     full (see above). A capacity of 0 is refused: the
- *                     call fails and the string in *err contains
- *                     "capacity must be > 0".
- * @param key_type ccol_data_type of keys (from ccol_determine_ccol_data_type)
- * @param val_type ccol_data_type of values (from ccol_determine_ccol_data_type)
- * @param getter       Remote getter (can be NULL)
- * @param setter       Remote setter (can be NULL). When it isn't NULL it is
- *                     called synchronously before each update of the cache.
- * @param eviction_cb  Called on eviction (can be NULL)
- * @param mprocs       Custom allocator, or NULL for malloc/free. The cache
- *                     keeps a copy of the struct, so the caller may release
- *                     or reuse the struct once this call returns. The
- *                     functions it names must stay callable until the cache
- *                     is destroyed.
- * @param err          Optional. Set to an error string on failure
- * @return The new cache handle, or CCACHE_NULL on failure. A create
- *         from a destructor that runs after the library's own destructor
- *         fails too, because by then the library has released its table of
- *         cache handles at the end of the process.
- */
+// Creates a cache of capacity live entries (0 is refused). It's the one
+// constructor behind ccache_init and the construct macros. key_type and
+// val_type come from ccol_determine_ccol_data_type. getter, setter and
+// eviction_cb may be NULL; a setter runs before each update of the cache.
+// mprocs is your allocator or NULL; the cache keeps a copy of the struct, but
+// its functions must stay callable until the destroy. Gives the handle, or
+// CCACHE_NULL with *err set (also for a create after the library's destructor
+// released the handle table).
+//
+// From a capacity of 128 the capacity is divided across segments that evict on
+// their own, so a full cache holds a few percent less than capacity;
+// clrucache_capacity() reports capacity itself.
 ccache clrucache_create_full(size_t capacity, ccol_data_type key_type,
                              ccol_data_type val_type,
-                             ccache_remote_getter_fn_t getter,
-                             ccache_remote_setter_fn_t setter,
-                             ccache_eviction_fn_t eviction_cb,
-                             ccol_memmgmt_procs_t *mprocs, char **err);
+                             ccache_remote_getter_fn getter,
+                             ccache_remote_setter_fn setter,
+                             ccache_eviction_fn eviction_cb,
+                             ccol_memmgmt_procs *mprocs, char **err);
 
-/**
- * @brief Internal destroy. Use the ccache_destroy() macro instead.
- *
- * cache must be a live handle, meaning one that clrucache_create_full,
- * ccache_init or ccache_construct returned and that hasn't been destroyed yet.
- * A stale handle is a fatal error; a handle is stale when an earlier, complete
- * call to this same function destroyed it, or when another thread is
- * destroying it at this same moment. A forged value or garbage is a fatal
- * error too. In all these cases the function calls _ccol_fatal_err(), which
- * calls abort() and raises SIGABRT, instead of risking a use-after-free or a
- * double-free. That covers both a plain sequential second destroy and a
- * concurrent destroy that overlaps in time. CCACHE_NULL (0) is the
- * one exception and stays a silent no-op, matching the "destroy sets the
- * handle to NULL" idiom of ccache_destroy.
- *
- * On a live handle it blocks until every in-flight resolved use of the
- * handle has stopped, then evicts all the remaining entries, calling the
- * eviction callback for each one, and then frees all the memory.
- */
-void __clrucache_destroy(ccache cache);
+// Internal: destroys a cache. It's the body of ccache_destroy(); use the macro,
+// which also clears the handle. CCACHE_NULL is a no-op; any other handle that
+// isn't live (already destroyed, being destroyed, garbage) is a fatal error.
+// It waits for every call that resolved the handle, evicts the remaining
+// entries through the eviction callback and frees everything.
+void clrucache__destroy(ccache cache);
 
-/**
- * @brief Copy a value directly into a buffer that the caller gives. This is
- *        internal. Use the ccache_get() macro instead.
- *
- * Unlike clrucache_get_full(), this doesn't allocate heap memory: it copies
- * the stored value into buf while holding the owning segment's lock, and
- * then returns.
- *
- * buf_size must be exactly the size of the stored value. ccache_get() obeys
- * that because it passes sizeof(ValT) and not sizeof(*val_ptr): it reads
- * into a temporary of type ValT and then converts and assigns that
- * temporary into *val_ptr. The type of *val_ptr can legitimately differ from
- * ValT (an int-valued cache with a double* out-parameter, for example), and
- * then the two sizes differ too.
- *
- * A stored value of any size other than that of ValT, larger or smaller,
- * gets ccol_unexpected_failure, and buf is left completely untouched; a
- * partial value is never copied into it. That only happens for a value that
- * came into the cache from somewhere else, never from a getter or setter
- * that always produces values of sizeof(ValT) bytes for this key.
- */
-ccol_retval_t __clrucache_get_into(ccache cache, const cmap_pair *key_pair,
-                                   void *buf, size_t buf_size);
+// Internal: copies the value of key_pair into buf without a heap allocation.
+// ccache_get() uses it for every value type other than char *, so a get
+// allocates nothing. buf_size must equal the stored size (ccache_get passes
+// sizeof(ValT)); any other size gives ccol_unexpected_failure and leaves buf
+// untouched.
+ccol_retval clrucache__get_into(ccache cache, const cmap_pair *key_pair,
+                                void *buf, size_t buf_size);
 
-/* ========================================================================== */
-/*                         OPERATIONS                                         */
-/* ========================================================================== */
+// Looks key_pair up and gives a heap copy of its value in *val_out, which the
+// caller frees with the cache's allocator. It's the raw get, for callers that
+// don't use the typed macros. On a miss the remote getter runs once and every
+// other getter of that key waits for its result; a getter also waits while a
+// set of the key runs. A fixed-width key must have the width of its type, or
+// the call gives ccol_invalid_args without reading it. Gives ccol_success,
+// ccol_key_not_found, ccol_invalid_args, ccol_not_enough_memory,
+// ccol_unexpected_failure (a joined fetch stored a value of the wrong size) or
+// ccol_container_full (the internal records are full).
+ccol_retval clrucache_get_full(ccache cache, const cmap_pair *key_pair,
+                               cmap_pair *val_out);
 
-/**
- * @brief Get a value by key
- *
- * On success it allocates a heap copy of the stored value, with the cache's
- * custom allocator if one was given at construction and with malloc()
- * otherwise. The copy goes to val_out->ptr and val_out->size gets the stored
- * byte size. The caller must free val_out->ptr with the matching allocator:
- * the custom free function when a custom allocator was configured, free()
- * otherwise.
- *
- * On a cache miss the remote getter, if one was given, is called once. The
- * other getters for the same key block until that call completes, and the
- * fetched value is stored in the cache and handed to all the waiters.
- *
- * It blocks while a setter for this key is in progress, until the cache is
- * consistent again. When that set fails and leaves the key absent, this call
- * goes on as a cache miss, so the remote getter runs for it.
- *
- * @param cache     Cache handle
- * @param key_pair  The key to look up. For a fixed-width key type its size
- *                  must equal the width of that type; otherwise the call
- *                  reports ccol_invalid_args without reading the key
- * @param val_out   On success val_out->ptr is a heap copy of the value,
- *                  which the caller must free with the cache's allocator,
- *                  and val_out->size is the stored value's size
- * @return ccol_success, ccol_key_not_found, ccol_invalid_args,
- *         ccol_not_enough_memory, ccol_unexpected_failure or
- *         ccol_container_full. ccol_unexpected_failure comes back when the
- *         call joins another thread's cache-miss fetch and that fetch stores
- *         a value of the wrong size, one that doesn't agree with what the
- *         caller on that other thread expects. ccol_container_full comes back
- *         on a cache miss when the cache's internal records reach their own
- *         maximum element count
- */
-ccol_retval_t clrucache_get_full(ccache cache, const cmap_pair *key_pair,
-                                 cmap_pair *val_out);
+// Stores val_pair under key_pair, after the remote setter (if any) succeeded;
+// it's the raw set. The key becomes its segment's newest entry. A failed setter
+// gives ccol_unexpected_failure and changes nothing in the cache. Every
+// allocation happens before the setter runs. Setters of one key are
+// serialized, and a getter of the key waits for the set. Gives ccol_success,
+// ccol_invalid_args, ccol_not_enough_memory, ccol_unexpected_failure or
+// ccol_container_full.
+ccol_retval clrucache_set_full(ccache cache, const cmap_pair *key_pair,
+                               const cmap_pair *val_pair);
 
-/**
- * @brief Set a value by key
- *
- * The remote setter, if one was given at construction, is called first. On
- * success the cache is updated and the key becomes its segment's most
- * recently used entry. On failure the function returns
- * ccol_unexpected_failure and nothing changes in the cache for that key:
- * both its stored value and its exact position in the eviction order
- * survive the call. So a set that stores nothing never costs another key
- * its place as the next entry to evict.
- *
- * Every allocation of the call, the copy of the new value included, happens
- * before the remote setter runs. A ccol_not_enough_memory or
- * ccol_container_full result therefore means the remote setter was never
- * called and nothing changed in the cache for the key, and a remote setter
- * that succeeds is always followed by a cache update that can't fail.
- *
- * The set takes effect when the remote setter returns. Until then the key is
- * an ordinary entry of its segment and a concurrent insert that needs room
- * can evict it. A set that then succeeds inserts the key again with the new
- * value, and a set that fails leaves it evicted. See the file-level
- * documentation of this header.
- *
- * Many setters for the same key are serialized. A getter for the same key
- * blocks until the set completes, since the cache is consistent then.
- *
- * @param cache    Cache handle
- * @param key_pair The key to set
- * @param val_pair The value to pair with the key
- * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory,
- *         ccol_unexpected_failure or ccol_container_full.
- *         ccol_unexpected_failure comes back when the synchronous remote
- *         call fails, and ccol_container_full when it sets a brand new key
- *         and the cache's internal bookkeeping reaches its own maximum
- *         element count
- */
-ccol_retval_t clrucache_set_full(ccache cache, const cmap_pair *key_pair,
-                                 const cmap_pair *val_pair);
-
-/* ========================================================================== */
-/*                         DESTROY MACRO                                      */
-/* ========================================================================== */
-
-/**
- * @brief Cleanup function for Resource Acquisition Is Initialization (RAII).
- *        Use it with _ccol_destructor.
- *
- * Calling it on a *cp that is already CCACHE_NULL is safe and does
- * nothing. Calling it on a stale handle that isn't CCACHE_NULL (one
- * that some other path has already destroyed) is fatal misuse, as
- * __clrucache_destroy documents too.
- */
-static inline __attribute__((always_inline)) void ___clrucache_destroy(
+// Internal: destroys *cp and clears it. The _scoped macros attach it with
+// ccol__destructor; a CCACHE_NULL handle is a no-op, a stale one is fatal.
+static inline __attribute__((always_inline)) void clrucache__destroy_cleanup(
     ccache *cp) {
   if (cp && *cp) {
-    __clrucache_destroy(*cp);
+    clrucache__destroy(*cp);
     *cp = CCACHE_NULL;
   }
 }
 
-/**
- * @brief Destroy a cache and set the handle to CCACHE_NULL
- *
- * Blocks until every in-flight resolved use of the handle has stopped. Don't
- * call it at the same time as another call on the same handle; the doc
- * comment of __clrucache_destroy describes what happens then, and it's a
- * fatal error, not a silent race.
- *
- * @note name is evaluated exactly once. It must be a modifiable lvalue, such
- * as a variable or an element of an array.
- */
+// Destroys a cache and sets the handle to CCACHE_NULL, so the variable can't be
+// used again by mistake. It waits for every call in flight on the handle; a
+// concurrent second destroy is a fatal error. name must be a modifiable lvalue
+// and is evaluated once.
 #define clrucache_destroy(name) \
-  _ccol_clrucache_destroy_impl( \
-      name, _ccol_uniq(__ccol_clrucache_destroy_slot, __COUNTER__))
+  ccol__clrucache_destroy_impl( \
+      name, ccol__uniq(ccol__clrucache_destroy_slot, __COUNTER__))
 
-/* Internal: the body of clrucache_destroy. slot is a name from _ccol_uniq(), so
- * the macro can nest inside the argument of another destroy macro and still
- * be -Wshadow clean. The argument is evaluated exactly once. */
-#define _ccol_clrucache_destroy_impl(name, slot) \
+// Internal: the body of clrucache_destroy(). slot comes from ccol__uniq(), so
+// destroy macros can nest without -Wshadow warnings.
+#define ccol__clrucache_destroy_impl(name, slot) \
   do {                                           \
     __typeof__(name) *slot = &(name);            \
-    __clrucache_destroy(*slot);                  \
+    clrucache__destroy(*slot);                   \
     *slot = CCACHE_NULL;                         \
   } while (0)
 
-/**
- * @brief Destroy a cache and set the handle to CCACHE_NULL (type-inferred
- * alias)
- *
- * The name the type-inferred layer uses for clrucache_destroy(). It behaves
- * the same way.
- */
+// The typed layer's name for clrucache_destroy(), so typed code reads the
+// same throughout.
 #define ccache_destroy(name) clrucache_destroy(name)
 
-/* ========================================================================== */
-/*                    TYPE-TRACKING DECLARE / INIT / CONSTRUCT                */
-/* ========================================================================== */
+// Declares a cache variable called name together with the companion variables
+// that record KeyT and ValT for the typed macros; initialize it with
+// ccache_init(). Array types are refused, because the macros copy through a
+// temporary of the declared type.
+#define ccache_declare(name, KeyT, ValT)                                 \
+  ccol__refuse_array_types("clru", KeyT, ValT);                          \
+  __typeof__(KeyT) *name##__ccache_key_type_var __attribute__((unused)); \
+  __typeof__(ValT) *name##__ccache_val_type_var __attribute__((unused)); \
+  ccache name
 
-/**
- * @brief Declare an uninitialized cache variable with type tracking
- *
- * Call ccache_init() on the variable before using it.
- */
-#define ccache_declare(name, KeyT, ValT)                                  \
-  _ccol_refuse_array_types("clru", KeyT, ValT);                           \
-  __typeof__(KeyT) *name##__ccache_key_type_var                           \
-      __attribute__((unused)); /* deliberately not initialized to NULL */ \
-  __typeof__(ValT) *name##__ccache_val_type_var                           \
-      __attribute__((unused)); /* deliberately not initialized to NULL */ \
-  ccache name                  /* deliberately not initialized to NULL */
-
-/**
- * @brief Declare a cache variable that the compiler cleans up at scope exit
- */
+// ccache_declare() for a cache that is destroyed when it goes out of scope, so
+// no exit path can leak it.
 #define ccache_declare_scoped(name, KeyT, ValT)                           \
-  _ccol_refuse_array_types("clru", KeyT, ValT);                           \
+  ccol__refuse_array_types("clru", KeyT, ValT);                           \
   __typeof__(KeyT) *name##__ccache_key_type_var __attribute__((unused)) = \
       NULL;                                                               \
   __typeof__(ValT) *name##__ccache_val_type_var __attribute__((unused)) = \
       NULL;                                                               \
-  ccache name _ccol_destructor(___clrucache_destroy) = CCACHE_NULL
+  ccache name ccol__destructor(clrucache__destroy_cleanup) = CCACHE_NULL
 
-/**
- * @brief Initialize a previously declared cache variable
- *
- * @param name       Cache variable, declared first with ccache_declare
- * @param capacity   The total number of live entries; see
- *                   clrucache_create_full()
- * @param getter     Remote getter (can be NULL)
- * @param setter     Remote setter (can be NULL)
- * @param evict_cb   Eviction callback (can be NULL)
- */
+// Creates the cache of a variable declared with ccache_declare(), taking the
+// key and value types from its companion variables; getter, setter and
+// evict_cb may be NULL. A failed create calls ccol__fatal_err.
 #define ccache_init(name, capacity, getter, setter, evict_cb)                  \
   do {                                                                         \
-    char *_ccache_err = NULL;                                                  \
+    char *ccache__err = NULL;                                                  \
     (name) = clrucache_create_full(                                            \
         (capacity),                                                            \
         ccol_determine_ccol_data_type(*name##__ccache_key_type_var),           \
         ccol_determine_ccol_data_type(*name##__ccache_val_type_var), (getter), \
-        (setter), (evict_cb), NULL, &_ccache_err);                             \
+        (setter), (evict_cb), NULL, &ccache__err);                             \
     if (!(name)) {                                                             \
-      _ccol_fatal_err("ccache_init('%s'): %s", #name,                          \
-                      _ccache_err ? _ccache_err : "unknown error");            \
+      ccol__fatal_err("ccache_init('%s'): %s", #name,                          \
+                      ccache__err ? ccache__err : "unknown error");            \
     }                                                                          \
   } while (0)
 
-/**
- * @brief Declare and initialize in one step, the most common use.
- *
- * Example:
- * @code
- * ccache_construct(my_cache, int, double, 128, NULL, NULL, NULL);
- * int k = 42; double v = 3.14;
- * ccache_set(my_cache, k, v);
- * double out;
- * ccache_get(my_cache, k, &out);
- * ccache_destroy(my_cache);
- * @endcode
- */
+// Declares and creates a typed cache in one step, the usual way to make one; a
+// failed create calls ccol__fatal_err.
+//
+//   ccache_construct(my_cache, int, double, 128, NULL, NULL, NULL);
+//   ccache_set(my_cache, 42, 3.14);
+//   double out;
+//   ccache_get(my_cache, 42, &out);
+//   ccache_destroy(my_cache);
 #define ccache_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb) \
-  _ccol_refuse_array_types("clru", KeyT, ValT);                                \
+  ccol__refuse_array_types("clru", KeyT, ValT);                                \
   __typeof__(KeyT) *name##__ccache_key_type_var __attribute__((unused)) =      \
       NULL;                                                                    \
   __typeof__(ValT) *name##__ccache_val_type_var __attribute__((unused)) =      \
       NULL;                                                                    \
   ccache name = CCACHE_NULL;                                                   \
   do {                                                                         \
-    char *_ccache_err = NULL;                                                  \
+    char *ccache__err = NULL;                                                  \
     (name) = clrucache_create_full(                                            \
         (capacity),                                                            \
         ccol_determine_ccol_data_type(*name##__ccache_key_type_var),           \
         ccol_determine_ccol_data_type(*name##__ccache_val_type_var), (getter), \
-        (setter), (evict_cb), NULL, &_ccache_err);                             \
+        (setter), (evict_cb), NULL, &ccache__err);                             \
     if (!(name)) {                                                             \
-      _ccol_fatal_err("ccache_construct('%s'): %s", #name,                     \
-                      _ccache_err ? _ccache_err : "unknown error");            \
+      ccol__fatal_err("ccache_construct('%s'): %s", #name,                     \
+                      ccache__err ? ccache__err : "unknown error");            \
     }                                                                          \
   } while (0)
 
-/**
- * @brief Declare, initialize, and destroy automatically at scope exit
- */
+// ccache_construct() for a cache that is destroyed at the end of its scope.
 #define ccache_construct_scoped(name, KeyT, ValT, capacity, getter, setter,    \
                                 evict_cb)                                      \
-  _ccol_refuse_array_types("clru", KeyT, ValT);                                \
+  ccol__refuse_array_types("clru", KeyT, ValT);                                \
   __typeof__(KeyT) *name##__ccache_key_type_var __attribute__((unused)) =      \
       NULL;                                                                    \
   __typeof__(ValT) *name##__ccache_val_type_var __attribute__((unused)) =      \
       NULL;                                                                    \
-  ccache name _ccol_destructor(___clrucache_destroy) = CCACHE_NULL;            \
+  ccache name ccol__destructor(clrucache__destroy_cleanup) = CCACHE_NULL;      \
   do {                                                                         \
-    char *_ccache_err = NULL;                                                  \
+    char *ccache__err = NULL;                                                  \
     (name) = clrucache_create_full(                                            \
         (capacity),                                                            \
         ccol_determine_ccol_data_type(*name##__ccache_key_type_var),           \
         ccol_determine_ccol_data_type(*name##__ccache_val_type_var), (getter), \
-        (setter), (evict_cb), NULL, &_ccache_err);                             \
+        (setter), (evict_cb), NULL, &ccache__err);                             \
     if (!(name)) {                                                             \
-      _ccol_fatal_err("ccache_construct_scoped('%s'): %s", #name,              \
-                      _ccache_err ? _ccache_err : "unknown error");            \
+      ccol__fatal_err("ccache_construct_scoped('%s'): %s", #name,              \
+                      ccache__err ? ccache__err : "unknown error");            \
     }                                                                          \
   } while (0)
 
-/**
- * @brief Restore the type-tracking variables for a cache passed across
- *        scopes
- *
- * Example:
- * @code
- * void use_cache(ccache c) {
- *   ccache_redeclare(c, int, double);
- *   double out;
- *   ccache_get(c, 42, &out);
- * }
- * @endcode
- */
+// Declares the companion type variables again for a cache handle that came
+// from another scope (a function parameter, for example), so the typed macros
+// work on it:
+//
+//   void use_cache(ccache c) {
+//     ccache_redeclare(c, int, double);
+//     double out;
+//     ccache_get(c, 42, &out);
+//   }
 #define ccache_redeclare(name, KeyT, ValT)                                \
-  _ccol_refuse_array_types("clru", KeyT, ValT);                           \
+  ccol__refuse_array_types("clru", KeyT, ValT);                           \
   __typeof__(KeyT) *name##__ccache_key_type_var __attribute__((unused)) = \
       NULL;                                                               \
   __typeof__(ValT) *name##__ccache_val_type_var __attribute__((unused)) = NULL
 
-/* ========================================================================== */
-/*                    TYPE-INFERRED GET / SET MACROS */
-/* ========================================================================== */
+// Looks key up in the typed cache name and stores the value in *val_ptr; it
+// evaluates to the ccol_retval of the get. key is converted to the declared
+// KeyT as by assignment (a char * key type keeps the caller's pointer type). A
+// value of another type is converted into *val_ptr as by assignment and no heap
+// memory is left; for a char * value type the caller gets a heap string to free
+// with the cache's allocator. A NULL char * key gives ccol_invalid_args. A
+// cache from another scope needs ccache_redeclare() first.
+#define ccache_get(name, key, val_ptr)                                  \
+  ccol__ccache_get_impl(name, (key), (val_ptr),                         \
+                        ccol__uniq(ccol__ccache_get_k, __COUNTER__),    \
+                        ccol__uniq(ccol__ccache_get_kp, __COUNTER__),   \
+                        ccol__uniq(ccol__ccache_get_r, __COUNTER__),    \
+                        ccol__uniq(ccol__ccache_get_vtmp, __COUNTER__), \
+                        ccol__uniq(ccol__ccache_get_vout, __COUNTER__))
 
-/**
- * @brief Get a value by key. This is a type-inferred convenience wrapper.
- *
- * For a val type other than char*, the stored value is converted to the
- * type of *val_ptr the way a plain C assignment converts it. A cache that
- * stores int values and reads into a double* out-parameter, for example,
- * converts the int to a double instead of copying the int's raw bytes. The
- * internal heap allocation is then freed. A type of *val_ptr that the
- * compiler can't convert implicitly from the cache's declared ValT is a
- * compile error right here, never a value that gets silently
- * reinterpreted.
- *
- * For a char* val type, ownership of the heap string goes to
- * *(char **)val_ptr, and the caller must free that string, with the cache's
- * custom allocator if one was given and with free() otherwise.
- *
- * key is also converted to the cache's declared KeyT the way a plain C
- * assignment converts it, instead of the key being looked up with its own
- * natural expression type. A cache with a character-pointer key type takes a
- * const char * key as it is. A padded struct key follows the rule in this
- * header's file-level documentation.
- *
- * When you pass the cache across scopes, into a thread function for
- * example, declare a local alias and call ccache_redeclare() before
- * ccache_get(), so the val type is detected correctly.
- *
- * @param name     Cache variable. Declare it with ccache_construct or
- *                 ccache_declare, or restore it with ccache_redeclare
- * @param key      Key expression (an lvalue or a literal string)
- * @param val_ptr  A pointer to the value type (ValT *), NOT a cmap_pair *.
- *                 For a val type other than char* this is, for example, a
- *                 double * for a double-valued cache: the value is copied
- *                 in, converted to the type of *val_ptr, and the internal
- *                 allocation is freed, so the caller sees no heap memory.
- *                 For a char* val type it is a pointer to a char* variable,
- *                 and ownership of the heap string goes to the caller, who
- *                 must free it with the cache's custom allocator if one was
- *                 given and with free() otherwise.
- * @return ccol_retval_t: ccol_success, ccol_key_not_found or another
- *         return value
- *
- * @note A NULL key of a character-pointer type isn't a string, and gives
- * ccol_invalid_args
- *
- * Example:
- * @code
- * int k = 5; int v = 0;
- * if (ccache_get(cache, k, &v) == ccol_success) { ... }
- *
- * char *str = NULL;
- * if (ccache_get(str_cache, k, &str) == ccol_success) { free(str); }
- * @endcode
- */
-#define ccache_get(name, key, val_ptr)                                   \
-  _ccol_ccache_get_impl(name, (key), (val_ptr),                          \
-                        _ccol_uniq(__ccol_ccache_get_k, __COUNTER__),    \
-                        _ccol_uniq(__ccol_ccache_get_kp, __COUNTER__),   \
-                        _ccol_uniq(__ccol_ccache_get_r, __COUNTER__),    \
-                        _ccol_uniq(__ccol_ccache_get_vtmp, __COUNTER__), \
-                        _ccol_uniq(__ccol_ccache_get_vout, __COUNTER__))
+// The value type of cache name without top-level qualifiers, so ccache_get()
+// can write a temporary of it when the value type is const.
+#define ccache__unqual_val_type(name) \
+  ccol__unqual_type(*(name##__ccache_val_type_var))
 
-/* The value type of the cache `name` without its top-level qualifiers, so
- * ccache_get() can write a temporary of that type when the value type is
- * const. _ccol_unqual_type() of common.h gives it and leaves an array type
- * as it is. */
-#define _ccache_unqual_val_type(name) \
-  _ccol_unqual_type(*(name##__ccache_val_type_var))
-
-/* The public macro above names all the temporaries of this body with
- * _ccol_uniq(), so it can nest inside the argument of any public macro,
- * itself included. */
-#define _ccol_ccache_get_impl(name, key, val_ptr, _ccache_k, _ccache_kp,       \
-                              _ccache_r, _ccache_vtmp, _ccache_vout)           \
+// Internal: the body of ccache_get(), with temporaries named by ccol__uniq() so
+// it nests inside any public macro. The key copy has the declared key type and
+// its padding cleared, since the segment choice and the map read every byte.
+// Both arms are compiled for every ValT, so the shared ValT temporary sizes
+// each copy by the declared type; without it the dead char * arm would be a
+// _FORTIFY_SOURCE error for a narrow ValT.
+#define ccol__ccache_get_impl(name, key, val_ptr, ccache__k, ccache__kp,       \
+                              ccache__r, ccache__vtmp, ccache__vout)           \
   ({                                                                           \
-    /* The key temporary has the cache's DECLARED key type, so the key is      \
-     * converted exactly the way ccache_set() converted it. A                  \
-     * character-pointer key type keeps the type of the caller's expression    \
-     * instead, so a const char * key needs no cast; see                       \
-     * _ccol_declared_or_own_type() in common.h. The choice of segment and     \
-     * the map both read every byte of the key, padding included, so we        \
-     * clear this copy's padding. For a type without padding the clear is      \
-     * empty. */                                                               \
-    _ccol_declared_or_own_type(name##__ccache_key_type_var, (key)) _ccache_k = \
+    ccol__declared_or_own_type(name##__ccache_key_type_var, (key)) ccache__k = \
         (key);                                                                 \
-    _ccol_clear_padding(&_ccache_k);                                           \
-    cmap_pair _ccache_kp = {};                                                 \
-    _populate_cmap_pair(&_ccache_kp, _ccache_k);                               \
-    ccol_retval_t _ccache_r;                                                   \
-    /* Both arms below get compiled for every ValT, because the condition      \
-     * is a constant the compiler folds and not a preprocessor test. So        \
-     * every statement in each arm has to be well formed and diagnose          \
-     * clean, both for the ValT that makes it dead and for the one that        \
-     * makes it live, and this shared temporary is what keeps that true.       \
-     * Its type is the cache's declared ValT, so each arm sizes its copy by    \
-     * that type instead of by a width only one arm's ValT has. Without        \
-     * it, a copy in the char* arm sized by sizeof(void *) is a                \
-     * _FORTIFY_SOURCE "will always overflow" error in a caller's -Werror      \
-     * build whenever ValT is narrower than a pointer, and on a statement      \
-     * that never even runs. */                                                \
-    _ccache_unqual_val_type(name) _ccache_vtmp;                                \
-    if (_ccol_is_char_ptr(*(name##__ccache_val_type_var))) {                   \
-      /* char* path: make a heap copy and hand its ownership to the            \
-       * caller */                                                             \
-      cmap_pair _ccache_vout = {};                                             \
-      _ccache_r = clrucache_get_full((name), &_ccache_kp, &_ccache_vout);      \
-      if (_ccache_r == ccol_success && _ccache_vout.ptr) {                     \
-        /* Move the heap pointer into the ValT temporary as bytes, because     \
-         * a cast would be a pointer-to-integer conversion for every ValT      \
-         * that makes this arm dead. Assigning out of the temporary is then    \
-         * an ordinary typed store, so there's no aliasing question. */        \
-        memcpy(&_ccache_vtmp, &_ccache_vout.ptr, sizeof(_ccache_vtmp));        \
-        *(val_ptr) = _ccache_vtmp;                                             \
+    ccol__clear_padding(&ccache__k);                                           \
+    cmap_pair ccache__kp = {};                                                 \
+    ccol__populate_cmap_pair(&ccache__kp, ccache__k);                          \
+    ccol_retval ccache__r;                                                     \
+    ccache__unqual_val_type(name) ccache__vtmp;                                \
+    if (ccol__is_char_ptr(*(name##__ccache_val_type_var))) {                   \
+      cmap_pair ccache__vout = {};                                             \
+      ccache__r = clrucache_get_full((name), &ccache__kp, &ccache__vout);      \
+      if (ccache__r == ccol_success && ccache__vout.ptr) {                     \
+        memcpy(&ccache__vtmp, &ccache__vout.ptr, sizeof(ccache__vtmp));        \
+        *(val_ptr) = ccache__vtmp;                                             \
       }                                                                        \
     } else {                                                                   \
-      /* Path for a val type other than char*: read into a temporary of        \
-       * the cache's declared ValT, not of the type of *val_ptr, and then      \
-       * assign that temporary to *val_ptr. The conversion then goes           \
-       * through the C compiler's assignment rules instead of a raw byte       \
-       * copy, so a *val_ptr whose type differs from ValT (a double*           \
-       * out-parameter for an int-valued cache, say) gets a real numeric       \
-       * conversion and not ValT's raw bytes reinterpreted as the type of      \
-       * *val_ptr. On failure *val_ptr is left untouched, matching the         \
-       * "buf untouched on failure" contract of __clrucache_get_into. */       \
-      _ccache_r = __clrucache_get_into((name), &_ccache_kp, &_ccache_vtmp,     \
-                                       sizeof(_ccache_vtmp));                  \
-      if (_ccache_r == ccol_success) *(val_ptr) = _ccache_vtmp;                \
+      ccache__r = clrucache__get_into((name), &ccache__kp, &ccache__vtmp,      \
+                                      sizeof(ccache__vtmp));                   \
+      if (ccache__r == ccol_success) *(val_ptr) = ccache__vtmp;                \
     }                                                                          \
-    _ccache_r;                                                                 \
+    ccache__r;                                                                 \
   })
 
-/**
- * @brief Set a value by key. This is a type-inferred convenience wrapper.
- *
- * If a remote setter was given at construction, it is called synchronously
- * before the cache is updated. See clrucache_set_full().
- *
- * key and val are converted to the cache's declared KeyT and ValT the way a
- * plain C assignment converts them, so an int literal passed as val for a
- * double-valued cache becomes the double value and not the int's raw bytes.
- * The compiler has to be able to convert a val or key expression implicitly
- * to the cache's declared ValT or KeyT; one it can't convert is a compile
- * error right here, never a value that gets silently reinterpreted. A
- * character-pointer KeyT or ValT is the exception: the expression's pointer
- * type is kept, so a const char * key or value for a char * cache needs no
- * cast. A padded struct key follows the rule in this header's file-level
- * documentation.
- *
- * name must be a plain variable, declared with ccache_construct or
- * ccache_declare or restored with ccache_redeclare(), because that's where the
- * KeyT and ValT for the conversion come from; it can't be any other
- * expression, such as a read of a struct member. When you pass the cache
- * across scopes, into a thread function for example, declare a local alias
- * and call ccache_redeclare() first. ccache_get() needs the same.
- *
- * @param name   Cache variable
- * @param key    Key expression
- * @param val    Value expression
- * @return ccol_retval_t
- *
- * @note A NULL key or value of a character-pointer type isn't a string, and
- * gives ccol_invalid_args
- *
- * Example:
- * @code
- * int k = 5; double v = 2.71;
- * ccache_set(cache, k, v);
- * @endcode
- */
-#define ccache_set(name, key, val)                                     \
-  _ccol_ccache_set_impl(name, (key), (val),                            \
-                        _ccol_uniq(__ccol_ccache_set_k, __COUNTER__),  \
-                        _ccol_uniq(__ccol_ccache_set_v, __COUNTER__),  \
-                        _ccol_uniq(__ccol_ccache_set_kp, __COUNTER__), \
-                        _ccol_uniq(__ccol_ccache_set_vp, __COUNTER__))
+// Stores val under key in the typed cache name, after the remote setter, and
+// evaluates to the ccol_retval of the set. key and val are converted to the
+// declared KeyT and ValT as by assignment (a char * type keeps the caller's
+// pointer type). name must be a plain variable with its companion variables. A
+// NULL char * key or value gives ccol_invalid_args.
+#define ccache_set(name, key, val)                                    \
+  ccol__ccache_set_impl(name, (key), (val),                           \
+                        ccol__uniq(ccol__ccache_set_k, __COUNTER__),  \
+                        ccol__uniq(ccol__ccache_set_v, __COUNTER__),  \
+                        ccol__uniq(ccol__ccache_set_kp, __COUNTER__), \
+                        ccol__uniq(ccol__ccache_set_vp, __COUNTER__))
 
-/* The public macro above names all the temporaries of this body with
- * _ccol_uniq(), so it can nest inside the argument of any public macro,
- * itself included. */
-#define _ccol_ccache_set_impl(name, key, val, _ccache_k, _ccache_v,            \
-                              _ccache_kp, _ccache_vp)                          \
+// Internal: the body of ccache_set(), with ccol__uniq() temporaries; the key
+// and value copies follow the rules of ccache_get().
+#define ccol__ccache_set_impl(name, key, val, ccache__k, ccache__v,            \
+                              ccache__kp, ccache__vp)                          \
   ({                                                                           \
-    /* See ccache_get() for the type of the key temporary and why its padding  \
-     * is cleared. The value temporary follows the same type rule, so a        \
-     * const char * value for a char * cache needs no cast either. */          \
-    _ccol_declared_or_own_type(name##__ccache_key_type_var, (key)) _ccache_k = \
+    ccol__declared_or_own_type(name##__ccache_key_type_var, (key)) ccache__k = \
         (key);                                                                 \
-    _ccol_clear_padding(&_ccache_k);                                           \
-    _ccol_declared_or_own_type(name##__ccache_val_type_var, (val)) _ccache_v = \
+    ccol__clear_padding(&ccache__k);                                           \
+    ccol__declared_or_own_type(name##__ccache_val_type_var, (val)) ccache__v = \
         (val);                                                                 \
-    cmap_pair _ccache_kp = {};                                                 \
-    cmap_pair _ccache_vp = {};                                                 \
-    _populate_cmap_pair(&_ccache_kp, _ccache_k);                               \
-    _populate_cmap_pair(&_ccache_vp, _ccache_v);                               \
-    clrucache_set_full((name), &_ccache_kp, &_ccache_vp);                      \
+    cmap_pair ccache__kp = {};                                                 \
+    cmap_pair ccache__vp = {};                                                 \
+    ccol__populate_cmap_pair(&ccache__kp, ccache__k);                          \
+    ccol__populate_cmap_pair(&ccache__vp, ccache__v);                          \
+    clrucache_set_full((name), &ccache__kp, &ccache__vp);                      \
   })
 
-/**
- * @brief Return the number of live entries the cache holds right now
- */
+// Gives the number of live entries right now, for monitoring.
 size_t clrucache_size(ccache cache);
 
-/**
- * @brief Return the capacity of the cache
- */
+// Gives the capacity the cache was created with.
 size_t clrucache_capacity(ccache cache);
 
-/**
- * @brief Get the number of entries a cache holds (type-inferred alias)
- *
- * The name the type-inferred layer uses for clrucache_size().
- */
+// The typed layer's name for clrucache_size().
 #define ccache_size(name) clrucache_size((name))
 
-/**
- * @brief Get the capacity of a cache (type-inferred alias)
- *
- * The name the type-inferred layer uses for clrucache_capacity().
- */
+// The typed layer's name for clrucache_capacity().
 #define ccache_capacity(name) clrucache_capacity((name))
 
 #pragma GCC visibility pop

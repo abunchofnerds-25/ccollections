@@ -7,9 +7,9 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-ccol_retval_t chttp_put(const char *url,
-                        const chttp_request_body_t *body,
-                        chttpcli_response_t **resp_out);
+ccol_retval chttp_put(const char *url,
+                        const chttp_request_body *body,
+                        chttpcli_response **resp_out);
 .fi
 .SH DESCRIPTION
 .nf

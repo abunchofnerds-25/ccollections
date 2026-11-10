@@ -68,24 +68,26 @@ SOFTWARE.
 
 TAU_MAIN()
 
-/* ========================================================================== */
-/* OpenSSL allocation failure                                                 */
-/*                                                                            */
-/* OpenSSL takes a custom allocator only before its first allocation, so a    */
-/* constructor that runs ahead of every other constructor of this binary      */
-/* installs a forwarder to malloc. While a test holds the window open the     */
-/* forwarder fails one chosen allocation of the arming thread, and apart from */
-/* that it behaves exactly like malloc. LibreSSL has no such hook, so the     */
-/* tests that need it skip there.                                             */
-/* ========================================================================== */
-
+// OpenSSL allocation failure
+//
+// OpenSSL takes a custom allocator only before its first allocation, so a
+// priority-101 constructor installs a forwarder to malloc. While a test holds
+// the window open, the forwarder fails one chosen allocation of the arming
+// thread; otherwise it behaves exactly like malloc. LibreSSL has no such hook,
+// so the tests that need it skip there.
+//
+// Whether the forwarder got installed, how many allocations the armed thread
+// made, which one fails (0 disarms), whether it failed, and the armed thread.
 static bool g_ossl_mem_hooked = false;
 static _Atomic long g_ossl_alloc_seen = 0;
-static _Atomic long g_ossl_alloc_fail_at = 0; /* 0 disarms */
+static _Atomic long g_ossl_alloc_fail_at = 0;
 static _Atomic bool g_ossl_alloc_fired = false;
 static pthread_t g_ossl_alloc_thread;
 
 #if !defined(LIBRESSL_VERSION_NUMBER)
+// Tells the forwarders whether this allocation fails: only on the armed thread
+// and only the g_ossl_alloc_fail_at-th one counted in g_ossl_alloc_seen. It
+// counts the call and sets g_ossl_alloc_fired when it fails one.
 static bool _ossl_should_fail(void) {
   long at = atomic_load(&g_ossl_alloc_fail_at);
   if (at == 0 || !pthread_equal(pthread_self(), g_ossl_alloc_thread))
@@ -95,6 +97,8 @@ static bool _ossl_should_fail(void) {
   return true;
 }
 
+// The OpenSSL allocator forwarders: malloc and realloc that fail when
+// _ossl_should_fail() says so, and a plain free.
 static void *_ossl_malloc(size_t n, const char *file, int line) {
   (void)file;
   (void)line;
@@ -111,41 +115,21 @@ static void _ossl_free(void *p, const char *file, int line) {
   free(p);
 }
 
+// Installs the forwarders before any other constructor can make OpenSSL
+// allocate, and records in g_ossl_mem_hooked whether OpenSSL took them.
 __attribute__((constructor(101))) static void _hook_openssl_allocator(void) {
   g_ossl_mem_hooked =
       CRYPTO_set_mem_functions(_ossl_malloc, _ossl_realloc, _ossl_free) == 1;
 }
 #endif
 
-/* The helper function _openssl_set_drbg_reseed tells OpenSSL when the random
- * number generators of the calling thread reseed. After secs seconds, and after
- * requests calls that draw random bytes. A 0 turns that trigger off. The
- * library never calls this; only the test thread does.
- *
- * Some background first. OpenSSL makes its random bytes with DRBGs
- * (deterministic random bit generators). A DRBG stretches a small secret seed
- * into as many random bytes as you ask for. Every thread has two of them, a
- * public and a private one, and both take their seeds from one shared primary
- * DRBG. Now and then OpenSSL drops the seed of a DRBG and takes a fresh one,
- * so that a leaked state exposes as little as possible. That's a reseed, and
- * it allocates memory.
- *
- * The OpenSSL allocation sweeps in this file depend on something a reseed
- * breaks. A sweep runs a call once to count its OpenSSL allocations, then runs
- * it again and again, failing allocation 1, then allocation 2, and so on. That
- * works only if every run allocates exactly like the counted one. The DRBGs of
- * a thread reseed every 7 minutes or every 65536 requests, and under valgrind
- * this suite runs past the 7 minutes. The run that meets the reseed then makes
- * more allocations than the sweep counted, and the sweep reports a failure
- * that our code didn't cause. That's why _ossl_arm calls this with (0, 0)
- * before every count. Asking for the two DRBGs here also creates them, so
- * their creation doesn't fall inside a count either.
- *
- * The OpenSSL manual explains both triggers and that 0 turns each one off. See
- * "Automatic Reseeding" in EVP_RAND(7) for OpenSSL 3
- * (https://docs.openssl.org/3.0/man7/EVP_RAND/) and RAND_DRBG_reseed(3)
- * for 1.1.1 (https://docs.openssl.org/1.1.1/man3/RAND_DRBG_reseed/).
- */
+// Sets when the calling thread's two OpenSSL DRBGs reseed: after secs seconds
+// and after requests random draws, where 0 turns a trigger off (EVP_RAND(7),
+// RAND_DRBG_reseed(3)). A reseed allocates, so a reseed that falls into a
+// sweep run makes it allocate more than the counted run and fails it for no
+// fault of ours; under valgrind the suite outlives the 7-minute default.
+// _ossl_arm() calls it with (0, 0), which also creates both DRBGs outside the
+// count. Only the test thread calls it.
 static void _openssl_set_drbg_reseed(unsigned int secs, unsigned int requests) {
 #if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
   OSSL_PARAM params[3] = {
@@ -166,6 +150,9 @@ static void _openssl_set_drbg_reseed(unsigned int secs, unsigned int requests) {
 #endif
 }
 
+// Arms the forwarders to fail allocation number nth of the calling thread
+// (0 only counts). It turns off DRBG reseeding first and resets the counters
+// and the fired flag.
 static void _ossl_arm(long nth) {
   _openssl_set_drbg_reseed(0, 0);
   g_ossl_alloc_thread = pthread_self();
@@ -173,13 +160,11 @@ static void _ossl_arm(long nth) {
   atomic_store(&g_ossl_alloc_fired, false);
   atomic_store(&g_ossl_alloc_fail_at, nth);
 }
+// Disarms the forwarders, so every allocation succeeds again.
 static void _ossl_disarm(void) { atomic_store(&g_ossl_alloc_fail_at, 0); }
 
-/* Checked at the real exit of the process, which is the moment valgrind runs
-   its own leak check and later than any TEST() can look. A regression in the
-   alloc/free balance of ANY chashmap iterator, anywhere in this suite's run,
-   then aborts loudly on the spot instead of showing up only as a rare valgrind
-   report that is hard to reproduce. */
+// Aborts at process exit when a chashmap iterator of this run was never freed,
+// so such a leak fails loudly here instead of as a rare valgrind report.
 static void __attribute__((destructor)) _check_chmap_iter_balance_at_exit(
     void) {
   long outstanding = chashmap_iter_outstanding_count_for_tests();
@@ -192,20 +177,15 @@ static void __attribute__((destructor)) _check_chmap_iter_balance_at_exit(
   }
 }
 
-/* ========================================================================== */
-/*                    THROWAWAY CERTIFICATE GENERATION                        */
-/*                                                                            */
-/* Real PEM files exercise the cert_path and key_path branch of               */
-/* ctls_ctx_cert_add, which loads from a file and is separate from the branch */
-/* that generates a self-signed certificate. The openssl CLI makes these      */
-/* files once at startup, the same way tests/chttpclient/tests_tls.c and      */
-/* tests/chttpserver/tests_tls.c do. Unlike those suites, ctls never stops    */
-/* the process for a bad or missing certificate (that's on purpose, see the   */
-/* doc comments in ctls.h), so this file doesn't need a separate binary to    */
-/* protect itself from a process abort. If the openssl CLI is missing here,   */
-/* the setup of the affected tests fails with a clear message.                */
-/* ========================================================================== */
-
+// Throwaway certificate generation
+//
+// The openssl command makes real PEM files once at startup, so the tests reach
+// the cert_path and key_path branch of ctls_ctx_cert_add. ctls never stops the
+// process for a bad file, so no separate binary is needed; without the openssl
+// command the affected tests skip.
+//
+// The scratch directory and the paths of the generated certificates and keys,
+// and whether the generation (and the encrypted key separately) worked.
 static char g_cert_dir[256];
 static char g_server_cert[320], g_server_key[320];
 static char g_client_cert[320], g_client_key[320];
@@ -214,9 +194,14 @@ static char g_named_cert[320], g_named_key[320];
 static bool g_certs_ready = false;
 static bool g_enc_cert_ready = false;
 
-/* The password that a ctls_ctx_cert_add caller has to give for g_enc_key. */
+// The password of g_enc_key, which a ctls_ctx_cert_add caller passes as
+// pk_password.
 #define CTLS_TEST_KEY_PASSWORD "hunter2"
 
+// Runs the openssl command to make a self-signed RSA certificate at cert_path
+// with its key at key_path, subject CN cn and, when san isn't NULL, a
+// subjectAltName. Gives 0 when both files are readable afterwards, -1
+// otherwise.
 static int _openssl_selfsigned(const char *key_path, const char *cert_path,
                                const char *cn, const char *san) {
   char cmd[1024];
@@ -239,11 +224,9 @@ static int _openssl_selfsigned(const char *key_path, const char *cert_path,
   return 0;
 }
 
-/* Makes a password-protected private key, which the -nodes form above
- * deliberately doesn't. Loading such a key is the only way to reach the PEM
- * password callback that ctls installs, and that callback turns a wrong
- * password into a reported load failure. Without it OpenSSL prompts on a
- * terminal that may not exist. */
+// Like _openssl_selfsigned() with a key encrypted under password. It's the
+// only way to reach the PEM password callback of ctls, which turns a wrong
+// password into a load failure instead of a terminal prompt.
 static int _openssl_selfsigned_encrypted(const char *key_path,
                                          const char *cert_path, const char *cn,
                                          const char *password) {
@@ -258,6 +241,11 @@ static int _openssl_selfsigned_encrypted(const char *key_path,
   return 0;
 }
 
+// Creates g_cert_dir and every certificate the suite uses: the server
+// (127.0.0.1 with an IP SAN), the client, named.test and the encrypted key.
+// It fills the path globals and g_enc_cert_ready, which is separate so an
+// openssl without the needed cipher skips only the password tests. Gives -1
+// when a required file couldn't be made.
 static int _generate_all_certs(void) {
   snprintf(g_cert_dir, sizeof(g_cert_dir), "/tmp/ctls_test_XXXXXX");
   if (!mkdtemp(g_cert_dir)) return -1;
@@ -277,8 +265,6 @@ static int _generate_all_certs(void) {
     return -1;
   snprintf(g_enc_cert, sizeof(g_enc_cert), "%s/enc.pem", g_cert_dir);
   snprintf(g_enc_key, sizeof(g_enc_key), "%s/enc_key.pem", g_cert_dir);
-  /* Kept as its own flag so that an openssl build without the cipher this needs
-   * skips only the password tests and not every file-backed cert test. */
   g_enc_cert_ready =
       (_openssl_selfsigned_encrypted(g_enc_key, g_enc_cert, "enc.test",
                                      CTLS_TEST_KEY_PASSWORD) == 0);
@@ -287,17 +273,14 @@ static int _generate_all_certs(void) {
 
 static void _teardown(void);
 
+// Prepares the binary: registers _teardown() with atexit (OpenBSD runs no
+// destructor of a program that links libpthread), ignores SIGPIPE so a
+// regression can't kill the binary (tests_sigpipe asserts the property),
+// resets inherited signals so system() works, and generates the
+// certificates into g_certs_ready.
 __attribute__((constructor)) static void _setup(void) {
-  /* An exit handler runs on every system, while OpenBSD runs no destructor of a
-   * program that links libpthread. */
   atexit(_teardown);
-  /* Every write of ctls goes through send(2) with MSG_NOSIGNAL, so no test here
-   * needs this ignore. It is here so that a regression of that property doesn't
-   * take down the whole binary; tests_sigpipe keeps the default disposition and
-   * is the suite that asserts the property itself. */
   signal(SIGPIPE, SIG_IGN);
-  /* The certificates come from system() calls of the openssl command, which
-   * fail when an inherited SIGCHLD ignore lets the kernel reap the shell. */
   test_reset_inherited_signals();
   g_certs_ready = (_generate_all_certs() == 0);
   if (!g_certs_ready) {
@@ -309,6 +292,7 @@ __attribute__((constructor)) static void _setup(void) {
 
 static void _bundle3_remove(void);
 
+// Removes every file the suite generated and its directory, at exit.
 static void _teardown(void) {
   _bundle3_remove();
   unlink(g_enc_cert);
@@ -323,24 +307,14 @@ static void _teardown(void) {
 }
 
 #if defined(LIBRESSL_VERSION_NUMBER)
-/* LibreSSL has no SSL_has_pending(), so the socket BIO follows the record
- * framing itself. A client hello in the SSLv2 format doesn't follow that
- * framing, and read as a TLS header its version bytes give a body length of
- * 771. What follows here is 748 bytes of real records that end in the middle of
- * a record, so the TLS layer holds a partial record and the tracker has to
- * report pending input.
- *
- * A tracker that doesn't give up on a header whose first byte isn't a content
- * type fails here: it counts the 748 bytes as the rest of its 771-byte body,
- * ends that body exactly at the end of the input and reports nothing
- * pending. */
+// LibreSSL has no SSL_has_pending(), so the socket BIO follows the record
+// framing itself. An SSLv2-format hello read as a TLS header claims a 771-byte
+// body; 748 bytes of real records follow and end inside a record. A tracker
+// that doesn't give up on a header with no valid content type counts them as
+// the rest of that body and reports nothing pending.
 TEST(ctls_libressl, framing_tracker_gives_up_on_an_sslv2_hello) {
-  /* An SSLv2 CLIENT-HELLO: a two-byte header with the high bit set, then type
-   * 1, version 3.3, a 3-byte cipher spec and a 16-byte challenge. */
   static const char v2[28] = {(char)0x80, 0x1c, 0x01, 0x03, 0x03, 0x00, 0x03,
                               0x00,       0x00, 0x00, 0x10, 0x00, 0x00, 0x2f};
-  /* 748 bytes: two whole application data records with 300 body bytes each,
-   * plus the first 138 bytes of a third one that announces 300. */
   static char tail[748];
   int at = 0;
   for (int r = 0; r < 3; r++) {
@@ -348,53 +322,44 @@ TEST(ctls_libressl, framing_tracker_gives_up_on_an_sslv2_hello) {
     tail[at++] = 0x03;
     tail[at++] = 0x03;
     tail[at++] = 0x01;
-    tail[at++] = 0x2c; /* 300 */
+    tail[at++] = 0x2c;
     int body = r < 2 ? 300 : 748 - at;
     for (int i = 0; i < body; i++) tail[at++] = 'x';
   }
   const char *chunks[2] = {v2, tail};
   int lens[2] = {(int)sizeof(v2), at};
   REQUIRE_EQ(at, 748);
-  REQUIRE_TRUE(_ctls_rec_track_pending_after_for_tests(chunks, lens, 2));
+  REQUIRE_TRUE(ctls__rec_track_pending_after_for_tests(chunks, lens, 2));
 }
 #endif
 
-/* ========================================================================== */
-/*                          HANDSHAKE DRIVER HELPERS                          */
-/* ========================================================================== */
-
-/* Makes a non-blocking AF_UNIX socketpair. It has real socket semantics, so a
- * BIO built on recv and send works over it, and it needs neither a network nor
- * a port. Hostname verification doesn't care about the address family of the
- * socket either: the hostname argument of ctls_conn_create_client is only what
- * we verify against, and nothing ties it to the real peer of the fd. So this
- * pair stands in faithfully for a real TCP loopback pair in every test below.
- */
+// Handshake driver helpers
+//
+// Makes a non-blocking AF_UNIX socketpair in fds, the transport of most tests:
+// it has real socket semantics and needs no network or port, and hostname
+// verification doesn't care about the address family. A test fails (instead
+// of later hanging on a blocking read) when the pair can't be made
+// non-blocking.
 static void _make_nonblocking_pair(int fds[2]) {
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
   for (int i = 0; i < 2; ++i) {
-    /* If this fails and nobody checks, fds[i] stays blocking, and every later
-     * ctls_conn_read or ctls_conn_write in the calling test blocks forever
-     * where EWOULDBLOCK is the expected answer. That hangs the whole test
-     * binary rather than just failing a check, and almost every test in this
-     * file sits on this helper. */
     int flags = fcntl(fds[i], F_GETFL, 0);
     REQUIRE_GE(flags, 0);
     REQUIRE_EQ(fcntl(fds[i], F_SETFL, flags | O_NONBLOCK), 0);
   }
 }
 
-/* Steps the non-blocking handshake on each end of a pair in turn, and stops
- * once both ends are done or max_iters runs out. It's safe without a real
- * poll(2) wait because both ends share one AF_UNIX socketpair that is already
- * connected, so whatever one side writes is there for the very next read of the
- * other side. */
-static bool _drive_both(ctls_conn_t *a, ctls_conn_t *b, int max_iters,
+// Steps the handshakes of a and b in turn until both are done or max_iters
+// runs out. No poll is needed, because the shared socketpair makes each
+// side's output readable by the next step of the other. *out_a_ok and
+// *out_b_ok (may be NULL) get each side's result; it gives true when both
+// succeeded.
+static bool _drive_both(ctls_conn *a, ctls_conn *b, int max_iters,
                         bool *out_a_ok, bool *out_b_ok) {
   bool a_done = false, b_done = false, a_ok = true, b_ok = true;
   for (int i = 0; i < max_iters && !(a_done && b_done); ++i) {
     if (!a_done) {
-      ctls_handshake_result_t r = ctls_conn_handshake_step(a);
+      ctls_handshake_result r = ctls_conn_handshake_step(a);
       if (r == CTLS_HANDSHAKE_DONE) {
         a_done = true;
       } else if (r == CTLS_HANDSHAKE_ERROR) {
@@ -403,7 +368,7 @@ static bool _drive_both(ctls_conn_t *a, ctls_conn_t *b, int max_iters,
       }
     }
     if (!b_done) {
-      ctls_handshake_result_t r = ctls_conn_handshake_step(b);
+      ctls_handshake_result r = ctls_conn_handshake_step(b);
       if (r == CTLS_HANDSHAKE_DONE) {
         b_done = true;
       } else if (r == CTLS_HANDSHAKE_ERROR) {
@@ -417,10 +382,11 @@ static bool _drive_both(ctls_conn_t *a, ctls_conn_t *b, int max_iters,
   return a_done && b_done && a_ok && b_ok;
 }
 
+// Copies the CN of ssl's peer certificate into buf and gives buf, or NULL when
+// there's no certificate or CN, so a test can see which certificate was
+// served.
 static const char *_peer_cert_cn(SSL *ssl, char *buf, size_t buflen) {
 #if defined(LIBRESSL_VERSION_NUMBER) || OPENSSL_VERSION_NUMBER < 0x30000000L
-  /* LibreSSL and OpenSSL 1.1.1 spell the call that takes a reference without
-   * the 1. */
   X509 *cert = SSL_get_peer_certificate(ssl);
 #else
   X509 *cert = SSL_get1_peer_certificate(ssl);
@@ -432,17 +398,18 @@ static const char *_peer_cert_cn(SSL *ssl, char *buf, size_t buflen) {
   return n >= 0 ? buf : NULL;
 }
 
-/* ========================================================================== */
-/*                          CONTEXT-LEVEL BEHAVIOR                            */
-/* ========================================================================== */
-
 TEST(ctls_ctx, new_default_alloc) {
   char *err = NULL;
-  ctls_ctx_t *ctx = ctls_ctx_new(&err);
+  ctls_ctx *ctx = ctls_ctx_new(&err);
   REQUIRE_NE((void *)ctx, (void *)NULL);
   ctls_ctx_release(ctx);
 }
 
+// Context-level behavior
+//
+// An allocator that counts its malloc and calloc calls in
+// g_custom_malloc_calls, so a test can see a context allocate through the
+// caller's procs.
 static int g_custom_malloc_calls = 0;
 static void *_custom_malloc(size_t n) {
   g_custom_malloc_calls++;
@@ -455,13 +422,10 @@ static void *_custom_calloc(size_t n, size_t sz) {
 static void *_custom_realloc(void *p, size_t n) { return realloc(p, n); }
 static void _custom_free(void *p) { free(p); }
 
-/* A certificate that matches its key but that the TLS library won't serve (here
- * an RSA-1024 key with a SHA-1 signature) is refused by ctls_ctx_cert_add
- * before anything is stored, so the context keeps working and a later,
- * unrelated change rebuilds it just like before. If the refused pair got
- * stored, the rebuild would fail and every later change of the context would
- * fail along with it. A TLS library that does serve such a pair makes
- * the test skip. */
+// An RSA-1024 key with a SHA-1 signature matches but the TLS library won't
+// serve it; ctls_ctx_cert_add must refuse it before storing anything, or every
+// later rebuild of the context would fail too. Skips where the library serves
+// such a pair.
 TEST(ctls_ctx, a_certificate_that_the_library_refuses_is_not_stored) {
   if (!g_certs_ready) return;
   char weak_cert[320], weak_key[320], cmd[1024];
@@ -476,13 +440,13 @@ TEST(ctls_ctx, a_certificate_that_the_library_refuses_is_not_stored) {
     return;
   }
   char *err = NULL;
-  ctls_ctx_t *ctx = ctls_ctx_new(&err);
+  ctls_ctx *ctx = ctls_ctx_new(&err);
   REQUIRE_NE((void *)ctx, NULL);
-  ccol_retval_t good =
+  ccol_retval good =
       ctls_ctx_cert_add(ctx, NULL, g_server_cert, g_server_key, NULL, &err);
-  ccol_retval_t weak =
+  ccol_retval weak =
       ctls_ctx_cert_add(ctx, "weak.test", weak_cert, weak_key, NULL, &err);
-  ccol_retval_t later = ctls_ctx_alpn_add(ctx, "h2", NULL, NULL, NULL, &err);
+  ccol_retval later = ctls_ctx_alpn_add(ctx, "h2", NULL, NULL, NULL, &err);
   ctls_ctx_release(ctx);
   unlink(weak_cert);
   unlink(weak_key);
@@ -497,21 +461,22 @@ TEST(ctls_ctx, a_certificate_that_the_library_refuses_is_not_stored) {
 
 TEST(ctls_ctx, new_custom_alloc_is_used) {
   g_custom_malloc_calls = 0;
-  ccol_memmgmt_procs_t procs = {.malloc = _custom_malloc,
-                                .free = _custom_free,
-                                .calloc = _custom_calloc,
-                                .realloc = _custom_realloc};
+  ccol_memmgmt_procs procs = {.malloc = _custom_malloc,
+                              .free = _custom_free,
+                              .calloc = _custom_calloc,
+                              .realloc = _custom_realloc};
   char *err = NULL;
-  ctls_ctx_t *ctx = ctls_ctx_new_mp(&procs, &err);
+  ctls_ctx *ctx = ctls_ctx_new_mp(&procs, &err);
   REQUIRE_NE((void *)ctx, (void *)NULL);
   REQUIRE_GT(g_custom_malloc_calls, 0);
   ctls_ctx_release(ctx);
 }
 
-/* An allocator that refuses every request of exactly g_refused_size bytes, so
- * a test can fail the buffer that holds one file it names and nothing else. */
+// The request size _refusing_malloc() refuses, and how many it refused.
 static size_t g_refused_size;
 static long g_refused_allocs;
+// malloc() that refuses every request of exactly g_refused_size bytes, so a
+// test can fail the buffer that holds one named file and nothing else.
 static void *_refusing_malloc(size_t n) {
   if (n == g_refused_size) {
     g_refused_allocs++;
@@ -520,47 +485,45 @@ static void *_refusing_malloc(size_t n) {
   return malloc(n);
 }
 
+// Gives the size of the file at path, or 0 when stat fails.
 static size_t _file_size(const char *path) {
   struct stat st;
   return stat(path, &st) == 0 ? (size_t)st.st_size : 0;
 }
 
-/* A failed allocation of the buffer that a certificate, key or CA file is read
- * into is out of memory, not an unreadable file: ctls_ctx_cert_add and
- * ctls_ctx_trust give ccol_not_enough_memory and say so in err_str, and the
- * context still takes the same files once memory is there. */
+// A failed allocation of the buffer a certificate, key or CA file is read into
+// is ccol_not_enough_memory with a message saying so, never an unreadable
+// file, and the same files load once memory is there.
 TEST(ctls_ctx, a_file_buffer_that_cannot_be_allocated_is_out_of_memory) {
   if (!g_certs_ready) return;
-  ccol_memmgmt_procs_t procs = {.malloc = _refusing_malloc,
-                                .free = _custom_free,
-                                .calloc = _custom_calloc,
-                                .realloc = _custom_realloc};
-  ctls_ctx_t *ctx = ctls_ctx_new_mp(&procs, NULL);
+  ccol_memmgmt_procs procs = {.malloc = _refusing_malloc,
+                              .free = _custom_free,
+                              .calloc = _custom_calloc,
+                              .realloc = _custom_realloc};
+  ctls_ctx *ctx = ctls_ctx_new_mp(&procs, NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
 
   char *cert_err = NULL, *key_err = NULL, *ca_err = NULL;
   g_refused_allocs = 0;
   g_refused_size = _file_size(g_server_cert);
-  ccol_retval_t cert_rv = ctls_ctx_cert_add(ctx, NULL, g_server_cert,
-                                            g_server_key, NULL, &cert_err);
+  ccol_retval cert_rv = ctls_ctx_cert_add(ctx, NULL, g_server_cert,
+                                          g_server_key, NULL, &cert_err);
   long cert_refusals = g_refused_allocs;
   g_refused_allocs = 0;
   g_refused_size = _file_size(g_server_key);
-  ccol_retval_t key_rv =
+  ccol_retval key_rv =
       ctls_ctx_cert_add(ctx, NULL, g_server_cert, g_server_key, NULL, &key_err);
   long key_refusals = g_refused_allocs;
   g_refused_allocs = 0;
   g_refused_size = _file_size(g_client_cert);
-  ccol_retval_t ca_rv = ctls_ctx_trust(ctx, g_client_cert, &ca_err);
+  ccol_retval ca_rv = ctls_ctx_trust(ctx, g_client_cert, &ca_err);
   long ca_refusals = g_refused_allocs;
   g_refused_size = 0;
-  ccol_retval_t cert_later =
+  ccol_retval cert_later =
       ctls_ctx_cert_add(ctx, NULL, g_server_cert, g_server_key, NULL, NULL);
-  ccol_retval_t ca_later = ctls_ctx_trust(ctx, g_client_cert, NULL);
+  ccol_retval ca_later = ctls_ctx_trust(ctx, g_client_cert, NULL);
   ctls_ctx_release(ctx);
 
-  /* The refused size must be the file buffer itself, or nothing here tests
-   * the read. */
   REQUIRE_GT(cert_refusals, 0);
   REQUIRE_GT(key_refusals, 0);
   REQUIRE_GT(ca_refusals, 0);
@@ -575,17 +538,16 @@ TEST(ctls_ctx, a_file_buffer_that_cannot_be_allocated_is_out_of_memory) {
 }
 
 TEST(ctls_ctx, cert_add_null_ctx_is_invalid) {
-  ccol_retval_t rv = ctls_ctx_cert_add(NULL, "x", NULL, NULL, NULL, NULL);
+  ccol_retval rv = ctls_ctx_cert_add(NULL, "x", NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_invalid_args);
 }
 
-/* An exit handler frees the process-wide key of the self-signed certificates.
- * The program's destructors run after every exit handler, so this one fails the
- * run if the key is still held by then. Without the exit handler the key stays
- * allocated, and the reachable rules of the OpenSSL suppression file would hide
- * that from the memtest. */
+// Fails the run when the process-wide root key of the self-signed
+// certificates is still held at the destructors, which run after every exit
+// handler. Without the exit handler of ctls the key would stay allocated, and
+// the OpenSSL suppressions would hide it from the memtest.
 __attribute__((destructor)) static void _root_key_freed_at_exit(void) {
-  if (_ctls_root_key_held_for_tests()) {
+  if (ctls__root_key_held_for_tests()) {
     static const char msg[] = "ctls: the root key is still held at exit\n";
     ssize_t w = write(2, msg, sizeof(msg) - 1);
     (void)w;
@@ -594,35 +556,31 @@ __attribute__((destructor)) static void _root_key_freed_at_exit(void) {
 }
 
 TEST(ctls_ctx, cert_add_no_name_no_files_generates_self_signed_default) {
-  /* A server_name of NULL or "" with cert_path and key_path both NULL is valid
-   * and generates a self-signed DEFAULT certificate. Its subject is a generic,
-   * fixed name, because the default slot has no name of its own to take one
-   * from. */
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ccol_retval_t rv = ctls_ctx_cert_add(ctx, NULL, NULL, NULL, NULL, NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
+  ccol_retval rv = ctls_ctx_cert_add(ctx, NULL, NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   ctls_ctx_release(ctx);
 }
 
 TEST(ctls_ctx, cert_add_only_cert_path_is_invalid) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ccol_retval_t rv =
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
+  ccol_retval rv =
       ctls_ctx_cert_add(ctx, NULL, "/nonexistent/cert.pem", NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_invalid_args);
   ctls_ctx_release(ctx);
 }
 
 TEST(ctls_ctx, cert_add_missing_file_reports_load_failure) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ccol_retval_t rv = ctls_ctx_cert_add(ctx, NULL, "/nonexistent/cert.pem",
-                                       "/nonexistent/key.pem", NULL, NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
+  ccol_retval rv = ctls_ctx_cert_add(ctx, NULL, "/nonexistent/cert.pem",
+                                     "/nonexistent/key.pem", NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_tls_cert_load_failed);
   ctls_ctx_release(ctx);
 }
 
 TEST(ctls_ctx, cert_add_self_signed_default_succeeds) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ccol_retval_t rv =
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
+  ccol_retval rv =
       ctls_ctx_cert_add(ctx, "self-signed.test", NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   ctls_ctx_release(ctx);
@@ -630,23 +588,23 @@ TEST(ctls_ctx, cert_add_self_signed_default_succeeds) {
 
 TEST(ctls_ctx, cert_add_real_files_succeeds) {
   if (!g_certs_ready) return;
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ccol_retval_t rv =
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
+  ccol_retval rv =
       ctls_ctx_cert_add(ctx, NULL, g_server_cert, g_server_key, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   ctls_ctx_release(ctx);
 }
 
 TEST(ctls_ctx, trust_missing_file_reports_load_failure) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ccol_retval_t rv = ctls_ctx_trust(ctx, "/nonexistent/ca.pem", NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
+  ccol_retval rv = ctls_ctx_trust(ctx, "/nonexistent/ca.pem", NULL);
   REQUIRE_EQ(rv, ccol_http_tls_cert_load_failed);
   ctls_ctx_release(ctx);
 }
 
 TEST(ctls_ctx, trust_null_args_invalid) {
   REQUIRE_EQ(ctls_ctx_trust(NULL, "x", NULL), ccol_invalid_args);
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_trust(ctx, NULL, NULL), ccol_invalid_args);
   ctls_ctx_release(ctx);
 }
@@ -656,32 +614,29 @@ TEST(ctls_ctx, trust_system_null_ctx_invalid) {
 }
 
 TEST(ctls_ctx, trust_system_no_crash) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  /* The system CA store of this CI and development environment should be there
-   * and loadable. A platform with no store configured gets
-   * ccol_http_tls_cert_load_failed here instead, which is the real failure, and
-   * this return value reports it instead of dropping it silently. */
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_trust_system(ctx), ccol_success);
   ctls_ctx_release(ctx);
 }
 
-/* Points SSL_CERT_FILE at path and drops the parsed default CA file, so that
- * the next context reads the file again. Only a child of _ctls_run_in_child
- * calls it, so the parent's environment never changes. */
+// Points SSL_CERT_FILE at path and drops the parsed default CA file, so the
+// next system-trust context reads the new file. Only children of
+// _ctls_run_in_child() call it, so the parent's environment never changes.
 static void _system_ca_env_set(const char *path) {
   setenv("SSL_CERT_FILE", path, 1);
-  _ctls_system_ca_forget_for_tests();
+  ctls__system_ca_forget_for_tests();
 }
 
-/* Runs one handshake between a server serving g_server_cert and a client
- * context, and tells whether the client verified the server. */
-static bool _client_verifies_test_server(ctls_ctx_t *client_ctx) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+// Runs one handshake between a server serving g_server_cert and a client on
+// client_ctx, so a test can ask what that client trusts. Gives true when the
+// handshake finished and the client verified the server (X509_V_OK).
+static bool _client_verifies_test_server(ctls_ctx *client_ctx) {
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   if (!server_ctx) return false;
   bool ok = ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                               NULL, NULL) == ccol_success;
   int fds[2] = {-1, -1};
-  ctls_conn_t *server_conn = NULL, *client_conn = NULL;
+  ctls_conn *server_conn = NULL, *client_conn = NULL;
   if (ok) ok = socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0;
   for (int i = 0; ok && i < 2; ++i) {
     int flags = fcntl(fds[i], F_GETFL, 0);
@@ -693,7 +648,7 @@ static bool _client_verifies_test_server(ctls_ctx_t *client_ctx) {
         ctls_conn_create_client(client_ctx, fds[1], "127.0.0.1", true, NULL);
     ok = server_conn && client_conn &&
          _drive_both(client_conn, server_conn, 200, NULL, NULL) &&
-         ctls_conn_verify_result(client_conn) == 0L /* X509_V_OK */;
+         ctls_conn_verify_result(client_conn) == 0L;
   }
   ctls_conn_destroy(client_conn);
   ctls_conn_destroy(server_conn);
@@ -703,13 +658,11 @@ static bool _client_verifies_test_server(ctls_ctx_t *client_ctx) {
   return ok;
 }
 
-/* Runs body in a forked child and copies the out_size bytes of results it
- * fills back into out, so the parent can assert on them. The two tests below
- * change SSL_CERT_FILE, and doing that in a child keeps the parent's
- * environment as it was: no later test sees the change, and musl, which
- * keeps every setenv() block for the life of the process, has nothing left
- * for the memtest to report. Returns false when the child gave no full
- * result within bound_ms, in which case it's killed. */
+// Runs body in a forked child and copies the out_size result bytes it fills
+// back into out. Tests that change SSL_CERT_FILE use it so the parent's
+// environment stays as it was (and musl, which keeps every setenv() block,
+// leaves nothing for the memtest). Gives false, after killing the child, when
+// no full result arrived within bound_ms.
 static bool _ctls_run_in_child(void (*body)(void *out), void *out,
                                size_t out_size, int bound_ms) {
   int p[2];
@@ -747,23 +700,30 @@ static bool _ctls_run_in_child(void (*body)(void *out), void *out,
   return got == out_size;
 }
 
+// What the SSL_CERT_FILE child reports: the trust result and whether the
+// client verified, with the variable at the server certificate and then at
+// another one.
 typedef struct {
-  ccol_retval_t rv_trusting;
+  ccol_retval rv_trusting;
   bool verified;
-  ccol_retval_t rv_other;
+  ccol_retval rv_other;
   bool other_verified;
 } _system_ca_names_result_t;
 
+// The child of ssl_cert_file_names_the_trusted_bundle: trusts the system store
+// with SSL_CERT_FILE at the server certificate and then at another one, and
+// records in the _system_ca_names_result_t at out whether each context
+// verified the server.
 static void _system_ca_names_body(void *out) {
   _system_ca_names_result_t *r = (_system_ca_names_result_t *)out;
   _system_ca_env_set(g_server_cert);
-  ctls_ctx_t *trusting = ctls_ctx_new(NULL);
+  ctls_ctx *trusting = ctls_ctx_new(NULL);
   r->rv_trusting =
       trusting ? ctls_ctx_trust_system(trusting) : ccol_unexpected_failure;
   r->verified =
       r->rv_trusting == ccol_success && _client_verifies_test_server(trusting);
   _system_ca_env_set(g_client_cert);
-  ctls_ctx_t *other = ctls_ctx_new(NULL);
+  ctls_ctx *other = ctls_ctx_new(NULL);
   r->rv_other = other ? ctls_ctx_trust_system(other) : ccol_unexpected_failure;
   r->other_verified =
       r->rv_other == ccol_success && _client_verifies_test_server(other);
@@ -771,10 +731,9 @@ static void _system_ca_names_body(void *out) {
   ctls_ctx_release(other);
 }
 
-/* The system store is the file that SSL_CERT_FILE names. A client that trusts
- * the system store verifies a server whose self-signed certificate is that
- * file, and stops verifying it once the variable names some other certificate.
- * The test runs in a child; see _ctls_run_in_child. */
+// The system store is the file SSL_CERT_FILE names: a client trusting it
+// verifies a server whose self-signed certificate is that file, and stops once
+// the variable names another certificate. Runs in a child.
 TEST(ctls_system_ca, ssl_cert_file_names_the_trusted_bundle) {
   if (!g_certs_ready) return;
   TEST_SKIP_FORK_IF_UNSUPPORTED();
@@ -788,17 +747,22 @@ TEST(ctls_system_ca, ssl_cert_file_names_the_trusted_bundle) {
   REQUIRE_FALSE(r.other_verified);
 }
 
+// What the parse-once child reports: whether every context was built, how
+// many parses ran, and whether the last context verifies.
 typedef struct {
   bool all_ok;
   long parses;
   bool verified;
 } _system_ca_once_result_t;
 
+// The child of the_default_file_is_parsed_once_per_process: builds four
+// system-trust contexts (each rebuilt once more by an ALPN add) and records
+// how many parses that took and whether the last context verifies.
 static void _system_ca_once_body(void *out) {
   _system_ca_once_result_t *r = (_system_ca_once_result_t *)out;
   _system_ca_env_set(g_server_cert);
-  long before = _ctls_system_ca_parses_for_tests();
-  ctls_ctx_t *ctxs[4] = {NULL, NULL, NULL, NULL};
+  long before = ctls__system_ca_parses_for_tests();
+  ctls_ctx *ctxs[4] = {NULL, NULL, NULL, NULL};
   r->all_ok = true;
   for (int i = 0; i < 4; ++i) {
     ctxs[i] = ctls_ctx_new(NULL);
@@ -807,16 +771,13 @@ static void _system_ca_once_body(void *out) {
             ccol_success)
       r->all_ok = false;
   }
-  r->parses = _ctls_system_ca_parses_for_tests() - before;
+  r->parses = ctls__system_ca_parses_for_tests() - before;
   r->verified = r->all_ok && _client_verifies_test_server(ctxs[3]);
   for (int i = 0; i < 4; ++i) ctls_ctx_release(ctxs[i]);
 }
 
-/* Every context that trusts the system store shares a single parse of the
- * default CA file, across rebuilds too. A store that doesn't keep the parsed
- * list parses the file again for each context and each rebuild of one, and
- * the count goes past one. The test runs in a child; see
- * _ctls_run_in_child. */
+// Every system-trust context, across rebuilds too, shares one parse of the
+// default CA file. Runs in a child.
 TEST(ctls_system_ca, the_default_file_is_parsed_once_per_process) {
   if (!g_certs_ready) return;
   TEST_SKIP_FORK_IF_UNSUPPORTED();
@@ -828,12 +789,13 @@ TEST(ctls_system_ca, the_default_file_is_parsed_once_per_process) {
   REQUIRE_TRUE(r.verified);
 }
 
+// An ALPN cleanup that sets the bool at udata, so a test sees it ran.
 static void _alpn_cleanup_marker(void *udata) { *(bool *)udata = true; }
 
 TEST(ctls_ctx, alpn_add_invalid_args) {
   REQUIRE_EQ(ctls_ctx_alpn_add(NULL, "http/1.1", NULL, NULL, NULL, NULL),
              ccol_invalid_args);
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_alpn_add(ctx, NULL, NULL, NULL, NULL, NULL),
              ccol_invalid_args);
   REQUIRE_EQ(ctls_ctx_alpn_add(ctx, "", NULL, NULL, NULL, NULL),
@@ -842,25 +804,21 @@ TEST(ctls_ctx, alpn_add_invalid_args) {
 }
 
 TEST(ctls_ctx, alpn_add_and_count_and_cleanup_fires_on_release) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   bool cleaned_up = false;
-  ccol_retval_t rv = ctls_ctx_alpn_add(ctx, "http/1.1", NULL, &cleaned_up,
-                                       _alpn_cleanup_marker, NULL);
+  ccol_retval rv = ctls_ctx_alpn_add(ctx, "http/1.1", NULL, &cleaned_up,
+                                     _alpn_cleanup_marker, NULL);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_EQ(ctls_ctx_alpn_count(ctx), (size_t)1);
   ctls_ctx_release(ctx);
   REQUIRE_TRUE(cleaned_up);
 }
 
-/* The cleanup of a replaced ALPN registration must run with no ctls lock
- * held. The cleanup below asks a second thread to take the context's lock
- * (through ctls_ctx_retain and ctls_ctx_release) and waits a bounded time for
- * it. If the replacing call holds that lock, the second thread can't finish
- * before the cleanup returns, the wait runs out and the cleanup records it. The
- * second thread then finishes once the lock is released, so the test never
- * hangs. */
+// The state the reentry cleanup shares with its helper thread: the context,
+// whether the helper finished, whether the lock was free, whether the cleanup
+// ran, and the helper thread.
 typedef struct {
-  ctls_ctx_t *ctx;
+  ctls_ctx *ctx;
   atomic_bool helper_done;
   bool lock_was_free;
   bool cleaned_up;
@@ -868,6 +826,8 @@ typedef struct {
   bool helper_started;
 } alpn_reentry_probe;
 
+// Retains and releases p->ctx, which takes the context lock, then sets
+// helper_done. It proves the lock is free while a cleanup runs.
 static void *_alpn_reentry_helper(void *arg) {
   alpn_reentry_probe *p = (alpn_reentry_probe *)arg;
   ctls_ctx_retain(p->ctx);
@@ -876,13 +836,17 @@ static void *_alpn_reentry_helper(void *arg) {
   return NULL;
 }
 
+// The ALPN cleanup of alpn_replacement_runs_the_old_cleanup_with_no_lock_held:
+// starts _alpn_reentry_helper() and waits up to 10 s for it. If the replacing
+// call held the context lock, the helper can't finish in time and
+// lock_was_free stays false; the helper finishes once the lock goes, so
+// nothing hangs.
 static void _alpn_reentry_cleanup(void *udata) {
   alpn_reentry_probe *p = (alpn_reentry_probe *)udata;
   p->cleaned_up = true;
   p->helper_started =
       pthread_create(&p->helper, NULL, _alpn_reentry_helper, p) == 0;
   if (!p->helper_started) return;
-  /* At most 10 seconds, in steps of 1 ms. */
   for (int i = 0; i < 10000 && !atomic_load(&p->helper_done); ++i) {
     struct timespec ts = {0, 1000000};
     nanosleep(&ts, NULL);
@@ -891,13 +855,13 @@ static void _alpn_reentry_cleanup(void *udata) {
 }
 
 TEST(ctls_ctx, alpn_replacement_runs_the_old_cleanup_with_no_lock_held) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
   alpn_reentry_probe probe = {.ctx = ctx};
   atomic_init(&probe.helper_done, false);
-  ccol_retval_t first = ctls_ctx_alpn_add(ctx, "http/1.1", NULL, &probe,
-                                          _alpn_reentry_cleanup, NULL);
-  ccol_retval_t second =
+  ccol_retval first = ctls_ctx_alpn_add(ctx, "http/1.1", NULL, &probe,
+                                        _alpn_reentry_cleanup, NULL);
+  ccol_retval second =
       ctls_ctx_alpn_add(ctx, "http/1.1", NULL, NULL, NULL, NULL);
   if (probe.helper_started) pthread_join(probe.helper, NULL);
   size_t count = ctls_ctx_alpn_count(ctx);
@@ -911,10 +875,10 @@ TEST(ctls_ctx, alpn_replacement_runs_the_old_cleanup_with_no_lock_held) {
 }
 
 TEST(ctls_ctx, retain_release_keeps_ctx_alive) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   ctls_ctx_retain(ctx);
-  ctls_ctx_release(ctx); /* still one reference (the one below) left */
-  ccol_retval_t rv =
+  ctls_ctx_release(ctx);
+  ccol_retval rv =
       ctls_ctx_cert_add(ctx, "still-alive.test", NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   ctls_ctx_release(ctx);
@@ -922,23 +886,19 @@ TEST(ctls_ctx, retain_release_keeps_ctx_alive) {
 
 TEST(ctls_ctx, release_null_is_noop) { ctls_ctx_release(NULL); }
 
-/* ========================================================================== */
-/*                         HANDSHAKE / I/O BEHAVIOR                           */
-/* ========================================================================== */
-
 TEST(ctls_handshake, self_signed_no_verify_completes) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
   char *err = NULL;
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, &err);
   REQUIRE_NE((void *)server_conn, (void *)NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, &err);
   REQUIRE_NE((void *)client_conn, (void *)NULL);
 
@@ -953,14 +913,17 @@ TEST(ctls_handshake, self_signed_no_verify_completes) {
   ctls_ctx_release(server_ctx);
 }
 
-/* An allocator that keeps the size in a header and fills a block with a
- * poison byte when it frees it, so a read through freed memory sees garbage
- * instead of the bytes that were there, in an ordinary build too. */
+// The header of a poisoning allocation: the size, padded to max_align_t.
 typedef struct {
   size_t size;
   max_align_t align;
 } poison_hdr;
 
+// Handshake and I/O behavior
+//
+// An allocator that keeps the size in a header and fills a block with 0xA5
+// when it frees it, so a read through freed memory sees garbage in an ordinary
+// build too.
 static void *_poison_malloc(size_t n) {
   poison_hdr *h = (poison_hdr *)malloc(sizeof(poison_hdr) + n);
   if (!h) return NULL;
@@ -989,29 +952,27 @@ static void *_poison_realloc(void *p, size_t n) {
   return q;
 }
 
-/* A connection that holds the last reference to its context frees itself
- * with the context's allocator after the release has freed the context, and
- * the copy of the procs with it. With the poisoning allocator a read of that
- * copy after the release calls through 0xA5A5... and the process dies. */
+// A connection that holds the last reference to its context frees itself with
+// the context's allocator after the release freed the context and its procs
+// copy. With the poisoning allocator a read of that copy after the release
+// calls through 0xA5A5... and the process dies.
 TEST(ctls_conn, a_connection_that_outlives_its_context_frees_itself_cleanly) {
-  ccol_memmgmt_procs_t procs = {.malloc = _poison_malloc,
-                                .free = _poison_free,
-                                .calloc = _poison_calloc,
-                                .realloc = _poison_realloc};
-  /* The pair comes first, so a failed socketpair leaves no context behind. */
+  ccol_memmgmt_procs procs = {.malloc = _poison_malloc,
+                              .free = _poison_free,
+                              .calloc = _poison_calloc,
+                              .realloc = _poison_realloc};
   int fds[2] = {-1, -1};
   _make_nonblocking_pair(fds);
   REQUIRE_TRUE(fds[0] >= 0 && fds[1] >= 0);
-  ctls_ctx_t *ctx = ctls_ctx_new_mp(&procs, NULL);
+  ctls_ctx *ctx = ctls_ctx_new_mp(&procs, NULL);
   bool have_ctx = ctx != NULL;
   if (!have_ctx) {
     close(fds[0]);
     close(fds[1]);
   }
   REQUIRE_TRUE(have_ctx);
-  ctls_conn_t *conn =
+  ctls_conn *conn =
       ctls_conn_create_client(ctx, fds[1], "srv.test", false, NULL);
-  /* The connection's own reference is now the last one. */
   ctls_ctx_release(ctx);
   bool created = conn != NULL;
   ctls_conn_destroy(conn);
@@ -1021,16 +982,16 @@ TEST(ctls_conn, a_connection_that_outlives_its_context_frees_itself_cleanly) {
 }
 
 TEST(ctls_handshake, read_write_roundtrip_after_handshake) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
@@ -1065,26 +1026,22 @@ TEST(ctls_handshake, read_write_roundtrip_after_handshake) {
 
 TEST(ctls_handshake, hostname_verify_success_with_matching_ip_san) {
   if (!g_certs_ready) return;
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
-  /* The server certificate is self-signed, so we trust it directly as its own
-   * CA and the chain verification has something to succeed against. As the
-   * documented semantics of this module say, verify_host implies verify_peer,
-   * and that's what starts the verification. */
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_trust(client_ctx, g_server_cert, NULL), ccol_success);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "127.0.0.1", true, NULL);
   REQUIRE_NE((void *)client_conn, (void *)NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
-  REQUIRE_EQ(ctls_conn_verify_result(client_conn), 0L /* X509_V_OK */);
+  REQUIRE_EQ(ctls_conn_verify_result(client_conn), 0L);
 
   ctls_conn_destroy(client_conn);
   ctls_conn_destroy(server_conn);
@@ -1096,19 +1053,18 @@ TEST(ctls_handshake, hostname_verify_success_with_matching_ip_san) {
 
 TEST(ctls_handshake, hostname_verify_failure_wrong_host) {
   if (!g_certs_ready) return;
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_trust(client_ctx, g_server_cert, NULL), ccol_success);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  /* "10.0.0.9" doesn't match the IP:127.0.0.1 SAN of the cert. */
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "10.0.0.9", true, NULL);
   REQUIRE_NE((void *)client_conn, (void *)NULL);
 
@@ -1126,27 +1082,26 @@ TEST(ctls_handshake, hostname_verify_failure_wrong_host) {
 
 TEST(ctls_handshake, mtls_client_presents_trusted_cert_succeeds) {
   if (!g_certs_ready) return;
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
              ccol_success);
-  /* The server trusts the client's own self-signed cert as its CA. */
   REQUIRE_EQ(ctls_ctx_trust(server_ctx, g_client_cert, NULL), ccol_success);
 
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(client_ctx, NULL, g_client_cert, g_client_key,
                                NULL, NULL),
              ccol_success);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], NULL, false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
-  SSL *server_ssl = _ctls_conn_ssl_for_tests(server_conn);
+  SSL *server_ssl = ctls__conn_ssl_for_tests(server_conn);
   char cn_buf[128];
   const char *cn = _peer_cert_cn(server_ssl, cn_buf, sizeof(cn_buf));
   REQUIRE_NE((void *)cn, (void *)NULL);
@@ -1161,25 +1116,23 @@ TEST(ctls_handshake, mtls_client_presents_trusted_cert_succeeds) {
   ctls_ctx_release(server_ctx);
 }
 
+// With SSL_VERIFY_PEER alone the server would accept a client without a
+// certificate, so this catches a missing SSL_VERIFY_FAIL_IF_NO_PEER_CERT.
 TEST(ctls_handshake, mtls_client_presents_no_cert_fails_by_default) {
-  /* A server-mode context with a trust store requires a client certificate by
-   * default, so a client that presents none fails the handshake on the server
-   * side. With SSL_VERIFY_PEER alone the server would complete the handshake,
-   * so this catches a missing SSL_VERIFY_FAIL_IF_NO_PEER_CERT. */
   if (!g_certs_ready) return;
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
              ccol_success);
   REQUIRE_EQ(ctls_ctx_trust(server_ctx, g_client_cert, NULL), ccol_success);
 
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL); /* no client cert configured */
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], NULL, false, NULL);
   bool client_ok = true, server_ok = true;
   _drive_both(client_conn, server_conn, 200, &client_ok, &server_ok);
@@ -1195,16 +1148,13 @@ TEST(ctls_handshake, mtls_client_presents_no_cert_fails_by_default) {
   REQUIRE_FALSE(verified);
 }
 
+// peer_cert_optional works before and after ctls_ctx_trust(). The verified
+// check matters: SSL_get_verify_result() alone says X509_V_OK for a peer that
+// presented nothing.
 TEST(ctls_handshake, mtls_optional_accepts_a_client_without_a_cert) {
-  /* ctls_ctx_peer_cert_optional() turns the requirement into a request: a
-   * client that presents no certificate gets through the handshake, and the
-   * connection reports it as not verified. The call works both before and after
-   * ctls_ctx_trust(). The verified check matters here: an answer based only
-   * on SSL_get_verify_result() says true, because OpenSSL reports X509_V_OK
-   * for a peer that presented nothing. */
   if (!g_certs_ready) return;
   for (int before = 0; before < 2; before++) {
-    ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+    ctls_ctx *server_ctx = ctls_ctx_new(NULL);
     REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                  NULL, NULL),
                ccol_success);
@@ -1214,13 +1164,13 @@ TEST(ctls_handshake, mtls_optional_accepts_a_client_without_a_cert) {
     if (!before)
       REQUIRE_EQ(ctls_ctx_peer_cert_optional(server_ctx, true), ccol_success);
 
-    ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+    ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
     int fds[2];
     _make_nonblocking_pair(fds);
-    ctls_conn_t *server_conn =
+    ctls_conn *server_conn =
         ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-    ctls_conn_t *client_conn =
+    ctls_conn *client_conn =
         ctls_conn_create_client(client_ctx, fds[1], NULL, false, NULL);
     bool ok = _drive_both(client_conn, server_conn, 200, NULL, NULL);
     long verify_result = ctls_conn_verify_result(server_conn);
@@ -1239,19 +1189,17 @@ TEST(ctls_handshake, mtls_optional_accepts_a_client_without_a_cert) {
 }
 
 TEST(ctls_handshake, peer_cert_verified_is_false_without_a_trust_store) {
-  /* A client that verifies nothing reports no verified peer even though the
-   * server did present a certificate, and so does a NULL connection. */
   if (!g_certs_ready) return;
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], NULL, false, NULL);
   bool before = ctls_conn_peer_cert_verified(client_conn);
   bool ok = _drive_both(client_conn, server_conn, 200, NULL, NULL);
@@ -1269,20 +1217,18 @@ TEST(ctls_handshake, peer_cert_verified_is_false_without_a_trust_store) {
   REQUIRE_EQ(ctls_ctx_peer_cert_optional(NULL, true), ccol_invalid_args);
 }
 
+// Without the early return SSL_write() of 0 bytes gives 0, which the failure
+// classification turns into -1 with ECONNRESET.
 TEST(ctls_io, zero_length_write_returns_zero) {
-  /* Writing nothing on a healthy connection returns 0 and leaves the connection
-   * usable, just like write(2) on a socket. Without the early return,
-   * SSL_write() with a length of 0 returns 0, and our failure classification
-   * would turn that into -1 with ECONNRESET. */
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], NULL, false, NULL);
   bool ok = _drive_both(client_conn, server_conn, 200, NULL, NULL);
   errno = 0;
@@ -1312,23 +1258,19 @@ TEST(ctls_io, zero_length_write_returns_zero) {
   REQUIRE_EQ(memcmp(buf, "abc", 3), 0);
 }
 
+// SSL_shutdown() on an unfinished handshake pushes "shutdown while in init",
+// which a later unrelated OpenSSL call on the thread would read as its own.
 TEST(ctls_io, destroy_before_the_handshake_leaves_no_openssl_error) {
-  /* Destroying a connection whose handshake never finished, or never started,
-   * leaves the OpenSSL error queue of the calling thread empty. Otherwise a
-   * later and unrelated OpenSSL call on the same thread would read that entry
-   * as its own. The queue isn't empty by accident: SSL_shutdown() on such a
-   * connection pushes "shutdown while in init". */
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], NULL, false, NULL);
-  /* One step on each side leaves both of them halfway through the handshake. */
   (void)ctls_conn_handshake_step(client_conn);
   (void)ctls_conn_handshake_step(server_conn);
   ERR_clear_error();
@@ -1347,25 +1289,22 @@ TEST(ctls_io, destroy_before_the_handshake_leaves_no_openssl_error) {
 
 TEST(ctls_handshake, mtls_client_presents_untrusted_cert_fails) {
   if (!g_certs_ready) return;
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
              ccol_success);
-  /* The server trusts ONLY the server cert itself as a CA (NOT the client
-   * cert), so a client that presents its own self-signed, untrusted cert
-   * fails verification. */
   REQUIRE_EQ(ctls_ctx_trust(server_ctx, g_server_cert, NULL), ccol_success);
 
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(client_ctx, NULL, g_client_cert, g_client_key,
                                NULL, NULL),
              ccol_success);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], NULL, false, NULL);
 
   bool client_ok = true, server_ok = true;
@@ -1380,30 +1319,25 @@ TEST(ctls_handshake, mtls_client_presents_untrusted_cert_fails) {
   ctls_ctx_release(server_ctx);
 }
 
-/* ========================================================================== */
-/*                              SNI DISPATCH                                  */
-/* ========================================================================== */
-
+// SNI dispatch
 TEST(ctls_sni, no_sni_uses_default_cert) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
              ccol_success);
   REQUIRE_EQ(
       ctls_ctx_cert_add(server_ctx, "alpha.test", NULL, NULL, NULL, NULL),
       ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  /* No hostname at all, so no SNI extension is sent and we get the default
-     cert. */
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], NULL, false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
-  SSL *client_ssl = _ctls_conn_ssl_for_tests(client_conn);
+  SSL *client_ssl = ctls__conn_ssl_for_tests(client_conn);
   char cn_buf[128];
   const char *cn = _peer_cert_cn(client_ssl, cn_buf, sizeof(cn_buf));
   REQUIRE_NE((void *)cn, (void *)NULL);
@@ -1418,23 +1352,23 @@ TEST(ctls_sni, no_sni_uses_default_cert) {
 }
 
 TEST(ctls_sni, exact_name_match_selects_named_cert) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
              ccol_success);
   REQUIRE_EQ(
       ctls_ctx_cert_add(server_ctx, "alpha.test", NULL, NULL, NULL, NULL),
       ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "alpha.test", false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
-  SSL *client_ssl = _ctls_conn_ssl_for_tests(client_conn);
+  SSL *client_ssl = ctls__conn_ssl_for_tests(client_conn);
   char cn_buf[128];
   const char *cn = _peer_cert_cn(client_ssl, cn_buf, sizeof(cn_buf));
   REQUIRE_NE((void *)cn, (void *)NULL);
@@ -1449,24 +1383,24 @@ TEST(ctls_sni, exact_name_match_selects_named_cert) {
 }
 
 TEST(ctls_sni, one_level_wildcard_matches_subdomain) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(
       ctls_ctx_cert_add(server_ctx, "default.test", NULL, NULL, NULL, NULL),
       ccol_success);
   REQUIRE_EQ(
       ctls_ctx_cert_add(server_ctx, "*.wild.test", NULL, NULL, NULL, NULL),
       ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "foo.wild.test", false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
-  SSL *client_ssl = _ctls_conn_ssl_for_tests(client_conn);
+  SSL *client_ssl = ctls__conn_ssl_for_tests(client_conn);
   char cn_buf[128];
   const char *cn = _peer_cert_cn(client_ssl, cn_buf, sizeof(cn_buf));
   REQUIRE_NE((void *)cn, (void *)NULL);
@@ -1480,35 +1414,30 @@ TEST(ctls_sni, one_level_wildcard_matches_subdomain) {
   ctls_ctx_release(server_ctx);
 }
 
+// The name is registered in mixed case and requested in another case; the
+// served CN is the lowercased name, and "ctls-default" would mean the named
+// entry was missed.
 TEST(ctls_sni, mixed_case_name_matches_case_insensitively) {
-  /* The test registers the name in mixed case. ctls_ctx_cert_add lowercases
-   * server_name before using it as the map key and, for a named entry that it
-   * signs itself, as the subject of the certificate, so the CN below is
-   * lowercase whatever case the test uses. */
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
              ccol_success);
   REQUIRE_EQ(
       ctls_ctx_cert_add(server_ctx, "Alpha.Test", NULL, NULL, NULL, NULL),
       ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  /* The client sends the SNI value in a completely different case from the one
-   * the cert was registered with above. */
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "ALPHA.TEST", false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
-  SSL *client_ssl = _ctls_conn_ssl_for_tests(client_conn);
+  SSL *client_ssl = ctls__conn_ssl_for_tests(client_conn);
   char cn_buf[128];
   const char *cn = _peer_cert_cn(client_ssl, cn_buf, sizeof(cn_buf));
   REQUIRE_NE((void *)cn, (void *)NULL);
-  /* Getting "ctls-default" here instead of "alpha.test" would mean the case
-   * mismatch made us miss the named entry altogether. */
   REQUIRE_STREQ(cn, "alpha.test");
 
   ctls_conn_destroy(client_conn);
@@ -1519,42 +1448,33 @@ TEST(ctls_sni, mixed_case_name_matches_case_insensitively) {
   ctls_ctx_release(server_ctx);
 }
 
-/* A caller may register a named certificate again for a server_name that
- * already has one, which is the supported way to rotate a certificate.
- * ctls_ctx_cert_add looks up the earlier entry and destroys it before it
- * inserts the new one. Inside, the chmap update of a key that is already there
- * returns ccol_key_already_present rather than ccol_success, and
- * ctls_ctx_cert_add must read that as success instead of destroying the
- * certificate it just stored. Such a destroy would leave the map's value slot
- * for this hostname pointing at freed memory. */
+// Rotating a named certificate updates a key the map already holds, which
+// gives ccol_key_already_present. ctls_ctx_cert_add must read that as success;
+// destroying the new entry would leave the map slot pointing at freed memory.
+// The second certificate's CN must be served.
 TEST(ctls_sni, cert_add_replaces_existing_named_cert_without_dangling_pointer) {
   if (!g_certs_ready) return;
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "rotate.test", g_server_cert,
                                g_server_key, NULL, NULL),
              ccol_success);
-  /* Rotate: the same name with a different cert/key pair. */
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "rotate.test", g_client_cert,
                                g_client_key, NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "rotate.test", false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
-  SSL *client_ssl = _ctls_conn_ssl_for_tests(client_conn);
+  SSL *client_ssl = ctls__conn_ssl_for_tests(client_conn);
   char cn_buf[128];
   const char *cn = _peer_cert_cn(client_ssl, cn_buf, sizeof(cn_buf));
   REQUIRE_NE((void *)cn, (void *)NULL);
-  /* Expect the CN of the second certificate, the client one. That shows
-   * the rotation really happened, on a live entry that the code updated
-   * correctly, and that no dangling pointer to the first certificate (freed by
-   * now) was left behind. */
   REQUIRE_STREQ(cn, "test-client");
 
   ctls_conn_destroy(client_conn);
@@ -1566,23 +1486,23 @@ TEST(ctls_sni, cert_add_replaces_existing_named_cert_without_dangling_pointer) {
 }
 
 TEST(ctls_sni, unmatched_name_falls_back_to_default) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
              ccol_success);
   REQUIRE_EQ(
       ctls_ctx_cert_add(server_ctx, "alpha.test", NULL, NULL, NULL, NULL),
       ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn = ctls_conn_create_client(
+  ctls_conn *client_conn = ctls_conn_create_client(
       client_ctx, fds[1], "totally-unrelated.test", false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
-  SSL *client_ssl = _ctls_conn_ssl_for_tests(client_conn);
+  SSL *client_ssl = ctls__conn_ssl_for_tests(client_conn);
   char cn_buf[128];
   const char *cn = _peer_cert_cn(client_ssl, cn_buf, sizeof(cn_buf));
   REQUIRE_NE((void *)cn, (void *)NULL);
@@ -1596,17 +1516,18 @@ TEST(ctls_sni, unmatched_name_falls_back_to_default) {
   ctls_ctx_release(server_ctx);
 }
 
-/* ========================================================================== */
-/*                            ALPN NEGOTIATION                                */
-/* ========================================================================== */
-
+// What _alpn_capture_cb() saw: whether it fired and the protocol name.
 typedef struct alpn_capture {
   bool fired;
   char name[64];
   size_t len;
 } alpn_capture;
 
-static void _alpn_capture_cb(ctls_conn_t *conn, const char *name, size_t len,
+// ALPN negotiation
+//
+// An on_selected callback that records in the alpn_capture at udata that it
+// fired and which protocol, so a test can check the agreed name.
+static void _alpn_capture_cb(ctls_conn *conn, const char *name, size_t len,
                              void *udata) {
   (void)conn;
   alpn_capture *cap = (alpn_capture *)udata;
@@ -1617,7 +1538,7 @@ static void _alpn_capture_cb(ctls_conn_t *conn, const char *name, size_t len,
 }
 
 TEST(ctls_alpn, matching_protocol_is_selected_both_sides) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
              ccol_success);
   alpn_capture server_cap = {0}, client_cap = {0};
@@ -1625,16 +1546,16 @@ TEST(ctls_alpn, matching_protocol_is_selected_both_sides) {
                                &server_cap, NULL, NULL),
              ccol_success);
 
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_alpn_add(client_ctx, "http/1.1", _alpn_capture_cb,
                                &client_cap, NULL, NULL),
              ccol_success);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
@@ -1657,30 +1578,27 @@ TEST(ctls_alpn, matching_protocol_is_selected_both_sides) {
   ctls_ctx_release(server_ctx);
 }
 
-/* ========================================================================== */
-/*                      OPENSSL ex_data SLOT OWNERSHIP                        */
-/* ========================================================================== */
-
-/* Only the address matters, nobody ever reads the value. */
+// OpenSSL ex_data slot ownership
+//
+// A pointer a test puts in the OpenSSL app-data slot; only its address
+// matters.
 static int _app_data_sentinel = 0;
 
-/* Once the ex_data index is registered, a connection reads it without taking a
- * lock. If every lookup took the mutex of the index, each create below would
- * add one locked call and the count would show it. */
+// If every lookup took the index mutex, each create would add one locked
+// call to the count.
 TEST(ctls_ex_data, a_registered_index_is_read_without_the_lock) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   int fds[2];
   _make_nonblocking_pair(fds);
-  /* The first create registers the index unless an earlier test already did. */
   ctls_conn_destroy(ctls_conn_create_server(ctx, fds[0], NULL, NULL));
-  long before = _ctls_ex_idx_locked_calls_for_tests();
+  long before = ctls__ex_idx_locked_calls_for_tests();
   bool all_created = true;
   for (int i = 0; i < 16; ++i) {
-    ctls_conn_t *conn = ctls_conn_create_server(ctx, fds[0], NULL, NULL);
+    ctls_conn *conn = ctls_conn_create_server(ctx, fds[0], NULL, NULL);
     if (!conn) all_created = false;
     ctls_conn_destroy(conn);
   }
-  long after = _ctls_ex_idx_locked_calls_for_tests();
+  long after = ctls__ex_idx_locked_calls_for_tests();
   close(fds[0]);
   close(fds[1]);
   ctls_ctx_release(ctx);
@@ -1688,61 +1606,45 @@ TEST(ctls_ex_data, a_registered_index_is_read_without_the_lock) {
   REQUIRE_EQ(after, before);
 }
 
+// OpenSSL keeps ex_data index 0 for SSL_set_app_data(), which other code may
+// use on an SSL it holds; if ctls used it, the two would overwrite each other.
+// The checks use OpenSSL's own macros so they can't drift with the code.
 TEST(ctls_ex_data, connections_leave_the_openssl_app_data_slot_alone) {
-  /* This module hangs its own per-connection pointer on an SSL* through an
-     ex_data index that it registers with OpenSSL. That index is not index 0:
-     OpenSSL keeps 0 for the SSL_set_app_data()/SSL_get_app_data() macros, and
-     any other code in the same process may use those on an SSL* it gets hold
-     of. If we took that slot the two would alias one pointer, and each side
-     would silently read and overwrite the other's value.
-
-     The expectations below are written against OpenSSL's own macros instead of
-     anything this module exports, so they can't drift together with the
-     implementation they check. */
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  ccol_retval_t cert_rv =
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
+  ccol_retval cert_rv =
       ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL);
   alpn_capture server_cap = {0};
-  ccol_retval_t alpn_rv = ctls_ctx_alpn_add(
+  ccol_retval alpn_rv = ctls_ctx_alpn_add(
       server_ctx, "http/1.1", _alpn_capture_cb, &server_cap, NULL, NULL);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
-  ccol_retval_t client_alpn_rv =
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
+  ccol_retval client_alpn_rv =
       ctls_ctx_alpn_add(client_ctx, "http/1.1", NULL, NULL, NULL, NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
 
   void *server_app_at_create = NULL;
   void *client_app_at_create = NULL;
   if (server_conn) {
     server_app_at_create =
-        SSL_get_app_data(_ctls_conn_ssl_for_tests(server_conn));
+        SSL_get_app_data(ctls__conn_ssl_for_tests(server_conn));
   }
   if (client_conn) {
     client_app_at_create =
-        SSL_get_app_data(_ctls_conn_ssl_for_tests(client_conn));
+        SSL_get_app_data(ctls__conn_ssl_for_tests(client_conn));
   }
 
-  /* We only simulate an application's use of the app-data slot once both
-     connections really exist and the slot is known to be free. Writing a
-     foreign pointer into a slot that this module reads its own connection from
-     would make it dereference that pointer during the handshake, and
-     _ctls_conn_ssl_for_tests() returns NULL for a connection that was never
-     created, which OpenSSL then dereferences. Either way the whole binary
-     crashes and takes every other test result of this run with it, instead of
-     failing just this one test. Both at_create values are NULL too when the
-     creation failed, so they can't carry that condition by themselves. */
   bool conns_created = (server_conn != NULL && client_conn != NULL);
   bool slot_free = (conns_created && server_app_at_create == NULL &&
                     client_app_at_create == NULL);
   if (slot_free) {
-    SSL_set_app_data(_ctls_conn_ssl_for_tests(server_conn),
+    SSL_set_app_data(ctls__conn_ssl_for_tests(server_conn),
                      &_app_data_sentinel);
-    SSL_set_app_data(_ctls_conn_ssl_for_tests(client_conn),
+    SSL_set_app_data(ctls__conn_ssl_for_tests(client_conn),
                      &_app_data_sentinel);
   }
 
@@ -1751,8 +1653,8 @@ TEST(ctls_ex_data, connections_leave_the_openssl_app_data_slot_alone) {
   void *server_app_after = NULL;
   void *client_app_after = NULL;
   if (slot_free) {
-    server_app_after = SSL_get_app_data(_ctls_conn_ssl_for_tests(server_conn));
-    client_app_after = SSL_get_app_data(_ctls_conn_ssl_for_tests(client_conn));
+    server_app_after = SSL_get_app_data(ctls__conn_ssl_for_tests(server_conn));
+    client_app_after = SSL_get_app_data(ctls__conn_ssl_for_tests(client_conn));
   }
   bool alpn_fired = server_cap.fired;
 
@@ -1767,16 +1669,11 @@ TEST(ctls_ex_data, connections_leave_the_openssl_app_data_slot_alone) {
   REQUIRE_EQ(alpn_rv, ccol_success);
   REQUIRE_EQ(client_alpn_rv, ccol_success);
 
-  /* A fresh connection should leave the app-data slot exactly the way OpenSSL
-     leaves it. */
   REQUIRE_TRUE(conns_created);
   REQUIRE_EQ(server_app_at_create, (void *)NULL);
   REQUIRE_EQ(client_app_at_create, (void *)NULL);
   REQUIRE_TRUE(slot_free);
 
-  /* A handshake that reads this module's own per-connection pointer (the
-     server's ALPN selection callback does exactly that) must not be confused by
-     the application's app data, and must not overwrite it either. */
   REQUIRE_TRUE(handshake_ok);
   REQUIRE_TRUE(alpn_fired);
   REQUIRE_STREQ(server_cap.name, "http/1.1");
@@ -1784,36 +1681,33 @@ TEST(ctls_ex_data, connections_leave_the_openssl_app_data_slot_alone) {
   REQUIRE_EQ(client_app_after, (void *)&_app_data_sentinel);
 }
 
-/* The server has none of the protocols that the client offers, so the handshake
- * ends up with no protocol at all. Reporting a registered protocol in that case
- * claims an agreement the peer never made: the server here would be told it
- * negotiated "spdy/1" with a client that only offered "http/1.1". */
-/* What the server on_selected callback below saw. */
+// What _alpn_destroy_own_conn_cb() saw: whether it fired and whether the
+// handshake had finished by then.
 typedef struct {
   bool fired;
   bool handshake_finished;
 } alpn_self_destroy;
 
-static void _alpn_destroy_own_conn_cb(ctls_conn_t *conn, const char *name,
+// A server on_selected callback that records in the alpn_self_destroy at udata
+// that it fired and whether the handshake had finished, then destroys its own
+// connection.
+static void _alpn_destroy_own_conn_cb(ctls_conn *conn, const char *name,
                                       size_t len, void *udata) {
   (void)name;
   (void)len;
   alpn_self_destroy *seen = (alpn_self_destroy *)udata;
   seen->fired = true;
   seen->handshake_finished =
-      SSL_is_init_finished(_ctls_conn_ssl_for_tests(conn)) == 1;
+      SSL_is_init_finished(ctls__conn_ssl_for_tests(conn)) == 1;
   ctls_conn_destroy(conn);
 }
 
-/* A server on_selected callback may destroy its own connection, because it
- * fires after the TLS library has finished the handshake step and nothing reads
- * the connection after that. Were the callback to fire from inside OpenSSL's
- * ALPN selection, it would see an unfinished handshake, and OpenSSL would
- * then read the selected name out of the freed connection, which valgrind and
- * AddressSanitizer report. */
+// The callback fires after the handshake step, so destroying the connection is
+// safe. Fired from inside OpenSSL's ALPN selection, it would see an unfinished
+// handshake and OpenSSL would read the selected name from freed memory.
 TEST(ctls_alpn, a_server_callback_may_destroy_its_own_connection) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   alpn_self_destroy seen = {0};
   bool configured =
       ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL) ==
@@ -1824,9 +1718,9 @@ TEST(ctls_alpn, a_server_callback_may_destroy_its_own_connection) {
           ccol_success;
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
   bool client_done = false;
   bool server_done = false;
@@ -1835,8 +1729,7 @@ TEST(ctls_alpn, a_server_callback_may_destroy_its_own_connection) {
         ctls_conn_handshake_step(client_conn) == CTLS_HANDSHAKE_DONE)
       client_done = true;
     if (!server_done) {
-      ctls_handshake_result_t r = ctls_conn_handshake_step(server_conn);
-      /* Once the callback has fired, server_conn is gone. */
+      ctls_handshake_result r = ctls_conn_handshake_step(server_conn);
       if (seen.fired || r == CTLS_HANDSHAKE_DONE || r == CTLS_HANDSHAKE_ERROR)
         server_done = true;
     }
@@ -1853,29 +1746,30 @@ TEST(ctls_alpn, a_server_callback_may_destroy_its_own_connection) {
   REQUIRE_TRUE(seen.handshake_finished);
 }
 
+// The server holds none of the offered protocols, so nothing is agreed;
+// reporting a registered protocol would claim an agreement the peer never
+// made. The handshake itself still succeeds.
 TEST(ctls_alpn, no_overlap_negotiates_no_protocol_at_all) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  ccol_retval_t cert_rv =
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
+  ccol_retval cert_rv =
       ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL);
   alpn_capture server_cap = {0};
-  ccol_retval_t server_alpn_rv = ctls_ctx_alpn_add(
+  ccol_retval server_alpn_rv = ctls_ctx_alpn_add(
       server_ctx, "spdy/1", _alpn_capture_cb, &server_cap, NULL, NULL);
 
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
-  ccol_retval_t client_alpn_rv =
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
+  ccol_retval client_alpn_rv =
       ctls_ctx_alpn_add(client_ctx, "http/1.1", NULL, NULL, NULL, NULL);
 
   int fds[2] = {-1, -1};
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
   bool handshake_ok = _drive_both(client_conn, server_conn, 200, NULL, NULL);
 
   bool fired = server_cap.fired;
-  /* Poisoned so that "reported nothing" can be told apart from "never touched".
-   */
   size_t len = 12345;
   const char *sel = ctls_conn_alpn_selected(server_conn, &len);
 
@@ -1889,37 +1783,32 @@ TEST(ctls_alpn, no_overlap_negotiates_no_protocol_at_all) {
   REQUIRE_EQ(cert_rv, ccol_success);
   REQUIRE_EQ(server_alpn_rv, ccol_success);
   REQUIRE_EQ(client_alpn_rv, ccol_success);
-  /* The handshake itself still succeeds. No ALPN match isn't a handshake
-   * failure, it only means that no protocol was negotiated. */
   REQUIRE_TRUE(handshake_ok);
   REQUIRE_FALSE(fired);
   REQUIRE_EQ((void *)sel, (void *)NULL);
   REQUIRE_EQ(len, (size_t)0);
 }
 
-/* The same thing from the client side, and the case where a wrong report turns
- * into an error on the wire. A client offers {"h2", "http/1.1"} to a server
- * that negotiates no ALPN at all, and the client has to be told that nothing
- * was negotiated. Reporting the first registered protocol would make it speak
- * HTTP/2 framing to an HTTP/1.1 peer. */
+// The client side: a server with no ALPN must leave the client with nothing
+// agreed, or it would speak HTTP/2 framing to an HTTP/1.1 peer.
 TEST(ctls_alpn,
      a_server_that_negotiates_none_leaves_the_client_reporting_none) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  ccol_retval_t cert_rv =
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
+  ccol_retval cert_rv =
       ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL);
 
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   alpn_capture client_cap = {0};
-  ccol_retval_t h2_rv = ctls_ctx_alpn_add(client_ctx, "h2", _alpn_capture_cb,
-                                          &client_cap, NULL, NULL);
-  ccol_retval_t h1_rv = ctls_ctx_alpn_add(
+  ccol_retval h2_rv = ctls_ctx_alpn_add(client_ctx, "h2", _alpn_capture_cb,
+                                        &client_cap, NULL, NULL);
+  ccol_retval h1_rv = ctls_ctx_alpn_add(
       client_ctx, "http/1.1", _alpn_capture_cb, &client_cap, NULL, NULL);
 
   int fds[2] = {-1, -1};
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
   bool handshake_ok = _drive_both(client_conn, server_conn, 200, NULL, NULL);
 
@@ -1946,25 +1835,22 @@ TEST(ctls_alpn,
   REQUIRE_EQ(len, (size_t)0);
 }
 
-/* ========================================================================== */
-/*                              ERROR PATHS                                   */
-/* ========================================================================== */
-
+// Error paths
 TEST(ctls_conn, create_client_null_ctx_fails) {
   char *err = NULL;
-  ctls_conn_t *conn = ctls_conn_create_client(NULL, 3, "x", false, &err);
+  ctls_conn *conn = ctls_conn_create_client(NULL, 3, "x", false, &err);
   REQUIRE_EQ((void *)conn, (void *)NULL);
 }
 
 TEST(ctls_conn, create_client_negative_fd_fails) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ctls_conn_t *conn = ctls_conn_create_client(ctx, -1, "x", false, NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
+  ctls_conn *conn = ctls_conn_create_client(ctx, -1, "x", false, NULL);
   REQUIRE_EQ((void *)conn, (void *)NULL);
   ctls_ctx_release(ctx);
 }
 
 TEST(ctls_conn, create_server_null_ctx_fails) {
-  ctls_conn_t *conn = ctls_conn_create_server(NULL, 3, NULL, NULL);
+  ctls_conn *conn = ctls_conn_create_server(NULL, 3, NULL, NULL);
   REQUIRE_EQ((void *)conn, (void *)NULL);
 }
 
@@ -1996,14 +1882,13 @@ TEST(ctls_conn, udata_null_conn_returns_null) {
 TEST(ctls_conn, destroy_null_is_noop) { ctls_conn_destroy(NULL); }
 
 TEST(ctls_conn, udata_roundtrip) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(ctx, "srv.test", NULL, NULL, NULL, NULL),
              ccol_success);
   int fds[2];
   _make_nonblocking_pair(fds);
   int marker = 42;
-  ctls_conn_t *server_conn =
-      ctls_conn_create_server(ctx, fds[0], &marker, NULL);
+  ctls_conn *server_conn = ctls_conn_create_server(ctx, fds[0], &marker, NULL);
   REQUIRE_EQ(ctls_conn_udata(server_conn), (void *)&marker);
   ctls_conn_destroy(server_conn);
   close(fds[0]);
@@ -2011,21 +1896,19 @@ TEST(ctls_conn, udata_roundtrip) {
   ctls_ctx_release(ctx);
 }
 
+// A server that parks a slow reader retries a blocked write from its own copy
+// of the bytes. Without SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER OpenSSL refuses
+// that retry with "bad write retry".
 TEST(ctls_conn, a_write_retry_may_come_from_another_buffer) {
-  /* A caller that parks a slow reader copies the unsent tail of its data into
-   * storage of its own and retries a write that said "would block" from there.
-   * The retry carries the same bytes at another address and it has to succeed.
-   * Without SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER OpenSSL refuses that retry
-   * with "bad write retry", and the write fails for good. */
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
   bool shaken = _drive_both(client_conn, server_conn, 200, NULL, NULL);
 
@@ -2039,12 +1922,6 @@ TEST(ctls_conn, a_write_retry_may_come_from_another_buffer) {
     writes++;
   bool blocked = shaken && w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
 
-  /* Make room, then retry the very same bytes from the other buffer. The
-   * blocked record is flushed whole before the retry reports success, and a
-   * small socket buffer (about 8 KiB per direction on a FreeBSD socketpair) may
-   * take the rest only over several rounds, each retrying from the other buffer
-   * again. A refused retry fails for good at once and ends the loop, only
-   * "would block" goes round again. */
   static char sink[65536];
   ssize_t retry = -1;
   for (int round = 0; blocked && round < 1000; round++) {
@@ -2065,32 +1942,16 @@ TEST(ctls_conn, a_write_retry_may_come_from_another_buffer) {
   REQUIRE_GT(retry, (ssize_t)0);
 }
 
-/* ========================================================================== */
-/* These tests cover three hazards that no ordinary test gets to.             */
-/*                                                                            */
-/* (1) A use-after-free in _ctls_servername_cb. The callback looks up the     */
-/* SSL_CTX* of the matching named certificate under tls->lock, and it must    */
-/* not call SSL_set_SSL_CTX() on that pointer AFTER unlocking, because a      */
-/* concurrent ctls_ctx_cert_add() can rotate that exact SSL_CTX and free it.  */
-/*                                                                            */
-/* (2) An unlocked data race in _ctls_alpn_select_cb, which picks the ALPN    */
-/* protocol in server mode. It must not read tls->alpn[] or tls->alpn_count   */
-/* without tls->lock; its client-mode sibling, _ctls_record_client_alpn,      */
-/* holds that lock.                                                           */
-/*                                                                            */
-/* (3) An allocation in ctls_ctx_cert_add for the subject name of a           */
-/* self-signed certificate, whose NULL result nothing may leave unchecked.    */
-/* Such a result reaches _ctls_create_self_signed(NULL), which then calls     */
-/* strlen(NULL) whenever memory stays exhausted. Every other allocation       */
-/* failure in the same function reports the documented ccol_not_enough_memory */
-/* instead.                                                                   */
-/* ========================================================================== */
-
-/* (3): an OOM on the subject name of a self-signed named cert must not crash */
-
-static _Atomic int g_fail_malloc_at_call = 0; /* 0 = never fail */
+// Self-signed name allocation, SNI and ALPN races
+//
+// The malloc call that _fail_nth_malloc() fails (0 for none) and the running
+// count of its calls.
+static _Atomic int g_fail_malloc_at_call = 0;
 static _Atomic int g_malloc_call_count = 0;
 
+// An allocator whose malloc fails call number g_fail_malloc_at_call, so a test
+// can fail one exact allocation of ctls_ctx_cert_add; calloc, realloc and free
+// pass through.
 static void *_fail_nth_malloc(size_t n) {
   int call = atomic_fetch_add(&g_malloc_call_count, 1) + 1;
   int fail_at = atomic_load(&g_fail_malloc_at_call);
@@ -2101,93 +1962,70 @@ static void _fail_nth_free(void *p) { free(p); }
 static void *_fail_nth_calloc(size_t n, size_t sz) { return calloc(n, sz); }
 static void *_fail_nth_realloc(void *p, size_t sz) { return realloc(p, sz); }
 
+// For a named self-signed certificate the second malloc copies the subject
+// name. Without its NULL check the rebuild calls strlen(NULL) inside
+// ctls_create_self_signed(). The context must stay usable afterwards.
 TEST(ctls_ctx, cert_add_self_signed_name_alloc_failure_reports_oom_not_crash) {
-  /* The call sequence of ctls_ctx_cert_add for a NAMED, self-signed certificate
-     with no password: lower_name = _ctls_strdup_lower(...) is the first malloc,
-     nc = _ccol_mem_calloc(...) is a calloc (not counted here), and
-     nc->self_signed_name = _ctls_strdup(...) is the second malloc, which is the
-     one this test goes after. Take away the NULL check it guards and the
-     test crashes with strlen(NULL) inside _ctls_create_self_signed, reached
-     through _ctls_ctx_rebuild_locked. */
-  ccol_memmgmt_procs_t mp = {_fail_nth_malloc, _fail_nth_free, _fail_nth_calloc,
-                             _fail_nth_realloc};
-  ctls_ctx_t *ctx = ctls_ctx_new_mp(&mp, NULL);
+  ccol_memmgmt_procs mp = {_fail_nth_malloc, _fail_nth_free, _fail_nth_calloc,
+                           _fail_nth_realloc};
+  ctls_ctx *ctx = ctls_ctx_new_mp(&mp, NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
 
   atomic_store(&g_malloc_call_count, 0);
   atomic_store(&g_fail_malloc_at_call, 2);
   char *err = NULL;
-  ccol_retval_t rv = ctls_ctx_cert_add(ctx, "oom.test", NULL, NULL, NULL, &err);
-  atomic_store(&g_fail_malloc_at_call, 0); /* disarm before any further alloc */
+  ccol_retval rv = ctls_ctx_cert_add(ctx, "oom.test", NULL, NULL, NULL, &err);
+  atomic_store(&g_fail_malloc_at_call, 0);
   REQUIRE_EQ((int)rv, (int)ccol_not_enough_memory);
 
-  /* The context should still be really usable afterwards, so the failed add
-     must not have left it half-configured or corrupted. */
   REQUIRE_EQ(ctls_ctx_cert_add(ctx, "after-oom.test", NULL, NULL, NULL, NULL),
              ccol_success);
 
   ctls_ctx_release(ctx);
 }
 
-/* (1): use-after-free in the SNI servername callback under concurrent cert
-   rotation */
-
+// The stop flag of the SNI rotation thread, and the context it rotates.
 static _Atomic bool g_sni_race_stop = false;
-static ctls_ctx_t *g_sni_race_ctx = NULL;
+static ctls_ctx *g_sni_race_ctx = NULL;
 
+// Re-adds the named certificate "race.test" of g_sni_race_ctx about 1000
+// times a second until g_sni_race_stop is set. Each add frees the previous
+// named SSL_CTX, the one a concurrent servername callback must never use after
+// its lookup. The usleep() throttle matters: an unthrottled thread on its own
+// core keeps the context lock so much that the handshakes starve, and
+// sched_yield() doesn't help across cores.
 static void *_sni_race_rotate_thread(void *arg) {
   (void)arg;
   while (!atomic_load(&g_sni_race_stop)) {
-    /* Adding the SAME name over and over makes the commit step of
-       _ctls_ctx_rebuild_locked SSL_CTX_free() the previous built_ctx on every
-       iteration. That is exactly the free that a concurrent, in-flight
-       _ctls_servername_cb call (on the handshake thread below) must never see
-       happen to the SSL_CTX* it has already looked up. */
     ctls_ctx_cert_add(g_sni_race_ctx, "race.test", NULL, NULL, NULL, NULL);
-    /* A real wall-clock throttle and not sched_yield(). On a machine with cores
-       to spare, an unthrottled rotate thread gets a core of its own with
-       nothing else competing for it, so sched_yield() there is close to a no-op
-       (it only gives the CPU to another runnable thread on the SAME core) and
-       does nothing to slow this thread down compared with the main thread,
-       which runs on a different core altogether. Unthrottled, the rotate thread
-       takes ctx->lock back so much faster than the main thread's handshake
-       calls that in practice the lock is always held, or stolen again the
-       instant it's released, by the time the main thread asks for it. That's a
-       real lock-starvation livelock: the 80 handshakes below don't finish
-       within several real minutes (it isn't a deadlock, but a test can't
-       survive it either). usleep(1000) caps the rotate thread at about 1000
-       iterations per second, which is plenty to keep racing the main thread's
-       lock acquisitions while leaving it real wall-clock room to win its share
-       of them. */
     usleep(1000);
   }
   return NULL;
 }
 
+// Full handshakes race a thread that rotates the named certificate. A plain
+// run proves little; under ASan, valgrind or TSan a use-after-free in the
+// servername callback aborts or is reported. It also checks that no chashmap
+// iterator is outstanding once the rotation has stopped.
 TEST(ctls_sni, cert_add_race_during_live_handshake_does_not_crash) {
   if (!g_certs_ready) return;
   g_sni_race_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(
       ctls_ctx_cert_add(g_sni_race_ctx, "race.test", NULL, NULL, NULL, NULL),
       ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   atomic_store(&g_sni_race_stop, false);
   pthread_t rotate_th;
   REQUIRE_EQ(pthread_create(&rotate_th, NULL, _sni_race_rotate_thread, NULL),
              0);
 
-  /* A bounded number of real, full handshakes, each one on a fresh connection
-     pair, racing the rotation thread's constant churn the whole time. The real
-     assertion is that this survives at all. A plain run proves little, but
-     under ASan, valgrind or TSan a use-after-free here reliably aborts or gets
-     reported. */
   for (int i = 0; i < 80; i++) {
     int fds[2];
     _make_nonblocking_pair(fds);
-    ctls_conn_t *server_conn =
+    ctls_conn *server_conn =
         ctls_conn_create_server(g_sni_race_ctx, fds[0], NULL, NULL);
-    ctls_conn_t *client_conn =
+    ctls_conn *client_conn =
         ctls_conn_create_client(client_ctx, fds[1], "race.test", false, NULL);
     _drive_both(client_conn, server_conn, 200, NULL, NULL);
     ctls_conn_destroy(client_conn);
@@ -2198,44 +2036,33 @@ TEST(ctls_sni, cert_add_race_during_live_handshake_does_not_crash) {
 
   atomic_store(&g_sni_race_stop, true);
   pthread_join(rotate_th, NULL);
-  /* A checkpoint in the middle of the suite, next to the stronger check that
-     _check_chmap_iter_balance_at_exit makes at the real exit of the process.
-     The rotation thread has just stopped, so nothing else in the process can be
-     creating or destroying a chashmap iterator right now, and the count must be
-     zero. Neither ctls_ctx_cert_add nor _ctls_ctx_rebuild_locked creates one
-     (the rebuild walks the named certificates with ccol_chmap_walk_next(),
-     which allocates nothing), so this is a standing guard that no chashmap
-     iterator of the process is left outstanding. */
   REQUIRE_EQ(chashmap_iter_outstanding_count_for_tests(), (long)0);
   ctls_ctx_release(client_ctx);
   ctls_ctx_release(g_sni_race_ctx);
   g_sni_race_ctx = NULL;
 }
 
-/* (2): race on the server-mode ALPN select callback, plus the
- * alpn_selected_name copy that the connection owns (both directions) */
-
+// The stop flag of the ALPN rotation thread, and the server context it
+// rotates.
 static _Atomic bool g_alpn_race_stop = false;
-static ctls_ctx_t *g_alpn_race_server_ctx = NULL;
+static ctls_ctx *g_alpn_race_server_ctx = NULL;
 
+// Re-registers "h2" on g_alpn_race_server_ctx until g_alpn_race_stop is set.
+// Each replace frees the previous entry's name buffer, which a concurrent
+// server ALPN callback must never read; throttled as
+// _sni_race_rotate_thread().
 static void *_alpn_race_rotate_thread(void *arg) {
   (void)arg;
   while (!atomic_load(&g_alpn_race_stop)) {
-    /* Adding the SAME protocol name over and over drives the "replace an
-       existing registration" branch of ctls_ctx_alpn_add, which frees the name
-       buffer of the previous entry. That's exactly the buffer that a
-       concurrent, in-flight _ctls_alpn_select_cb call (on the handshake thread
-       below) must never read once it's freed. */
     ctls_ctx_alpn_add(g_alpn_race_server_ctx, "h2", NULL, NULL, NULL, NULL);
-    /* Same as the usleep() comment in _sni_race_rotate_thread above. Without a
-       real wall-clock throttle this tight loop starves the main thread's
-       handshake calls so that they practically never win ctx->lock, and
-       sched_yield() alone doesn't help. */
     usleep(1000);
   }
   return NULL;
 }
 
+// Handshakes race a thread that replaces the ALPN registration, and a
+// selected protocol name must stay readable after the handshake through the
+// connection's own copy.
 TEST(ctls_alpn, alpn_add_race_during_live_handshake_does_not_crash) {
   if (!g_certs_ready) return;
   g_alpn_race_server_ctx = ctls_ctx_new(NULL);
@@ -2245,7 +2072,7 @@ TEST(ctls_alpn, alpn_add_race_during_live_handshake_does_not_crash) {
   REQUIRE_EQ(
       ctls_ctx_alpn_add(g_alpn_race_server_ctx, "h2", NULL, NULL, NULL, NULL),
       ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_alpn_add(client_ctx, "h2", NULL, NULL, NULL, NULL),
              ccol_success);
 
@@ -2254,27 +2081,15 @@ TEST(ctls_alpn, alpn_add_race_during_live_handshake_does_not_crash) {
   REQUIRE_EQ(pthread_create(&rotate_th, NULL, _alpn_race_rotate_thread, NULL),
              0);
 
-  /* Kept in a local instead of asserted inside the loop. A failing REQUIRE_EQ
-     there would return from this function at once, skipping the
-     atomic_store(&g_alpn_race_stop, true)/pthread_join(rotate_th, ...) below,
-     which leaves that thread running forever (its loop only ends once it sees
-     g_alpn_race_stop set) and leaks both ctls_ctx_t handles that the two
-     release calls below would otherwise free. So every check waits until the
-     loop, the stop signal, the join and both releases have run, which is how
-     this codebase handles every early-REQUIRE-failure hazard of this kind. */
   bool alpn_len_mismatch = false;
   for (int i = 0; i < 80; i++) {
     int fds[2];
     _make_nonblocking_pair(fds);
-    ctls_conn_t *server_conn =
+    ctls_conn *server_conn =
         ctls_conn_create_server(g_alpn_race_server_ctx, fds[0], NULL, NULL);
-    ctls_conn_t *client_conn =
+    ctls_conn *client_conn =
         ctls_conn_create_client(client_ctx, fds[1], NULL, false, NULL);
     if (_drive_both(client_conn, server_conn, 200, NULL, NULL)) {
-      /* When a handshake does complete, the selected protocol name has to stay
-         readable afterwards, long after tls->lock was released, through the
-         copy that the connection owns and not through a pointer owned by the
-         ctx that may already have been rotated and freed. */
       size_t len = 0;
       const char *name = ctls_conn_alpn_selected(server_conn, &len);
       if (name && len != strlen(name)) alpn_len_mismatch = true;
@@ -2294,32 +2109,18 @@ TEST(ctls_alpn, alpn_add_race_during_live_handshake_does_not_crash) {
   REQUIRE_FALSE(alpn_len_mismatch);
 }
 
-/* ========================================================================== */
-/*                     PROCESS-WIDE SSL_CTX LIFETIME CENSUS                   */
-/*                                                                            */
-/* An SSL_CTX has no public getter for its reference count, so the claim that */
-/* a context rebuilt many times while connections come and go doesn't pile up */
-/* references can only be checked by counting. We compare how many SSL_CTX    */
-/* objects are created with how many are really destroyed. OpenSSL calls a    */
-/* registered ex_data new callback once for each SSL_CTX_new and the matching */
-/* free callback once for each real destruction, which is the free that runs  */
-/* when the reference count reaches zero and not one for every SSL_CTX_free   */
-/* call. One registered index thus counts both for every SSL_CTX of the       */
-/* process, including the ones that ctls builds inside itself and never hands */
-/* out. A reference that nobody releases shows up directly as a creation with */
-/* no matching destruction.                                                   */
-/*                                                                            */
-/* A constructor registers the index, so nothing can build an SSL_CTX before  */
-/* the index exists. An ex_data callback fires on whatever thread creates or  */
-/* destroys the context, so both counters are atomic, and nobody reads them   */
-/* before the threads under test are joined.                                  */
-/* ========================================================================== */
-
+// Process-wide SSL_CTX census
+//
+// An SSL_CTX has no public reference count getter, so the suite counts
+// creations and real destructions through an ex_data index, whose callbacks
+// fire once per SSL_CTX_new and once per destruction at refcount zero, for
+// every SSL_CTX of the process. A leaked reference shows as a creation with no
+// destruction. The callbacks run on any thread, so the counters are atomic.
 static _Atomic long g_ssl_ctx_created = 0;
 static _Atomic long g_ssl_ctx_destroyed = 0;
 
-/* OpenSSL declares the ex data new callback as void and LibreSSL as int, where
- * 1 means success. */
+// The return type and the return statement of the ex_data new callback:
+// void in OpenSSL, int (1 for success) in LibreSSL.
 #if defined(LIBRESSL_VERSION_NUMBER)
 #define CENSUS_NEW_RET int
 #define CENSUS_NEW_DONE return 1
@@ -2328,6 +2129,8 @@ static _Atomic long g_ssl_ctx_destroyed = 0;
 #define CENSUS_NEW_DONE return
 #endif
 
+// The ex_data new callback of the census: counts one SSL_CTX creation in
+// g_ssl_ctx_created.
 static CENSUS_NEW_RET _ssl_ctx_census_new(void *parent, void *ptr,
                                           CRYPTO_EX_DATA *ad, int idx,
                                           long argl, void *argp) {
@@ -2341,6 +2144,8 @@ static CENSUS_NEW_RET _ssl_ctx_census_new(void *parent, void *ptr,
   CENSUS_NEW_DONE;
 }
 
+// The ex_data free callback of the census: counts one SSL_CTX destruction in
+// g_ssl_ctx_destroyed.
 static void _ssl_ctx_census_free(void *parent, void *ptr, CRYPTO_EX_DATA *ad,
                                  int idx, long argl, void *argp) {
   (void)parent;
@@ -2352,11 +2157,14 @@ static void _ssl_ctx_census_free(void *parent, void *ptr, CRYPTO_EX_DATA *ad,
   atomic_fetch_add_explicit(&g_ssl_ctx_destroyed, 1, memory_order_relaxed);
 }
 
+// Registers the census callbacks before anything can build an SSL_CTX.
 static void __attribute__((constructor)) _register_ssl_ctx_census(void) {
   SSL_CTX_get_ex_new_index(0, NULL, _ssl_ctx_census_new, NULL,
                            _ssl_ctx_census_free);
 }
 
+// Gives the SSL_CTX objects created and not yet destroyed, so a test can
+// check that its contexts all went away.
 static long _ssl_ctx_outstanding(void) {
   long created = atomic_load_explicit(&g_ssl_ctx_created, memory_order_relaxed);
   long destroyed =
@@ -2364,56 +2172,41 @@ static long _ssl_ctx_outstanding(void) {
   return created - destroyed;
 }
 
-/* ========================================================================== */
-/* SNI dispatch pins the context the connection actually serves from          */
-/*                                                                            */
-/* A connection reads the SSL_CTX that it was created from (OpenSSL calls it  */
-/* the session context) for its whole life. A server connection whose SNI     */
-/* name matches a named certificate also reads the SSL_CTX that the dispatch  */
-/* for that certificate installed. Both contexts are shared, and a concurrent */
-/* ctls_ctx_cert_add, ctls_ctx_alpn_add or ctls_ctx_trust rebuilds and frees  */
-/* both, which is a documented and supported use. So ctls holds a reference   */
-/* of its own on each one: a context that a live connection can still reach   */
-/* is kept alive by this module, and not by whatever a third party's internal */
-/* bookkeeping happens to do.                                                 */
-/* ========================================================================== */
-
+// SNI dispatch pins the context the connection serves from
+//
+// A server connection whose SNI name matches pins its creation-time context
+// and the named one, because a concurrent rebuild frees both; a client
+// connection pins only its creation-time context.
 TEST(ctls_sni, dispatch_pins_the_named_context_until_the_connection_is_gone) {
   if (!g_certs_ready) return;
-  long pins_before = _ctls_live_conn_ctx_pin_count_for_tests();
+  long pins_before = ctls__live_conn_ctx_pin_count_for_tests();
 
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
-  ccol_retval_t default_rv = ctls_ctx_cert_add(server_ctx, NULL, g_server_cert,
-                                               g_server_key, NULL, NULL);
-  ccol_retval_t named_rv =
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
+  ccol_retval default_rv = ctls_ctx_cert_add(server_ctx, NULL, g_server_cert,
+                                             g_server_key, NULL, NULL);
+  ccol_retval named_rv =
       ctls_ctx_cert_add(server_ctx, "pinned.test", NULL, NULL, NULL, NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "pinned.test", false, NULL);
   bool shook = _drive_both(client_conn, server_conn, 200, NULL, NULL);
 
-  /* Every observation goes into a local before any cleanup runs, so the asserts
-     at the end of the test can run after both connections and both contexts
-     have been released no matter what. */
-  SSL_CTX *server_pinned = _ctls_conn_pinned_sni_ctx_for_tests(server_conn);
+  SSL_CTX *server_pinned = ctls__conn_pinned_sni_ctx_for_tests(server_conn);
   SSL_CTX *server_active =
-      SSL_get_SSL_CTX(_ctls_conn_ssl_for_tests(server_conn));
-  SSL_CTX *client_pinned = _ctls_conn_pinned_sni_ctx_for_tests(client_conn);
-  /* The server connection pins its creation-time context and the dispatched
-     named one. The client connection never reaches a servername callback, so it
-     pins only its creation-time context. */
-  long pins_during = _ctls_live_conn_ctx_pin_count_for_tests();
+      SSL_get_SSL_CTX(ctls__conn_ssl_for_tests(server_conn));
+  SSL_CTX *client_pinned = ctls__conn_pinned_sni_ctx_for_tests(client_conn);
+  long pins_during = ctls__live_conn_ctx_pin_count_for_tests();
 
   ctls_conn_destroy(client_conn);
   ctls_conn_destroy(server_conn);
   close(fds[0]);
   close(fds[1]);
-  long pins_after = _ctls_live_conn_ctx_pin_count_for_tests();
+  long pins_after = ctls__live_conn_ctx_pin_count_for_tests();
   ctls_ctx_release(client_ctx);
   ctls_ctx_release(server_ctx);
 
@@ -2429,73 +2222,67 @@ TEST(ctls_sni, dispatch_pins_the_named_context_until_the_connection_is_gone) {
 
 TEST(ctls_sni, a_name_matching_no_named_certificate_pins_only_the_default) {
   if (!g_certs_ready) return;
-  long pins_before = _ctls_live_conn_ctx_pin_count_for_tests();
+  long pins_before = ctls__live_conn_ctx_pin_count_for_tests();
 
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
-  ccol_retval_t default_rv = ctls_ctx_cert_add(server_ctx, NULL, g_server_cert,
-                                               g_server_key, NULL, NULL);
-  ccol_retval_t named_rv =
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
+  ccol_retval default_rv = ctls_ctx_cert_add(server_ctx, NULL, g_server_cert,
+                                             g_server_key, NULL, NULL);
+  ccol_retval named_rv =
       ctls_ctx_cert_add(server_ctx, "registered.test", NULL, NULL, NULL, NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn = ctls_conn_create_client(
+  ctls_conn *client_conn = ctls_conn_create_client(
       client_ctx, fds[1], "unregistered.test", false, NULL);
   bool shook = _drive_both(client_conn, server_conn, 200, NULL, NULL);
 
-  SSL_CTX *server_pinned = _ctls_conn_pinned_sni_ctx_for_tests(server_conn);
-  long pins_during = _ctls_live_conn_ctx_pin_count_for_tests();
+  SSL_CTX *server_pinned = ctls__conn_pinned_sni_ctx_for_tests(server_conn);
+  long pins_during = ctls__live_conn_ctx_pin_count_for_tests();
 
   ctls_conn_destroy(client_conn);
   ctls_conn_destroy(server_conn);
   close(fds[0]);
   close(fds[1]);
-  long pins_after = _ctls_live_conn_ctx_pin_count_for_tests();
+  long pins_after = ctls__live_conn_ctx_pin_count_for_tests();
   ctls_ctx_release(client_ctx);
   ctls_ctx_release(server_ctx);
 
   REQUIRE_EQ(default_rv, ccol_success);
   REQUIRE_EQ(named_rv, ccol_success);
   REQUIRE_TRUE(shook);
-  /* No named certificate answers this name, so the connection keeps serving
-     from the default context and there's no second context to pin. */
   REQUIRE_EQ((void *)server_pinned, (void *)NULL);
   REQUIRE_EQ(pins_during - pins_before, 2L);
   REQUIRE_EQ(pins_after, pins_before);
 }
 
-/* ========================================================================== */
-/* Concurrent reconfiguration under live traffic                              */
-/*                                                                            */
-/* Four acceptor threads and six client threads run real TLS handshakes over  */
-/* loopback, sharing one server context and one client context. Meanwhile a   */
-/* rotator thread keeps adding named certificates, the default certificate    */
-/* and an ALPN protocol again, and each of those calls rebuilds and frees     */
-/* every SSL_CTX that the context owns. The client names cycle through four   */
-/* cases: an exact match, a second exact match, a name that the wildcard      */
-/* entry answers and a name that nothing answers. So some connections go to   */
-/* three different named contexts, others stay on the default one, and all of */
-/* them are in flight while their contexts get replaced.                      */
-/*                                                                            */
-/* The listening socket binds port 0, so several suites (or several runs of   */
-/* this one) can never collide on a fixed port.                               */
-/* ========================================================================== */
-
+// Concurrent reconfiguration under live traffic
+//
+// Acceptor and client threads run real TLS handshakes over loopback with one
+// server and one client context, while a rotator keeps re-adding named
+// certificates, the default certificate and an ALPN protocol, each of which
+// rebuilds and frees every SSL_CTX. The client names cycle through two exact
+// matches, a wildcard match and a name nothing answers. The listener binds
+// port 0, so runs never collide.
+//
+// The thread counts and the rounds each client makes.
 #define CTLS_STRESS_ACCEPTORS 4
 #define CTLS_STRESS_CLIENTS 6
 #define CTLS_STRESS_ROUNDS 6
-/* Only a safety net against a hang, since no assertion below depends on how
-   long a handshake takes. It's generous enough that ten threads run one at a
-   time under valgrind still finish well inside it. */
+// A safety net against a hang, generous enough for ten threads under
+// valgrind; no assertion depends on how long a handshake takes.
 #define CTLS_STRESS_HANDSHAKE_DEADLINE_MS 60000
 
+// The SNI names the clients cycle through.
 static const char *const g_stress_names[] = {
     "one.stress.test", "two.stress.test", "leaf.wild.stress.test",
     "nothing.stress.test"};
 
+// The state the stress threads share: the stop flag, the start gate and its
+// arrival count, the handshake and accept counters, the listening socket and
+// its address, and the two contexts.
 static _Atomic bool g_stress_stop = false;
 static _Atomic bool g_stress_go = false;
 static _Atomic int g_stress_arrived = 0;
@@ -2504,9 +2291,11 @@ static _Atomic long g_stress_client_ok = 0;
 static _Atomic long g_stress_accepted = 0;
 static int g_stress_listen_fd = -1;
 static struct sockaddr_in g_stress_addr;
-static ctls_ctx_t *g_stress_server_ctx = NULL;
-static ctls_ctx_t *g_stress_client_ctx = NULL;
+static ctls_ctx *g_stress_server_ctx = NULL;
+static ctls_ctx *g_stress_client_ctx = NULL;
 
+// Gives the milliseconds since start on CLOCK_MONOTONIC, for the handshake
+// deadline.
 static long _elapsed_ms_since(const struct timespec *start) {
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
@@ -2514,16 +2303,16 @@ static long _elapsed_ms_since(const struct timespec *start) {
          (now.tv_nsec - start->tv_nsec) / 1000000L;
 }
 
+// Puts fd in non-blocking mode, ignoring a failure; the stress threads use it
+// on every socket.
 static void _set_nonblocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
   if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-/* A counted gate instead of a pthread_barrier_t. The barrier's participant
-   count is fixed at creation, so a pthread_create that fails halfway leaves
-   every thread that did start parked on it forever. The creating thread opens
-   this gate once the number of threads it ACTUALLY started have arrived, on
-   every path out. */
+// Counts the calling thread into g_stress_arrived and waits until g_stress_go
+// opens. It's a counted gate instead of a pthread_barrier_t, whose count is
+// fixed at creation, so a partial start can't park threads forever.
 static void _stress_wait_for_go(void) {
   atomic_fetch_add(&g_stress_arrived, 1);
   while (!atomic_load(&g_stress_go)) {
@@ -2532,13 +2321,14 @@ static void _stress_wait_for_go(void) {
   }
 }
 
-/* Drives one end of a handshake to the end, waiting on whichever direction the
-   step itself asked for. */
-static bool _drive_one_side(ctls_conn_t *conn, int fd) {
+// Drives the handshake of conn on fd to the end, polling for whichever
+// direction each step asks for, so a stress thread can handshake alone. Gives
+// false on an error or after CTLS_STRESS_HANDSHAKE_DEADLINE_MS.
+static bool _drive_one_side(ctls_conn *conn, int fd) {
   struct timespec start;
   clock_gettime(CLOCK_MONOTONIC, &start);
   for (;;) {
-    ctls_handshake_result_t r = ctls_conn_handshake_step(conn);
+    ctls_handshake_result r = ctls_conn_handshake_step(conn);
     if (r == CTLS_HANDSHAKE_DONE) return true;
     if (r == CTLS_HANDSHAKE_ERROR) return false;
     if (_elapsed_ms_since(&start) >= CTLS_STRESS_HANDSHAKE_DEADLINE_MS)
@@ -2551,22 +2341,21 @@ static bool _drive_one_side(ctls_conn_t *conn, int fd) {
   }
 }
 
+// Accepts connections on g_stress_listen_fd and handshakes each with
+// g_stress_server_ctx until g_stress_stop, counting accepts and successful
+// handshakes. It polls with a timeout, since only Linux bounds accept(2) with
+// SO_RCVTIMEO, and the non-blocking listener makes a lost race give EAGAIN.
 static void *_stress_acceptor_thread(void *arg) {
   (void)arg;
   _stress_wait_for_go();
   while (!atomic_load(&g_stress_stop)) {
-    /* A bounded wait so the thread notices the stop flag quickly. Only Linux
-       bounds accept(2) with SO_RCVTIMEO, the BSDs and macOS ignore it on a
-       listening socket. The listening socket is non-blocking, so an acceptor
-       that loses the connection to another one gets EAGAIN instead of parking
-       in accept(2). */
     struct pollfd pfd = {.fd = g_stress_listen_fd, .events = POLLIN};
     if (poll(&pfd, 1, 100) <= 0) continue;
     int fd = accept(g_stress_listen_fd, NULL, NULL);
     if (fd < 0) continue;
     atomic_fetch_add(&g_stress_accepted, 1);
     _set_nonblocking(fd);
-    ctls_conn_t *conn =
+    ctls_conn *conn =
         ctls_conn_create_server(g_stress_server_ctx, fd, NULL, NULL);
     if (conn) {
       if (_drive_one_side(conn, fd)) atomic_fetch_add(&g_stress_server_ok, 1);
@@ -2577,6 +2366,9 @@ static void *_stress_acceptor_thread(void *arg) {
   return NULL;
 }
 
+// Connects CTLS_STRESS_ROUNDS times to g_stress_addr and handshakes with
+// g_stress_client_ctx, picking the SNI name from g_stress_names by its seed in
+// arg, and counts successful handshakes.
 static void *_stress_client_thread(void *arg) {
   long seed = (long)(intptr_t)arg;
   _stress_wait_for_go();
@@ -2591,7 +2383,7 @@ static void *_stress_client_thread(void *arg) {
     }
     _set_nonblocking(fd);
     const char *sni = g_stress_names[((size_t)seed + (size_t)i) % name_count];
-    ctls_conn_t *conn =
+    ctls_conn *conn =
         ctls_conn_create_client(g_stress_client_ctx, fd, sni, false, NULL);
     if (conn) {
       if (_drive_one_side(conn, fd)) atomic_fetch_add(&g_stress_client_ok, 1);
@@ -2602,6 +2394,9 @@ static void *_stress_client_thread(void *arg) {
   return NULL;
 }
 
+// Cycles through re-adding a named file certificate, a wildcard certificate,
+// the default certificate and an ALPN protocol on g_stress_server_ctx until
+// g_stress_stop, throttled so the handshake threads get the lock.
 static void *_stress_rotator_thread(void *arg) {
   (void)arg;
   _stress_wait_for_go();
@@ -2624,18 +2419,18 @@ static void *_stress_rotator_thread(void *arg) {
         ctls_ctx_alpn_add(g_stress_server_ctx, "h2", NULL, NULL, NULL, NULL);
         break;
     }
-    /* A real wall-clock throttle instead of sched_yield(), for the reason the
-       two rotation threads above explain: an unthrottled rotator holds
-       ctx->lock, or takes it back right away, so consistently that the
-       handshake threads never win their share of it. */
     usleep(500);
   }
   return NULL;
 }
 
+// Every accepted connection must complete (a healthy majority is asserted,
+// since a refused connect says something about the machine), every
+// connection reference is released, and every SSL_CTX the rebuilds made is
+// destroyed once the contexts go.
 TEST(ctls_stress, concurrent_reconfiguration_under_live_handshakes) {
   if (!g_certs_ready) return;
-  long pins_before = _ctls_live_conn_ctx_pin_count_for_tests();
+  long pins_before = ctls__live_conn_ctx_pin_count_for_tests();
   long ssl_ctx_before = _ssl_ctx_outstanding();
 
   atomic_store(&g_stress_stop, false);
@@ -2653,7 +2448,7 @@ TEST(ctls_stress, concurrent_reconfiguration_under_live_handshakes) {
   memset(&bind_addr, 0, sizeof(bind_addr));
   bind_addr.sin_family = AF_INET;
   bind_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  bind_addr.sin_port = 0; /* an ephemeral port: never a fixed one */
+  bind_addr.sin_port = 0;
   bool bound = bind(g_stress_listen_fd, (struct sockaddr *)&bind_addr,
                     sizeof(bind_addr)) == 0 &&
                listen(g_stress_listen_fd, 64) == 0;
@@ -2662,7 +2457,6 @@ TEST(ctls_stress, concurrent_reconfiguration_under_live_handshakes) {
   if (bound)
     bound = getsockname(g_stress_listen_fd, (struct sockaddr *)&g_stress_addr,
                         &alen) == 0;
-  /* Non-blocking, for the bounded accept in _stress_acceptor_thread. */
   _set_nonblocking(g_stress_listen_fd);
 
   g_stress_server_ctx = ctls_ctx_new(NULL);
@@ -2699,9 +2493,6 @@ TEST(ctls_stress, concurrent_reconfiguration_under_live_handshakes) {
         clients_started++;
   }
   int started = acceptors_started + clients_started + rotator_started;
-  /* Bounded by what really started and released no matter what, so a partial
-     start still lets every started thread run to the end and be joined instead
-     of parking forever. */
   while (atomic_load(&g_stress_arrived) < started) {
     struct timespec ts = {0, 200000};
     nanosleep(&ts, NULL);
@@ -2723,50 +2514,37 @@ TEST(ctls_stress, concurrent_reconfiguration_under_live_handshakes) {
   long client_ok = atomic_load(&g_stress_client_ok);
   long server_ok = atomic_load(&g_stress_server_ok);
   long accepted = atomic_load(&g_stress_accepted);
-  long pins_after = _ctls_live_conn_ctx_pin_count_for_tests();
+  long pins_after = ctls__live_conn_ctx_pin_count_for_tests();
   long ssl_ctx_after = _ssl_ctx_outstanding();
 
   REQUIRE_TRUE(configured);
   REQUIRE_EQ(started, CTLS_STRESS_ACCEPTORS + CTLS_STRESS_CLIENTS + 1);
   REQUIRE_GT(accepted, (long)0);
-  /* Reconfiguring a context must not break a handshake that's already in flight
-     against it, so every connection that was accepted and driven to an answer
-     is expected to complete. We assert a healthy majority and not equality,
-     because a client whose test_connect(2) is refused while the backlog is full
-     says something about the machine and nothing about ctls. */
   REQUIRE_GT(client_ok, (long)(CTLS_STRESS_CLIENTS * CTLS_STRESS_ROUNDS / 2));
   REQUIRE_GT(server_ok, (long)(CTLS_STRESS_CLIENTS * CTLS_STRESS_ROUNDS / 2));
-  /* Every reference that ctls took for a connection has been released. */
   REQUIRE_EQ(pins_after, pins_before);
-  /* And every SSL_CTX created by the rotator's rebuilds is really destroyed
-     once the contexts are released. A reference that nobody holds would leave a
-     context alive here whose count never reaches zero. */
   REQUIRE_EQ(ssl_ctx_after, ssl_ctx_before);
 }
 
-/* ========================================================================== */
-/* Allocation-failure sweep                                                   */
-/*                                                                            */
-/* Each entry point below has cleanup branches that free a different part of  */
-/* what the call had built when the allocation failed. Nothing else in this   */
-/* suite runs them, so without this the documented ccol_not_enough_memory     */
-/* return and the freeing that comes with it are never checked.               */
-/*                                                                            */
-/* The counter is shared across all four procs on purpose. The context        */
-/* itself, a named-certificate record and a connection all come from          */
-/* _ccol_mem_calloc, while the trust array and the ALPN array grow through    */
-/* _ccol_mem_realloc, so a harness that failed only malloc would leave every  */
-/* one of those branches out of reach.                                        */
-/* ========================================================================== */
-
+// Allocation-failure sweep
+//
+// The entry points below have cleanup branches that only a failed allocation
+// reaches. The counter is shared by all four procs, since the context, the
+// named records and the connection come from calloc and the trust and ALPN
+// arrays grow through realloc.
+//
+// The allocations counted since arming, and the one that fails (0 disarms).
 static _Atomic int g_alloc_seen = 0;
-static _Atomic int g_alloc_fail_at = 0; /* 0 disarms */
+static _Atomic int g_alloc_fail_at = 0;
 
+// Counts one allocation of g_sweep_mp and tells whether it's the armed one.
 static bool _sweep_should_fail(void) {
   int at = atomic_load(&g_alloc_fail_at);
   if (at == 0) return false;
   return (atomic_fetch_add(&g_alloc_seen, 1) + 1) == at;
 }
+// The g_sweep_mp functions: malloc, calloc and realloc fail when
+// _sweep_should_fail() says so; free passes through.
 static void *_sweep_malloc(size_t n) {
   return _sweep_should_fail() ? NULL : malloc(n);
 }
@@ -2777,17 +2555,20 @@ static void *_sweep_calloc(size_t a, size_t b) {
 static void *_sweep_realloc(void *p, size_t n) {
   return _sweep_should_fail() ? NULL : realloc(p, n);
 }
-static ccol_memmgmt_procs_t g_sweep_mp = {_sweep_malloc, _sweep_free,
-                                          _sweep_calloc, _sweep_realloc};
+// The procs the sweep tests hand to ctls.
+static ccol_memmgmt_procs g_sweep_mp = {_sweep_malloc, _sweep_free,
+                                        _sweep_calloc, _sweep_realloc};
 
+// Arms g_sweep_mp to fail allocation number nth and resets the count.
 static void _sweep_arm(int nth) {
   atomic_store(&g_alloc_seen, 0);
   atomic_store(&g_alloc_fail_at, nth);
 }
+// Disarms g_sweep_mp, so every allocation succeeds.
 static void _sweep_disarm(void) { atomic_store(&g_alloc_fail_at, 0); }
 
-/* This depth goes past the last allocation that any of these calls makes, so
- * the sweep covers every branch and not just the first few. */
+// How many allocation indexes the sweep tries: past the last allocation any
+// of these calls makes, so every branch is covered.
 #define CTLS_SWEEP_DEPTH 46
 
 TEST(ctls_oom, ctx_new_reports_failure_at_every_allocation_step) {
@@ -2795,10 +2576,8 @@ TEST(ctls_oom, ctx_new_reports_failure_at_every_allocation_step) {
   for (int n = 1; n <= 10; n++) {
     _sweep_arm(n);
     char *err = NULL;
-    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, &err);
+    ctls_ctx *ctx = ctls_ctx_new_mp(&g_sweep_mp, &err);
     _sweep_disarm();
-    /* Either the failed allocation wasn't on this path, or the context couldn't
-     * be built and we get no half-built one back. */
     if (ctx)
       ctls_ctx_release(ctx);
     else if (!err)
@@ -2811,18 +2590,17 @@ TEST(ctls_oom, named_self_signed_cert_add_never_crashes_or_half_configures) {
   bool all_handled = true;
   for (int n = 1; n <= CTLS_SWEEP_DEPTH; n++) {
     _sweep_disarm();
-    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    ctls_ctx *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
     if (!ctx) continue;
 
     _sweep_arm(n);
-    ccol_retval_t rv =
+    ccol_retval rv =
         ctls_ctx_cert_add(ctx, "sweep.test", NULL, NULL, NULL, NULL);
     _sweep_disarm();
 
     if (rv != ccol_success && rv != ccol_not_enough_memory &&
         rv != ccol_http_tls_cert_load_failed)
       all_handled = false;
-    /* A failed add leaves the context usable and not poisoned. */
     if (ctls_ctx_cert_add(ctx, "after.test", NULL, NULL, NULL, NULL) !=
         ccol_success)
       all_handled = false;
@@ -2835,10 +2613,10 @@ TEST(ctls_oom, default_self_signed_cert_add_never_crashes) {
   bool all_handled = true;
   for (int n = 1; n <= CTLS_SWEEP_DEPTH; n++) {
     _sweep_disarm();
-    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    ctls_ctx *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
     if (!ctx) continue;
     _sweep_arm(n);
-    ccol_retval_t rv = ctls_ctx_cert_add(ctx, NULL, NULL, NULL, NULL, NULL);
+    ccol_retval rv = ctls_ctx_cert_add(ctx, NULL, NULL, NULL, NULL, NULL);
     _sweep_disarm();
     if (rv != ccol_success && rv != ccol_not_enough_memory &&
         rv != ccol_http_tls_cert_load_failed)
@@ -2853,11 +2631,11 @@ TEST(ctls_oom, file_backed_cert_add_with_password_never_crashes) {
   bool all_handled = true;
   for (int n = 1; n <= CTLS_SWEEP_DEPTH; n++) {
     _sweep_disarm();
-    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    ctls_ctx *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
     if (!ctx) continue;
     _sweep_arm(n);
-    ccol_retval_t rv = ctls_ctx_cert_add(ctx, "sweep.test", g_server_cert,
-                                         g_server_key, "unused-password", NULL);
+    ccol_retval rv = ctls_ctx_cert_add(ctx, "sweep.test", g_server_cert,
+                                       g_server_key, "unused-password", NULL);
     _sweep_disarm();
     if (rv != ccol_success && rv != ccol_not_enough_memory &&
         rv != ccol_http_tls_cert_load_failed)
@@ -2867,21 +2645,20 @@ TEST(ctls_oom, file_backed_cert_add_with_password_never_crashes) {
   REQUIRE_TRUE(all_handled);
 }
 
+// The second add grows the parallel PEM and length arrays; a reallocation
+// that covers only one of them leaves the other pointing at freed storage.
 TEST(ctls_oom, trust_array_growth_reports_failure_without_dangling) {
   if (!g_certs_ready) return;
   bool all_handled = true;
   for (int n = 1; n <= 20; n++) {
     _sweep_disarm();
-    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    ctls_ctx *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
     if (!ctx) continue;
-    /* There are two adds and the second one makes the parallel pem array and
-     * length array grow. A reallocation that covers only one of them leaves the
-     * other one pointing at freed storage. */
     _sweep_arm(n);
-    ccol_retval_t first = ctls_ctx_trust(ctx, g_server_cert, NULL);
+    ccol_retval first = ctls_ctx_trust(ctx, g_server_cert, NULL);
     _sweep_disarm();
     _sweep_arm(n);
-    ccol_retval_t second = ctls_ctx_trust(ctx, g_server_cert, NULL);
+    ccol_retval second = ctls_ctx_trust(ctx, g_server_cert, NULL);
     _sweep_disarm();
     if (first != ccol_success && first != ccol_not_enough_memory &&
         first != ccol_http_tls_cert_load_failed)
@@ -2898,19 +2675,15 @@ TEST(ctls_oom, alpn_array_growth_reports_failure_and_keeps_the_count_honest) {
   bool all_handled = true;
   for (int n = 1; n <= 14; n++) {
     _sweep_disarm();
-    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    ctls_ctx *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
     if (!ctx) continue;
     _sweep_arm(n);
-    ccol_retval_t a = ctls_ctx_alpn_add(ctx, "h2", NULL, NULL, NULL, NULL);
+    ccol_retval a = ctls_ctx_alpn_add(ctx, "h2", NULL, NULL, NULL, NULL);
     _sweep_disarm();
     _sweep_arm(n);
-    ccol_retval_t b =
-        ctls_ctx_alpn_add(ctx, "http/1.1", NULL, NULL, NULL, NULL);
+    ccol_retval b = ctls_ctx_alpn_add(ctx, "http/1.1", NULL, NULL, NULL, NULL);
     _sweep_disarm();
 
-    /* A failed add changes nothing, whether it failed before storing the entry
-     * or while rebuilding the SSL_CTX, so the count is exactly the number of
-     * adds that succeeded. */
     size_t expect =
         (a == ccol_success ? 1u : 0u) + (b == ccol_success ? 1u : 0u);
     if (ctls_ctx_alpn_count(ctx) != expect) all_handled = false;
@@ -2925,30 +2698,24 @@ TEST(ctls_oom, alpn_array_growth_reports_failure_and_keeps_the_count_honest) {
   REQUIRE_TRUE(all_handled);
 }
 
-/* ========================================================================== */
-/* A failed change of the configuration changes nothing                       */
-/*                                                                            */
-/* Every certificate of the fixture comes from a file. OpenSSL 3.5 frees a    */
-/* pointer it never allocated when an allocation inside X509_sign fails (a    */
-/* program of a few lines without this library shows it), so a sweep over     */
-/* OpenSSL's allocations must not sign a self-signed certificate.             */
-/*                                                                            */
-/* Each test below fails one allocation at a time, first every allocation of  */
-/* OpenSSL and then every allocation of this module, while one call that      */
-/* changes the configuration runs, and it stops at the first index the call   */
-/* never reaches. After a failed call every name has to serve the certificate */
-/* and the verify mode it served before the call, and it keeps doing so */
-/* after a later rebuild for an unrelated reason (an ALPN registration that   */
-/* replaces itself). That second part is what proves the stored configuration */
-/* matches the contexts that serve.                                           */
-/* ========================================================================== */
-
-/* The CN of the certificate that serves a ClientHello naming name, or "" when
- * that context holds no certificate. */
-static const char *_served_cn(ctls_ctx_t *ctx, const char *name, char *buf,
+// A failed change of the configuration changes nothing
+//
+// Each test fails one allocation at a time, first every OpenSSL allocation and
+// then every allocation of this module, while one configuration call runs,
+// and stops at the first index the call never reaches. After a failed call
+// every name must serve the certificate and verify mode it served before,
+// also after a later unrelated rebuild (an ALPN registration that replaces
+// itself), which proves the stored configuration matches the serving
+// contexts. The fixture uses file certificates only, because OpenSSL 3.5
+// frees a pointer it never allocated when an allocation inside X509_sign
+// fails.
+//
+// Copies into buf the CN of the certificate that serves a ClientHello naming
+// name and gives buf, "" when that context holds no certificate.
+static const char *_served_cn(ctls_ctx *ctx, const char *name, char *buf,
                               size_t buflen) {
   buf[0] = '\0';
-  SSL_CTX *served = _ctls_ctx_served_ctx_for_tests(ctx, name);
+  SSL_CTX *served = ctls__ctx_served_ctx_for_tests(ctx, name);
   X509 *cert = served ? SSL_CTX_get0_certificate(served) : NULL;
   if (cert)
     X509_NAME_get_text_by_NID(X509_get_subject_name(cert), NID_commonName, buf,
@@ -2956,11 +2723,13 @@ static const char *_served_cn(ctls_ctx_t *ctx, const char *name, char *buf,
   return buf;
 }
 
-static int _served_verify_mode(ctls_ctx_t *ctx) {
-  SSL_CTX *served = _ctls_ctx_served_ctx_for_tests(ctx, NULL);
+// Gives the verify mode of ctx's default context, or -1 when none is built.
+static int _served_verify_mode(ctls_ctx *ctx) {
+  SSL_CTX *served = ctls__ctx_served_ctx_for_tests(ctx, NULL);
   return served ? SSL_CTX_get_verify_mode(served) : -1;
 }
 
+// The configuration calls the rollback sweeps run.
 typedef enum {
   CFG_OP_ROTATE_NAME,
   CFG_OP_ADD_NAME,
@@ -2970,15 +2739,18 @@ typedef enum {
   CFG_OP_COUNT
 } cfg_op_t;
 
-/* The names whose served certificate the tests check, and the CN each of them
- * serves before the call under test. */
+// The names whose served certificate the rollback tests check, and the CN
+// each of them serves before the call under test.
 static const char *const g_cfg_names[] = {NULL, "keep.test", "rot.test",
                                           "new.test"};
 static const char *const g_cfg_before[] = {"test-client", "named.test",
                                            "named.test", "test-client"};
 
-static ctls_ctx_t *_cfg_fixture(ccol_memmgmt_procs_t *mp) {
-  ctls_ctx_t *ctx = ctls_ctx_new_mp(mp, NULL);
+// Builds the rollback fixture on allocator mp: a default file certificate,
+// two named file certificates and an ALPN protocol. Gives NULL when any step
+// fails.
+static ctls_ctx *_cfg_fixture(ccol_memmgmt_procs *mp) {
+  ctls_ctx *ctx = ctls_ctx_new_mp(mp, NULL);
   if (!ctx) return NULL;
   if (ctls_ctx_cert_add(ctx, NULL, g_client_cert, g_client_key, NULL, NULL) !=
           ccol_success ||
@@ -2993,7 +2765,9 @@ static ctls_ctx_t *_cfg_fixture(ccol_memmgmt_procs_t *mp) {
   return ctx;
 }
 
-static ccol_retval_t _cfg_run_op(ctls_ctx_t *ctx, cfg_op_t op) {
+// Runs configuration call op on ctx and gives its result; the call's
+// arguments are the ones _cfg_applied() checks for.
+static ccol_retval _cfg_run_op(ctls_ctx *ctx, cfg_op_t op) {
   switch (op) {
     case CFG_OP_ROTATE_NAME:
       return ctls_ctx_cert_add(ctx, "rot.test", g_server_cert, g_server_key,
@@ -3014,8 +2788,9 @@ static ccol_retval_t _cfg_run_op(ctls_ctx_t *ctx, cfg_op_t op) {
   return ccol_invalid_args;
 }
 
-/* Tells whether ctx serves exactly what the fixture configured. */
-static bool _cfg_unchanged(ctls_ctx_t *ctx) {
+// Tells whether ctx serves exactly what the fixture configured: the
+// g_cfg_before CNs for g_cfg_names and no peer verification.
+static bool _cfg_unchanged(ctls_ctx *ctx) {
   char buf[128];
   for (size_t i = 0; i < sizeof(g_cfg_names) / sizeof(g_cfg_names[0]); ++i) {
     if (strcmp(_served_cn(ctx, g_cfg_names[i], buf, sizeof(buf)),
@@ -3025,8 +2800,8 @@ static bool _cfg_unchanged(ctls_ctx_t *ctx) {
   return _served_verify_mode(ctx) == SSL_VERIFY_NONE;
 }
 
-/* Tells whether ctx serves what a successful op configures. */
-static bool _cfg_applied(ctls_ctx_t *ctx, cfg_op_t op) {
+// Tells whether ctx serves what a successful op configures.
+static bool _cfg_applied(ctls_ctx *ctx, cfg_op_t op) {
   char buf[128];
   switch (op) {
     case CFG_OP_ROTATE_NAME:
@@ -3046,18 +2821,18 @@ static bool _cfg_applied(ctls_ctx_t *ctx, cfg_op_t op) {
   return false;
 }
 
-/* How many failure points a sweep over OpenSSL's allocations visits by default.
- * One call makes a few thousand of them and every failure inside the rebuild
- * ends up in the same rollback, so evenly spaced points cover it.
- * CTLS_FULL_SWEEP=1 in the environment visits every index.
- */
+// How many failure points a sweep over OpenSSL's allocations visits by
+// default, so a run stays short; one call makes thousands of allocations and
+// every failure in the rebuild takes the same rollback. CTLS_FULL_SWEEP=1 in
+// the environment visits every index.
 #define CTLS_CFG_OSSL_POINTS 120
 
-/* Fails allocation n of op on ctx, through OpenSSL when ossl is set and through
- * g_sweep_mp otherwise. Sets *fired if the call got that far. */
-static ccol_retval_t _cfg_run_failing(ctls_ctx_t *ctx, cfg_op_t op, bool ossl,
-                                      long n, bool *fired) {
-  ccol_retval_t rv;
+// Runs op on ctx with allocation n failing, through OpenSSL when ossl is set
+// and through g_sweep_mp otherwise, and gives the call's result. *fired tells
+// whether the call got as far as allocation n.
+static ccol_retval _cfg_run_failing(ctls_ctx *ctx, cfg_op_t op, bool ossl,
+                                    long n, bool *fired) {
+  ccol_retval rv;
   if (ossl) {
     _ossl_arm(n);
     rv = _cfg_run_op(ctx, op);
@@ -3072,22 +2847,25 @@ static ccol_retval_t _cfg_run_failing(ctls_ctx_t *ctx, cfg_op_t op, bool ossl,
   return rv;
 }
 
-/* The failure points of a sweep: 1, 1 + step, ... up to total, then total
- * itself, then total + 1, which the call never reaches. */
+// Gives the failure point after n in a sweep: 1, 1 + step, ... up to total,
+// then total itself, then total + 1, which the call never reaches.
 static long _cfg_next_point(long n, long step, long total) {
   if (n >= total) return n + 1;
   return n + step > total ? total : n + step;
 }
 
-/* Sweeps one op through the allocations it makes and then once more past the
- * last one, where the call is expected to succeed. Returns the number of
- * failed calls, or -1 on a breach. */
+// Sweeps op through every failure point, first counting the call's
+// allocations with nothing failing. Each failed call must give
+// ccol_not_enough_memory or ccol_http_tls_cert_load_failed and leave the
+// fixture unchanged, also after an unrelated rebuild; a success must apply
+// the change, and the point past the last allocation must succeed. Counts the
+// ccol_not_enough_memory failures in *oom_failures and gives the number of
+// failed calls, or -1 on a breach.
 static long _cfg_sweep(cfg_op_t op, bool ossl, long *oom_failures) {
-  /* A call that hits no failure point counts the points it goes past. */
-  ctls_ctx_t *ctx = _cfg_fixture(&g_sweep_mp);
+  ctls_ctx *ctx = _cfg_fixture(&g_sweep_mp);
   if (!ctx) return -1;
   bool fired = false;
-  ccol_retval_t rv = _cfg_run_failing(ctx, op, ossl, LONG_MAX / 2, &fired);
+  ccol_retval rv = _cfg_run_failing(ctx, op, ossl, LONG_MAX / 2, &fired);
   long total =
       ossl ? atomic_load(&g_ossl_alloc_seen) : atomic_load(&g_alloc_seen);
   ctls_ctx_release(ctx);
@@ -3115,7 +2893,6 @@ static long _cfg_sweep(cfg_op_t op, bool ossl, long *oom_failures) {
     if (rv != ccol_not_enough_memory && rv != ccol_http_tls_cert_load_failed)
       break;
     ++failures;
-    /* A failed call changes nothing, neither now nor after a later rebuild. */
     if (!_cfg_unchanged(ctx)) break;
     if (ctls_ctx_alpn_add(ctx, "h2", NULL, NULL, NULL, NULL) != ccol_success ||
         !_cfg_unchanged(ctx))
@@ -3125,10 +2902,9 @@ static long _cfg_sweep(cfg_op_t op, bool ossl, long *oom_failures) {
   return -1;
 }
 
-/* Suppose a rotation stored the new entry before the rebuild and kept it
- * after a failed one. Then the rotated name would serve the default
- * certificate from then on, and if a new name stayed registered, the next
- * rebuild would serve it with the certificate the call refused. */
+// A rotation that kept the new entry after a failed rebuild would serve the
+// default certificate for the rotated name, and a new name that stayed
+// registered would serve the refused certificate at the next rebuild.
 TEST(ctls_cfg_rollback, a_failed_certificate_change_keeps_every_name) {
   if (!g_certs_ready) return;
   for (int op = CFG_OP_ROTATE_NAME; op <= CFG_OP_REPLACE_DEFAULT; ++op) {
@@ -3139,23 +2915,20 @@ TEST(ctls_cfg_rollback, a_failed_certificate_change_keeps_every_name) {
     long ossl_oom = 0;
     long ossl_failures = _cfg_sweep((cfg_op_t)op, true, &ossl_oom);
     REQUIRE_GT(ossl_failures, 0L);
-    /* A failed OpenSSL allocation inside the rebuild is reported as one. */
     REQUIRE_GT(ossl_oom, 0L);
   }
 }
 
-/* A failed trust call that kept its bundle and its verify flag would show up
- * on the next unrelated rebuild, which would turn on SSL_VERIFY_PEER with the
- * bundle the call refused. */
+// A failed trust call that kept its bundle and verify flag would turn on
+// SSL_VERIFY_PEER with the refused bundle at the next unrelated rebuild.
+// trust_system makes about 10^5 OpenSSL allocations per call, so only this
+// module's allocations are swept for it.
 TEST(ctls_cfg_rollback, a_failed_trust_change_keeps_verification_off) {
   if (!g_certs_ready) return;
   for (int op = CFG_OP_TRUST; op < CFG_OP_COUNT; ++op) {
     long oom = 0;
     long lib_failures = _cfg_sweep((cfg_op_t)op, false, &oom);
     REQUIRE_GT(lib_failures, 0L);
-    /* trust_system loads the whole system store into every context it builds,
-     * about 10^5 OpenSSL allocations per call, so here only this module's
-     * allocations fail its rebuild. */
     if (!g_ossl_mem_hooked || op == CFG_OP_TRUST_SYSTEM) continue;
     long ossl_oom = 0;
     long ossl_failures = _cfg_sweep((cfg_op_t)op, true, &ossl_oom);
@@ -3164,26 +2937,24 @@ TEST(ctls_cfg_rollback, a_failed_trust_change_keeps_verification_off) {
   }
 }
 
-/* We also check a served name through a real handshake: after a failed
- * rotation, a client naming the rotated host gets the certificate that the host
- * served before the call. */
+// Checks through a real handshake that a failed rotation leaves the rotated
+// host serving its old certificate. The sweep runs from the end, where the
+// rebuild's allocations are.
 TEST(ctls_cfg_rollback, a_failed_rotation_serves_the_old_certificate) {
   if (!g_certs_ready || !g_ossl_mem_hooked) return;
-  ctls_ctx_t *server_ctx = _cfg_fixture(NULL);
+  ctls_ctx *server_ctx = _cfg_fixture(NULL);
   REQUIRE_NE((void *)server_ctx, (void *)NULL);
-  /* The last allocations of a rotation belong to its rebuild, so a sweep from
-   * the end hits a failure there first. */
   long total = 0;
   {
-    ctls_ctx_t *probe = _cfg_fixture(NULL);
+    ctls_ctx *probe = _cfg_fixture(NULL);
     _ossl_arm(LONG_MAX);
-    ccol_retval_t rv = _cfg_run_op(probe, CFG_OP_ROTATE_NAME);
+    ccol_retval rv = _cfg_run_op(probe, CFG_OP_ROTATE_NAME);
     _ossl_disarm();
     total = atomic_load(&g_ossl_alloc_seen);
     ctls_ctx_release(probe);
     REQUIRE_EQ((int)rv, (int)ccol_success);
   }
-  ccol_retval_t rv = ccol_success;
+  ccol_retval rv = ccol_success;
   for (long n = total; n > 0 && rv == ccol_success; --n) {
     _ossl_arm(n);
     rv = _cfg_run_op(server_ctx, CFG_OP_ROTATE_NAME);
@@ -3195,16 +2966,16 @@ TEST(ctls_cfg_rollback, a_failed_rotation_serves_the_old_certificate) {
     }
   }
   bool failed = rv != ccol_success;
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "rot.test", false, NULL);
   bool done = _drive_both(client_conn, server_conn, 200, NULL, NULL);
   char cn_buf[128];
-  const char *cn = done ? _peer_cert_cn(_ctls_conn_ssl_for_tests(client_conn),
+  const char *cn = done ? _peer_cert_cn(ctls__conn_ssl_for_tests(client_conn),
                                         cn_buf, sizeof(cn_buf))
                         : NULL;
   bool served_old = cn && strcmp(cn, "named.test") == 0;
@@ -3219,24 +2990,13 @@ TEST(ctls_cfg_rollback, a_failed_rotation_serves_the_old_certificate) {
   REQUIRE_TRUE(served_old);
 }
 
-/* A trust bundle gets into every context whole or not at all. The bundle has
- * three CAs and one CRL. After a call that fails one allocation the context
- * serves what it served before, and after a call that succeeds every context
- * holds all three CAs and the CRL, checks revocation, offers the fixture's ALPN
- * list, and the thread's error queue is empty. A second bundle that repeats a
- * CA of the first one is accepted.
- *
- * Each part of that is checked. If the rebuild ignored a parse that gives
- * nothing, or an add that fails, a call under a failed allocation would
- * succeed with fewer CAs, or without the CRL and so with revocation checking
- * off. If it ignored a failed SSL_CTX_set_alpn_protos, it would succeed with a
- * context that offers no protocol. */
-
+// The three-CA bundle with a CRL and whether it was made (0 untried, 1 ready,
+// -1 failed), for a_trust_bundle_is_installed_whole_or_not_at_all.
 static char g_bundle3[320];
-static int g_bundle3_state = 0; /* 0 untried, 1 ready, -1 failed */
+static int g_bundle3_state = 0;
 
-/* Writes server.pem, client.pem, named.pem and a CRL issued by named.test into
- * one bundle, using the openssl CLI. */
+// Makes g_bundle3 once with the openssl command: server.pem, client.pem,
+// named.pem and a CRL issued by named.test. Gives whether it's ready.
 static bool _bundle3_ready(void) {
   if (g_bundle3_state != 0) return g_bundle3_state > 0;
   g_bundle3_state = -1;
@@ -3257,6 +3017,7 @@ static bool _bundle3_ready(void) {
   return true;
 }
 
+// Removes g_bundle3 and the files the CRL generation left, at teardown.
 static void _bundle3_remove(void) {
   static const char *const files[] = {"crl.cnf",     "crl.idx", "crl.idx.attr",
                                       "crl.idx.old", "crl.pem", "bundle3.pem"};
@@ -3267,10 +3028,10 @@ static void _bundle3_remove(void) {
   }
 }
 
-/* Tells whether the context serving name holds exactly the three CAs and the
- * CRL of the bundle, with revocation checking on. */
-static bool _bundle3_in_store(ctls_ctx_t *ctx, const char *name) {
-  SSL_CTX *served = _ctls_ctx_served_ctx_for_tests(ctx, name);
+// Tells whether the context serving name holds exactly the three CAs and the
+// CRL of the bundle, with revocation checking and peer verification on.
+static bool _bundle3_in_store(ctls_ctx *ctx, const char *name) {
+  SSL_CTX *served = ctls__ctx_served_ctx_for_tests(ctx, name);
   X509_STORE *store = served ? SSL_CTX_get_cert_store(served) : NULL;
   if (!store) return false;
   STACK_OF(X509_OBJECT) *objs = X509_STORE_get0_objects(store);
@@ -3288,8 +3049,9 @@ static bool _bundle3_in_store(ctls_ctx_t *ctx, const char *name) {
          (SSL_CTX_get_verify_mode(served) & SSL_VERIFY_PEER) != 0;
 }
 
-/* Tells whether a client hello of served offers exactly the fixture's ALPN list
- * "h2": extension 16, length 5, list length 3. */
+// Tells whether a client hello made from served offers exactly the fixture's
+// ALPN list "h2" (extension 16, length 5, list length 3), so a test can catch
+// a rebuild that lost its ALPN list.
 static bool _ctx_offers_h2(SSL_CTX *served) {
   static const unsigned char ext[] = {0x00, 0x10, 0x00, 0x05, 0x00,
                                       0x03, 0x02, 'h',  '2'};
@@ -3314,14 +3076,15 @@ static bool _ctx_offers_h2(SSL_CTX *served) {
   return found;
 }
 
-/* Runs ctls_ctx_trust(bundle3) on a fresh fixture with allocation n failing,
- * through OpenSSL when ossl is set. Returns 1 for a success that installed the
- * whole bundle, 0 for a clean failure that changed nothing, 2 when n was never
- * reached and -1 for a breach. */
+// Runs ctls_ctx_trust(g_bundle3) on a fresh fixture with allocation n
+// failing, through OpenSSL when ossl is set. Gives 1 for a success that
+// installed the whole bundle everywhere with an empty error queue, 0 for a
+// clean failure that changed nothing, 2 when n was never reached, and -1 for
+// a breach.
 static int _bundle3_try(bool ossl, long n) {
-  ctls_ctx_t *ctx = _cfg_fixture(&g_sweep_mp);
+  ctls_ctx *ctx = _cfg_fixture(&g_sweep_mp);
   if (!ctx) return -1;
-  ccol_retval_t rv;
+  ccol_retval rv;
   bool fired;
   ERR_clear_error();
   if (ossl) {
@@ -3340,9 +3103,9 @@ static int _bundle3_try(bool ossl, long n) {
   if (rv == ccol_success) {
     if (queued == 0 && _bundle3_in_store(ctx, NULL) &&
         _bundle3_in_store(ctx, "keep.test") &&
-        _ctx_offers_h2(_ctls_ctx_served_ctx_for_tests(ctx, NULL)) &&
-        _ctx_offers_h2(_ctls_ctx_served_ctx_for_tests(ctx, "keep.test")) &&
-        _ctx_offers_h2(_ctls_ctx_served_ctx_for_tests(ctx, "rot.test")))
+        _ctx_offers_h2(ctls__ctx_served_ctx_for_tests(ctx, NULL)) &&
+        _ctx_offers_h2(ctls__ctx_served_ctx_for_tests(ctx, "keep.test")) &&
+        _ctx_offers_h2(ctls__ctx_served_ctx_for_tests(ctx, "rot.test")))
       out = fired ? 1 : 2;
   } else if ((rv == ccol_not_enough_memory ||
               rv == ccol_http_tls_cert_load_failed) &&
@@ -3357,6 +3120,10 @@ static int _bundle3_try(bool ossl, long n) {
   return out;
 }
 
+// A rebuild that ignored a parse giving nothing or a failed add would succeed
+// with fewer CAs, or without the CRL and so without revocation checks; one
+// that ignored a failed SSL_CTX_set_alpn_protos would offer no protocol. A
+// second bundle repeating a CA is accepted.
 TEST(ctls_cfg_rollback, a_trust_bundle_is_installed_whole_or_not_at_all) {
   if (!_bundle3_ready()) {
     fprintf(stderr, "SKIP: the openssl CLI cannot make a CRL\n");
@@ -3368,7 +3135,6 @@ TEST(ctls_cfg_rollback, a_trust_bundle_is_installed_whole_or_not_at_all) {
   for (int pass = 0; pass < 2 && finished; ++pass) {
     bool ossl = pass == 1;
     if (ossl && !g_ossl_mem_hooked) break;
-    /* A call that hits no failure point counts the points it goes past. */
     if (_bundle3_try(ossl, LONG_MAX / 2) != 2) {
       ++breaches;
       break;
@@ -3389,10 +3155,9 @@ TEST(ctls_cfg_rollback, a_trust_bundle_is_installed_whole_or_not_at_all) {
       }
     }
   }
-  /* Sharing a CA between two bundles is no reason to fail. */
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ccol_retval_t first = ctls_ctx_trust(ctx, g_server_cert, NULL);
-  ccol_retval_t second = ctls_ctx_trust(ctx, g_bundle3, NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
+  ccol_retval first = ctls_ctx_trust(ctx, g_server_cert, NULL);
+  ccol_retval second = ctls_ctx_trust(ctx, g_bundle3, NULL);
   ctls_ctx_release(ctx);
   _bundle3_remove();
   REQUIRE_TRUE(finished);
@@ -3402,22 +3167,19 @@ TEST(ctls_cfg_rollback, a_trust_bundle_is_installed_whole_or_not_at_all) {
   REQUIRE_EQ((int)second, (int)ccol_success);
 }
 
-/* Reading nothing returns 0 at once, like read(2), both on a connection with
- * no input and on one with input waiting, and the input stays there for the
- * next read. Without that shortcut SSL_read with a length of 0 returns 0,
- * and the classification would report that as -1 with ECONNRESET or
- * EWOULDBLOCK.
- */
+// Without the shortcut SSL_read() of 0 bytes gives 0, which the
+// classification reports as -1 with ECONNRESET or EWOULDBLOCK. Waiting input
+// must stay for the next read.
 TEST(ctls_io, a_read_of_zero_bytes_returns_zero) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "x.test", false, NULL);
   bool done = _drive_both(client_conn, server_conn, 200, NULL, NULL);
   char buf[16];
@@ -3447,20 +3209,20 @@ TEST(ctls_oom, conn_create_returns_null_rather_than_a_partial_connection) {
   bool all_handled = true;
   for (int n = 1; n <= 6; n++) {
     _sweep_disarm();
-    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    ctls_ctx *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
     if (!ctx) continue;
     ctls_ctx_cert_add(ctx, NULL, NULL, NULL, NULL, NULL);
 
     int fds[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0) {
       _sweep_arm(n);
-      ctls_conn_t *cl =
+      ctls_conn *cl =
           ctls_conn_create_client(ctx, fds[0], "sweep.test", true, NULL);
       _sweep_disarm();
       if (cl) ctls_conn_destroy(cl);
 
       _sweep_arm(n);
-      ctls_conn_t *sv = ctls_conn_create_server(ctx, fds[1], NULL, NULL);
+      ctls_conn *sv = ctls_conn_create_server(ctx, fds[1], NULL, NULL);
       _sweep_disarm();
       if (sv) ctls_conn_destroy(sv);
 
@@ -3474,59 +3236,53 @@ TEST(ctls_oom, conn_create_returns_null_rather_than_a_partial_connection) {
   REQUIRE_TRUE(all_handled);
 }
 
-/* ========================================================================== */
-/* Password-protected private keys                                            */
-/* ========================================================================== */
-
+// Password-protected private keys
 TEST(ctls_pem_password, a_correct_password_loads_an_encrypted_key) {
   if (!g_enc_cert_ready) return;
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
   char *err = NULL;
-  ccol_retval_t rv = ctls_ctx_cert_add(ctx, NULL, g_enc_cert, g_enc_key,
-                                       CTLS_TEST_KEY_PASSWORD, &err);
+  ccol_retval rv = ctls_ctx_cert_add(ctx, NULL, g_enc_cert, g_enc_key,
+                                     CTLS_TEST_KEY_PASSWORD, &err);
   ctls_ctx_release(ctx);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 }
 
+// Without the password callback of ctls, OpenSSL would prompt on the terminal
+// and hang.
 TEST(ctls_pem_password, a_wrong_password_reports_a_load_failure) {
-  /* Without the password callback that ctls installs, OpenSSL prompts on the
-   * controlling terminal instead of returning, and in a test binary or a daemon
-   * that's a hang rather than a failure. */
   if (!g_enc_cert_ready) return;
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
   char *err = NULL;
-  ccol_retval_t rv = ctls_ctx_cert_add(ctx, NULL, g_enc_cert, g_enc_key,
-                                       "not-the-password", &err);
+  ccol_retval rv = ctls_ctx_cert_add(ctx, NULL, g_enc_cert, g_enc_key,
+                                     "not-the-password", &err);
   ctls_ctx_release(ctx);
   REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
 }
 
 TEST(ctls_pem_password, an_encrypted_key_with_no_password_reports_a_failure) {
   if (!g_enc_cert_ready) return;
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
-  ccol_retval_t rv =
+  ccol_retval rv =
       ctls_ctx_cert_add(ctx, NULL, g_enc_cert, g_enc_key, NULL, NULL);
   ctls_ctx_release(ctx);
   REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
 }
 
 TEST(ctls_pem_password, an_encrypted_named_cert_serves_a_real_handshake) {
-  /* A key that loads isn't necessarily a key that works, so this shows that the
-   * decrypted key really backs a completed handshake. */
   if (!g_enc_cert_ready) return;
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  ccol_retval_t added = ctls_ctx_cert_add(
-      server_ctx, NULL, g_enc_cert, g_enc_key, CTLS_TEST_KEY_PASSWORD, NULL);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
+  ccol_retval added = ctls_ctx_cert_add(server_ctx, NULL, g_enc_cert, g_enc_key,
+                                        CTLS_TEST_KEY_PASSWORD, NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
   _make_nonblocking_pair(fds);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "enc.test", false, NULL);
   bool shook = (server_conn && client_conn) &&
                _drive_both(client_conn, server_conn, 200, NULL, NULL);
@@ -3542,19 +3298,14 @@ TEST(ctls_pem_password, an_encrypted_named_cert_serves_a_real_handshake) {
   REQUIRE_TRUE(shook);
 }
 
-/* ========================================================================== */
-/* Unreadable and unusable PEM inputs                                         */
-/* ========================================================================== */
-
+// Unreadable and unusable PEM inputs
 TEST(ctls_file_input, an_empty_file_reports_a_load_failure) {
-  /* A zero-length file opens and seeks just fine, so only a size check catches
-   * it before the PEM parser is handed nothing. */
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
 
   char path[] = "/tmp/ctls_empty_XXXXXX";
   int fd = mkstemp(path);
-  ccol_retval_t rv = ccol_unexpected_failure;
+  ccol_retval rv = ccol_unexpected_failure;
   bool made = (fd >= 0);
   if (made) {
     close(fd);
@@ -3567,37 +3318,27 @@ TEST(ctls_file_input, an_empty_file_reports_a_load_failure) {
   REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
 }
 
+// procfs entries report a length of 0 although they have content.
 TEST(ctls_file_input, a_file_that_reports_zero_length_reports_a_load_failure) {
-  /* procfs entries report a length of zero although they have content, and that
-   * takes the same branch as an empty regular file. */
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
-  ccol_retval_t rv = ctls_ctx_trust(ctx, "/proc/self/status", NULL);
+  ccol_retval rv = ctls_ctx_trust(ctx, "/proc/self/status", NULL);
   ctls_ctx_release(ctx);
   REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
 }
 
+// Opening a directory works on Linux, and the seek after it fails or reports
+// LONG_MAX depending on the filesystem (tmpfs or ext4), so the type check
+// must refuse it; the LONG_MAX case would otherwise reach the allocation. The
+// directory is made in the build tree, on the filesystem the library reads
+// from.
 TEST(ctls_file_input, a_directory_in_place_of_a_bundle_reports_a_load_failure) {
-  /* Pointing a bundle option at a directory by mistake is an ordinary
-   * configuration slip. Opening a directory succeeds on Linux, and depending on
-   * the filesystem the seek after it either fails or reports a length of
-   * LONG_MAX, so the rejection must come from the type of the file and not
-   * from its apparent size. Without that check the LONG_MAX case reaches the
-   * allocation and AddressSanitizer stops the process with
-   * allocation-size-too-big. The test makes its directory here and not under
-   * /tmp, so the case is the same whatever filesystem the tests run on.
-   */
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
 
-  /* The directory sits next to the test binary and not under /tmp because
-   * whether a seek on a directory works depends on the filesystem. It fails on
-   * tmpfs, which /tmp often is, and succeeds on ext4. The build tree is the one
-   * place guaranteed to be on the same filesystem the library normally reads
-   * from. */
   char dir[] = "ctls_dir_XXXXXX";
   bool made = (mkdtemp(dir) != NULL);
-  ccol_retval_t rv = ccol_unexpected_failure;
+  ccol_retval rv = ccol_unexpected_failure;
   if (made) {
     rv = ctls_ctx_trust(ctx, dir, NULL);
     rmdir(dir);
@@ -3608,18 +3349,15 @@ TEST(ctls_file_input, a_directory_in_place_of_a_bundle_reports_a_load_failure) {
   REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
 }
 
+// A path may name a log or a core dump; a sparse file past the cap is refused
+// on its size, and the reason must name the size, not an unreadable file.
 TEST(ctls_file_input, an_oversized_bundle_is_rejected_before_it_is_allocated) {
-  /* A PEM artefact is a couple of kilobytes and a full system CA bundle a few
-   * hundred kilobytes, but a path can point at something completely different,
-   * such as a log, an image or a core dump, which we turn away on its
-   * size instead of being read into memory. The file below is sparse, so making
-   * it costs no disk space and no time. */
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
 
   char path[] = "ctls_big_XXXXXX";
   int fd = mkstemp(path);
-  ccol_retval_t rv = ccol_unexpected_failure;
+  ccol_retval rv = ccol_unexpected_failure;
   char *err = NULL;
   bool sized = false;
   if (fd >= 0) {
@@ -3632,23 +3370,19 @@ TEST(ctls_file_input, an_oversized_bundle_is_rejected_before_it_is_allocated) {
 
   REQUIRE_TRUE(sized);
   REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
-  /* The reported reason names the size and must not claim that the file
-   * couldn't be read. An operator who is told "unreadable" about a file that
-   * reads perfectly well goes looking for a permissions problem that doesn't
-   * exist. */
   REQUIRE_NE((void *)err, (void *)NULL);
   if (err) REQUIRE_NE((void *)strstr(err, "larger than"), (void *)NULL);
 }
 
+// A file below the cap fails on its contents (no certificate), and the
+// reason tells which check ran.
 TEST(ctls_file_input, a_bundle_just_under_the_limit_is_still_read) {
-  /* The cap must reject only what goes past it. A file below the limit is read
-   * normally and fails later on its contents, not on its size. */
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
 
   char path[] = "ctls_ok_XXXXXX";
   int fd = mkstemp(path);
-  ccol_retval_t rv = ccol_unexpected_failure;
+  ccol_retval rv = ccol_unexpected_failure;
   char *err = NULL;
   bool sized = false;
   if (fd >= 0) {
@@ -3660,11 +3394,6 @@ TEST(ctls_file_input, a_bundle_just_under_the_limit_is_still_read) {
   ctls_ctx_release(ctx);
 
   REQUIRE_TRUE(sized);
-  /* The library rejects this file on its contents, because it holds no
-   * certificate, and not on its size, and that difference is the whole point of
-   * this test. The two branches report different reasons, so the reason tells
-   * us which one ran: a file below the cap has to reach the content check
-   * instead of being turned away for its length. */
   REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
   REQUIRE_NE((void *)err, (void *)NULL);
   if (err) {
@@ -3673,20 +3402,15 @@ TEST(ctls_file_input, a_bundle_just_under_the_limit_is_still_read) {
   }
 }
 
+// An empty trust store would make a request-only server accept every client
+// without a certificate, so the configuration call must fail.
 TEST(ctls_file_input, a_bundle_holding_no_certificate_is_rejected) {
-  /* A readable file can parse to no certificate at all, which leaves a trust
-   * store with no issuer in it while peer verification is on. A client built
-   * from such a context rejects every peer. A server in the request-only mode
-   * of ctls_ctx_peer_cert_optional() behaves differently: it keeps accepting
-   * every client that presents no certificate, so the mutual TLS that the
-   * bundle was configured for silently isn't there. The configuration call has
-   * to fail instead. */
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
 
   char path[] = "ctls_nocert_XXXXXX";
   int fd = mkstemp(path);
-  ccol_retval_t rv = ccol_success;
+  ccol_retval rv = ccol_success;
   char *err = NULL;
   bool written = false;
   if (fd >= 0) {
@@ -3710,10 +3434,10 @@ TEST(ctls_file_input, a_bundle_that_cannot_be_allocated_reports_oom) {
   bool handled = true;
   for (int n = 1; n <= 6; n++) {
     _sweep_disarm();
-    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    ctls_ctx *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
     if (!ctx) continue;
     _sweep_arm(n);
-    ccol_retval_t rv = ctls_ctx_trust(ctx, g_server_cert, NULL);
+    ccol_retval rv = ctls_ctx_trust(ctx, g_server_cert, NULL);
     _sweep_disarm();
     if (rv != ccol_success && rv != ccol_not_enough_memory &&
         rv != ccol_http_tls_cert_load_failed)
@@ -3723,21 +3447,19 @@ TEST(ctls_file_input, a_bundle_that_cannot_be_allocated_reports_oom) {
   REQUIRE_TRUE(handled);
 }
 
-/* ========================================================================== */
-/* Read and write result classification                                       */
-/*                                                                            */
-/* chttpclient and chttpserver branch on this pair of a return value and an   */
-/* errno on every read and every write they make, so the pair is the          */
-/* interface between ctls and the two largest modules of the library.         */
-/* ========================================================================== */
-
-/* Builds a TLS session over a socketpair with the handshake done. Returns false
- * if the handshake couldn't be driven to the end, and in that case nothing is
- * left allocated for the caller to release. */
-static bool _make_connected_pair(ctls_ctx_t **out_server_ctx,
-                                 ctls_ctx_t **out_client_ctx,
-                                 ctls_conn_t **out_server,
-                                 ctls_conn_t **out_client, int fds[2]) {
+// Read and write result classification
+//
+// chttpclient and chttpserver branch on the return value and errno of every
+// read and write, so this pair is the interface between ctls and them.
+//
+// Builds two contexts, a socketpair in fds and a server and a client
+// connection with the handshake done, handing all of them back through the
+// out parameters. Gives false, with nothing left allocated, when the
+// handshake can't be finished.
+static bool _make_connected_pair(ctls_ctx **out_server_ctx,
+                                 ctls_ctx **out_client_ctx,
+                                 ctls_conn **out_server, ctls_conn **out_client,
+                                 int fds[2]) {
   *out_server_ctx = ctls_ctx_new(NULL);
   *out_client_ctx = ctls_ctx_new(NULL);
   *out_server = NULL;
@@ -3755,9 +3477,11 @@ static bool _make_connected_pair(ctls_ctx_t **out_server_ctx,
   return _drive_both(*out_client, *out_server, 200, NULL, NULL);
 }
 
+// The read wants the read direction; a caller that re-armed for writability
+// would stall the connection.
 TEST(ctls_io, a_read_with_nothing_pending_asks_to_be_retried) {
-  ctls_ctx_t *sc, *cc;
-  ctls_conn_t *s, *c;
+  ctls_ctx *sc, *cc;
+  ctls_conn *s, *c;
   int fds[2] = {-1, -1};
   bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
 
@@ -3780,14 +3504,12 @@ TEST(ctls_io, a_read_with_nothing_pending_asks_to_be_retried) {
   REQUIRE_TRUE(up);
   REQUIRE_EQ(n, (ssize_t)-1);
   REQUIRE_TRUE(err == EWOULDBLOCK || err == EAGAIN);
-  /* A read that is only waiting for more data wants the read direction, and a
-   * caller that re-armed for writability here would stall the connection. */
   REQUIRE_FALSE(ctls_conn_wants_write(NULL));
 }
 
 TEST(ctls_io, a_roundtrip_reports_the_exact_byte_count) {
-  ctls_ctx_t *sc, *cc;
-  ctls_conn_t *s, *c;
+  ctls_ctx *sc, *cc;
+  ctls_conn *s, *c;
   int fds[2] = {-1, -1};
   bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
 
@@ -3813,17 +3535,15 @@ TEST(ctls_io, a_roundtrip_reports_the_exact_byte_count) {
 }
 
 TEST(ctls_io, a_clean_peer_shutdown_reads_as_end_of_stream) {
-  /* Zero means that the peer closed the session properly, and a caller must not
-   * mix that up with the -1 that asks for a retry. */
-  ctls_ctx_t *sc, *cc;
-  ctls_conn_t *s, *c;
+  ctls_ctx *sc, *cc;
+  ctls_conn *s, *c;
   int fds[2] = {-1, -1};
   bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
 
   char buf[64];
   ssize_t n = -99;
   if (up) {
-    ctls_conn_destroy(c); /* sends the TLS close_notify that the peer sees */
+    ctls_conn_destroy(c);
     c = NULL;
     n = ctls_conn_read(s, buf, sizeof(buf));
   }
@@ -3840,10 +3560,8 @@ TEST(ctls_io, a_clean_peer_shutdown_reads_as_end_of_stream) {
 }
 
 TEST(ctls_io, a_protocol_violation_reads_as_a_reset_connection) {
-  /* Plaintext where a TLS record should be is a protocol error, and the caller
-   * is told the connection is unusable, not that it can retry. */
-  ctls_ctx_t *sc, *cc;
-  ctls_conn_t *s, *c;
+  ctls_ctx *sc, *cc;
+  ctls_conn *s, *c;
   int fds[2] = {-1, -1};
   bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
 
@@ -3873,8 +3591,8 @@ TEST(ctls_io, a_protocol_violation_reads_as_a_reset_connection) {
 }
 
 TEST(ctls_io, an_abruptly_closed_peer_reads_as_a_failure_not_a_retry) {
-  ctls_ctx_t *sc, *cc;
-  ctls_conn_t *s, *c;
+  ctls_ctx *sc, *cc;
+  ctls_conn *s, *c;
   int fds[2] = {-1, -1};
   bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
 
@@ -3882,8 +3600,6 @@ TEST(ctls_io, an_abruptly_closed_peer_reads_as_a_failure_not_a_retry) {
   ssize_t n = -99;
   int err = 0;
   if (up) {
-    /* Closing the descriptor under the peer skips close_notify altogether, so
-     * this is the truncation case and not the clean shutdown above. */
     close(fds[1]);
     fds[1] = -1;
     errno = 0;
@@ -3903,11 +3619,11 @@ TEST(ctls_io, an_abruptly_closed_peer_reads_as_a_failure_not_a_retry) {
   if (n < 0) REQUIRE_TRUE(err != 0);
 }
 
+// The case where a caller must re-arm for writability, which
+// ctls_conn_wants_write() tells it.
 TEST(ctls_io, a_write_that_fills_the_socket_asks_for_the_write_direction) {
-  /* The one case where a caller has to re-arm for writability after a read-side
-   * API call, and ctls_conn_wants_write is how it finds out. */
-  ctls_ctx_t *sc, *cc;
-  ctls_conn_t *s, *c;
+  ctls_ctx *sc, *cc;
+  ctls_conn *s, *c;
   int fds[2] = {-1, -1};
   bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
 
@@ -3939,18 +3655,16 @@ TEST(ctls_io, a_write_that_fills_the_socket_asks_for_the_write_direction) {
   REQUIRE_TRUE(wants_write);
 }
 
-/* ========================================================================== */
-/*              CERTIFICATE/KEY PAIRING AND SNI PRECEDENCE                    */
-/* ========================================================================== */
-
-/* Completes one handshake against server_ctx with the given SNI name (a NULL
- * name sends no SNI extension at all) and reports the common name of the
- * certificate the server really served. */
-static void _serve_one_sni(ctls_ctx_t *server_ctx, const char *sni,
-                           bool *out_ok, char *out_cn, size_t out_cn_len) {
+// Certificate and key pairing, SNI precedence
+//
+// Completes one handshake against server_ctx with SNI name sni (NULL sends no
+// SNI), so a test sees which certificate a name gets. *out_ok tells whether
+// the handshake finished, and out_cn gets the CN the server served.
+static void _serve_one_sni(ctls_ctx *server_ctx, const char *sni, bool *out_ok,
+                           char *out_cn, size_t out_cn_len) {
   *out_ok = false;
   if (out_cn_len) out_cn[0] = '\0';
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   if (!client_ctx) return;
   int fds[2] = {-1, -1};
   _make_nonblocking_pair(fds);
@@ -3958,15 +3672,15 @@ static void _serve_one_sni(ctls_ctx_t *server_ctx, const char *sni,
     ctls_ctx_release(client_ctx);
     return;
   }
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], sni, false, NULL);
   if (server_conn && client_conn &&
       _drive_both(client_conn, server_conn, 200, NULL, NULL)) {
     char buf[256];
     const char *cn =
-        _peer_cert_cn(_ctls_conn_ssl_for_tests(client_conn), buf, sizeof(buf));
+        _peer_cert_cn(ctls__conn_ssl_for_tests(client_conn), buf, sizeof(buf));
     if (cn) {
       snprintf(out_cn, out_cn_len, "%s", cn);
       *out_ok = true;
@@ -3979,21 +3693,18 @@ static void _serve_one_sni(ctls_ctx_t *server_ctx, const char *sni,
   ctls_ctx_release(client_ctx);
 }
 
+// Two well-formed files from different pairs, as a rotation that updates one
+// path and forgets the other produces; the matching pair still loads.
 TEST(ctls_ctx, cert_add_rejects_a_certificate_and_key_that_do_not_match) {
   if (!g_certs_ready) return;
-  /* Both files read fine and are well-formed PEM, but they come from two
-   * different pairs, which is exactly what a rotation produces when it updates
-   * one of the two paths and forgets the other. */
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   char *default_err = NULL;
-  ccol_retval_t default_rv = ctls_ctx_cert_add(
-      ctx, NULL, g_server_cert, g_client_key, NULL, &default_err);
+  ccol_retval default_rv = ctls_ctx_cert_add(ctx, NULL, g_server_cert,
+                                             g_client_key, NULL, &default_err);
   char *named_err = NULL;
-  ccol_retval_t named_rv = ctls_ctx_cert_add(
-      ctx, "mismatch.test", g_server_cert, g_client_key, NULL, &named_err);
-  /* The matching pair is still accepted, so the check rejects a real
-   * mismatch and not every file-backed pair. */
-  ccol_retval_t good_rv =
+  ccol_retval named_rv = ctls_ctx_cert_add(ctx, "mismatch.test", g_server_cert,
+                                           g_client_key, NULL, &named_err);
+  ccol_retval good_rv =
       ctls_ctx_cert_add(ctx, NULL, g_server_cert, g_server_key, NULL, NULL);
   ctls_ctx_release(ctx);
 
@@ -4004,38 +3715,33 @@ TEST(ctls_ctx, cert_add_rejects_a_certificate_and_key_that_do_not_match) {
   REQUIRE_EQ(good_rv, ccol_success);
 }
 
+// A refused pair must not stay stored, or the next unrelated rebuild fails on
+// it; accepting the mismatch would leave a context that serves nothing.
 TEST(ctls_ctx, a_rejected_pair_leaves_the_context_serving_what_it_had) {
   if (!g_certs_ready) return;
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  ccol_retval_t first_rv = ctls_ctx_cert_add(server_ctx, NULL, g_server_cert,
-                                             g_server_key, NULL, NULL);
-  /* A rotation that picks up the new certificate together with the old key. */
-  ccol_retval_t rotate_rv = ctls_ctx_cert_add(server_ctx, NULL, g_server_cert,
-                                              g_client_key, NULL, NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
+  ccol_retval first_rv = ctls_ctx_cert_add(server_ctx, NULL, g_server_cert,
+                                           g_server_key, NULL, NULL);
+  ccol_retval rotate_rv = ctls_ctx_cert_add(server_ctx, NULL, g_server_cert,
+                                            g_client_key, NULL, NULL);
   bool served = false;
   char cn[256];
   _serve_one_sni(server_ctx, NULL, &served, cn, sizeof(cn));
-  /* A pair that the library rejected must not stay in the stored configuration
-   * either. A later, unrelated configuration change rebuilds every context from
-   * that store, and the rebuild would fail on the rejected pair again. */
-  ccol_retval_t later_rv = ctls_ctx_trust(server_ctx, g_client_cert, NULL);
+  ccol_retval later_rv = ctls_ctx_trust(server_ctx, g_client_cert, NULL);
   ctls_ctx_release(server_ctx);
 
   REQUIRE_EQ(first_rv, ccol_success);
   REQUIRE_EQ(rotate_rv, ccol_http_tls_cert_load_failed);
-  /* Accepting the mismatch leaves a context that can't serve a single
-   * handshake, so this fails outright instead of just serving the wrong name.
-   */
   REQUIRE_TRUE(served);
   REQUIRE_STREQ(cn, "127.0.0.1");
   REQUIRE_EQ(later_rv, ccol_success);
 }
 
-/* Which certificate a hostname gets must depend on the hostname and not on
- * the order in which the certificates were registered, so the test below runs
- * both orders. A lookup that returns the first pattern that happens to match
- * would serve the wildcard certificate for every exactly registered name in
- * whichever order puts the wildcard first. */
+// Registers three exact names and "*.wild.test" (the wildcard first when
+// wildcard_first is set) and serves each exact name plus a name only the
+// wildcard covers, so a test can check that the order of registration
+// doesn't decide. *out_setup_ok and *out_all_served give the setup and
+// handshake results, and served gets the four CNs.
 static void _run_exact_beats_wildcard(bool wildcard_first, bool *out_setup_ok,
                                       bool *out_all_served,
                                       char served[4][256]) {
@@ -4043,7 +3749,7 @@ static void _run_exact_beats_wildcard(bool wildcard_first, bool *out_setup_ok,
                                         "c.wild.test"};
   *out_setup_ok = false;
   *out_all_served = false;
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   if (!server_ctx) return;
   bool setup_ok = ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL) ==
                   ccol_success;
@@ -4063,8 +3769,6 @@ static void _run_exact_beats_wildcard(bool wildcard_first, bool *out_setup_ok,
     _serve_one_sni(server_ctx, kExact[i], &ok, served[i], 256);
     all_served = ok;
   }
-  /* A name with no exact registration of its own still reaches the wildcard, so
-   * the precedence rule doesn't take away the wildcard's own coverage. */
   if (all_served) {
     bool ok = false;
     _serve_one_sni(server_ctx, "z.wild.test", &ok, served[3], 256);
@@ -4099,15 +3803,13 @@ TEST(ctls_sni, an_exact_name_beats_a_wildcard_registered_after_it) {
   REQUIRE_STREQ(served[3], "*.wild.test");
 }
 
+// "*.wild.test" answers one label below "wild.test" only; two labels and the
+// bare domain fall through to the default.
 TEST(ctls_sni, a_wildcard_covers_exactly_one_label) {
-  /* The lookup makes a single probe, and that probe encodes one rule:
-   * "*.wild.test" answers for one label below "wild.test" and for nothing else.
-   * A name with two labels falls through to the default certificate, and so
-   * does the bare domain. */
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  ccol_retval_t default_rv =
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
+  ccol_retval default_rv =
       ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL);
-  ccol_retval_t wild_rv =
+  ccol_retval wild_rv =
       ctls_ctx_cert_add(server_ctx, "*.wild.test", NULL, NULL, NULL, NULL);
 
   bool one_ok = false, two_ok = false, bare_ok = false;
@@ -4127,29 +3829,28 @@ TEST(ctls_sni, a_wildcard_covers_exactly_one_label) {
   REQUIRE_STREQ(bare, "ctls-default");
 }
 
-/* ========================================================================== */
-/*                         SESSION RESUMPTION                                 */
-/* ========================================================================== */
-
-/* The peer here is a plain OpenSSL client and not a ctls client, since that is
- * what every real client that resumes a session looks like: it keeps the
- * session of one connection and offers it on the next one. */
-
+// Session resumption
+//
+// The peer is a plain OpenSSL client, which keeps a session and offers it on
+// the next connection as every real resuming client does.
+//
+// One resumption case: the protocol version, whether the client presents
+// g_client_cert, and the SNI name (NULL for none).
 typedef struct {
-  int max_version;   /* TLS1_2_VERSION or TLS1_3_VERSION */
-  bool present_cert; /* the client presents g_client_cert */
-  const char *sni;   /* NULL for no SNI */
+  int max_version;
+  bool present_cert;
+  const char *sni;
 } _resume_case_t;
 
-/* Drives a ctls server connection and a raw OpenSSL client to the end of the
- * handshake, then moves one byte from the server to the client. That makes the
- * client read past the handshake, which is where a TLS 1.3 client takes in the
- * server's session tickets. */
-static bool _resume_drive(ctls_conn_t *server_conn, SSL *client) {
+// Drives the handshake of a ctls server connection and a raw OpenSSL client,
+// then moves one byte from the server to the client, which makes a TLS 1.3
+// client take in the session tickets. Gives true when both finished and the
+// byte arrived.
+static bool _resume_drive(ctls_conn *server_conn, SSL *client) {
   bool s_done = false, c_done = false;
   for (int i = 0; i < 400 && !(s_done && c_done); i++) {
     if (!s_done) {
-      ctls_handshake_result_t r = ctls_conn_handshake_step(server_conn);
+      ctls_handshake_result r = ctls_conn_handshake_step(server_conn);
       if (r == CTLS_HANDSHAKE_ERROR) return false;
       s_done = (r == CTLS_HANDSHAKE_DONE);
     }
@@ -4176,17 +3877,18 @@ static bool _resume_drive(ctls_conn_t *server_conn, SSL *client) {
   return false;
 }
 
-/* Runs one connection. *sess_inout is offered when it isn't NULL and gets the
- * session of this connection, and *reused_out gets what the client and the
- * server each say about resumption. */
-static bool _resume_connect(ctls_ctx_t *server_ctx, SSL_CTX *client_ctx,
+// Runs one connection of case rc between server_ctx and a raw client on
+// client_ctx. It offers *sess_inout when it isn't NULL and replaces it with
+// this connection's session, and *client_reused and *server_reused get what
+// each side says about resumption. Gives false when the connection failed.
+static bool _resume_connect(ctls_ctx *server_ctx, SSL_CTX *client_ctx,
                             const _resume_case_t *rc, SSL_SESSION **sess_inout,
                             bool *client_reused, bool *server_reused) {
   int fds[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return false;
   for (int i = 0; i < 2; i++)
     fcntl(fds[i], F_SETFL, fcntl(fds[i], F_GETFL, 0) | O_NONBLOCK);
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
   SSL *client = SSL_new(client_ctx);
   bool ok = server_conn && client && SSL_set_fd(client, fds[1]) == 1;
@@ -4199,7 +3901,7 @@ static bool _resume_connect(ctls_ctx_t *server_ctx, SSL_CTX *client_ctx,
   if (ok) {
     *client_reused = SSL_session_reused(client) == 1;
     *server_reused =
-        SSL_session_reused(_ctls_conn_ssl_for_tests(server_conn)) == 1;
+        SSL_session_reused(ctls__conn_ssl_for_tests(server_conn)) == 1;
     SSL_SESSION *s = SSL_get1_session(client);
     if (*sess_inout) SSL_SESSION_free(*sess_inout);
     *sess_inout = s;
@@ -4214,9 +3916,10 @@ static bool _resume_connect(ctls_ctx_t *server_ctx, SSL_CTX *client_ctx,
   return ok;
 }
 
-/* LibreSSL resumes no TLS 1.3 session, and its SSL_SESSION_is_resumable() says
- * 0 for every session, including a TLS 1.2 session that it does resume, so
- * there a session issued by the first connection is enough. */
+// Whether TLS 1.3 cases run, and whether the first connection issued a
+// session that can be resumed. LibreSSL resumes no TLS 1.3 session and its
+// SSL_SESSION_is_resumable() says 0 for everything, so there a session that
+// exists is enough.
 #if defined(LIBRESSL_VERSION_NUMBER)
 #define RESUME_TLS13 0
 #define RESUME_SESSION_ISSUED(s) ((s) != NULL)
@@ -4226,10 +3929,12 @@ static bool _resume_connect(ctls_ctx_t *server_ctx, SSL_CTX *client_ctx,
   ((s) != NULL && SSL_SESSION_is_resumable(s) == 1)
 #endif
 
-/* Returns true when both sides report a resumed session on the second of two
- * connections and neither side reports one on the first. */
+// Runs case rc twice against a server with a trust store (optional client
+// certificate when the client presents none), so a test can check resumption
+// for that client shape. Gives true when the second connection resumed on
+// both sides and the first didn't.
 static bool _resume_case_resumes(const _resume_case_t *rc) {
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   bool ok = server_ctx &&
             ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                               NULL, NULL) == ccol_success &&
@@ -4237,9 +3942,6 @@ static bool _resume_case_resumes(const _resume_case_t *rc) {
   if (ok && rc->sni)
     ok = ctls_ctx_cert_add(server_ctx, rc->sni, NULL, NULL, NULL, NULL) ==
          ccol_success;
-  /* A client that presents no certificate gets to a server with a trust store
-   * only when that server merely requests one, while a client that presents one
-   * resumes against the default, which requires it. */
   if (ok && !rc->present_cert)
     ok = ctls_ctx_peer_cert_optional(server_ctx, true) == ccol_success;
   SSL_CTX *client_ctx = SSL_CTX_new(TLS_client_method());
@@ -4277,22 +3979,17 @@ TEST(ctls_resumption, a_server_with_a_trust_store_resumes_every_client_shape) {
   REQUIRE_EQ(failed_mask, 0);
 }
 
-/* ========================================================================== */
-/*                  HOSTNAME VERIFICATION NEEDS A HOSTNAME                    */
-/* ========================================================================== */
-
+// Hostname verification needs a hostname
 TEST(ctls_conn, verify_host_with_no_hostname_is_refused) {
-  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  ctls_ctx *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
   int fds[2];
   _make_nonblocking_pair(fds);
   char *err_null = NULL, *err_empty = NULL;
-  ctls_conn_t *a = ctls_conn_create_client(ctx, fds[1], NULL, true, &err_null);
-  ctls_conn_t *b = ctls_conn_create_client(ctx, fds[1], "", true, &err_empty);
-  /* The same two calls are accepted when the check is switched off on purpose.
-   */
-  ctls_conn_t *c = ctls_conn_create_client(ctx, fds[1], NULL, false, NULL);
-  ctls_conn_t *d = ctls_conn_create_client(ctx, fds[1], "", false, NULL);
+  ctls_conn *a = ctls_conn_create_client(ctx, fds[1], NULL, true, &err_null);
+  ctls_conn *b = ctls_conn_create_client(ctx, fds[1], "", true, &err_empty);
+  ctls_conn *c = ctls_conn_create_client(ctx, fds[1], NULL, false, NULL);
+  ctls_conn *d = ctls_conn_create_client(ctx, fds[1], "", false, NULL);
   bool a_null = (a == NULL), b_null = (b == NULL);
   bool c_ok = (c != NULL), d_ok = (d != NULL);
   ctls_conn_destroy(a);
@@ -4310,42 +4007,35 @@ TEST(ctls_conn, verify_host_with_no_hostname_is_refused) {
   REQUIRE_NE((void *)err_empty, (void *)NULL);
 }
 
-/* ========================================================================== */
-/*                  INPUT THAT THE TLS LAYER ALREADY HOLDS                    */
-/* ========================================================================== */
-
+// Input the TLS layer already holds
+//
+// One 12000-byte write is one record, so a 4096-byte read leaves the rest
+// inside the TLS layer while the socket is empty.
 TEST(ctls_conn, pending_input_reports_plaintext_that_the_socket_no_longer_has) {
   REQUIRE_FALSE(ctls_conn_has_pending_input(NULL));
-  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
              ccol_success);
-  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  ctls_ctx *client_ctx = ctls_ctx_new(NULL);
   int fds[2];
   _make_nonblocking_pair(fds);
-  /* Room for the whole record in one write. A FreeBSD socketpair holds about
-   * 8 KiB per direction by default, while Linux holds a lot more. */
   int room = 65536;
   for (int i = 0; i < 2; i++) {
     setsockopt(fds[i], SOL_SOCKET, SO_SNDBUF, &room, sizeof(room));
     setsockopt(fds[i], SOL_SOCKET, SO_RCVBUF, &room, sizeof(room));
   }
-  ctls_conn_t *server_conn =
+  ctls_conn *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn =
+  ctls_conn *client_conn =
       ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
   bool hs = _drive_both(client_conn, server_conn, 200, NULL, NULL);
 
-  /* A single write of 12000 bytes is one TLS record, so a 4096-byte read leaves
-   * the rest of that record inside the TLS layer while the socket holds nothing
-   * more. */
   static char payload[12000];
   memset(payload, 'p', sizeof(payload));
   bool pending_before = true, pending_mid = false, pending_after = true;
   bool socket_empty_mid = false;
   size_t total = 0;
   if (hs) {
-    /* Let the server take in whatever the handshake left, such as TLS 1.3
-     * tickets going the other way, before we measure. */
     char tmp[16];
     (void)ctls_conn_read(server_conn, tmp, sizeof(tmp));
     pending_before = ctls_conn_has_pending_input(server_conn);
@@ -4381,16 +4071,15 @@ TEST(ctls_conn, pending_input_reports_plaintext_that_the_socket_no_longer_has) {
   REQUIRE_FALSE(pending_after);
 }
 
-/* ========================================================================== */
-/* Construction and peer-certificate answers under allocation failure         */
-/* ========================================================================== */
-
-/* Counts every allocation and every free of a non-NULL block, so a test can
- * tell that a context gave back everything it took once its last reference
- * is gone. */
+// Construction and peer-certificate answers under allocation failure
+//
+// The allocations and frees of non-NULL blocks through g_cnt_mp, so a test can
+// tell that a context gave back everything it took.
 static _Atomic long g_cnt_allocs = 0;
 static _Atomic long g_cnt_frees = 0;
 
+// The g_cnt_mp functions, which count into g_cnt_allocs and g_cnt_frees; a
+// realloc counts only when it allocates a new block.
 static void *_cnt_malloc(size_t n) {
   void *p = malloc(n);
   if (p) atomic_fetch_add(&g_cnt_allocs, 1);
@@ -4410,24 +4099,21 @@ static void _cnt_free(void *p) {
   if (p) atomic_fetch_add(&g_cnt_frees, 1);
   free(p);
 }
-static ccol_memmgmt_procs_t g_cnt_mp = {_cnt_malloc, _cnt_free, _cnt_calloc,
-                                        _cnt_realloc};
+// The counting procs.
+static ccol_memmgmt_procs g_cnt_mp = {_cnt_malloc, _cnt_free, _cnt_calloc,
+                                      _cnt_realloc};
 
+// Zeroes the two counters before a measured run.
 static void _cnt_reset(void) {
   atomic_store(&g_cnt_allocs, 0);
   atomic_store(&g_cnt_frees, 0);
 }
 
-/* ctls_ctx_new fails as a whole when OpenSSL cannot build its SSL_CTX: it
- * returns NULL with an err_str and has given every block back to the
- * caller's allocator. */
+// An unarmed build runs first so OpenSSL's one-time init is done before the
+// sweep; a failure inside a run-once init would stick for the process.
 TEST(ctls_oom, ctx_new_under_openssl_allocation_failure_gives_everything_back) {
   if (!g_ossl_mem_hooked) return;
-  /* An unarmed build first, so OpenSSL's one-time initialisation is done
-   * before the sweep: a failure inside a run-once init sticks for the whole
-   * process, which would fail this test when it runs alone and every test
-   * after it. */
-  ctls_ctx_t *warm = ctls_ctx_new_mp(&g_cnt_mp, NULL);
+  ctls_ctx *warm = ctls_ctx_new_mp(&g_cnt_mp, NULL);
   bool warmed = warm != NULL;
   if (warm) ctls_ctx_release(warm);
   long failures = 0;
@@ -4438,7 +4124,7 @@ TEST(ctls_oom, ctx_new_under_openssl_allocation_failure_gives_everything_back) {
     _cnt_reset();
     char *err = NULL;
     _ossl_arm(n);
-    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_cnt_mp, &err);
+    ctls_ctx *ctx = ctls_ctx_new_mp(&g_cnt_mp, &err);
     _ossl_disarm();
     bool fired = atomic_load(&g_ossl_alloc_fired);
     if (ctx) {
@@ -4458,6 +4144,8 @@ TEST(ctls_oom, ctx_new_under_openssl_allocation_failure_gives_everything_back) {
   REQUIRE_FALSE(unbalanced);
 }
 
+// The connection constructors the sweeps cover: a client by name, a client by
+// IP literal, and a server.
 typedef enum {
   CREATE_CLIENT_NAME,
   CREATE_CLIENT_IP,
@@ -4465,8 +4153,10 @@ typedef enum {
   CREATE_KIND_COUNT
 } create_kind_t;
 
-static ctls_conn_t *_create_of_kind(ctls_ctx_t *ctx, int fd, create_kind_t k,
-                                    char **err) {
+// Creates a connection of kind k on fd with ctx, passing err through, so one
+// sweep loop covers every constructor. Gives the connection or NULL.
+static ctls_conn *_create_of_kind(ctls_ctx *ctx, int fd, create_kind_t k,
+                                  char **err) {
   switch (k) {
     case CREATE_CLIENT_NAME:
       return ctls_conn_create_client(ctx, fd, "sweep.test", true, err);
@@ -4480,12 +4170,10 @@ static ctls_conn_t *_create_of_kind(ctls_ctx_t *ctx, int fd, create_kind_t k,
   return NULL;
 }
 
-/* A connection that cannot be built under an OpenSSL allocation failure
- * comes back as NULL with an err_str naming its create call, and hands back
- * all it took on the way: the pin on the served SSL_CTX, the socket BIO, and
- * the reference on the context. The context stays usable, and once it is
- * released the caller's allocator has every block back, which it would not
- * if any failed create kept a reference. */
+// A connection that can't be built under an OpenSSL allocation failure gives
+// NULL with an err_str naming its create call and hands back the SSL_CTX pin,
+// the socket BIO and the context reference; once the context is released the
+// allocator has every block back.
 TEST(ctls_oom,
      conn_create_under_openssl_allocation_failure_gives_everything_back) {
   if (!g_ossl_mem_hooked || !g_certs_ready) return;
@@ -4494,14 +4182,14 @@ TEST(ctls_oom,
       "ctls_conn_create_server:"};
   for (int k = 0; k < CREATE_KIND_COUNT; k++) {
     _cnt_reset();
-    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_cnt_mp, NULL);
+    ctls_ctx *ctx = ctls_ctx_new_mp(&g_cnt_mp, NULL);
     REQUIRE_NE((void *)ctx, NULL);
-    ccol_retval_t rv_cert =
+    ccol_retval rv_cert =
         ctls_ctx_cert_add(ctx, NULL, g_server_cert, g_server_key, NULL, NULL);
     int fds[2] = {-1, -1};
     bool paired = socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0;
-    long pins_before = _ctls_live_conn_ctx_pin_count_for_tests();
-    size_t bios_before = _ctls_live_sock_bio_count_for_tests();
+    long pins_before = ctls__live_conn_ctx_pin_count_for_tests();
+    size_t bios_before = ctls__live_sock_bio_count_for_tests();
     long failures = 0;
     bool bad_err = false;
     bool leaked = false;
@@ -4509,7 +4197,7 @@ TEST(ctls_oom,
     for (long n = 1; paired && n <= 2000 && !finished; n++) {
       char *err = NULL;
       _ossl_arm(n);
-      ctls_conn_t *conn = _create_of_kind(ctx, fds[0], (create_kind_t)k, &err);
+      ctls_conn *conn = _create_of_kind(ctx, fds[0], (create_kind_t)k, &err);
       _ossl_disarm();
       bool fired = atomic_load(&g_ossl_alloc_fired);
       if (conn) {
@@ -4520,11 +4208,11 @@ TEST(ctls_oom,
         if (!err || strncmp(err, prefix[k], strlen(prefix[k])) != 0)
           bad_err = true;
       }
-      if (_ctls_live_conn_ctx_pin_count_for_tests() != pins_before ||
-          _ctls_live_sock_bio_count_for_tests() != bios_before)
+      if (ctls__live_conn_ctx_pin_count_for_tests() != pins_before ||
+          ctls__live_sock_bio_count_for_tests() != bios_before)
         leaked = true;
     }
-    ctls_conn_t *after =
+    ctls_conn *after =
         paired ? _create_of_kind(ctx, fds[0], (create_kind_t)k, NULL) : NULL;
     ctls_conn_destroy(after);
     if (fds[0] >= 0) close(fds[0]);
@@ -4544,16 +4232,18 @@ TEST(ctls_oom,
   }
 }
 
-/* A verified mutual TLS pair: the server trusts the client's self-signed
- * certificate, and the server context takes its memory from server_mp. */
+// A verified mutual TLS pair: the server trusts the client's self-signed
+// certificate, and the server context takes its memory from server_mp.
 typedef struct {
-  ctls_ctx_t *server_ctx;
-  ctls_ctx_t *client_ctx;
-  ctls_conn_t *server;
-  ctls_conn_t *client;
+  ctls_ctx *server_ctx;
+  ctls_ctx *client_ctx;
+  ctls_conn *server;
+  ctls_conn *client;
   int fds[2];
 } _mtls_pair_t;
 
+// Destroys whatever _mtls_open() built and resets *p to empty, so it can be
+// called on a partly built pair.
 static void _mtls_close(_mtls_pair_t *p) {
   ctls_conn_destroy(p->client);
   ctls_conn_destroy(p->server);
@@ -4565,7 +4255,10 @@ static void _mtls_close(_mtls_pair_t *p) {
   p->fds[0] = p->fds[1] = -1;
 }
 
-static bool _mtls_open(_mtls_pair_t *p, ccol_memmgmt_procs_t *server_mp,
+// Builds a mutual TLS pair in *p with the server context on server_mp; the
+// client presents its certificate when client_presents is set, otherwise the
+// server only requests one. Gives false, with everything closed, on failure.
+static bool _mtls_open(_mtls_pair_t *p, ccol_memmgmt_procs *server_mp,
                        bool client_presents) {
   memset(p, 0, sizeof(*p));
   p->fds[0] = p->fds[1] = -1;
@@ -4592,8 +4285,9 @@ static bool _mtls_open(_mtls_pair_t *p, ccol_memmgmt_procs_t *server_mp,
   return ok;
 }
 
-/* The DER encoding of the client certificate, read from its file, which the
- * caller frees with OPENSSL_free. */
+// Reads g_client_cert and gives its DER encoding (free it with OPENSSL_free)
+// with the length in *len_out, so a test can compare the accessor's answer.
+// NULL on failure.
 static unsigned char *_client_cert_der(int *len_out) {
   *len_out = 0;
   FILE *f = fopen(g_client_cert, "r");
@@ -4609,11 +4303,8 @@ static unsigned char *_client_cert_der(int *len_out) {
   return der;
 }
 
-/* On the server end of a verified mutual TLS connection, the three
- * accessors describe the client's certificate: its DER encoding, the SHA-256
- * of that encoding and its subject as RFC 2253 text. A second call answers
- * from the same storage. A peer that presented no certificate gets NULL, a
- * zero length and an all-zero digest. */
+// A second call answers from the same storage, and a peer with no certificate
+// gets NULL, a zero length and an all-zero digest.
 TEST(ctls_handshake, peer_cert_accessors_describe_the_verified_client) {
   if (!g_certs_ready) return;
   int want_len = 0;
@@ -4638,7 +4329,6 @@ TEST(ctls_handshake, peer_cert_accessors_describe_the_verified_client) {
   const char *subject = opened ? ctls_conn_peer_cert_subject(p.server) : NULL;
   bool subject_ok = subject && strcmp(subject, "CN=test-client") == 0 &&
                     ctls_conn_peer_cert_subject(p.server) == subject;
-  /* The client end did not verify the server, so it has no answer. */
   size_t client_len = 99;
   bool client_none = opened &&
                      !ctls_conn_peer_cert_der(p.client, &client_len) &&
@@ -4670,12 +4360,9 @@ TEST(ctls_handshake, peer_cert_accessors_describe_the_verified_client) {
   REQUIRE_TRUE(anon_md_zero);
 }
 
-/* An accessor whose answer cannot be built (a block of the server context's
- * allocator, or an allocation inside OpenSSL) answers NULL with a zero length,
- * or false with an all-zero digest, and caches nothing: the next call with
- * memory available gives the full answer. The ctx sweep fails each block of
- * the context's own allocator; the OpenSSL sweep each allocation of OpenSSL
- * on this thread. */
+// An accessor whose answer can't be built (a block of the context allocator,
+// or an OpenSSL allocation) answers empty and caches nothing, so the next call
+// with memory gives the full answer.
 TEST(ctls_oom, peer_cert_accessors_under_allocation_failure_cache_nothing) {
   if (!g_certs_ready) return;
   int want_len = 0;
@@ -4723,8 +4410,6 @@ TEST(ctls_oom, peer_cert_accessors_under_allocation_failure_cache_nothing) {
       _mtls_close(&p);
     }
   }
-  /* The digest is computed on each call, so one connection serves the whole
-   * sweep once the DER is cached. */
   long md_failures = 0;
   bool md_bad = false;
   bool md_finished = !g_ossl_mem_hooked;
@@ -4762,31 +4447,33 @@ TEST(ctls_oom, peer_cert_accessors_under_allocation_failure_cache_nothing) {
   REQUIRE_FALSE(md_bad);
 }
 
+// What _alpn_log_cleanup() saw: how many cleanups ran and the last udata.
 typedef struct {
   int cleanups;
   void *last_udata;
 } _alpn_cleanup_log_t;
 
+// The log the cleanup below writes to.
 static _alpn_cleanup_log_t g_alpn_log;
+// An ALPN cleanup that counts its runs and records udata in g_alpn_log, so a
+// test sees which registration was cleaned up.
 static void _alpn_log_cleanup(void *udata) {
   g_alpn_log.cleanups++;
   g_alpn_log.last_udata = udata;
 }
 
-/* An ALPN replacement whose rebuild fails reports it and keeps the earlier
- * registration: nothing's cleanup runs, the count stays 1, and the next
- * replacement that succeeds runs the cleanup of the earlier registration
- * with its own udata, which shows that the earlier one was still the stored
- * one. */
+// The failed replacement runs no cleanup, and the next successful one cleans
+// up the earlier registration with its own udata, which shows it was still
+// the stored one.
 TEST(ctls_oom, a_failed_alpn_replacement_keeps_the_earlier_registration) {
   if (!g_ossl_mem_hooked) return;
   int old_udata = 1, new_udata = 2, last_udata = 3;
-  ctls_ctx_t *probe = ctls_ctx_new(NULL);
+  ctls_ctx *probe = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)probe, NULL);
-  ccol_retval_t rv_first =
+  ccol_retval rv_first =
       ctls_ctx_alpn_add(probe, "h2", NULL, &old_udata, NULL, NULL);
   _ossl_arm(LONG_MAX);
-  ccol_retval_t rv_count =
+  ccol_retval rv_count =
       ctls_ctx_alpn_add(probe, "h2", NULL, &new_udata, NULL, NULL);
   _ossl_disarm();
   long total = atomic_load(&g_ossl_alloc_seen);
@@ -4799,7 +4486,7 @@ TEST(ctls_oom, a_failed_alpn_replacement_keeps_the_earlier_registration) {
   long failures = 0;
   bool breach = false;
   for (long n = 1; n <= total; n += step) {
-    ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+    ctls_ctx *ctx = ctls_ctx_new(NULL);
     if (!ctx || ctls_ctx_alpn_add(ctx, "h2", NULL, &old_udata,
                                   _alpn_log_cleanup, NULL) != ccol_success) {
       ctls_ctx_release(ctx);
@@ -4809,7 +4496,7 @@ TEST(ctls_oom, a_failed_alpn_replacement_keeps_the_earlier_registration) {
     memset(&g_alpn_log, 0, sizeof(g_alpn_log));
     char *err = NULL;
     _ossl_arm(n);
-    ccol_retval_t rv =
+    ccol_retval rv =
         ctls_ctx_alpn_add(ctx, "h2", NULL, &new_udata, _alpn_log_cleanup, &err);
     _ossl_disarm();
     if (rv == ccol_success) {
@@ -4821,8 +4508,8 @@ TEST(ctls_oom, a_failed_alpn_replacement_keeps_the_earlier_registration) {
     failures++;
     bool kept = g_alpn_log.cleanups == 0 && ctls_ctx_alpn_count(ctx) == 1 &&
                 err && strstr(err, "rebuild failure") != NULL;
-    ccol_retval_t rv_after = ctls_ctx_alpn_add(ctx, "h2", NULL, &last_udata,
-                                               _alpn_log_cleanup, NULL);
+    ccol_retval rv_after = ctls_ctx_alpn_add(ctx, "h2", NULL, &last_udata,
+                                             _alpn_log_cleanup, NULL);
     if (!kept || rv_after != ccol_success || g_alpn_log.cleanups != 1 ||
         g_alpn_log.last_udata != &old_udata)
       breach = true;
@@ -4834,15 +4521,18 @@ TEST(ctls_oom, a_failed_alpn_replacement_keeps_the_earlier_registration) {
   REQUIRE_FALSE(breach);
 }
 
+// What the hashed-directory child reports: the trust result and whether the
+// client verified, with the directory holding the server certificate and
+// with an empty one.
 typedef struct {
-  ccol_retval_t rv_dir;
+  ccol_retval rv_dir;
   bool verified_dir;
-  ccol_retval_t rv_empty;
+  ccol_retval rv_empty;
   bool verified_empty;
 } _system_ca_dir_result_t;
 
-/* A directory named after the subject hash of g_server_cert, holding a link
- * to it, as OpenSSL's hashed lookup expects. */
+// Links g_server_cert into dir under its subject hash, as OpenSSL's hashed
+// lookup expects. Gives false on failure.
 static bool _hashed_dir_make(const char *dir) {
   FILE *f = fopen(g_server_cert, "r");
   if (!f) return false;
@@ -4857,6 +4547,11 @@ static bool _hashed_dir_make(const char *dir) {
          symlink(g_server_cert, link_path) == 0;
 }
 
+// The child of the hashed-directory test: makes a hashed directory and an
+// empty one, points SSL_CERT_FILE at a key (which contributes no
+// certificate) and SSL_CERT_DIR at each directory in turn, and records in the
+// _system_ca_dir_result_t at out whether a system-trust client verifies.
+// It removes the directories afterwards.
 static void _system_ca_dir_body(void *out) {
   _system_ca_dir_result_t *r = (_system_ca_dir_result_t *)out;
   char dir[300], empty[300];
@@ -4864,11 +4559,10 @@ static void _system_ca_dir_body(void *out) {
   snprintf(empty, sizeof(empty), "%s/hashed_empty", g_cert_dir);
   bool made =
       mkdir(dir, 0700) == 0 && mkdir(empty, 0700) == 0 && _hashed_dir_make(dir);
-  /* A key holds no certificate, so the default file contributes nothing. */
   if (made) {
     setenv("SSL_CERT_DIR", dir, 1);
     _system_ca_env_set(g_server_key);
-    ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+    ctls_ctx *ctx = ctls_ctx_new(NULL);
     r->rv_dir = ctx ? ctls_ctx_trust_system(ctx) : ccol_unexpected_failure;
     r->verified_dir =
         r->rv_dir == ccol_success && _client_verifies_test_server(ctx);
@@ -4894,10 +4588,9 @@ static void _system_ca_dir_body(void *out) {
   rmdir(empty);
 }
 
-/* When the default CA file holds no certificate, the system store is the
- * hashed directory that SSL_CERT_DIR names: a client trusts the server whose
- * certificate that directory holds, and trusts nothing from an empty one.
- * The test runs in a child; see _ctls_run_in_child. */
+// With a default CA file that holds no certificate, the system store is the
+// directory SSL_CERT_DIR names: a client trusts the server whose certificate
+// it holds, and nothing from an empty one. Runs in a child.
 TEST(ctls_system_ca,
      a_default_file_without_certificates_falls_back_to_the_directory) {
   if (!g_certs_ready) return;
@@ -4912,6 +4605,9 @@ TEST(ctls_system_ca,
   REQUIRE_FALSE(r.verified_empty);
 }
 
+// What the allocation sweep child reports: failed and broken calls, whether
+// the sweep got past the last allocation, and the clean call's verification
+// and trusted certificate count.
 typedef struct {
   long failures;
   long breaches;
@@ -4920,11 +4616,10 @@ typedef struct {
   int clean_count;
 } _system_ca_oom_result_t;
 
-/* Writes a bundle of six certificates with the test server's among them to
- * path, and says whether it could. OpenSSL starts the list a parse fills with
- * room for four entries, so only a bundle longer than that makes the parse
- * grow the list, and a failed growth gives NULL with nothing on the error
- * queue. */
+// Writes six certificates, the test server's among them, to path. OpenSSL's
+// parse list starts with room for four, so only a longer bundle makes the
+// parse grow it, and a failed growth gives NULL with an empty error queue.
+// Gives false when it couldn't write.
 static bool _write_system_ca_bundle(const char *path) {
   const char *parts[] = {g_client_cert, g_enc_cert, g_named_cert,
                          g_client_cert, g_enc_cert, g_server_cert};
@@ -4947,16 +4642,18 @@ static bool _write_system_ca_bundle(const char *path) {
   return ok;
 }
 
-/* With SSL_CERT_FILE naming a bundle of six certificates, the test server's
- * among them, and SSL_CERT_DIR an empty directory, fails each OpenSSL
- * allocation of ctls_ctx_trust_system in turn. A call that reports success must
- * hold every certificate of the bundle, as a call with nothing failing does
- * (and that call must also verify the test server in a handshake); one that
- * ran out of memory while it read the file must say so, because falling back
- * to the empty directory would leave a store that trusts nothing. A
- * handshake for every success would take minutes under valgrind, so the
- * sweep compares the count of trusted certificates instead. The child gets
- * 600 s where the others get 30. */
+// The child of a_default_file_that_cannot_be_parsed_for_memory_says_so: with
+// SSL_CERT_FILE at the six-certificate bundle and SSL_CERT_DIR empty, it
+// fails each OpenSSL allocation of ctls_ctx_trust_system() in turn. A success
+// must trust as many certificates as the clean call (which must also verify
+// the server in a handshake; a handshake per success would take minutes under
+// valgrind); a call that ran out of memory reading the file must say so,
+// since falling back to the empty directory trusts nothing. The sweep runs to
+// twice the clean count (allocation counts differ a lot between TLS
+// libraries) and stops at the first index nothing fails. CTLS_SAMPLED_SWEEP
+// (set by the memtest target) visits about 300 points, because the cost grows
+// with the square of the count. Results go into the _system_ca_oom_result_t
+// at out.
 static void _system_ca_oom_body(void *out) {
   _system_ca_oom_result_t *r = (_system_ca_oom_result_t *)out;
   char empty[300];
@@ -4970,28 +4667,18 @@ static void _system_ca_oom_body(void *out) {
   }
   setenv("SSL_CERT_DIR", empty, 1);
   _system_ca_env_set(bundle);
-  ctls_ctx_t *clean = ctls_ctx_new(NULL);
-  /* The clean call is counted, and the sweep runs to that count with room to
-   * spare, because the number of allocations differs a lot between TLS
-   * libraries (about 1500 with OpenSSL 3.5, more than 8000 with 3.0 on
-   * FreeBSD). The sweep still stops at the first index that nothing fails. */
+  ctls_ctx *clean = ctls_ctx_new(NULL);
   _ossl_arm(LONG_MAX);
-  ccol_retval_t clean_rv =
+  ccol_retval clean_rv =
       clean ? ctls_ctx_trust_system(clean) : ccol_unexpected_failure;
   _ossl_disarm();
   long clean_allocs = atomic_load(&g_ossl_alloc_seen);
   if (clean_rv == ccol_success) {
-    r->clean_count = _ctls_trusted_cert_count_for_tests(clean);
+    r->clean_count = ctls__trusted_cert_count_for_tests(clean);
     r->clean_verified = _client_verifies_test_server(clean);
   }
   ctls_ctx_release(clean);
   long sweep_max = 2 * clean_allocs + 64;
-  /* Every index costs a whole call, so the sweep grows with the square of
-   * the count, which valgrind can't finish in the child's time with OpenSSL
-   * 3.0 (6000 to 9000 allocations). The memtest target therefore sets
-   * CTLS_SAMPLED_SWEEP and visits about 300 evenly spaced points; every
-   * other run visits each index. Past the counted end the step is 1, so the
-   * sweep still finds the first index that nothing fails. */
   long step = 1;
   if (getenv("CTLS_SAMPLED_SWEEP") && clean_allocs > 300)
     step = clean_allocs / 300;
@@ -5000,20 +4687,20 @@ static void _system_ca_oom_body(void *out) {
              : nth + step > clean_allocs ? clean_allocs
                                          : nth + step) {
     _system_ca_env_set(bundle);
-    ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+    ctls_ctx *ctx = ctls_ctx_new(NULL);
     if (!ctx) {
       r->breaches++;
       break;
     }
     _ossl_arm(nth);
-    ccol_retval_t rv = ctls_ctx_trust_system(ctx);
+    ccol_retval rv = ctls_ctx_trust_system(ctx);
     bool fired = atomic_load(&g_ossl_alloc_fired);
     _ossl_disarm();
     if (!fired) r->reached_the_end = true;
     if (rv == ccol_not_enough_memory)
       r->failures++;
     else if (rv != ccol_success ||
-             _ctls_trusted_cert_count_for_tests(ctx) != r->clean_count)
+             ctls__trusted_cert_count_for_tests(ctx) != r->clean_count)
       r->breaches++;
     ctls_ctx_release(ctx);
   }

@@ -22,13 +22,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* The open file descriptors of the test process, on every supported system.
- * Linux lists them in /proc/self/fd, which stays fast whatever the
- * descriptor limit is. The BSDs and macOS have no such listing by default,
- * so there we probe every descriptor number up to the process limit (at most
- * 65536) with fcntl(F_GETFD). Neither form counts a descriptor that it opened
- * for itself. */
-
+// The open file descriptors of the test process. Linux lists them in
+// /proc/self/fd; elsewhere we probe every number up to the limit (at most
+// 65536) with fcntl(F_GETFD).
 #ifndef CCOL_TESTS_TEST_FDS_H
 #define CCOL_TESTS_TEST_FDS_H
 
@@ -37,7 +33,9 @@ SOFTWARE.
 #include <stdlib.h>
 #include <unistd.h>
 
-/* Calls fn(fd, arg) once for every open descriptor. */
+// Calls fn(fd, arg) once for every open descriptor of the process, leaving out
+// its own. Tests use it to look for leaked or inherited descriptors on systems
+// with and without /proc.
 static inline void test_for_each_open_fd(void (*fn)(int fd, void *arg),
                                          void *arg) {
   DIR *d = opendir("/proc/self/fd");
@@ -59,16 +57,19 @@ static inline void test_for_each_open_fd(void (*fn)(int fd, void *arg),
   }
 }
 
+// Adds one to the int counter *arg; the callback that test_count_open_fds()
+// hands to test_for_each_open_fd().
 static inline void test_fds_count_one(int fd, void *arg) {
   (void)fd;
   (*(int *)arg)++;
 }
 
-/* The number of open descriptors. */
+// Gives the number of open descriptors, so a test can compare it with a
+// baseline to find a descriptor leak.
 static inline int test_count_open_fds(void) {
   int n = 0;
   test_for_each_open_fd(test_fds_count_one, &n);
   return n;
 }
 
-#endif /* CCOL_TESTS_TEST_FDS_H */
+#endif

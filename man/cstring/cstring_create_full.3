@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cstring.h>
 
-cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
+cstr cstring_create_full(const char *initial, ccol_memmgmt_procs *m_procs,
                          char **err);
 .fi
 .SH DESCRIPTION

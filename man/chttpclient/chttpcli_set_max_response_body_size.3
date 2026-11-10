@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-ccol_retval_t chttpcli_set_max_response_body_size(chttpcli cli,
+ccol_retval chttpcli_set_max_response_body_size(chttpcli cli,
                                                       size_t max_bytes);
 .fi
 .SH DESCRIPTION
@@ -22,7 +22,7 @@ limit again.
 The cap has no effect on chttpcli_do_streaming,
 chttpcli_do_async_streaming or chttpcli_do_pooled_streaming. A
 streaming caller controls its own memory through the value that its
-chttpcli_write_fn_t returns (a value less than len aborts the transfer),
+chttpcli_write_fn returns (a value less than len aborts the transfer),
 so on that path there is nothing for this cap to bound.
 
 The client enforces the cap in two ways. A response whose

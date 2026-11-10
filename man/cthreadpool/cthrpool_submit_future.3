@@ -7,10 +7,10 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadpool.h>
 
-cthrpool_future_t *cthrpool_submit_future(cthrpool pool,
+cthrpool_future *cthrpool_submit_future(cthrpool pool,
                                           void *(*fn)(void *),
                                           void *arg,
-                                          ccol_retval_t *rv_out);
+                                          ccol_retval *rv_out);
 .fi
 .SH DESCRIPTION
 .nf
@@ -51,7 +51,7 @@ rv_out  Receives the result code on every return (may be NULL)
 .fi
 .SH RETURN VALUE
 .nf
-Returns a new cthrpool_future_t handle on success, and stores
+Returns a new cthrpool_future handle on success, and stores
 ccol_success in *rv_out.
 Returns NULL on failure, and stores one of these codes in *rv_out:
   ccol_invalid_args       pool is CTHRPOOL_NULL, or a stale and

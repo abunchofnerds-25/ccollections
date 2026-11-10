@@ -24,27 +24,20 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file test_helpers/chttp.h
- * @brief INTERNAL ONLY. The test-only hooks of chttp.
- *
- * src/chttp.c defines this hook and the chttp tests call it, so a test can
- * reach an overflow guard that would otherwise need inputs of several
- * gigabytes.
- *
- * All of it exists only in a build that defines RUNNING_UNIT_TESTS. Every test
- * suite defines it and the shipped library never does, so none of this is
- * installed or exported.
- */
+// Test-only hooks of chttp, declared for src/chttp.c and the chttp tests. They
+// exist only when RUNNING_UNIT_TESTS is defined, which the shipped library
+// never does.
 
 #include <chttp.h>
 
 #ifdef RUNNING_UNIT_TESTS
-/* Runs the Basic auth encoder with the given fake lengths and tells whether
- * its overflow guard rejected the call. It's safe only with lengths that go
- * over the threshold of the guard, because the encoder would otherwise read
- * past the real, short strings. */
-bool _chttp_basic_auth_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
+// Runs the Basic auth encoder with fake string lengths and tells whether its
+// overflow guard refused the call. It exists so a test reaches the guard
+// without gigabytes of input. mp is the allocator, and the fake lengths
+// replace the strlen() of username and password. Only lengths above the
+// guard's threshold are safe; below it the encoder would read past the real,
+// short strings.
+bool chttp__basic_auth_overflow_guard_for_tests(ccol_memmgmt_procs *mp,
                                                 const char *username,
                                                 size_t fake_user_len,
                                                 const char *password,

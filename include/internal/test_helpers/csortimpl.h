@@ -24,23 +24,14 @@ SOFTWARE.
 
 #pragma once
 
-/**
- * @file test_helpers/csortimpl.h
- * @brief INTERNAL ONLY. The test-only counter of the contiguous sort path.
- *
- * src/csort.c defines it, and the vector tests read it to prove that cvec_sort
- * takes that path.
- *
- * All of it exists only in a build that defines RUNNING_UNIT_TESTS. Every test
- * suite defines it and the shipped library never does, so none of this is
- * installed or exported.
- */
+// INTERNAL ONLY. The test-only counter of the contiguous sort path, defined in
+// src/csort.c. It exists only when RUNNING_UNIT_TESTS is defined, which every
+// test suite does and the shipped library never does.
 
 #include <internal/csortimpl.h>
 
 #ifdef RUNNING_UNIT_TESTS
-/* Process-wide count of the sorts that took the contiguous path and
- * allocated a buffer. A test reads it to prove that cvec_sort gets to this
- * path. */
-unsigned long long _csort_contiguous_sorts_for_tests(void);
-#endif /* RUNNING_UNIT_TESTS */
+// Process-wide count of the sorts that took the contiguous path and allocated a
+// buffer. The vector tests read it to prove that cvec_sort gets there.
+unsigned long long csort__contiguous_sorts_for_tests(void);
+#endif  // RUNNING_UNIT_TESTS

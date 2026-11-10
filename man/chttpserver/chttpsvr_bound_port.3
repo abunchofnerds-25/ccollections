@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-ccol_retval_t chttpsvr_bound_port(chttpsvr srv, uint16_t *port_out);
+ccol_retval chttpsvr_bound_port(chttpsvr srv, uint16_t *port_out);
 .fi
 .SH DESCRIPTION
 .nf
@@ -43,7 +43,7 @@ The answer then describes the listener from one side of that change.
 .fi
 .SH EXAMPLES
 .nf
-chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
 cfg.host = "127.0.0.1";
 cfg.port = 0; /* let the system choose a free port */
 if (chttpsvr_start(srv, &cfg) == ccol_success) {

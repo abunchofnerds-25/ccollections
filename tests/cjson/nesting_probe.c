@@ -22,15 +22,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe: cjson_set nests inside its own argument, and inside the
- * argument of another public macro, under -Wshadow -Werror. Every expansion
- * gives its temporaries unique names, so a nested expansion never declares
- * a local that hides one of the enclosing expansion's. Without that, each
- * nesting below would be a -Wshadow error in a caller's build. The Makefile
- * compiles this file with -fsyntax-only and nothing here runs. */
-
+// A compile-time probe: cjson_set nests inside its own argument and inside the
+// argument of another public macro under -Wshadow -Werror, because every
+// expansion gives its temporaries unique names. The Makefile compiles this file
+// with -fsyntax-only; nothing here runs.
 #include <cjson.h>
 
+// Nests cjson_set inside its own argument and inside a statement expression, so
+// a -Wshadow build fails if two expansions share a temporary name. doc is never
+// used at run time.
 void cjson_nesting_probe(cjson doc);
 void cjson_nesting_probe(cjson doc) {
   (void)cjson_set(doc, "a", (int)cjson_set(doc, "b", 1));

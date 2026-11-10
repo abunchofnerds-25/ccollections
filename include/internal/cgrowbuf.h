@@ -22,105 +22,62 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-/**
- * @file cgrowbuf.h
- * @brief INTERNAL ONLY. A growable byte buffer with a latching OOM flag.
- *
- * Code that builds text (a serializer, or text that a parse collects) appends
- * an unknown amount of data piece by piece, and checking the allocation
- * after every append makes that code hard to read. This buffer doubles its
- * capacity when it grows and latches a single out-of-memory flag. Once the
- * flag is set every further operation on the buffer is a safe no-op, so the
- * caller only checks once, at the end of the whole build pass.
- *
- * The header is internal: it has no visibility block, make install doesn't
- * install it, and its symbols aren't in the dynamic symbol table of the
- * shared library.
- */
-
+// INTERNAL ONLY. A growable byte buffer with a latching out-of-memory flag,
+// for code that builds text piece by piece (the serializers, the record
+// builder of the logger, text that a parse collects). Once an allocation fails
+// every later operation on the buffer does nothing, so the caller checks for
+// an error once, at the end of the whole build. The header isn't installed and
+// its symbols aren't exported.
 #ifndef CCOL_CGROWBUF_H
 #define CCOL_CGROWBUF_H
 
 #include <common.h>
+// C23 has bool, true and false as keywords.
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-#include <stdbool.h> /* C23 has bool, true and false as keywords */
+#include <stdbool.h>
 #endif
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-/**
- * @brief A byte buffer that grows dynamically, for code that builds text (a
- * serializer, or text that a parse collects) and has to append an unknown
- * amount of data piece by piece.
- *
- * The capacity doubles when the buffer grows. When an allocation fails, or a
- * requested size is too large to represent, oom latches to true and every
- * further ccol_growbuf_* operation on that buffer is a safe no-op, so a
- * caller can check for an error at the end of a whole build pass instead of
- * after each append.
- *
- * Once the build is done the caller reads buf, len and oom directly. buf is
- * NUL-terminated but can be NULL when oom is set. cap and m_procs are
- * internal bookkeeping for growth and a caller must not read them.
- */
+// The buffer. When an allocation fails, or a size is too large to represent,
+// oom latches to true. After the build the caller reads buf, len and oom
+// directly; buf is NUL-terminated but can be NULL when oom is set. cap and
+// m_procs are internal bookkeeping.
 typedef struct {
   char *buf;
   size_t len;
   size_t cap;
   bool oom;
-  ccol_memmgmt_procs_t *m_procs;
-} ccol_growbuf_t;
+  ccol_memmgmt_procs *m_procs;
+} ccol_growbuf;
 
-/**
- * @brief Initialize a growable byte buffer with a 256-byte backing store.
- * @param b  The buffer to initialize.
- * @param mp The allocator for every growth and every append on this buffer.
- * @note When the allocation fails the buffer's internal OOM flag gets set,
- * and every further ccol_growbuf_* call on b is then a safe no-op.
- */
-void ccol_growbuf_init(ccol_growbuf_t *b, ccol_memmgmt_procs_t *mp);
+// Sets b up with a 256-byte store, so a builder can start appending. Every
+// later growth allocates through mp. A failed allocation sets oom.
+void ccol_growbuf_init(ccol_growbuf *b, ccol_memmgmt_procs *mp);
 
-/**
- * @brief Like ccol_growbuf_init(), but the backing store is sized up front,
- * for a caller that already knows roughly how much content it will append.
- * The store holds at least `hint + 1` bytes, and never less than 64 bytes.
- * @param b    The buffer to initialize.
- * @param mp   The allocator for every growth and every append on this buffer.
- * @param hint The approximate number of content bytes that the caller
- *             expects. A hint of SIZE_MAX asks for a store of SIZE_MAX + 1
- *             bytes, which can't be represented, so the buffer's internal
- *             OOM flag is set instead of quietly allocating some other
- *             amount.
- * @note When the allocation fails the buffer's internal OOM flag gets set,
- * and every further ccol_growbuf_* call on b is then a safe no-op.
- */
-void ccol_growbuf_init_hint(ccol_growbuf_t *b, ccol_memmgmt_procs_t *mp,
+// Like ccol_growbuf_init(), for a caller that knows roughly how much it will
+// append, so it doesn't pay for growth steps: the store holds at least hint + 1
+// bytes (never less than 64). A hint of SIZE_MAX can't be represented, so it
+// sets oom.
+void ccol_growbuf_init_hint(ccol_growbuf *b, ccol_memmgmt_procs *mp,
                             size_t hint);
 
-/**
- * @brief Append n raw bytes, growing the buffer if needed.
- * @param b    The buffer that receives the bytes.
- * @param data The bytes to append. data must be non-NULL and readable for n
- *             bytes, unless n is 0: data is ignored then and can be NULL.
- * @param n    The number of bytes to append.
- * @note This is a no-op once the buffer's internal OOM flag is set.
- * @note An append needs n + 1 bytes more than the content the buffer already
- * holds. When that total is too large to represent, nothing is copied and the
- * buffer's internal OOM flag is set, the same as for a failed allocation.
- */
-void ccol_growbuf_append_slow(ccol_growbuf_t *b, const char *data, size_t n);
+// Appends n bytes of data to b, growing the buffer when needed. It's the out of
+// line half of ccol_growbuf_append(), which calls it for every case that the
+// inline path doesn't handle. data may be NULL when n is 0. Does nothing once
+// oom is set, and sets oom when the new size can't be represented or the
+// allocation fails.
+void ccol_growbuf_append_slow(ccol_growbuf *b, const char *data, size_t n);
 
-/* The common case (n bytes that fit in the room already allocated) runs
- * inline, so appending a literal or one byte costs a few moves and no call.
- * Growth, an empty append and the OOM state go to ccol_growbuf_append_slow,
- * which applies every rule documented above. */
-static inline void ccol_growbuf_append(ccol_growbuf_t *b, const char *data,
+// Appends n bytes of data to b; it's the append that every builder calls. The
+// common case (n bytes that fit in the room already allocated) runs inline and
+// costs no call. Growth, an empty append and the oom state go to
+// ccol_growbuf_append_slow(). The n <= PTRDIFF_MAX bound changes nothing at run
+// time; it tells the fortify checks that the memcpy never sees a larger
+// length.
+static inline void ccol_growbuf_append(ccol_growbuf *b, const char *data,
                                        size_t n) {
-  /* No object is larger than PTRDIFF_MAX, so this bound changes nothing at
-   * run time. It's there to tell the compiler that the memcpy below never
-   * sees a larger length; without it a constant length near SIZE_MAX (an
-   * append that the slow path refuses anyway) makes it report one. */
   if (__builtin_expect(
           !b->oom && n != 0 && n <= (size_t)PTRDIFF_MAX && n < b->cap - b->len,
           1)) {
@@ -132,31 +89,24 @@ static inline void ccol_growbuf_append(ccol_growbuf_t *b, const char *data,
   ccol_growbuf_append_slow(b, data, n);
 }
 
-/** @brief Append one byte. */
-static inline void ccol_growbuf_append_c(ccol_growbuf_t *b, char c) {
+// Appends the byte c to b, for builders that emit punctuation one byte at a
+// time.
+static inline void ccol_growbuf_append_c(ccol_growbuf *b, char c) {
   ccol_growbuf_append(b, &c, 1);
 }
 
-/**
- * @brief Append a NUL-terminated string.
- * @note A NULL s is treated as an empty append rather than calling
- * strlen(NULL), which is undefined behavior. We accept that NULL on purpose:
- * a caller can pass the buf field of another buffer along, and a failed init
- * or append of that other buffer leaves the field NULL.
- */
-static inline void ccol_growbuf_append_cstr(ccol_growbuf_t *b, const char *s) {
+// Appends the NUL-terminated string s to b, for builders that emit literals. A
+// NULL s is an empty append, so a caller can pass along the buf field of
+// another buffer that ran out of memory.
+static inline void ccol_growbuf_append_cstr(ccol_growbuf *b, const char *s) {
   if (!s) return;
   ccol_growbuf_append(b, s, strlen(s));
 }
 
-/**
- * @brief Free the buffer's backing store (b->buf).
- * @note b itself isn't freed, it usually lives on the stack or inside
- * another struct. Calling this on a buffer that is already in the OOM state
- * is safe, since b->buf can be NULL there.
- */
-static inline void ccol_growbuf_destroy(ccol_growbuf_t *b) {
-  _ccol_mem_free(b->m_procs, b->buf);
+// Frees the store of b (not b itself), for a builder that drops its result or
+// fails. Safe on a buffer in the oom state.
+static inline void ccol_growbuf_destroy(ccol_growbuf *b) {
+  ccol__mem_free(b->m_procs, b->buf);
 }
 
-#endif /* CCOL_CGROWBUF_H */
+#endif

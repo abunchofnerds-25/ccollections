@@ -188,7 +188,7 @@ check it for you.
 ## When an error must not stop the program
 
 When an allocation fails the `cvec_*` macros stop the program through
-`_ccol_fatal_err()`, which is why ordinary code needs no error checks. If
+`ccol__fatal_err()`, which is why ordinary code needs no error checks. If
 you have to recover from the failure, call the raw functions under the
 macros instead. Inside library code they're the right choice anyway, because
 a library shouldn't stop its caller's program. They take a pointer to the
@@ -431,6 +431,6 @@ Related guides:
 [Iterators](citerators.md),
 [Sorting](csort.md),
 [Strings](cstring.md),
-[Design of the type-safe macros](design.md),
+[How the library works](design.md),
 [Memory management](memory.md),
 [Concurrency](concurrency.md)

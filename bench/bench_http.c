@@ -90,7 +90,7 @@ typedef struct {
 /* The response states the length the server received, so the client can
  * check that the whole body arrived, because otherwise a partly arrived body
  * would measure less work at the full price. */
-static void bench_echo_len_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+static void bench_echo_len_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                    void *ctx) {
   (void)ctx;
   size_t len = 0;
@@ -99,7 +99,7 @@ static void bench_echo_len_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
   chttpsvr_resp_printf(resp, "%zu", len);
 }
 
-static void bench_large_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+static void bench_large_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                 void *ctx) {
   (void)req;
   const unsigned char *body = ctx;
@@ -107,7 +107,7 @@ static void bench_large_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
   chttpsvr_resp_write(resp, body, BENCH_HTTP_LARGE_BODY);
 }
 
-static void bench_hello_handler(chttpsvr_req_t *req, chttpsvr_resp_t *resp,
+static void bench_hello_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                 void *ctx) {
   (void)req;
   (void)ctx;
@@ -143,7 +143,7 @@ static void *http_setup(size_t n) {
    * formatting and writing one line per request inside a measurement that is
    * about the request path. */
   /* Nothing frees this, and nothing may: these two constructors report
-   * through _CCOL_ERR_STR, a static string the macro builds from __FILE__ and
+   * through CCOL__ERR_STR, a static string the macro builds from __FILE__ and
    * __LINE__, so calling free() on it is undefined behavior and not just a
    * waste. The serializers' parse error strings belong to the library in the
    * same way: each thread has its own and the next parse reuses it. */
@@ -175,7 +175,7 @@ static void *http_setup(size_t n) {
 
   bool started = false;
   for (int i = 0; i < BENCH_HTTP_PORT_TRIES; i++) {
-    chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+    chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = "127.0.0.1";
     cfg.port = (uint16_t)(BENCH_HTTP_PORT_BASE + i);
     cfg.enable_keepalive = true;
@@ -213,9 +213,9 @@ static void *http_setup(size_t n) {
  * part of the work at the full price. */
 static void http_do_requests(http_state_t *st, size_t count) {
   for (size_t i = 0; i < count; i++) {
-    chttp_request_t *req = chttp_request_create(CHTTP_GET, st->url, NULL, NULL);
+    chttp_request *req = chttp_request_create(CHTTP_GET, st->url, NULL, NULL);
     if (!req) bench_die("http request allocation failed");
-    chttpcli_response_t *resp = NULL;
+    chttpcli_response *resp = NULL;
     if (chttpcli_do(st->cli, req, &resp) != ccol_success) {
       chttpcli_resp_free(resp);
       chttp_request_free(req);
@@ -242,12 +242,12 @@ static void http_do_posts(http_state_t *st, const unsigned char *body,
   char expect[32];
   snprintf(expect, sizeof(expect), "%zu", body_len);
   for (size_t i = 0; i < count; i++) {
-    chttp_request_body_t b =
+    chttp_request_body b =
         CHTTP_BODY(body, body_len, "application/octet-stream");
-    chttp_request_t *req =
+    chttp_request *req =
         chttp_request_create(CHTTP_POST, st->url_echo_len, &b, NULL);
     if (!req) bench_die("http request allocation failed");
-    chttpcli_response_t *resp = NULL;
+    chttpcli_response *resp = NULL;
     if (chttpcli_do(st->cli, req, &resp) != ccol_success || !resp ||
         resp->status_code != 200 || resp->body_len != strlen(expect) ||
         memcmp(resp->body, expect, resp->body_len) != 0) {
@@ -281,10 +281,10 @@ static void http_post_large_run(void *state, size_t n) {
 static void http_get_large_run(void *state, size_t n) {
   http_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
-    chttp_request_t *req =
+    chttp_request *req =
         chttp_request_create(CHTTP_GET, st->url_large, NULL, NULL);
     if (!req) bench_die("http request allocation failed");
-    chttpcli_response_t *resp = NULL;
+    chttpcli_response *resp = NULL;
     if (chttpcli_do(st->cli, req, &resp) != ccol_success || !resp ||
         resp->status_code != 200 || resp->body_len != BENCH_HTTP_LARGE_BODY) {
       chttpcli_resp_free(resp);

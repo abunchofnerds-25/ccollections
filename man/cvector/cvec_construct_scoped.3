@@ -18,7 +18,7 @@ that cleanup handler, with one more difference: the hidden type marker
 variables, which the other type-dispatching macros read, are initialized
 to NULL here, while cvec_construct(3) leaves them indeterminate on
 purpose. Everything else cvec_construct(3) documents holds here as well,
-including the stop of the program through _ccol_fatal_err() on a failed
+including the stop of the program through ccol__fatal_err() on a failed
 creation.
 
 The vector is destroyed on every exit from the scope: the closing brace, a
@@ -33,7 +33,7 @@ type  Element type, for example int, double or struct foo
 .fi
 .SH NOTES
 .nf
-The macro stops the program through _ccol_fatal_err() when an allocation
+The macro stops the program through ccol__fatal_err() when an allocation
 fails.
 
 It is built on __attribute__((cleanup)) and so needs GCC or Clang. On a

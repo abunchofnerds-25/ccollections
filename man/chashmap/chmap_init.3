@@ -34,7 +34,7 @@ None. The macro expands to a statement and is not an expression.
 .fi
 .SH NOTES
 .nf
-Stops the program through _ccol_fatal_err() if the creation fails; call
+Stops the program through ccol__fatal_err() if the creation fails; call
 chashmap_create(3) directly when a failure has to be handled instead of
 being fatal
 Uses CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets

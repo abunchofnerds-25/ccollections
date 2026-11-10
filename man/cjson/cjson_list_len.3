@@ -14,7 +14,7 @@ size_t cjson_dictionary_size(cjson node);
 .nf
 cjson_list_len() returns the number of child nodes of a CJSON_LIST
 node, and cjson_dictionary_size() the number of key-value pairs of a
-CJSON_DICTIONARY node.  Both call _ccol_fatal_err() when node is NULL
+CJSON_DICTIONARY node.  Both call ccol__fatal_err() when node is NULL
 and when node is not of the type that the function reads.
 .fi
 .SH PARAMETERS

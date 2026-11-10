@@ -1,13 +1,13 @@
 .TH CCOL_RETVAL_TO_STR 3 "2026-10-06" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_retval_to_str \- name of a ccol_retval_t code as a string
+ccol_retval_to_str \- name of a ccol_retval code as a string
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/common.h>
 
-static inline const char *ccol_retval_to_str(ccol_retval_t r);
+static inline const char *ccol_retval_to_str(ccol_retval r);
 .fi
 .SH DESCRIPTION
 .nf
@@ -23,7 +23,7 @@ r  The code to name
 .SH RETURN VALUE
 .nf
 A pointer to a string literal with static storage duration. A value that
-is not an enumerator of ccol_retval_t gives "unknown". The function never
+is not an enumerator of ccol_retval gives "unknown". The function never
 returns NULL.
 .fi
 .SH THREAD SAFETY
@@ -38,8 +38,8 @@ Thread-safe. The function reads no state.
 int main(void) {
   ccircq *q = ccircq_create(4, NULL);
   if (!q) return 1;
-  cmessage_t msg;
-  ccol_retval_t rv = ccircq_try_recv(q, &msg);
+  cmessage msg;
+  ccol_retval rv = ccircq_try_recv(q, &msg);
   printf("%s\en", ccol_retval_to_str(rv));   /* ccol_container_empty */
   ccircq_destroy(q);
   return 0;

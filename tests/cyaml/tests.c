@@ -30,8 +30,9 @@ SOFTWARE.
 #include <langinfo.h>
 #include <limits.h>
 #include <locale.h>
+// macOS declares nl_langinfo_l() in <xlocale.h>.
 #if defined(__APPLE__)
-#include <xlocale.h> /* nl_langinfo_l */
+#include <xlocale.h>
 #endif
 #include <pthread.h>
 #include <stdatomic.h>
@@ -45,16 +46,16 @@ SOFTWARE.
 
 TAU_MAIN()
 
-/* The forked children of this binary report through their wait status, and
- * test_reset_inherited_signals() explains what an inherited signal state does
- * to that. */
+// The forked children report through their wait status, so the binary starts
+// with a clean signal state (see test_reset_inherited_signals()).
 __attribute__((constructor)) static void _reset_inherited_signals(void) {
   test_reset_inherited_signals();
 }
 
-/* Counting allocator: it lets exactly g_alloc_remaining calls to malloc,
- * calloc and realloc succeed and then returns NULL. -1 means no limit,
- * which is the normal behaviour. */
+// A budget allocator for the tests that fail every allocation after a given
+// point. These let g_alloc_remaining calls through to malloc, calloc and
+// realloc, decrementing it on each call, and return NULL once it is 0. -1
+// means no limit.
 static int g_alloc_remaining = -1;
 
 static void *counting_malloc(size_t sz) {
@@ -72,15 +73,14 @@ static void *counting_realloc(void *p, size_t sz) {
   if (g_alloc_remaining > 0) g_alloc_remaining--;
   return realloc(p, sz);
 }
-static ccol_memmgmt_procs_t g_counting_mp = {.malloc = counting_malloc,
-                                             .calloc = counting_calloc,
-                                             .realloc = counting_realloc,
-                                             .free = free};
+static ccol_memmgmt_procs g_counting_mp = {.malloc = counting_malloc,
+                                           .calloc = counting_calloc,
+                                           .realloc = counting_realloc,
+                                           .free = free};
 
-/* A plain tally, unlike g_counting_mp above. That one is there to REFUSE an
-   allocation once its budget runs out, while this one never refuses and
-   only counts how many allocations happened. A test that pins how much work
-   a parse does needs that count, and a budget can't give it. */
+// A tally allocator for the tests that pin how much work a parse does. These
+// forward to the C library and count each call in g_tally; they never
+// refuse.
 static long g_tally = 0;
 static void *tally_malloc(size_t sz) {
   g_tally++;
@@ -94,20 +94,15 @@ static void *tally_realloc(void *p, size_t sz) {
   g_tally++;
   return realloc(p, sz);
 }
-static ccol_memmgmt_procs_t g_tally_mp = {.malloc = tally_malloc,
-                                          .calloc = tally_calloc,
-                                          .realloc = tally_realloc,
-                                          .free = free};
+static ccol_memmgmt_procs g_tally_mp = {.malloc = tally_malloc,
+                                        .calloc = tally_calloc,
+                                        .realloc = tally_realloc,
+                                        .free = free};
 
-/* Allocator that injects one fault. g_counting_mp above fails every call
- * once its budget hits zero, so a message the parser allocates AFTER the
- * failure that made the whole parse fail can never succeed there. This one
- * fails exactly the g_single_fail_at allocation call and lets every other
- * call before and after it succeed as usual, so we can fail one particular
- * allocation and still leave enough "budget" for the error message the
- * parser builds afterwards. tests/chttp/tests.c and
- * tests/chttpclient/tests.c use the same pattern. -1 means it never
- * fails. */
+// A single-fault allocator for the tests that fail one particular allocation
+// and still need later ones (such as the error message) to succeed. These
+// forward to the C library, count each call in g_single_call_idx and fail
+// only the call whose index is g_single_fail_at. -1 means none fails.
 static int g_single_fail_at = -1;
 static int g_single_call_idx;
 
@@ -126,22 +121,16 @@ static void *single_fault_realloc(void *p, size_t sz) {
   if (g_single_fail_at >= 0 && idx == g_single_fail_at) return NULL;
   return realloc(p, sz);
 }
-static ccol_memmgmt_procs_t g_single_fault_mp = {
-    .malloc = single_fault_malloc,
-    .calloc = single_fault_calloc,
-    .realloc = single_fault_realloc,
-    .free = free};
+static ccol_memmgmt_procs g_single_fault_mp = {.malloc = single_fault_malloc,
+                                               .calloc = single_fault_calloc,
+                                               .realloc = single_fault_realloc,
+                                               .free = free};
 
-/* ========================================================================== */
-/*                         CONSTRUCTION                                       */
-/* ========================================================================== */
+// Construction
 
-/* The parser gives a string key to the dictionary by moving the scalar
-   node's buffer rather than copying it, so a parse makes one allocation less
-   per entry than a copy would. The bound is a count and not a time, so it's
-   exact and repeatable: on this document a move makes 457 allocations and a
-   copy makes 521, exactly one more per entry. Copy the key instead and the
-   count goes past 8 per entry, so the test fails. */
+// The parser moves a string key's buffer into the dictionary instead of
+// copying it, which saves one allocation per entry. The bound sits between the
+// two counts (457 with the move, 521 with a copy on this document).
 TEST(cyaml_key_storage, a_string_key_is_moved_into_the_dictionary_not_copied) {
   enum { N = 64 };
   char doc[8192];
@@ -156,38 +145,25 @@ TEST(cyaml_key_storage, a_string_key_is_moved_into_the_dictionary_not_copied) {
   long allocations = g_tally;
   bool parsed_ok = (parsed != NULL && err == NULL);
   size_t entries = parsed ? cyaml_dictionary_size(parsed) : 0;
-  /* The tree is destroyed before any assertion, so a failure here leaks
-     nothing. err is non-NULL only on a parse failure, which an assertion
-     below checks for. */
   if (parsed) cyaml_destroy(parsed);
 
   REQUIRE_TRUE(parsed_ok);
   REQUIRE_EQ(entries, (size_t)N);
-  /* The measured counts are 457 with the move and 521 without, the same on
-     gcc and clang, at every optimization level and at both widths. The bound
-     sits between the two counts rather than right under the higher one, so
-     a change that adds or removes a few allocations doesn't quietly flip
-     this test's verdict.
-   */
   REQUIRE_LT(allocations, (long)(8 * N - N / 2));
 }
 
-/* A byte-order mark shifts every offset in the document by three but no
-   column, so the parser rewrites the line starts it works from. Columns
-   decide block nesting, so the symptom would be a document that keeps its
-   structure with a BOM and loses it without one, or the other way around.
-   The two documents below are byte for byte the same except for the BOM,
-   and the parse has to agree on every column of both.
-
-   This test does NOT pin the memo's start-of-life sentinel. The BOM branch
-   moves the parse position past the mark before any parse function runs, so
-   nothing ever asks about offset zero on a BOM document and no memo that
-   answers there is ever consulted. The sentinel is just defensive. */
+// Returns parent's child under key, or NULL when parent isn't a dictionary.
+// The BOM tests use it to read nested nodes without aborting the binary in
+// ccol__fatal_err when a nesting regression turns a node into a scalar.
 static cyaml _cyaml_dict_child(cyaml parent, const char *key) {
   if (!parent || cyaml_type(parent) != CYAML_DICTIONARY) return NULL;
   return cyaml_dictionary_get(parent, key);
 }
 
+// Reads the shape of the BOM test document: the size of "root" and the two
+// nested integers "leaf" and "deep". The BOM tests compare these between the
+// documents with and without a mark. Each out-parameter stays as the caller
+// set it when the shape doesn't match.
 static void _cyaml_probe(cyaml doc, size_t *root_size, long long *leaf,
                          long long *deep) {
   if (!doc || cyaml_type(doc) != CYAML_DICTIONARY) return;
@@ -209,20 +185,10 @@ static void _cyaml_probe(cyaml doc, size_t *root_size, long long *leaf,
     *deep = cyaml_int_val(deep_node);
 }
 
-/* The same BOM document with the line cache turned off, which is the
- * fallback a growth failure of line_starts latches. That path computes a
- * line start with a backward scan, and a scan that walks past the
- * byte-order mark reports the first line three bytes early. Every column on
- * that line is then three too large, which is enough to break the block
- * structure the columns decide rather than only to report a wrong position.
- *
- * The test above can't reach this path, since it exercises the cached path
- * where the cache's seed accounts for the mark. The real fallback needs an
- * allocation failure after 64 line boundaries, and by then no query lands
- * on the first line at all, so the hook is what makes this testable.
- *
- * Take the scan's floor away and the BOM document fails to parse with
- * "trailing content". */
+// The same BOM document with the line cache off, the fallback that a failed
+// growth of line_starts latches. The backward scan then needs the end of the
+// mark as its floor, or every column on the first line is three too large and
+// the parse fails with "trailing content".
 TEST(cyaml_line_cache, a_bom_is_honoured_when_the_line_cache_is_disabled) {
   static const char body[] =
       "root:\n"
@@ -236,8 +202,6 @@ TEST(cyaml_line_cache, a_bom_is_honoured_when_the_line_cache_is_disabled) {
   char *err_a = NULL, *err_b = NULL;
   cyaml plain = cyaml_parse(body, &err_a);
   cyaml bom = cyaml_parse(with_bom, &err_b);
-  /* The hook is disarmed before any assertion, so an early return can't
-     leave every later test of this binary on the degraded path. */
   cyaml_test_force_line_cache_disabled = false;
 
   size_t plain_root = 0, bom_root = 0;
@@ -256,6 +220,9 @@ TEST(cyaml_line_cache, a_bom_is_honoured_when_the_line_cache_is_disabled) {
   REQUIRE_EQ(bom_leaf, 7LL);
 }
 
+// A byte order mark shifts every offset by three but no column. Columns decide
+// block nesting, so the same document with and without a BOM must agree on
+// its whole structure.
 TEST(cyaml_line_cache, a_bom_does_not_shift_the_columns_the_memo_reports) {
   static const char body[] =
       "root:\n"
@@ -272,12 +239,6 @@ TEST(cyaml_line_cache, a_bom_does_not_shift_the_columns_the_memo_reports) {
 
   long long plain_leaf = -1, bom_leaf = -1, plain_deep = -1, bom_deep = -1;
   size_t plain_root = 0, bom_root = 0;
-  /* Every accessor below is gated on the node's type and not only on the
-     node being non-NULL, because a nesting regression is exactly what turns
-     one of these nodes into a scalar. cyaml_dictionary_size and
-     cyaml_int_val call _ccol_fatal_err on a node of the wrong type, which
-     would abort the whole binary and lose every other test's result
-     instead of failing this one cleanly. */
   _cyaml_probe(plain, &plain_root, &plain_leaf, &plain_deep);
   _cyaml_probe(bom, &bom_root, &bom_leaf, &bom_deep);
   bool both_parsed =
@@ -294,8 +255,9 @@ TEST(cyaml_line_cache, a_bom_does_not_shift_the_columns_the_memo_reports) {
   REQUIRE_EQ(bom_deep, 9LL);
 }
 
-/* Rewrite every '\n' in `body` as `eol`, with a byte-order mark in front of
-   the result if the caller asks for one. The caller owns the result. */
+// Copies body with every '\n' replaced by eol and a byte order mark in front
+// when bom is true, so the span tests can build one document in every line
+// ending. The caller frees the result; NULL when memory runs out.
 static char *_cyaml_reline(const char *body, const char *eol, bool bom) {
   size_t eol_len = strlen(eol);
   size_t out_cap = strlen(body) * (eol_len + 1) + 4;
@@ -318,23 +280,12 @@ static char *_cyaml_reline(const char *body, const char *eol, bool bom) {
   return out;
 }
 
-/* The parser decides whether a token spans more than one physical line from
-   the start of the line it has reached, without scanning the token's bytes,
-   so the answer is only as good as the line starts the parser tracks. The
-   matrix below makes that answer visible from outside. An implicit key has
-   to fit on one line, so each `multi` document must be rejected and each
-   `single` one accepted, for every line ending this parser knows and with
-   or without a byte-order mark that shifts every offset by three.
-
-   The bare-CR document is the interesting case, because a line-break test
-   that only looks for '\n' accepts every `multi` document in that form. The
-   BOM columns matter for the same reason as two tests above, since the line
-   start a span is compared against has the start of the first line as its
-   floor.
-
-   A mistake in either direction shows. Reporting "crossed" for a span that
-   didn't cross makes every `single` document fail, and reporting "didn't
-   cross" for one that did makes every `multi` document parse. */
+// Parses a matrix of implicit-key documents for each line ending (LF, CRLF,
+// bare CR), with and without a BOM, and reports whether every `multi` key
+// (spanning two lines) was refused and every `single` one accepted. The span
+// tests run it with the line cache on and off, since the parser decides
+// "crosses a line" from the line starts it tracks. The bare-CR column catches
+// a check that only looks for '\n'.
 static void _cyaml_check_implicit_key_span_matrix(bool *all_multi_rejected,
                                                   bool *all_single_accepted) {
   static const char *const eols[] = {"\n", "\r\n", "\r"};
@@ -383,29 +334,21 @@ TEST(cyaml_line_cache, an_implicit_key_spanning_lines_is_rejected_per_ending) {
   REQUIRE_TRUE(single_accepted);
 }
 
-/* The same matrix with the line cache off, the degraded state that a growth
-   failure of line_starts latches. A span decision then comes from a
-   backward scan instead of the cache, and the two have to agree. The BOM
-   documents are what tell them apart, because only the scan needs the start
-   of the first line as an explicit floor. */
+// The same matrix with the line cache off, so the span decisions come from the
+// backward scan and must agree with the cached ones.
 TEST(cyaml_line_cache, an_implicit_key_span_agrees_when_the_cache_is_off) {
   bool multi_rejected = false, single_accepted = false;
   cyaml_test_force_line_cache_disabled = true;
   _cyaml_check_implicit_key_span_matrix(&multi_rejected, &single_accepted);
-  /* The hook is disarmed before any assertion, so an early return can't
-     leave every later test of this binary on the degraded path. */
   cyaml_test_force_line_cache_disabled = false;
   REQUIRE_TRUE(multi_rejected);
   REQUIRE_TRUE(single_accepted);
 }
 
-/* A speculative key parse rewinds the position it advanced to, and then the
-   parser asks about offsets the line cache has already scanned past. That's
-   the one shape where the cache can't answer from its last entry and has to
-   search, and a span decision after such a rewind must come out the same as
-   on the way forward. Each document below causes a rewind and then makes
-   span decisions on later lines; a rewind happens when a token looks like a
-   key until the ':' doesn't show up where a key needs it. */
+// A speculative key parse rewinds, and the parser then asks about offsets the
+// line cache has already passed, so the cache has to search instead of
+// answering from its last entry. Span decisions after such a rewind must come
+// out the same as on the way forward.
 TEST(cyaml_line_cache, span_decisions_survive_a_speculative_rewind) {
   static const char *const bodies[] = {
       "- \"looks like a key\"\n- second\n- \"third\": 1\n",
@@ -562,13 +505,9 @@ TEST(construction, mapping_replace) {
   cyaml_destroy(m);
 }
 
+// cyaml_dictionary_get() hands out a borrowed pointer. Setting that same
+// pointer again under the same key must not free the node.
 TEST(construction, mapping_set_self_assignment_does_not_corrupt_value) {
-  /* cyaml_dictionary_get gives a borrowed reference, and a caller can hand
-   * that same pointer back to cyaml_dictionary_set for the SAME key, so
-   * old_child == child. Storing the same pointer again must not destroy the
-   * node the dictionary slot points to. Without the self-assignment check
-   * the live node the dictionary reaches gets corrupted, or freed if it
-   * came from a custom allocator with no thread-local pool. */
   cyaml m = cyaml_create_dictionary();
   REQUIRE_NE((void *)m, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(m, "k", cyaml_create_int(1)), ccol_success);
@@ -588,9 +527,6 @@ TEST(construction, mapping_set_self_assignment_does_not_corrupt_value) {
 }
 
 TEST(construction, mapping_set_replaces_container) {
-  /* Replacing a container value (CYAML_LIST) with a scalar must free the
-   * old subtree recursively through node_clear and then store the new value
-   * with no leak and no dangling pointer. */
   cyaml m = cyaml_create_dictionary();
   REQUIRE_NE((void *)m, NULL);
 
@@ -601,14 +537,12 @@ TEST(construction, mapping_set_replaces_container) {
   REQUIRE_EQ(cyaml_dictionary_set(m, "k", lst), ccol_success);
   REQUIRE_EQ(cyaml_type(cyaml_dictionary_get(m, "k")), CYAML_LIST);
 
-  /* Replace the list with a scalar, which frees the two-element list. */
   REQUIRE_EQ(cyaml_dictionary_set(m, "k", cyaml_create_string("replaced")),
              ccol_success);
   REQUIRE_EQ(cyaml_dictionary_size(m), (size_t)1);
   REQUIRE_EQ(cyaml_type(cyaml_dictionary_get(m, "k")), CYAML_STRING);
   REQUIRE_STREQ(cyaml_str_val(cyaml_dictionary_get(m, "k")), "replaced");
 
-  /* Replace the scalar with a nested dictionary. */
   cyaml sub = cyaml_create_dictionary();
   REQUIRE_NE((void *)sub, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(sub, "x", cyaml_create_int(99)),
@@ -622,9 +556,7 @@ TEST(construction, mapping_set_replaces_container) {
   cyaml_destroy(m);
 }
 
-/* ========================================================================== */
-/*                         IMPLICIT TYPE RESOLUTION                           */
-/* ========================================================================== */
+// Implicit type resolution
 
 TEST(implicit_types, null_tilde) {
   char *err = NULL;
@@ -654,8 +586,6 @@ TEST(implicit_types, null_NULL) {
 }
 
 TEST(implicit_types, null_empty_input) {
-  /* An empty document of zero bytes is a null value, because under the YAML
-   * 1.2 core schema an empty plain scalar resolves to null. */
   char *err = NULL;
   cyaml n = cyaml_parse("", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -701,10 +631,6 @@ TEST(implicit_types, integer_decimal) {
 }
 
 TEST(implicit_types, integer_decimal_leading_zero) {
-  /* The decimal int grammar of the YAML 1.2 core schema is [-+]?[0-9]+ and
-   * says nothing against a leading zero (the stricter JSON schema does, with
-   * its own (0|[1-9][0-9]*)). So "007" is a plain integer 7 and not a
-   * string, and this test pins how try_parse_int_scalar treats that form. */
   char *err = NULL;
   cyaml n = cyaml_parse("007\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -723,11 +649,9 @@ TEST(implicit_types, integer_negative) {
   cyaml_destroy(n);
 }
 
+// The parser hands strtoll() the signed text. Without the sign 2^63 overflows,
+// and the value would turn into a lossy float.
 TEST(implicit_types, integer_llong_min) {
-  /* LLONG_MIN = -9223372036854775808. With the sign removed, strtoll on
-   * "9223372036854775808" (= 2^63) overflows long long, so the parser has to
-   * give strtoll the whole signed string and not p after the '-'. Otherwise
-   * the value quietly becomes a CYAML_FLOAT and loses precision. */
   char *err = NULL;
   cyaml n = cyaml_parse("-9223372036854775808\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -738,8 +662,6 @@ TEST(implicit_types, integer_llong_min) {
 }
 
 TEST(implicit_types, integer_llong_min_round_trip) {
-  /* Serialize LLONG_MIN and parse it again, and expect both the type and the
-   * value to come back intact. */
   cyaml n = cyaml_create_int(LLONG_MIN);
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
@@ -774,13 +696,6 @@ TEST(implicit_types, integer_octal) {
 }
 
 TEST(implicit_types, hex_with_embedded_sign_is_not_a_valid_integer) {
-  /* The core schema grammar for this form is exactly "0x" [0-9a-fA-F]+, with
-   * no room for a sign between the prefix and the digits. strtoull() is more
-   * permissive and accepts an optional leading '+' or '-' before the digits
-   * it reads, so without an explicit rejection a malformed literal such as
-   * "0x-0" would quietly be accepted as a valid CYAML_INTEGER of magnitude
-   * 0. It should fall back to CYAML_STRING like any other plain scalar that
-   * isn't a number. */
   char *err = NULL;
   cyaml n = cyaml_parse("0x-0\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -821,9 +736,6 @@ TEST(implicit_types, octal_with_embedded_plus_sign_is_not_a_valid_integer) {
 }
 
 TEST(implicit_types, hex_with_a_sign_before_the_prefix_is_a_string) {
-  /* The core schema gives the 0x form no sign, so "-0x1" is a string. A
-   * parser that read a sign in front of the prefix would make it the
-   * integer -1. */
   char *err = NULL;
   cyaml n = cyaml_parse("-0x1\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -834,9 +746,6 @@ TEST(implicit_types, hex_with_a_sign_before_the_prefix_is_a_string) {
 }
 
 TEST(implicit_types, hex_above_the_integer_range_is_a_string) {
-  /* 0xFFFFFFFFFFFFFFFF (2^64-1) doesn't fit in a signed 64-bit long long and
-   * the hex form has no float reading, so it's a string and never the long
-   * long -1. */
   char *err = NULL;
   cyaml n = cyaml_parse("0xFFFFFFFFFFFFFFFF\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -847,8 +756,6 @@ TEST(implicit_types, hex_above_the_integer_range_is_a_string) {
 }
 
 TEST(implicit_types, hex_exactly_two_pow_63_is_a_string) {
-  /* 0x8000000000000000 (2^63) is one above LLONG_MAX, so it's a string and
-   * never a negative integer or a float. */
   char *err = NULL;
   cyaml n = cyaml_parse("0x8000000000000000\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -859,8 +766,6 @@ TEST(implicit_types, hex_exactly_two_pow_63_is_a_string) {
 }
 
 TEST(implicit_types, negative_hex_two_pow_63_is_a_string) {
-  /* A sign in front of the 0x prefix makes a string, even where the value
-   * would be exactly LLONG_MIN. */
   char *err = NULL;
   cyaml n = cyaml_parse("-0x8000000000000000\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -871,8 +776,6 @@ TEST(implicit_types, negative_hex_two_pow_63_is_a_string) {
 }
 
 TEST(implicit_types, octal_above_the_integer_range_is_a_string) {
-  /* 0o1777777777777777777777 = 2^64-1 in octal. Like the hex case above it's
-   * a string, since the octal form has no float reading. */
   char *err = NULL;
   cyaml n = cyaml_parse("0o1777777777777777777777\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -939,10 +842,9 @@ TEST(tag_typing, int_refuses_a_signed_or_oversized_hex) {
   REQUIRE_TRUE(b_refused);
 }
 
-/* A string that looks like a signed or oversized hex or octal literal is
- * written quoted, so YAML 1.1 readers (which read a signed hex as an
- * integer) see a string as well, and it reads back as the same string; as a
- * key it keeps its text. */
+// A string that looks like a signed or oversized hex or octal literal goes out
+// quoted, so YAML 1.1 readers see a string as well, and it reads back as the
+// same string, also as a key.
 TEST(implicit_types, signed_and_oversized_hex_strings_round_trip_quoted) {
   static const char *const texts[] = {"-0x1", "+0x10", "-0o7",
                                       "0x8000000000000000",
@@ -966,11 +868,6 @@ TEST(implicit_types, signed_and_oversized_hex_strings_round_trip_quoted) {
 }
 
 TEST(implicit_types, uppercase_hex_prefix_is_a_string) {
-  /* The core schema grammar for the int and float hex fallback forms is
-   * exactly the lowercase "0x" [0-9a-fA-F]+. An uppercase "0X" prefix has no
-   * numeric meaning in the core schema at all, so it resolves to an
-   * ordinary CYAML_STRING like any other plain scalar that isn't a number,
-   * and a reference parser agrees. */
   char *err = NULL;
   cyaml n = cyaml_parse("0X10\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1000,14 +897,9 @@ TEST(implicit_types, uppercase_hex_prefix_with_leading_sign_is_a_string) {
   cyaml_destroy(n);
 }
 
+// strtod() reads "0X..." as a hex float, so the float path must refuse the
+// uppercase prefix too.
 TEST(implicit_types, uppercase_hex_prefix_overflow_stays_a_string_not_float) {
-  /* Hex follows the strict core schema: a lowercase "0x" prefix, no sign and a
-   * value of at most LLONG_MAX. Anything else is a CYAML_STRING, and an
-   * uppercase "0X" prefix with a magnitude past int64 has no numeric meaning
-   * of any kind, so it stays a string too. The test also guards against
-   * strtod()'s native hex-float extension, which recognizes "0X" in either
-   * case as the C standard says, so without try_parse_float_scalar's rejection
-   * of the uppercase form strtod() would quietly read this as a hex float. */
   char *err = NULL;
   cyaml n = cyaml_parse("0XFFFFFFFFFFFFFFFF\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1035,12 +927,9 @@ TEST(implicit_types, float_exponent) {
   cyaml_destroy(n);
 }
 
+// strtod() sets ERANGE on this valid subnormal, so only a result clamped to an
+// infinity may count as a failure.
 TEST(implicit_types, float_subnormal_underflow_is_still_a_float) {
-  /* 5e-324 is a real, valid IEEE-754 denormal double, and yet strtod() sets
-   * errno=ERANGE on this legitimate underflow just as it does on a real
-   * overflow. So the value must not be rejected on a bare errno==ERANGE
-   * check; only a result clamped to +infinity or -infinity is a real
-   * failure. */
   char *err = NULL;
   cyaml n = cyaml_parse("5e-324\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1051,8 +940,6 @@ TEST(implicit_types, float_subnormal_underflow_is_still_a_float) {
 }
 
 TEST(implicit_types, float_underflow_to_zero_is_still_a_float) {
-  /* 1e-400 legitimately underflows all the way to 0.0, but it's a
-   * CYAML_FLOAT with a correct value and not a CYAML_STRING. */
   char *err = NULL;
   cyaml n = cyaml_parse("1e-400\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1063,10 +950,6 @@ TEST(implicit_types, float_underflow_to_zero_is_still_a_float) {
 }
 
 TEST(implicit_types, float_overflow_is_an_infinity) {
-  /* A plain scalar with core-schema float syntax is a float whatever its
-   * magnitude, so a value too large for a double is an infinity, as in
-   * PyYAML. A parser that refused the overflow would make these scalars
-   * CYAML_STRING, and the type checks below would catch it. */
   static const struct {
     const char *text;
     double want;
@@ -1099,8 +982,6 @@ TEST(implicit_types, float_overflow_with_the_float_tag_is_an_infinity) {
 }
 
 TEST(implicit_types, an_overflowing_float_key_is_the_infinity_key) {
-  /* The key 1e400 is the float +inf, so its canonical key text is ".inf" and
-   * a later .inf key names the same member. */
   char *err = NULL;
   cyaml n = cyaml_parse("{1e400: a, .inf: b}", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1113,11 +994,6 @@ TEST(implicit_types, an_overflowing_float_key_is_the_infinity_key) {
 }
 
 TEST(implicit_types, hex_float_syntax_is_not_a_yaml_float) {
-  /* strtod() accepts the C99 hex-float syntax (0x1p3) as a GNU and C99
-   * extension, but that syntax has no place in YAML 1.2's core schema float
-   * grammar, which is decimal only. It must fall through to CYAML_STRING
-   * like any other scalar that doesn't look like a number, and the parser
-   * must not quietly read it as the float 8.0. */
   char *err = NULL;
   cyaml n = cyaml_parse("0x1p3\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1139,8 +1015,6 @@ TEST(implicit_types,
 }
 
 TEST(implicit_types, hex_just_above_the_integer_range_is_a_string) {
-  /* 0x8000000000000001 (2^63+1) fits in a uint64 but not in a long long, so
-   * it's a string, like every wider hex literal. */
   char *err = NULL;
   cyaml n = cyaml_parse("0x8000000000000001\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1189,7 +1063,6 @@ TEST(implicit_types, string_plain) {
 }
 
 TEST(implicit_types, string_not_bool) {
-  /* "trueish" must be a string, not a bool. */
   char *err = NULL;
   cyaml n = cyaml_parse("trueish\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1198,14 +1071,9 @@ TEST(implicit_types, string_not_bool) {
   cyaml_destroy(n);
 }
 
-/* ========================================================================== */
-/*                 C99 NAN/INF BARE FORMS ARE STRINGS (YAML 1.2)              */
-/* ========================================================================== */
+// C99 nan and inf bare forms are strings (YAML 1.2)
 
 TEST(implicit_types, string_nan_lowercase) {
-  /* In the YAML 1.2 core schema only ".nan", ".NaN" and ".NAN" are a float
-   * NaN and a bare "nan" is a plain string. strtod() on a C99 platform takes
-   * it for NaN, so make_typed_scalar needs to filter these out first. */
   char *err = NULL;
   cyaml n = cyaml_parse("nan\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1235,13 +1103,9 @@ TEST(implicit_types, string_nan_uppercase) {
   cyaml_destroy(n);
 }
 
+// strtod() accepts "nan(123)", which is no YAML 1.2 float, so the parser
+// filters it out before the strtod() fallback.
 TEST(implicit_types, string_nan_with_parenthesized_payload) {
-  /* glibc's strtod() also accepts the C99 "nan(n-char-sequence)" syntax,
-   * for example "nan(123)", which isn't part of YAML 1.2's core schema float
-   * grammar (only the dot-prefixed forms are, and the bare forms above are
-   * strings too). Without an explicit filter in front, the generic strtod()
-   * fallback would quietly accept this as a NaN float and throw away the
-   * original text. */
   char *err = NULL;
   cyaml n = cyaml_parse("nan(123)\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1252,8 +1116,6 @@ TEST(implicit_types, string_nan_with_parenthesized_payload) {
 }
 
 TEST(implicit_types, string_nan_with_empty_parens_and_sign) {
-  /* The same class for the forms with a sign in front and with an empty
-   * payload, which strtod() also accepts. */
   char *err = NULL;
   cyaml n1 = cyaml_parse("nan()\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1270,10 +1132,9 @@ TEST(implicit_types, string_nan_with_empty_parens_and_sign) {
   cyaml_destroy(n2);
 }
 
+// An explicit !!float reaches try_parse_float_scalar() directly, a second way
+// into the same guard.
 TEST(implicit_types, tagged_float_nan_with_parenthesized_payload_rejected) {
-  /* An explicit !!float tag reaches try_parse_float_scalar() directly,
-   * without the int-first cascade of make_typed_scalar(), so this drives
-   * the same guard from a second call site. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!float nan(3)\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -1281,9 +1142,6 @@ TEST(implicit_types, tagged_float_nan_with_parenthesized_payload_rejected) {
 }
 
 TEST(implicit_types, flow_dict_nan_parenthesized_keys_do_not_collide) {
-  /* Regression guard for the key collision this would cause. If "nan(1)"
-   * and "nan(2)" both quietly canonicalized to the float NaN's "nan"
-   * dictionary key text, the second entry would destroy the first. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{nan(1): x, nan(2): y}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1295,8 +1153,6 @@ TEST(implicit_types, flow_dict_nan_parenthesized_keys_do_not_collide) {
 }
 
 TEST(implicit_types, string_inf_lowercase) {
-  /* Under YAML 1.2 a bare "inf" is a string, and only ".inf", ".Inf" and
-   * ".INF" are a float infinity. */
   char *err = NULL;
   cyaml n = cyaml_parse("inf\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1357,8 +1213,6 @@ TEST(implicit_types, string_minus_inf) {
 }
 
 TEST(implicit_types, c99_nan_inf_round_trips) {
-  /* Check the full round trip for the bare C99 forms: create a string node,
-   * serialize it and parse it again, and the value and type should survive. */
   const char *cases[] = {"nan", "NaN",      "NAN",  "inf",  "Inf",
                          "INF", "infinity", "+inf", "-inf", NULL};
   for (int i = 0; cases[i]; i++) {
@@ -1378,9 +1232,7 @@ TEST(implicit_types, c99_nan_inf_round_trips) {
   }
 }
 
-/* ========================================================================== */
-/*                         QUOTED SCALARS                                     */
-/* ========================================================================== */
+// Quoted scalars
 
 TEST(quoted, double_quoted_basic) {
   char *err = NULL;
@@ -1410,12 +1262,6 @@ TEST(quoted, double_quoted_unicode_escape) {
 }
 
 TEST(quoted, double_quoted_full_escape_table) {
-  /* double_quoted_escapes above only covers \n and \t, so this test goes
-   * through every other single-character escape of YAML 1.2 sec. 5.7 that
-   * no other test of the suite covers directly (\x, \u and \U have their
-   * own tests). Those are \a \b \v \f \r \e, an escaped space, \" , \/, and
-   * the three Unicode line and space separator escapes \N \_ \L
-   * \P. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"\\a\\b\\v\\f\\r\\e\\ \\\"\\/\\N\\_\\L\\P\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1426,7 +1272,6 @@ TEST(quoted, double_quoted_full_escape_table) {
 }
 
 TEST(quoted, double_quoted_preserves_null_like) {
-  /* A double-quoted "null" is always a string. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"null\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1454,7 +1299,6 @@ TEST(quoted, single_quoted_escaped_quote) {
 }
 
 TEST(quoted, single_quoted_no_escape_processing) {
-  /* \n inside single quotes is NOT an escape. */
   char *err = NULL;
   cyaml n = cyaml_parse("'\\n'\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1464,7 +1308,6 @@ TEST(quoted, single_quoted_no_escape_processing) {
 }
 
 TEST(quoted, double_quoted_hex_escape) {
-  /* \xXX: two-digit hex codepoint encoded as UTF-8. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"H\\x65llo\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1474,20 +1317,15 @@ TEST(quoted, double_quoted_hex_escape) {
 }
 
 TEST(quoted, double_quoted_surrogate_pair) {
-  /* U+1F600 (grinning face emoji) encoded as a UTF-16 surrogate pair. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"\\uD83D\\uDE00\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_EQ(cyaml_type(n), CYAML_STRING);
-  /* U+1F600 in UTF-8 is F0 9F 98 80. */
   REQUIRE_STREQ(cyaml_str_val(n), "\xF0\x9F\x98\x80");
   cyaml_destroy(n);
 }
 
 TEST(quoted, double_quoted_big_unicode_escape) {
-  /* \U takes 8 hex digits directly for a codepoint above the Basic
-   * Multilingual Plane, so no surrogate pair is needed. U+1F600 in UTF-8 is
-   * F0 9F 98 80, the same as in the \u surrogate-pair test above. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"\\U0001F600\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1496,9 +1334,8 @@ TEST(quoted, double_quoted_big_unicode_escape) {
   cyaml_destroy(n);
 }
 
-/* A \U escape whose value isn't a Unicode scalar value (above U+10FFFF, or a
- * UTF-16 surrogate) names no character. The parser refuses the document and
- * never stores a stand-in character. */
+// A \U escape above U+10FFFF or of a surrogate names no character, so the
+// document is refused and no stand-in character is stored.
 TEST(quoted, double_quoted_big_unicode_escape_out_of_range_is_rejected) {
   static const char *const docs[] = {"\"\\UFFFFFFFF\"\n", "\"\\U00110000\"\n",
                                      "\"\\U0000D800\"\n", "\"\\U0000DFFF\"\n"};
@@ -1510,8 +1347,6 @@ TEST(quoted, double_quoted_big_unicode_escape_out_of_range_is_rejected) {
     cyaml_destroy(n);
     REQUIRE_TRUE(refused);
   }
-  /* The largest scalar value and the first one after the surrogates are
-   * accepted. */
   char *err = NULL;
   cyaml n = cyaml_parse("[\"\\U0010FFFF\", \"\\U0000E000\"]\n", &err);
   bool ok =
@@ -1522,10 +1357,8 @@ TEST(quoted, double_quoted_big_unicode_escape_out_of_range_is_rejected) {
   REQUIRE_TRUE(ok);
 }
 
-/* A \u escape of a surrogate is only valid as the high half of a pair that a
- * low-surrogate \u escape completes immediately. Every other surrogate
- * escape is a lone surrogate, which names no character, so the document is
- * refused. */
+// A surrogate escape is valid only as the high half of a pair that the next
+// \u escape completes. Every other one is a lone surrogate and is refused.
 TEST(quoted, double_quoted_lone_surrogate_escapes_are_rejected) {
   static const struct {
     const char *doc;
@@ -1552,7 +1385,6 @@ TEST(quoted, double_quoted_lone_surrogate_escapes_are_rejected) {
 }
 
 TEST(quoted, double_quoted_surrogate_pair_decodes_to_one_code_point) {
-  /* U+1F600 written as the pair \uD83D\uDE00, as JSON writes it. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"a\\uD83D\\uDE00b\"\n", &err);
   bool ok = n != NULL && err == NULL && cyaml_type(n) == CYAML_STRING &&
@@ -1564,8 +1396,6 @@ TEST(quoted, double_quoted_surrogate_pair_decodes_to_one_code_point) {
 }
 
 TEST(quoted, block_mapping_double_quoted_first_key) {
-  /* A double-quoted scalar as the first (and only) key of a block dictionary.
-   */
   const char *yaml =
       "\"host\": localhost\n"
       "\"port\": 8080\n";
@@ -1581,7 +1411,6 @@ TEST(quoted, block_mapping_double_quoted_first_key) {
 }
 
 TEST(quoted, block_mapping_mixed_keys) {
-  /* A plain first key followed by a double-quoted second key. */
   const char *yaml =
       "plain: 1\n"
       "\"quoted key\": 2\n";
@@ -1596,7 +1425,6 @@ TEST(quoted, block_mapping_mixed_keys) {
 }
 
 TEST(quoted, single_quoted_key_in_mapping) {
-  /* A single-quoted key holding spaces, which a plain scalar can't give. */
   char *err = NULL;
   cyaml doc = cyaml_parse("'key with spaces': value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1608,8 +1436,6 @@ TEST(quoted, single_quoted_key_in_mapping) {
 }
 
 TEST(quoted, double_quoted_multiline_fold_to_space) {
-  /* A double-quoted scalar over two lines. The one line break folds to a
-   * space, as YAML 1.2 section 6.5 says. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"line1\nline2\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1620,8 +1446,6 @@ TEST(quoted, double_quoted_multiline_fold_to_space) {
 }
 
 TEST(quoted, double_quoted_multiline_blank_line_preserved) {
-  /* One blank line between two content lines is two newlines in a row, and
-   * the value keeps it as one newline, as YAML 1.2 section 6.5 says. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"line1\n\nline2\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1632,8 +1456,6 @@ TEST(quoted, double_quoted_multiline_blank_line_preserved) {
 }
 
 TEST(quoted, double_quoted_multiline_leading_whitespace_stripped) {
-  /* After the fold the parser strips the leading whitespace of the
-   * continuation line. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"line1\n   continuation\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1644,8 +1466,6 @@ TEST(quoted, double_quoted_multiline_leading_whitespace_stripped) {
 }
 
 TEST(quoted, single_quoted_multiline_fold_to_space) {
-  /* A single-quoted scalar over several lines follows the same line-folding
-   * rules as a double-quoted one. */
   char *err = NULL;
   cyaml n = cyaml_parse("'line1\nline2'\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1656,7 +1476,6 @@ TEST(quoted, single_quoted_multiline_fold_to_space) {
 }
 
 TEST(quoted, single_quoted_multiline_blank_line_preserved) {
-  /* A single-quoted scalar keeps one blank line as one newline too. */
   char *err = NULL;
   cyaml n = cyaml_parse("'line1\n\nline2'\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1667,10 +1486,6 @@ TEST(quoted, single_quoted_multiline_blank_line_preserved) {
 }
 
 TEST(quoted, double_quoted_trailing_whitespace_stripped_before_fold) {
-  /* YAML 1.2 sec. 8.1.2 keeps trailing white space on the line where the
-   * fold happens out of the content, so "hello   \nworld" gives
-   * "hello world": the parser strips the three spaces before the newline and
-   * puts one fold space in their place. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"hello   \nworld\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1681,8 +1496,6 @@ TEST(quoted, double_quoted_trailing_whitespace_stripped_before_fold) {
 }
 
 TEST(quoted, double_quoted_trailing_whitespace_stripped_before_blank_fold) {
-  /* When a blank line follows the fold, the trailing whitespace on the first
-   * line still has to be stripped before the blank line's newline goes out. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"hello   \n\nworld\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1693,7 +1506,6 @@ TEST(quoted, double_quoted_trailing_whitespace_stripped_before_blank_fold) {
 }
 
 TEST(quoted, single_quoted_trailing_whitespace_stripped_before_fold) {
-  /* Same rule applies to single-quoted scalars. */
   char *err = NULL;
   cyaml n = cyaml_parse("'hello   \nworld'\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1704,9 +1516,6 @@ TEST(quoted, single_quoted_trailing_whitespace_stripped_before_fold) {
 }
 
 TEST(quoted, double_quoted_escaped_newline_joins_lines) {
-  /* A backslash right before a literal newline throws away that newline and
-   * all leading whitespace on the continuation line (YAML 1.2 sec. 8.1.1.2),
-   * so the result must hold neither the newline nor any space around it. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"line1\\\n   cont\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1717,15 +1526,6 @@ TEST(quoted, double_quoted_escaped_newline_joins_lines) {
 }
 
 TEST(quoted, double_quoted_escaped_newline_then_blank_line_joins_with_one_lf) {
-  /* YAML 1.2 sec. 8.1.2's s-double-escaped production is ("\" b-non-content
-   * l-empty(n,flow-in)* s-flow-line-prefix(n)). Under it only the escaped
-   * break ITSELF isn't content, while each l-empty blank line after it ends in
-   * a real b-as-line-feed, exactly the way an ordinary unescaped break folds
-   * its own blank lines. So "a", an escaped newline, one truly blank line and
-   * then "b" join with exactly one literal newline, the one the blank line
-   * contributes, and never with a space or with nothing. Two independent
-   * reference parsers, PyYAML and Ruby's Psych with libyaml, agree on
-   * "a\nb". */
   char *err = NULL;
   cyaml n = cyaml_parse("\"a\\\n\nb\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1737,12 +1537,6 @@ TEST(quoted, double_quoted_escaped_newline_then_blank_line_joins_with_one_lf) {
 
 TEST(quoted,
      double_quoted_escaped_newline_then_two_blank_lines_joins_with_two_lfs) {
-  /* Same as above but with two blank lines in a row between the escaped
-   * break and the next real content. Each blank line contributes its own
-   * literal newline, so two blank lines join with two newlines, which shows
-   * that the blank-line loop counts each line instead of writing one fixed
-   * newline whatever the count. PyYAML and Psych both agree on
-   * "a\n\nb". */
   char *err = NULL;
   cyaml n = cyaml_parse("\"a\\\n\n\nb\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1752,9 +1546,7 @@ TEST(quoted,
   cyaml_destroy(n);
 }
 
-/* ========================================================================== */
-/*                         BLOCK SCALARS                                      */
-/* ========================================================================== */
+// Block scalars
 
 TEST(block_scalars, literal_basic) {
   const char *yaml =
@@ -1807,7 +1599,6 @@ TEST(block_scalars, folded_basic) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)n, NULL);
   REQUIRE_EQ(cyaml_type(n), CYAML_STRING);
-  /* Single newline between lines is folded to a space. */
   REQUIRE_STREQ(cyaml_str_val(n), "line one line two\n");
   cyaml_destroy(n);
 }
@@ -1835,17 +1626,11 @@ TEST(block_scalars, folded_blank_line_kept) {
   cyaml n = cyaml_parse(yaml, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_EQ(cyaml_type(n), CYAML_STRING);
-  /* Blank line becomes a literal newline in folded output. */
   REQUIRE_STREQ(cyaml_str_val(n), "line one\nline two\n");
   cyaml_destroy(n);
 }
 
 TEST(block_scalars, literal_blank_line_bare_cr_does_not_swallow_next_line) {
-  /* A blank line inside a literal block scalar can end in a lone '\r' with
-   * no '\n' after it, and the parser has to read that as a blank line of its
-   * own, one line long. If skip_to_eol only stopped at '\n', it would scan
-   * right through the next content line looking for the next real '\n' and
-   * then quietly drop that whole line from the scalar's value. */
   const char *yaml = "|\n  x\n\r  y\n";
   char *err = NULL;
   cyaml n = cyaml_parse(yaml, &err);
@@ -1857,20 +1642,12 @@ TEST(block_scalars, literal_blank_line_bare_cr_does_not_swallow_next_line) {
 }
 
 TEST(block_scalars, folded_bare_cr_line_ending_does_not_swallow_next_line) {
-  /* The same over-consumption hazard as in
-   * literal_blank_line_bare_cr_does_not_swallow_next_line above, but in the
-   * folded scalar path, where a blank line AND a content line share the same
-   * per-line skip_to_eol call. The equivalent call in
-   * parse_block_scalar_content is only reached from its blank-line
-   * branch. */
   const char *yaml = ">\n  x\r  y\n";
   char *err = NULL;
   cyaml n = cyaml_parse(yaml, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)n, NULL);
   REQUIRE_EQ(cyaml_type(n), CYAML_STRING);
-  /* Two folded lines join with a single space, just like an ordinary
-   * '\n'-separated pair. */
   REQUIRE_STREQ(cyaml_str_val(n), "x y\n");
   cyaml_destroy(n);
 }
@@ -1885,17 +1662,11 @@ TEST(block_scalars, folded_keep) {
   cyaml n = cyaml_parse(yaml, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_EQ(cyaml_type(n), CYAML_STRING);
-  /* Folded style: the one newline between two lines folds to a space, and
-   * CHOMP_KEEP keeps the trailing blank line, so there are two trailing
-   * newlines in total. */
   REQUIRE_STREQ(cyaml_str_val(n), "line one line two\n\n");
   cyaml_destroy(n);
 }
 
 TEST(block_scalars, folded_keep_content_no_trailing_blank) {
-  /* >+ with content but NO trailing blank line: CHOMP_KEEP should write
-   * exactly one newline at the end, after the last content line. That's the
-   * "trailing_blanks = 0" branch of the CHOMP_KEEP logic. */
   char *err = NULL;
   cyaml n = cyaml_parse(">+\n  hello\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1931,7 +1702,6 @@ TEST(block_scalars, literal_in_mapping) {
 }
 
 TEST(block_scalars, empty_literal) {
-  /* A literal block scalar with no content lines produces an empty string. */
   char *err = NULL;
   cyaml n = cyaml_parse("|\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -1942,9 +1712,6 @@ TEST(block_scalars, empty_literal) {
 }
 
 TEST(block_scalars, literal_leading_blank) {
-  /* A blank line can come before the first content line of a literal block
-   * scalar, and then the value starts with a newline, as the YAML 1.2
-   * spec says. */
   const char *yaml =
       "|\n"
       "\n"
@@ -1959,8 +1726,6 @@ TEST(block_scalars, literal_leading_blank) {
 }
 
 TEST(block_scalars, folded_leading_blank) {
-  /* A folded block scalar has the same contract, a blank line at the start
-   * gives a literal newline at the start of the value. */
   const char *yaml =
       ">\n"
       "\n"
@@ -1975,8 +1740,6 @@ TEST(block_scalars, folded_leading_blank) {
 }
 
 TEST(block_scalars, literal_explicit_indent) {
-  /* |2 sets block_indent = parent_indent(0) + 2 = 2, so a line indented more
-   * than the block indent carries its extra spaces into the value. */
   const char *yaml =
       "|2\n"
       "  line one\n"
@@ -1992,8 +1755,6 @@ TEST(block_scalars, literal_explicit_indent) {
 }
 
 TEST(block_scalars, folded_explicit_indent) {
-  /* >2 with two normal content lines: the newline between them folds to a
-   * space, and CHOMP_CLIP adds one newline at the end. */
   const char *yaml =
       ">2\n"
       "  line one\n"
@@ -2008,9 +1769,6 @@ TEST(block_scalars, folded_explicit_indent) {
 }
 
 TEST(block_scalars, literal_keep_no_content_trailing_blank) {
-  /* |+ with no content line but one trailing blank line gives "\n",
-   * because under YAML 1.2 sec. 8.1.1.2 CHOMP_KEEP keeps a trailing empty
-   * line whether or not there's a content line with text. */
   char *err = NULL;
   cyaml n = cyaml_parse("|+\n\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2021,8 +1779,6 @@ TEST(block_scalars, literal_keep_no_content_trailing_blank) {
 }
 
 TEST(block_scalars, folded_keep_no_content_trailing_blank) {
-  /* >+ with no content line but one trailing blank line also gives "\n",
-   * by the same CHOMP_KEEP rule as in the literal case. */
   char *err = NULL;
   cyaml n = cyaml_parse(">+\n\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2033,8 +1789,6 @@ TEST(block_scalars, folded_keep_no_content_trailing_blank) {
 }
 
 TEST(block_scalars, literal_chomp_indent_both_orders) {
-  /* |2- and |-2 give the same result, since YAML 1.2 lets the
-   * chomping and indentation indicators come in either order. */
   char *err = NULL;
 
   cyaml a = cyaml_parse("|2-\n  hello\n  world\n", &err);
@@ -2053,9 +1807,6 @@ TEST(block_scalars, literal_chomp_indent_both_orders) {
 }
 
 TEST(errors, block_scalar_duplicate_indentation_indicator_rejected) {
-  /* c-b-block-header allows at most one indentation indicator in a header,
-   * so the parser has to reject a second digit and not quietly let it
-   * overwrite the first ("last one wins"). */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: |24\n    x\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -2063,10 +1814,6 @@ TEST(errors, block_scalar_duplicate_indentation_indicator_rejected) {
 }
 
 TEST(errors, block_scalar_duplicate_chomping_indicator_rejected) {
-  /* c-b-block-header allows at most one chomping indicator in a header, so
-   * the parser rejects two indicators of the same kind as well as two
-   * different ones together, and must not give either case "last one wins"
-   * semantics. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: |--\n  x\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -2089,7 +1836,6 @@ TEST(errors, block_scalar_duplicate_chomping_indicator_rejected) {
 }
 
 TEST(block_scalars, folded_chomp_indent_both_orders) {
-  /* >2- and >-2 must give the same result. */
   char *err = NULL;
 
   cyaml a = cyaml_parse(">2-\n  hello\n  world\n", &err);
@@ -2108,9 +1854,6 @@ TEST(block_scalars, folded_chomp_indent_both_orders) {
 }
 
 TEST(block_scalars, folded_more_indented_block) {
-  /* Under YAML 1.2 spec s8.1.1.2 a line break next to a more-indented line, on
-   * either side, stays a newline instead of folding to a space. This test goes
-   * from normal to more-indented and back to normal. */
   const char *yaml =
       ">\n"
       "  normal\n"
@@ -2126,9 +1869,6 @@ TEST(block_scalars, folded_more_indented_block) {
 }
 
 TEST(block_scalars, folded_more_indented_block_adjacent) {
-  /* Many more-indented lines in a row, and the parser keeps every line break
-   * between them, since each such break touches a neighbour that is more
-   * indented. */
   const char *yaml =
       ">\n"
       "  normal\n"
@@ -2145,10 +1885,6 @@ TEST(block_scalars, folded_more_indented_block_adjacent) {
 }
 
 TEST(block_scalars, folded_blank_line_adjacent_to_more_indented_line) {
-  /* YAML 1.2 section 8.1.3 defines a run of more-indented lines. Going into
-   * such a run or out of it costs one literal newline, which the parser adds
-   * ON TOP OF every blank line between the two chunks, so the two counts add
-   * up instead of one replacing the other. A reference parser agrees. */
   const char *yaml =
       ">\n"
       "  a\n"
@@ -2164,9 +1900,6 @@ TEST(block_scalars, folded_blank_line_adjacent_to_more_indented_line) {
 }
 
 TEST(block_scalars, folded_more_indented_line_adjacent_to_blank_line) {
-  /* The same rule where the two counts add up, but here the content goes
-   * from a more-indented run back to normal content, with one blank line in
-   * between. */
   const char *yaml =
       ">\n"
       "  a\n"
@@ -2182,22 +1915,12 @@ TEST(block_scalars, folded_more_indented_line_adjacent_to_blank_line) {
   cyaml_destroy(doc);
 }
 
+// The extra newline for a change into a more-indented run must not fire for
+// blank lines before the first content line. The explicit indentation
+// indicator makes the first line really more indented than the declared
+// indent.
 TEST(block_scalars,
      folded_leading_blank_lines_before_more_indented_unaffected) {
-  /* The have_content guard controls the extra newline the parser adds, and
-   * it must not fire for blank lines before the scalar's very first content
-   * line, since no content line comes before such a break and the break
-   * touches nothing.
-   *
-   * The document gives an explicit indentation indicator, so the first
-   * content line ("more") really is more indented than the DECLARED indent
-   * of 2. Without the indicator the parser detects the indent itself, takes
-   * the column of "more" as the base, and then "more" isn't more indented
-   * than itself.
-   *
-   * A reference parser agrees with the result, the parser writes only the
-   * newline of the blank line at the start and adds no second newline for a
-   * change of run on top of it. */
   const char *yaml =
       ">2\n"
       "\n"
@@ -2211,9 +1934,7 @@ TEST(block_scalars,
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         BLOCK MAPPINGS                                     */
-/* ========================================================================== */
+// Block mappings
 
 TEST(block_mapping, simple) {
   const char *yaml =
@@ -2276,14 +1997,6 @@ TEST(block_mapping, null_value) {
 }
 
 TEST(block_mapping, implicit_key_canonicalizes_like_every_other_key_notation) {
-  /* The parser has to resolve an implicit key's core-schema type before it
-   * stores the key, the same as for a flow dictionary key, a "key: value"
-   * shorthand in a flow sequence and an explicit "? key" block key.
-   *
-   * Under YAML 1.2 "~", "null" and an explicit "? ~" key are all spellings
-   * of the same value, so they collide on the one "null" dictionary
-   * key. Without this rule "? ~\n: 1\n~: 2\n" would keep two separate
-   * entries ("~" and "null"), where a consistent implementation gives one. */
   char *err = NULL;
   cyaml doc = cyaml_parse("? ~\n: 1\n~: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2294,9 +2007,6 @@ TEST(block_mapping, implicit_key_canonicalizes_like_every_other_key_notation) {
 }
 
 TEST(block_mapping, implicit_bool_and_int_keys_canonicalize) {
-  /* More spellings of the same rule: an implicit "TRUE" key canonicalizes to
-   * "true" just like an explicit "? TRUE" key, and an implicit "0x10" key
-   * canonicalizes to "16" just like "? 0x10". */
   char *err = NULL;
   cyaml doc1 = cyaml_parse("TRUE: a\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2311,11 +2021,9 @@ TEST(block_mapping, implicit_bool_and_int_keys_canonicalize) {
   cyaml_destroy(doc2);
 }
 
+// The first entry of a mapping and every later one are found by different
+// code paths, so both positions are checked.
 TEST(block_mapping, implicit_key_canonicalization_applies_to_every_entry) {
-  /* The first entry of a mapping is found by one code path, parse_node's
-   * top-level plain-scalar dispatch, and every later entry by another,
-   * parse_one_dict_entry_key. So this test checks the behaviour at both
-   * positions in one document and not just at the first. */
   char *err = NULL;
   cyaml doc = cyaml_parse("~: first\nNull: second\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2326,14 +2034,6 @@ TEST(block_mapping, implicit_key_canonicalization_applies_to_every_entry) {
 }
 
 TEST(block_mapping, anchored_implicit_key_canonicalizes_and_alias_resolves) {
-  /* An anchored implicit key has to canonicalize its own stored key text
-   * exactly like a key without an anchor, while the anchor itself should
-   * resolve to the key's real typed value for a later alias (an integer here
-   * and not the string "16").
-   *
-   * Two separate code paths do this work, one clones a typed node for the
-   * alias and the other canonicalizes a string for the dictionary storage,
-   * and the two has to stay consistent. */
   char *err = NULL;
   cyaml doc = cyaml_parse("&k 0x10: v\nback: *k\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2360,8 +2060,6 @@ TEST(block_mapping, document_start_marker) {
 }
 
 TEST(block_mapping, utf8_bom_skipped) {
-  /* The parser consumes a UTF-8 BOM (EF BB BF) at the start quietly and then
-   * parses the rest of the document as usual. */
   static const char yaml[] = "\xEF\xBB\xBFkey: value\n";
   char *err = NULL;
   cyaml doc = cyaml_parse(yaml, &err);
@@ -2372,16 +2070,9 @@ TEST(block_mapping, utf8_bom_skipped) {
   cyaml_destroy(doc);
 }
 
+// A second key at column 0 shows that the BOM doesn't move the start of the
+// first line; otherwise every column there is three too high.
 TEST(block_mapping, utf8_bom_skipped_multiline) {
-  /* The BOM must not shift where line_start_pos() puts the start of the
-   * first physical line. A document with one key (see utf8_bom_skipped
-   * above) can't catch this, because it never compares the column of a
-   * SECOND line against anything.
-   *
-   * A second key at column 0 needs the first line to start at byte 3, right
-   * after the BOM, and not at byte 0. Otherwise every column on that line
-   * comes out 3 bytes too high and the parser rejects this document as
-   * "trailing content". */
   static const char yaml[] =
       "\xEF\xBB\xBF"
       "a: 1\nb: 2\n";
@@ -2396,10 +2087,6 @@ TEST(block_mapping, utf8_bom_skipped_multiline) {
 }
 
 TEST(block_mapping, utf8_bom_skipped_before_explicit_doc_marker) {
-  /* The same hazard, reached here through at_doc_marker()'s column-0 rule and
-   * not through the plain indentation comparison of the test above. A "---"
-   * right after the BOM is a real document-start marker, and the parser must
-   * not quietly take it as three bytes of plain-scalar text. */
   static const char yaml[] = "\xEF\xBB\xBF---\na: 1\nb: 2\n";
   char *err = NULL;
   cyaml doc = cyaml_parse(yaml, &err);
@@ -2412,11 +2099,6 @@ TEST(block_mapping, utf8_bom_skipped_before_explicit_doc_marker) {
 }
 
 TEST(multi_document, utf8_bom_skipped_before_first_document_marker) {
-  /* The worst form of the same hazard: the 3 bytes of the BOM must not count
-   * as part of line 1's indentation. If they did, the first "---" would fail
-   * at_doc_marker()'s column-0 check, the parser would quietly take it as
-   * plain-scalar text ("--- a"), and two separate documents would become one
-   * without any error. */
   static const char yaml[] = "\xEF\xBB\xBF---\na\n---\nb\n";
   char *err = NULL;
   cyaml doc = cyaml_parse(yaml, &err);
@@ -2429,6 +2111,8 @@ TEST(multi_document, utf8_bom_skipped_before_first_document_marker) {
   cyaml_destroy(doc);
 }
 
+// Requires that yaml fails to parse with an error message; the shorthand of
+// the tab-indentation tests for a refused document.
 static void require_tab_rejected(const char *yaml) {
   char *err = NULL;
   cyaml doc = cyaml_parse(yaml, &err);
@@ -2436,8 +2120,8 @@ static void require_tab_rejected(const char *yaml) {
   REQUIRE_NE((void *)err, NULL);
 }
 
-/* Parse yaml, require success and require that the flow serialization of
- * the result is exactly want. */
+// Tells whether yaml parses and its flow serialization is exactly want, the
+// accepting half of the tab tests. Prints the case when it isn't.
 static bool _tab_accepted_as(const char *yaml, const char *want) {
   char *err = NULL;
   cyaml doc = cyaml_parse(yaml, &err);
@@ -2452,12 +2136,6 @@ static bool _tab_accepted_as(const char *yaml, const char *want) {
 }
 
 TEST(bom_prefix, comment_directly_after_bom) {
-  /* A '#' at the start of the stream opens a comment. With a byte order mark
-   the stream starts after the mark, so a '#' right after it is still at the
-   start of the stream and opens a comment, and that's exactly what a text
-   editor that saves with a BOM produces for a file whose first line is a
-   comment. A comment test that treated only offset 0 as the start of the
-   stream would make the parse fail with "unexpected '#' at position 3". */
   static const char yaml[] = "\xEF\xBB\xBF# c\na: 1\n";
   char *err = NULL;
   cyaml doc = cyaml_parse(yaml, &err);
@@ -2467,7 +2145,6 @@ TEST(bom_prefix, comment_directly_after_bom) {
   REQUIRE_EQ(cyaml_int_val(cyaml_dictionary_get(doc, "a")), 1LL);
   cyaml_destroy(doc);
 
-  /* A stream that is only a BOM and a comment is an empty document. */
   static const char only[] = "\xEF\xBB\xBF#";
   doc = cyaml_parse(only, &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2477,10 +2154,6 @@ TEST(bom_prefix, comment_directly_after_bom) {
 }
 
 TEST(bom_prefix, comment_after_bom_on_value_line) {
-  /* rest_of_line_is_blank() makes the same start-of-stream test, so a BOM
-   followed right by "# c" and then a document needs to parse through that
-   path as well, while a '#' that touches content after the mark stays
-   content. */
   static const char yaml[] = "\xEF\xBB\xBF#c\nk: # v\n  x\n";
   char *err = NULL;
   cyaml doc = cyaml_parse(yaml, &err);
@@ -2500,12 +2173,6 @@ TEST(bom_prefix, comment_after_bom_on_value_line) {
 }
 
 TEST(bom_prefix, bom_before_a_later_document) {
-  /* YAML 1.2 allows a byte order mark in the prefix of every document of a
-   stream and not only the first, and concatenating files that each start
-   with one produces exactly that. The mark isn't content and the "---"
-   after it sits at column 0. Without the prefix skip, the mark and the rest
-   of its line become a third document holding the plain scalar
-   "\xEF\xBB\xBF# c", or the "---" after the mark isn't a marker. */
   static const char yaml[] =
       "a: 1\n...\n\xEF\xBB\xBF# c\n--- b\n...\n\xEF\xBB\xBF--- {k: v}\n";
   char *err = NULL;
@@ -2523,9 +2190,6 @@ TEST(bom_prefix, bom_before_a_later_document) {
 }
 
 TEST(bom_prefix, bom_before_a_later_block_document_keeps_columns) {
-  /* The columns of the line after a later mark count from the end of the
-   mark, just as for a mark at the start of the stream, so the block
-   mapping's second key sits at column 0 and joins the first one. */
   static const char yaml[] =
       "x\n...\n\xEF\xBB\xBF"
       "a: 1\nb: 2\n";
@@ -2542,9 +2206,7 @@ TEST(bom_prefix, bom_before_a_later_block_document_keeps_columns) {
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         BLOCK SEQUENCES                                    */
-/* ========================================================================== */
+// Block sequences
 
 TEST(block_sequence, simple_strings) {
   const char *yaml =
@@ -2635,9 +2297,7 @@ TEST(block_sequence, nested_sequence) {
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         FLOW COLLECTIONS                                   */
-/* ========================================================================== */
+// Flow collections
 
 TEST(flow, sequence_basic) {
   char *err = NULL;
@@ -2738,8 +2398,6 @@ TEST(flow, flow_value_in_block_mapping) {
 }
 
 TEST(flow, mapping_integer_key) {
-  /* The parser turns an integer key of a flow mapping into a string before
-   * it stores it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{42: the_answer}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2750,8 +2408,6 @@ TEST(flow, mapping_integer_key) {
 }
 
 TEST(flow, mapping_non_string_keys) {
-  /* The parser also turns a null key and a bool key of a flow dictionary into
-   * a string. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{null: 1, true: 2, false: 3}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2764,9 +2420,6 @@ TEST(flow, mapping_non_string_keys) {
 }
 
 TEST(flow, value_with_bare_colon) {
-  /* A plain scalar value in a flow dictionary can hold a ':' with no
-   * whitespace and no flow terminator after it, typically in a URL, so the
-   * parser must not cut "http://example.com" at the first ':'. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{url: http://example.com, port: 80}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2779,7 +2432,6 @@ TEST(flow, value_with_bare_colon) {
 }
 
 TEST(flow, plain_scalar_with_colon_in_sequence) {
-  /* The same rule holds inside a flow list. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[http://a.b, ftp://x.y]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -2791,8 +2443,6 @@ TEST(flow, plain_scalar_with_colon_in_sequence) {
 }
 
 TEST(flow, value_with_bare_colon_serialize_round_trip) {
-  /* For a dictionary whose value holds a bare ':', cyaml_serialize_flow's
-   * output parses back into the original string. */
   cyaml doc = cyaml_create_dictionary();
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(doc, "url",
@@ -2812,15 +2462,9 @@ TEST(flow, value_with_bare_colon_serialize_round_trip) {
   cyaml_destroy(doc2);
 }
 
-/* ========================================================================== */
-/*                         ANCHORS AND ALIASES                                */
-/* ========================================================================== */
+// Anchors and aliases
 
 TEST(anchors, basic_alias) {
-  /* The "production: *def" line must resolve the alias to the anchored
-   * mapping's content. Without that reference the test would prove nothing,
-   * since a document that defines &def but never dereferences it can't
-   * notice a regression in alias resolution. */
   const char *yaml =
       "default: &def\n"
       "  timeout: 30\n"
@@ -2846,7 +2490,6 @@ TEST(anchors, basic_alias) {
 }
 
 TEST(anchors, alias_resolves_to_anchor_value) {
-  /* An alias gives a node whose content matches the anchored value. */
   const char *yaml =
       "base: &base 42\n"
       "copy: *base\n";
@@ -2869,7 +2512,6 @@ TEST(anchors, alias_resolves_to_anchor_value) {
 }
 
 TEST(anchors, alias_is_independent_copy) {
-  /* An alias has to give a deep clone and not a shared reference. */
   const char *yaml =
       "src: &a\n"
       "  val: 1\n"
@@ -2883,7 +2525,6 @@ TEST(anchors, alias_is_independent_copy) {
   cyaml dst = cyaml_dictionary_get(doc, "dst");
   REQUIRE_NE((void *)src, NULL);
   REQUIRE_NE((void *)dst, NULL);
-  /* The two are separate nodes. */
   REQUIRE_NE((void *)src, (void *)dst);
   REQUIRE_EQ(cyaml_type(src), CYAML_DICTIONARY);
   REQUIRE_EQ(cyaml_type(dst), CYAML_DICTIONARY);
@@ -2910,7 +2551,6 @@ TEST(anchors, scalar_anchor_and_alias) {
   REQUIRE_EQ(cyaml_type(alt), CYAML_INTEGER);
   REQUIRE_EQ(cyaml_int_val(base), 9090LL);
   REQUIRE_EQ(cyaml_int_val(alt), 9090LL);
-  /* Must be separate nodes. */
   REQUIRE_NE((void *)base, (void *)alt);
 
   cyaml_destroy(doc);
@@ -2942,8 +2582,6 @@ TEST(anchors, sequence_anchor) {
 }
 
 TEST(anchors, anchor_name_reuse) {
-  /* The second definition of &a replaces the first, so the alias *a
-   * resolves to the latest binding. */
   const char *yaml =
       "first: &a 100\n"
       "second: &a 200\n"
@@ -2959,11 +2597,6 @@ TEST(anchors, anchor_name_reuse) {
 }
 
 TEST(anchors, many_linear_aliases_to_small_anchor_still_works) {
-  /* A guard for the node allocation budget (CYAML_MAX_PARSE_NODES; see
-   * exponential_alias_expansion_rejected_not_exhausted). Many aliases to the
-   * SAME small anchor are ordinary, legitimate, linear reuse. Each *a clone
-   * is independent but small and the total stays far below the budget, so
-   * the parser must not reject this document. */
   size_t n = 2000;
   size_t cap = 64 + n * 8;
   char *input = malloc(cap);
@@ -2981,9 +2614,7 @@ TEST(anchors, many_linear_aliases_to_small_anchor_still_works) {
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         PATH NAVIGATION (cyaml_get)                       */
-/* ========================================================================== */
+// Path navigation (cyaml_get)
 
 TEST(path, get_mapping_key) {
   const char *yaml =
@@ -3053,14 +2684,11 @@ TEST(path, get_root_empty_path) {
   cyaml doc = cyaml_parse("key: val\n", &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  /* An empty path returns the root. */
   REQUIRE_EQ((void *)cyaml_get(doc, ""), (void *)doc);
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         PATH MUTATION (cyaml_set)                         */
-/* ========================================================================== */
+// Path mutation (cyaml_set)
 
 TEST(path, set_existing_scalar) {
   char *err = NULL;
@@ -3118,8 +2746,6 @@ TEST(path, set_sequence_element) {
 }
 
 TEST(path, set_bool_type) {
-  /* cyaml_set with a bool literal goes through the CYAML_BOOL branch of
-   * _cyaml_type_of and of node_reinit_scalar. */
   char *err = NULL;
   cyaml doc = cyaml_parse("flag: false\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3131,27 +2757,19 @@ TEST(path, set_bool_type) {
 }
 
 TEST(path, set_float_type) {
-  /* cyaml_set with a float literal goes through the float branch of
-   * _cyaml_type_of in node_reinit_scalar, which tests
-   * raw_size == sizeof(float). */
   char *err = NULL;
   cyaml doc = cyaml_parse("scale: 1\n", &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_set(doc, "scale", 1.5f), ccol_success);
   REQUIRE_EQ(cyaml_type(cyaml_get(doc, "scale")), CYAML_FLOAT);
-  /* 1.5 is exact in a float, so going from float to double loses
-   * nothing. */
   REQUIRE_EQ(cyaml_double_val(cyaml_get(doc, "scale")), 1.5);
   cyaml_destroy(doc);
 }
 
+// Goes through every width (1, 2, 4, 8) and signedness that cyaml__type_of()
+// and cyaml__is_signed() dispatch on.
 TEST(path, set_integer_various_widths_and_signs_round_trip) {
-  /* Every other cyaml_set() integer test passes a bare int literal, which
-   * only hits one case of node_reinit_scalar (raw_size 4 and is_signed
-   * true). This one goes through every other combination of that switch,
-   * raw_size (1, 2, 4 and 8) against is_signed (true and false), which are
-   * the widths _cyaml_type_of() and _cyaml_is_signed() dispatch on. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: 0\nb: 0\nc: 0\nd: 0\ne: 0\nf: 0\ng: 0\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3183,19 +2801,12 @@ TEST(path, set_integer_various_widths_and_signs_round_trip) {
 }
 
 TEST(path, set_sequence_element_out_of_bounds) {
-  /* cyaml_set on a sequence index past the last element fails with
-   * ccol_key_not_found and leave every existing element alone. A "#N"
-   * component with valid syntax but an out-of-range index is an absent path
-   * component, the same kind of absent component as a missing dictionary
-   * key. cyaml_delete documents the same distinction; see
-   * delete.path_out_of_range_list_index_returns_key_not_found. */
   char *err = NULL;
   cyaml doc = cyaml_parse("nums:\n  - 1\n  - 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
 
   REQUIRE_EQ(cyaml_set(doc, "nums.#99", 42), ccol_key_not_found);
 
-  /* Existing elements must be untouched. */
   REQUIRE_EQ(cyaml_int_val(cyaml_get(doc, "nums.#0")), 1LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_get(doc, "nums.#1")), 2LL);
 
@@ -3203,8 +2814,6 @@ TEST(path, set_sequence_element_out_of_bounds) {
 }
 
 TEST(path, set_on_list_root) {
-  /* cyaml_set(list_root, "#N", val) should work when the root node is a
-   * CYAML_LIST itself and not a dictionary. */
   char *err = NULL;
   cyaml root = cyaml_parse("- 1\n- 2\n- 3\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3220,46 +2829,33 @@ TEST(path, set_on_list_root) {
 }
 
 TEST(path, set_fails_on_scalar_parent) {
-  /* cyaml_set must fail when the middle node is a scalar. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: 42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
 
-  /* "key" is an integer node, so the path "key.sub" has no valid parent
-   * container. */
   REQUIRE_EQ(cyaml_set(doc, "key.sub", 1), ccol_invalid_args);
 
-  /* The original value must be untouched. */
   REQUIRE_EQ(cyaml_int_val(cyaml_get(doc, "key")), 42LL);
 
   cyaml_destroy(doc);
 }
 
 TEST(path, set_missing_parent) {
-  /* cyaml_set fails when a middle node of the path is missing, and it
-   * must change nothing in the original tree. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: 42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
 
   REQUIRE_EQ(cyaml_set(doc, "missing.sub", 1), ccol_key_not_found);
 
-  /* The original key must be untouched. */
   REQUIRE_EQ(cyaml_int_val(cyaml_get(doc, "key")), 42LL);
 
   cyaml_destroy(doc);
 }
 
+// A malformed "#N" index is a caller error at any position in the path, so a
+// malformed middle component must not look like an absent one.
 TEST(path,
      set_malformed_index_syntax_in_non_leaf_component_returns_invalid_args) {
-  /* A malformed "#N" index is an error in the path the caller built and not
-   * a question about the data that's there, and that holds at ANY position
-   * in the path, not only at the leaf.
-   *
-   * So navigate_y() has to keep a malformed index in the middle of a path
-   * apart from a middle component that really is absent, instead of giving
-   * the same NULL for both. With one shared NULL the caller would get
-   * ccol_key_not_found here instead of ccol_invalid_args. */
   char *err = NULL;
   cyaml doc = cyaml_parse("items:\n  - a: 1\n  - a: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3270,11 +2866,9 @@ TEST(path,
   cyaml_destroy(doc);
 }
 
+// strtol() accepts leading blanks and a '+', but the "#N" grammar wants digits
+// right after the '#'.
 TEST(path, get_index_with_leading_whitespace_is_malformed) {
-  /* A bare strtol() call happily accepts whitespace before the digits and an
-   * explicit '+' in front, so the library needs to reject "items.#  0" and
-   * "items.#+0" rather than quietly taking them as index 0. The documented
-   * "#N" grammar wants digits only, right after the '#'. */
   char *err = NULL;
   cyaml doc = cyaml_parse("items:\n  - a: 1\n  - a: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3287,12 +2881,6 @@ TEST(path, get_index_with_leading_whitespace_is_malformed) {
 }
 
 TEST(path, set_index_with_leading_whitespace_returns_invalid_args) {
-  /* Mirrors the two forms of
-   * path.get_index_with_leading_whitespace_is_malformed (leading whitespace
-   * and an explicit leading '+'): the set path must not accept a
-   * strtol()-style sign. The get and delete paths have their own tests for
-   * the '+' form below, and this one catches such a regression on the set
-   * path. */
   char *err = NULL;
   cyaml doc = cyaml_parse("items:\n  - a: 1\n  - a: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3305,11 +2893,6 @@ TEST(path, set_index_with_leading_whitespace_returns_invalid_args) {
 }
 
 TEST(delete, path_index_with_leading_sign_returns_invalid_args) {
-  /* Mirrors the two forms of
-   * path.get_index_with_leading_whitespace_is_malformed (an explicit leading
-   * '+' and leading whitespace): the delete path must not accept
-   * strtol()-style whitespace, and this catches such a regression on the
-   * delete path. */
   char *err = NULL;
   cyaml doc = cyaml_parse("items:\n  - a: 1\n  - a: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3322,12 +2905,6 @@ TEST(delete, path_index_with_leading_sign_returns_invalid_args) {
 }
 
 TEST(path, set_wrong_type_in_non_leaf_component_returns_invalid_args) {
-  /* A scalar can sit in the middle of a path with more components after it,
-   * but it has no children to walk into. That's a wrong-type error in the
-   * path (ccol_invalid_args) and not an absent component
-   * (ccol_key_not_found). Here "a" is the scalar 1, so "a.b.c" fails
-   * inside navigate_y() itself, while it tries to resolve the parent segment
-   * "a.b". */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: 1\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3339,11 +2916,6 @@ TEST(path, set_wrong_type_in_non_leaf_component_returns_invalid_args) {
 }
 
 TEST(path, set_null_value) {
-  /* cyaml_set with a NULL literal changes the leaf's type to
-   * CYAML_NULL. NULL has the type void *, and _cyaml_type_of maps void * to
-   * CYAML_NULL with an explicit association of its own, separate from the
-   * default branch that gives _CYAML_TYPE_UNSUPPORTED for a type the library
-   * really doesn't support (see set_unsupported_type_is_rejected below). */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: 42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3357,10 +2929,6 @@ TEST(path, set_null_value) {
 }
 
 TEST(path, set_unsupported_type_is_rejected) {
-  /* _cyaml_type_of() doesn't know every C type. A value of a type it doesn't
-   * know, for example long double, fails with ccol_invalid_args and
-   * leaves the existing leaf completely untouched, instead of quietly
-   * succeeding and writing CYAML_NULL over the leaf. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: 42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3370,9 +2938,6 @@ TEST(path, set_unsupported_type_is_rejected) {
   REQUIRE_EQ(cyaml_type(cyaml_get(doc, "key")), CYAML_INTEGER);
   REQUIRE_EQ(cyaml_int_val(cyaml_get(doc, "key")), 42LL);
 
-  /* The call fails as well when the leaf doesn't exist yet. That's the
-   * node_make_scalar path, while the node_reinit_scalar path above works on
-   * a leaf that exists. */
   REQUIRE_EQ(cyaml_set(doc, "brand_new_key", ld), ccol_invalid_args);
   REQUIRE_EQ((void *)cyaml_get(doc, "brand_new_key"), NULL);
 
@@ -3380,9 +2945,6 @@ TEST(path, set_unsupported_type_is_rejected) {
 }
 
 TEST(path, set_string_variable) {
-  /* cyaml_set with a char * variable instead of a string literal. raw then
-   * names a const char *, which node_reinit_scalar dereferences
-   * directly. */
   char *err = NULL;
   cyaml doc = cyaml_parse("env: dev\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3395,9 +2957,6 @@ TEST(path, set_string_variable) {
 }
 
 TEST(path, set_replaces_container_leaf) {
-  /* A cyaml_set call can name a path whose leaf is a container, and the call
-   * replaces that container in place with the new scalar, through
-   * node_clear followed by a fresh initialization of the node. */
   char *err = NULL;
   cyaml doc = cyaml_parse("data:\n  - 1\n  - 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3411,8 +2970,6 @@ TEST(path, set_replaces_container_leaf) {
 }
 
 TEST(path, degenerate_path_trailing_dot) {
-  /* A path ending in a dot gives an empty leaf component, so cyaml_set
-   * rejects it and cyaml_get returns NULL for it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: 42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3425,8 +2982,6 @@ TEST(path, degenerate_path_trailing_dot) {
 }
 
 TEST(path, degenerate_path_consecutive_dots) {
-  /* A path with two dots in a row has an empty component in the middle, so
-   * walking the path fails and returns NULL. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a:\n  b: 42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3436,25 +2991,20 @@ TEST(path, degenerate_path_consecutive_dots) {
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                       PATH ESCAPE SEQUENCE TESTS                           */
-/* ========================================================================== */
+// Path escape sequences
 
 TEST(path, get_escaped_dot_flat_key) {
-  /* The key "a.b" holds a literal dot and we reach it with "a\\.b". */
   char *err = NULL;
   cyaml doc = cyaml_parse("\"a.b\": 42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
   cyaml node = cyaml_get(doc, "a\\.b");
   REQUIRE_NE((void *)node, NULL);
   REQUIRE_EQ(cyaml_int_val(node), 42LL);
-  /* A dot with no escape must NOT find the key. */
   REQUIRE_EQ((void *)cyaml_get(doc, "a.b"), NULL);
   cyaml_destroy(doc);
 }
 
 TEST(path, get_escaped_backslash_flat_key) {
-  /* The key "a\b" holds a literal backslash, reached with "a\\\\b". */
   char *err = NULL;
   cyaml doc = cyaml_parse("\"a\\\\b\": 7\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3465,8 +3015,6 @@ TEST(path, get_escaped_backslash_flat_key) {
 }
 
 TEST(path, get_escaped_dot_nested_path) {
-  /* The outer key is the plain "outer", and the inner key "k.ey" holds a
-   * literal dot. */
   char *err = NULL;
   cyaml doc = cyaml_parse("outer:\n  \"k.ey\": 99\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3477,7 +3025,6 @@ TEST(path, get_escaped_dot_nested_path) {
 }
 
 TEST(path, get_escaped_dot_both_components) {
-  /* Both levels have a key that holds a dot: "a.b" -> "c.d". */
   char *err = NULL;
   cyaml doc = cyaml_parse("\"a.b\":\n  \"c.d\": 1\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3488,7 +3035,6 @@ TEST(path, get_escaped_dot_both_components) {
 }
 
 TEST(path, set_escaped_dot_creates_new_key) {
-  /* Create a new key "x.y", which holds a literal dot, at the root. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3496,13 +3042,11 @@ TEST(path, set_escaped_dot_creates_new_key) {
   cyaml node = cyaml_get(doc, "x\\.y");
   REQUIRE_NE((void *)node, NULL);
   REQUIRE_EQ(cyaml_int_val(node), 55LL);
-  /* The call must not create a nested "x" key nobody asked for. */
   REQUIRE_EQ((void *)cyaml_get(doc, "x"), NULL);
   cyaml_destroy(doc);
 }
 
 TEST(path, set_escaped_dot_updates_existing_key) {
-  /* Change the value of the existing key "p.q", which holds a literal dot. */
   char *err = NULL;
   cyaml doc = cyaml_parse("\"p.q\": 0\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3512,7 +3056,6 @@ TEST(path, set_escaped_dot_updates_existing_key) {
 }
 
 TEST(path, set_escaped_dot_nested_path) {
-  /* Set "outer"."k.ey" with the escaped path "outer.k\\.ey". */
   char *err = NULL;
   cyaml doc = cyaml_parse("outer:\n  \"k.ey\": 0\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3522,7 +3065,6 @@ TEST(path, set_escaped_dot_nested_path) {
 }
 
 TEST(path, set_escaped_backslash_creates_key) {
-  /* Create the key "a\\b", which holds a literal backslash, with "a\\\\b". */
   char *err = NULL;
   cyaml doc = cyaml_parse("{}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3533,12 +3075,6 @@ TEST(path, set_escaped_backslash_creates_key) {
 }
 
 TEST(path, set_replaces_container_list_element) {
-  /* A cyaml_set call can name a sequence index whose current value is a
-   * container, and the call should replace that container in place with the
-   * new scalar, through node_clear and a fresh initialization of the node.
-   * It checks the same node_reinit_scalar path as
-   * set_replaces_container_leaf, but reaches it through _cyaml_set_typed's
-   * list branch. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "items:\n"
@@ -3552,78 +3088,58 @@ TEST(path, set_replaces_container_list_element) {
   REQUIRE_EQ(cyaml_set(doc, "items.#0", 42), ccol_success);
   REQUIRE_EQ(cyaml_type(cyaml_get(doc, "items.#0")), CYAML_INTEGER);
   REQUIRE_EQ(cyaml_int_val(cyaml_get(doc, "items.#0")), 42LL);
-  /* The element beside it must stay untouched. */
   REQUIRE_EQ(cyaml_int_val(cyaml_get(doc, "items.#1")), 99LL);
 
   cyaml_destroy(doc);
 }
 
+// A one-component path makes two strdup calls. The budget lets the first
+// succeed and fails the second, and the document must stay whole. The budget
+// is reset before any assertion, so a failure here can't break later tests
+// that share g_counting_mp.
 TEST(path, set_single_component_oom) {
-  /* For a path of one component (no dots) _cyaml_set_typed makes two
-   * ccol_strdup calls, the first for the scratch copy it searches for dots
-   * and the second for leaf_copy. When the second strdup fails for lack of
-   * memory the function has to return ccol_not_enough_memory and leave the
-   * document whole, instead of passing NULL to path_unescape_component. */
   g_alloc_remaining = -1;
   char *err = NULL;
   cyaml doc = cyaml_parse_mp("port: 8080\n", &err, &g_counting_mp);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
 
-  /* Let exactly one malloc succeed, so the first strdup (the scratch copy)
-   * succeeds and the second one (leaf_copy) fails. */
   g_alloc_remaining = 1;
   long long new_val = 9090LL;
-  ccol_retval_t r = _cyaml_set_typed(doc, "port", CYAML_INTEGER, &new_val,
-                                     sizeof(new_val), true);
-  /* Reset the budget before checking the result. A failing REQUIRE_* returns
-   * from this function at once, so a reset after the check would leave
-   * g_alloc_remaining at its empty budget, and every later test of this
-   * binary that uses &g_counting_mp would fail too, turning one clear
-   * failure here into a chain of failures that look unrelated. */
+  ccol_retval r = cyaml__set_typed(doc, "port", CYAML_INTEGER, &new_val,
+                                   sizeof(new_val), true);
   g_alloc_remaining = -1;
   REQUIRE_EQ(r, ccol_not_enough_memory);
 
-  /* The document must stay unchanged. */
   REQUIRE_EQ(cyaml_int_val(cyaml_get(doc, "port")), 8080LL);
   cyaml_destroy(doc);
 }
 
+// The delete counterpart of set_single_component_oom.
 TEST(path, delete_single_component_oom) {
-  /* For a path of one component (no dots) _cyaml_delete makes two
-   * ccol_strdup calls, the first for the scratch copy it searches for dots
-   * and the second for leaf_copy. When the second strdup fails for lack of
-   * memory the function has to return ccol_not_enough_memory and leave the
-   * document whole, instead of passing NULL to path_unescape_component. */
   g_alloc_remaining = -1;
   char *err = NULL;
   cyaml doc = cyaml_parse_mp("port: 8080\n", &err, &g_counting_mp);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
 
-  /* Let exactly one malloc succeed, so the first strdup (the scratch copy)
-   * succeeds and the second one (leaf_copy) fails. */
   g_alloc_remaining = 1;
-  ccol_retval_t r = _cyaml_delete(doc, "port");
-  /* The same comment in set_single_component_oom above explains why the
-   * reset comes before this check and not after it. */
+  ccol_retval r = cyaml__delete(doc, "port");
   g_alloc_remaining = -1;
   REQUIRE_EQ(r, ccol_not_enough_memory);
 
-  /* The document must stay unchanged. */
   REQUIRE_EQ(cyaml_int_val(cyaml_get(doc, "port")), 8080LL);
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         DEEP COPY                                          */
-/* ========================================================================== */
+// Deep copy
 
-/* Collect the keys of dict, in iteration order, joined by ','. */
+// Writes the keys of dict in iteration order, joined by ',', into out (cap
+// bytes), so the order tests can compare a whole order with one string.
 static void _dict_keys(cyaml dict, char *out, size_t cap) {
   size_t len = 0;
   out[0] = '\0';
-  cyaml_dictionary_iter_t it;
+  cyaml_dictionary_iter it;
   for (bool more = cyaml_dictionary_first(dict, &it); more;
        more = cyaml_dictionary_next(&it)) {
     int w = snprintf(out + len, cap - len, "%s%s", len ? "," : "", it.key);
@@ -3633,10 +3149,6 @@ static void _dict_keys(cyaml dict, char *out, size_t cap) {
 }
 
 TEST(dict_order, parse_keeps_document_order_in_both_serializers) {
-  /* A dictionary keeps its members in document order and both serializers
-   * write that order. The keys are neither sorted nor in any order a hash or
-   * a reversal could give, so a serializer that follows any other order
-   * fails on the exact text. */
   const char *src =
       "zeta: 1\nalpha: 2\nmid: {q: 1, b: 2, x: 3}\nbeta: [1, 2]\ngamma: 5\n";
   char *err = NULL;
@@ -3660,8 +3172,6 @@ TEST(dict_order, parse_keeps_document_order_in_both_serializers) {
 }
 
 TEST(dict_order, many_keys_keep_their_order) {
-  /* Enough members to force several growths of the map, and none of them may
-   * disturb the order. */
   char src[8192];
   size_t len = 0;
   for (int i = 0; i < 300; i++)
@@ -3673,7 +3183,7 @@ TEST(dict_order, many_keys_keep_their_order) {
   REQUIRE_NE((void *)doc, NULL);
   int i = 0;
   bool ordered = true;
-  cyaml_dictionary_iter_t it;
+  cyaml_dictionary_iter it;
   for (bool more = cyaml_dictionary_first(doc, &it); more;
        more = cyaml_dictionary_next(&it), i++) {
     char want[16];
@@ -3723,8 +3233,6 @@ TEST(dict_order, set_replace_keeps_place_and_remove_then_add_appends) {
   cyaml_dictionary_set(d, "x", cyaml_create_int(11));
   _dict_keys(d, keys, sizeof(keys));
   bool readd_ok = strcmp(keys, "y,z,x") == 0;
-  /* A path set of a new key appends as well, and a path set of an existing
-   * key keeps its place. */
   cyaml_set(d, "w", 4);
   cyaml_set(d, "y", 20);
   _dict_keys(d, keys, sizeof(keys));
@@ -3736,11 +3244,6 @@ TEST(dict_order, set_replace_keeps_place_and_remove_then_add_appends) {
 }
 
 TEST(dict_order, merged_members_take_the_place_of_the_merge_key) {
-  /* The members a "<<" entry brings in take its place, after the explicit
-   * members before it and before the explicit members after it. Sources
-   * come in the order the entry lists them, each in its own order; an
-   * explicit key keeps its own place and value, and an earlier source wins
-   * over a later one. */
   const char *src =
       "b1: &b1 {x: 1, y: 2, w: 0}\n"
       "b2: &b2 {v: 7, x: 8, u: 9}\n"
@@ -3769,7 +3272,6 @@ TEST(dict_order, merged_members_take_the_place_of_the_merge_key) {
   REQUIRE_EQ(y, 20LL);
   REQUIRE_TRUE(flow_ok);
 
-  /* A merge key first and a merge key last, in a flow mapping. */
   doc = cyaml_parse(
       "b: &b {p: 1, q: 2}\nf: {<<: *b, r: 3}\ng: {s: 0, <<: *b}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -3804,7 +3306,7 @@ TEST(dict_iter, walks_members_in_order_and_ends_cleanly) {
   cyaml_dictionary_set(d, "one", cyaml_create_int(1));
   cyaml_dictionary_set(d, "two", cyaml_create_string("2"));
   cyaml_dictionary_set(d, "three", cyaml_create_list());
-  cyaml_dictionary_iter_t it;
+  cyaml_dictionary_iter it;
   bool ok1 = cyaml_dictionary_first(d, &it);
   bool k1 = ok1 && strcmp(it.key, "one") == 0 &&
             it.value == cyaml_dictionary_get(d, "one");
@@ -3825,7 +3327,7 @@ TEST(dict_iter, walks_members_in_order_and_ends_cleanly) {
 }
 
 TEST(dict_iter, empty_null_and_wrong_type_give_false) {
-  cyaml_dictionary_iter_t it = {.key = "stale", .value = (cyaml)&it};
+  cyaml_dictionary_iter it = {.key = "stale", .value = (cyaml)&it};
   cyaml d = cyaml_create_dictionary();
   cyaml l = cyaml_create_list();
   bool empty =
@@ -3846,16 +3348,13 @@ TEST(dict_iter, empty_null_and_wrong_type_give_false) {
 }
 
 TEST(dict_iter, removing_the_current_member_keeps_the_cursor_valid) {
-  /* You may remove the member the cursor stands on, and the walk carries on
-   * with the member after it. Under valgrind or AddressSanitizer this also
-   * shows that the cursor never reads the freed member. */
   cyaml d = cyaml_create_dictionary();
   const char *names[] = {"a", "b", "c", "d", "e"};
   for (int i = 0; i < 5; i++)
     cyaml_dictionary_set(d, names[i], cyaml_create_int(i));
   char seen[16] = "";
   size_t n = 0;
-  cyaml_dictionary_iter_t it;
+  cyaml_dictionary_iter it;
   for (bool more = cyaml_dictionary_first(d, &it); more;
        more = cyaml_dictionary_next(&it)) {
     seen[n++] = it.key[0];
@@ -3873,35 +3372,26 @@ TEST(dict_iter, removing_the_current_member_keeps_the_cursor_valid) {
 }
 
 TEST(dict_iter, survives_replacement_of_current_and_other_values) {
-  /* The cursor holds the current member's successor, so replacing any
-   * member's value (the current one included) and removing a member other
-   * than the successor leave it valid, and the walk goes on in the same
-   * order. Under valgrind or AddressSanitizer this also shows that no step
-   * reads a freed entry. */
   cyaml d = cyaml_parse("{a: 1, b: 2, c: 3, d: 4, e: 5}", NULL);
   char order[8] = {0};
   size_t visited = 0;
   long long seen_d = 0;
-  ccol_retval_t r1 = ccol_success, r2 = ccol_success, r3 = ccol_success;
-  ccol_retval_t r4 = ccol_success;
+  ccol_retval r1 = ccol_success, r2 = ccol_success, r3 = ccol_success;
+  ccol_retval r4 = ccol_success;
   bool value_is_same_node_after_set = false;
-  cyaml_dictionary_iter_t it;
+  cyaml_dictionary_iter it;
   for (bool ok = cyaml_dictionary_first(d, &it); ok;
        ok = cyaml_dictionary_next(&it)) {
     if (visited < sizeof(order) - 1) order[visited] = it.key[0];
     visited++;
     if (strcmp(it.key, "a") == 0) {
-      /* The current member, through cyaml_dictionary_set(). */
       r1 = cyaml_dictionary_set(d, "a", cyaml_create_int(10));
     } else if (strcmp(it.key, "b") == 0) {
-      /* The current member, through cyaml_set(), which keeps the node. */
       cyaml before = it.value;
       r2 = cyaml_set(d, "b", 20);
       value_is_same_node_after_set = cyaml_dictionary_get(d, "b") == before;
-      /* Another member, which the walk has not reached yet. */
       r3 = cyaml_dictionary_set(d, "d", cyaml_create_int(40));
     } else if (strcmp(it.key, "c") == 0) {
-      /* A member other than the successor ("d"), here the predecessor. */
       r4 = cyaml_dictionary_remove(d, "a");
     } else if (strcmp(it.key, "d") == 0) {
       seen_d = cyaml_int_val(it.value);
@@ -3922,6 +3412,8 @@ TEST(dict_iter, survives_replacement_of_current_and_other_values) {
   REQUIRE_TRUE(out_ok);
 }
 
+// It checks the change on the original as well, so a set that does nothing and
+// a shallow clone both fail.
 TEST(clone, deep_independence) {
   const char *yaml =
       "server:\n"
@@ -3938,13 +3430,6 @@ TEST(clone, deep_independence) {
   REQUIRE_NE((void *)copy, NULL);
   REQUIRE_NE((void *)copy, (void *)original);
 
-  /* Change original, and the copy must not change. We assert the change
-   * itself and its effect on original, not only that copy keeps its value,
-   * because without those two assertions two broken behaviours would pass:
-   * a cyaml_set() that does nothing and reports success, and a fully
-   * shallow cyaml_clone() that shares its nodes. The test is here to tell
-   * those apart from the correct deep copy, which is independent of the
-   * source. */
   REQUIRE_EQ(cyaml_set(original, "server.host", "changed"), ccol_success);
   REQUIRE_STREQ(cyaml_str_val(cyaml_get(original, "server.host")), "changed");
   REQUIRE_STREQ(cyaml_str_val(cyaml_get(copy, "server.host")), "localhost");
@@ -3980,36 +3465,23 @@ TEST(clone, empty_dictionary) {
 }
 
 TEST(clone, oom_returns_null) {
-  /* When the first node allocation inside cyaml_clone fails, the function
-   * returns NULL and leaks nothing. */
   g_alloc_remaining = -1;
   cyaml src = cyaml_create_string_mp("hello", &g_counting_mp);
   REQUIRE_NE((void *)src, NULL);
 
   g_alloc_remaining = 0;
   cyaml copy = cyaml_clone(src);
-  /* The same comment in path.set_single_component_oom explains why the reset
-   * comes before this check and not after it. */
   g_alloc_remaining = -1;
   REQUIRE_EQ((void *)copy, NULL);
 
-  /* src is still whole, and destroying it works. */
   REQUIRE_STREQ(cyaml_str_val(src), "hello");
   cyaml_destroy(src);
 }
 
+// Fails an allocation at every budget and requires that a clone, when one
+// comes back, never holds fewer entries than the source. Each clone is freed
+// before its assertion, so valgrind sees no leak of the test's own.
 TEST(clone, dictionary_iterator_oom_never_returns_incomplete_clone) {
-  /* chashmap_begin_iter() returns NULL in two different cases, for a map
-   * that really is empty and for a non-empty map where the small allocation
-   * for one iteration fails for lack of memory. Code that reads both cases
-   * as "nothing to clone" would return a non-NULL clone that looks fine but
-   * quietly holds no key at all, which breaks the documented contract of
-   * "NULL when an allocation fails".
-   *
-   * The test fails an allocation at every budget from 0 to well past the
-   * whole clone's real allocation count, and at each budget it checks one
-   * property: a dictionary clone that cyaml_clone returns must never hold
-   * fewer entries than the source. */
   char *err = NULL;
   cyaml src = cyaml_parse_mp("a: 1\nb: 2\nc: 3\n", &err, &g_counting_mp);
   REQUIRE_EQ((void *)err, NULL);
@@ -4022,11 +3494,6 @@ TEST(clone, dictionary_iterator_oom_never_returns_incomplete_clone) {
     cyaml copy = cyaml_clone(src);
     g_alloc_remaining = -1;
     if (copy) {
-      /* The cleanup comes before the REQUIRE_* check below and not after it,
-       * because this test sweeps every allocation budget. Leaking its own
-       * copy on an assertion that already failed looks exactly like a real
-       * leak in the code under test, Valgrind can't tell the two apart, and
-       * running the test under valgrind would then tell us nothing. */
       size_t copy_size = cyaml_dictionary_size(copy);
       cyaml_destroy(copy);
       REQUIRE_EQ(copy_size, src_size);
@@ -4038,23 +3505,9 @@ TEST(clone, dictionary_iterator_oom_never_returns_incomplete_clone) {
   cyaml_destroy(src);
 }
 
+// A tree built through the API has no depth bound, so cyaml_clone() applies
+// the cap itself and returns NULL for a chain of 1000 levels.
 TEST(clone, exceeding_max_depth_returns_null_not_crashed) {
-  /* A tree that a caller gives to cyaml_clone() doesn't have to come from
-   * cyaml_parse(). CYAML_MAX_NESTING_DEPTH bounds what a parse builds, but a
-   * caller can also build a tree directly with cyaml_create_list() and
-   * cyaml_list_push(), and construction puts no bound on the depth at all.
-   *
-   * So cyaml_clone() has to apply the same limit itself, just as
-   * cyaml_serialize() does (see
-   * serialize.excessive_depth_rejected_not_crashed above). It reports
-   * NULL, its documented contract of "NULL when an allocation fails",
-   * instead of overflowing the stack and crashing on a tree that is just
-   * deep and has no cycle.
-   *
-   * The depth of 1000 is the one serialize.excessive_depth_rejected_not_crashed
-   * uses. It's well past the cap of 500 levels and still shallow enough for
-   * this test's cleanup, which is cyaml_destroy's tree walk. That walk has no
-   * depth guard, and at this depth it can't exhaust the stack. */
   size_t depth = 1000;
   cyaml root = cyaml_create_null();
   REQUIRE_NE((void *)root, NULL);
@@ -4072,9 +3525,6 @@ TEST(clone, exceeding_max_depth_returns_null_not_crashed) {
 }
 
 TEST(clone, deep_but_within_limit_list_still_works) {
-  /* A guard for the depth cap above. A tree well inside
-   * CYAML_MAX_NESTING_DEPTH (500) clones correctly and completely, and
-   * an off-by-one in the depth check must not reject it. */
   size_t depth = 100;
   cyaml root = cyaml_create_int(42);
   REQUIRE_NE((void *)root, NULL);
@@ -4101,31 +3551,11 @@ TEST(clone, deep_but_within_limit_list_still_works) {
   cyaml_destroy(copy);
 }
 
+// Fails an allocation at every budget across documents that build
+// dictionaries entry by entry, so a later failure tears down a dictionary
+// that already holds entries. There is no leak checker in tau; make memtest
+// catches a leak here.
 TEST(oom, parsing_a_dictionary_never_leaks_under_sustained_allocation_failure) {
-  /* The parser builds a dictionary one entry at a time, calling
-   * cyaml_dictionary_set once per entry across many turns of a loop in
-   * parse_flow_dictionary, parse_block_dictionary, parse_flow_list and
-   * merge_one_source_into. A LATER parse failure that has nothing to do with
-   * that dictionary then destroys the whole dictionary, and that destroy
-   * must never leak an entry the parser has already inserted.
-   *
-   * __cyaml_destroy's dictionary cleanup is node_clear, which reaches every
-   * child with chashmap_destroy_with_dtor (chashmap.h). That function walks the
-   * map's internal storage directly and so needs no allocation, while a walk
-   * that first lists the map with chashmap_begin_iter() does need one, and
-   * that small internal allocation can fail on its own when memory stays
-   * out.
-   *
-   * The test fails an allocation at every budget across six documents that
-   * go through every parser loop that builds a dictionary one entry at a
-   * time. Among them is a dictionary inside a flow dictionary's value, which
-   * finishes fine and is torn down later only by a failure further out, and
-   * a merge key ("<<") that the parser expands.
-   *
-   * tau has no leak checker, so the test can't find a leak. Its job is to
-   * drive these exact code paths under `make memtest`, which runs valgrind
-   * over the whole suite, and it's valgrind that catches a regression here and
-   * not an assertion in this function. */
   const char *docs[] = {
       "{z: 1, a: 2, m: 3}\n",
       "z: 1\na: 2\nm: 3\n",
@@ -4140,37 +3570,19 @@ TEST(oom, parsing_a_dictionary_never_leaks_under_sustained_allocation_failure) {
       char *err = NULL;
       cyaml doc = cyaml_parse_mp(docs[d], &err, &g_counting_mp);
       g_alloc_remaining = -1;
-      /* The parse error string is library storage and never freed; see the
-         ownership rule in common.h. */
       if (doc) cyaml_destroy(doc);
     }
   }
 }
 
+// An alias key and an anchored flow key can each fail only for lack of memory.
+// Such a failure must never look like "not a key" and end the dictionary
+// early, so a result that comes back must be the complete document.
 TEST(
     oom,
     dictionary_entry_key_resolution_never_returns_a_truncated_document_under_sustained_allocation_failure) {
-  /* Two branches of try_parse_scalar_dict_key() can only fail for lack of
-   * memory, and neither of them calls parse_err(). The first takes an alias
-   * as a key and calls cyaml_clone() on the aliased node, and the second
-   * takes an anchored flow collection as a key, where parse_flow_list() or
-   * parse_flow_dictionary() fails at its very first allocation.
-   *
-   * Every caller of this function reads ctx->error to tell "this isn't a
-   * dictionary entry after all" from "this is a real error" (see the
-   * function's own doc comment), so a memory failure that the function
-   * doesn't report must never look like a complete document. The wrong
-   * outcome would be "stop this dictionary here and hand back what's parsed
-   * so far as a complete, successful document".
-   *
-   * The test fails an allocation at every budget, with one document per
-   * branch, and at each budget checks one property: a non-NULL result always
-   * must be the complete, correct document and never a truncated one that
-   * misses a later entry. */
   const char *docs[] = {
-      /* An alias resolved directly as a dictionary key (3rd entry). */
       "x: &k v\na: 1\n*k: 2\n",
-      /* An anchored flow list used as a dictionary key (2nd entry). */
       "a: 1\n&x [1, 2]: value\n",
   };
   const size_t expected_sizes[] = {3, 2};
@@ -4182,52 +3594,20 @@ TEST(
       cyaml doc = cyaml_parse_mp(docs[d], &err, &g_counting_mp);
       g_alloc_remaining = -1;
       if (doc) {
-        /* The cleanup comes before the REQUIRE_* check below and not after
-         * it, because this test sweeps every allocation budget. Leaking its
-         * own doc on an assertion that already failed looks exactly like a
-         * real leak in the code under test, Valgrind can't tell the two
-         * apart, and running the test under valgrind would tell us nothing.
-         * Every other allocator-fault test of this file follows the same rule
-         * for its own baseline and reset step; see the anchored-key test
-         * above that also runs out of memory. */
         size_t actual_size = cyaml_dictionary_size(doc);
         cyaml_destroy(doc);
         REQUIRE_EQ(actual_size, expected_sizes[d]);
       } else {
-        /* err can legitimately be NULL as well, because under a tight enough
-         * budget the allocation of the error message string can fail too.
-         * The parsing_a_dictionary_never_leaks... test above has the same
-         * else-branch and checks err the same way. */
       }
     }
   }
 }
 
+// Every scalar branch of node_to_dict_key_string() reports its own message on
+// a failed strdup. The single-fault allocator leaves room for that message.
+// Only the existence of the specific message is checked, not what every other
+// index reports.
 TEST(oom, scalar_dictionary_key_oom_reports_specific_message) {
-  /* node_to_dict_key_string() has five scalar branches (STRING, INTEGER,
-   * FLOAT, NULL and BOOL), and each needs to report a message of its own when
-   * a bare ccol_strdup runs out of memory, like the LIST and DICTIONARY
-   * branch right next to them does.
-   *
-   * The "[1: a]" shorthand entry of parse_flow_list has no fallback message
-   * of its own either, unlike try_parse_scalar_dict_key, and converting the
-   * integer key "1" to a string can run out of memory. Without those five
-   * messages that failure would fall all the way through to parse_common's
-   * generic fallback instead of giving a real message.
-   *
-   * We use the single-fault allocator here and not g_counting_mp's budget
-   * style. Under a budget every call after the one that reaches zero fails
-   * too, so a budget-style failure leaves no headroom for the error message
-   * the parser builds, err would always be NULL and this test would tell us
-   * nothing. Failing exactly one call lets the rest of the parse, building
-   * the error string included, run as usual.
-   *
-   * The test sweeps every call index and checks that the parser reaches the
-   * specific message at some index. It deliberately asserts nothing about
-   * every OTHER failing index. Several unrelated allocation sites elsewhere
-   * in the parser have the same kind of gap and fall through to the generic
-   * fallback, but those sites are out of scope here, and this test isn't
-   * responsible for them and must not treat them as a regression. */
   const char *doc_src = "[1: a]\n";
   bool saw_specific_oom_message = false;
   for (int fail_at = 0; fail_at < 60; fail_at++) {
@@ -4246,42 +3626,10 @@ TEST(oom, scalar_dictionary_key_oom_reports_specific_message) {
   REQUIRE_TRUE(saw_specific_oom_message);
 }
 
+// A failed allocation in the speculative anchor or tag scan of a key, or in
+// anchors_store(), must be reported. Returning "not a key" there would leave
+// the position moved, so every failed allocation must fail the whole parse.
 TEST(oom, anchor_or_tag_decorated_key_oom_never_silently_succeeds) {
-  /* try_parse_scalar_dict_key()'s doc comment promises that returning "this
-   * isn't a key after all" always leaves ctx->pos back exactly where it was
-   * on entry. A caller reads ctx->error[0] to tell that case from a real
-   * error, and that's its only signal.
-   *
-   * try_parse_scalar_dict_key calls parse_anchor_name() and
-   * parse_tag_token() speculatively while it scans a possible "&anchor key:"
-   * or "!!tag key:" prefix, so those two functions must not return false on
-   * their own _ccol_mem_alloc failure without calling parse_err(). Such a
-   * return would break the contract. The caller sees ctx->error[0] == 0 and
-   * reads it as "not a key, and the position is already restored", but the
-   * position is NOT restored, since the scan has already moved it past the
-   * anchor or tag text, and the parse is then corrupt instead of failing.
-   *
-   * anchors_store() has the same requirement. The parser calls it once it
-   * confirms the key, to register the key's anchor for a later '*name', and
-   * it has to report a memory failure to its two callers
-   * (register_key_anchor() and the ordinary branch for a whole-node anchor)
-   * instead of quietly throwing away its clone and letting both callers
-   * report success.
-   *
-   * This document goes down the path of a key that carries an anchor: the
-   * '&' property-scanning branch of try_parse_scalar_dict_key, then
-   * register_key_anchor() and anchors_store(). Every allocation of this
-   * document is one call to _ccol_mem_alloc, node_alloc or
-   * chashmap_insert_elem and nothing retries it, which direct inspection
-   * confirms, since this input's dictionary has one entry and so no retry
-   * path of a chmap iterator ever runs.
-   *
-   * So a real allocation failure anywhere in this parse always has to make
-   * the whole document fail. For this call count there's no legitimate
-   * outcome where the parse "should still succeed", even though some other
-   * allocation sites of this parser can legitimately recover from one
-   * transient failure through the retry that chmap_begin_iter_safe
-   * holds. */
   const char *doc_src = "&a key: value\n";
 
   g_single_call_idx = 0;
@@ -4289,14 +3637,6 @@ TEST(oom, anchor_or_tag_decorated_key_oom_never_silently_succeeds) {
   char *baseline_err = NULL;
   cyaml baseline = cyaml_parse_mp(doc_src, &baseline_err, &g_single_fault_mp);
   int total_calls = g_single_call_idx;
-  /* The cleanup comes before the REQUIRE_* checks below and not after them.
-   * In an ordinary test a leak on an assertion that already failed is this
-   * file's accepted, uniform convention, but this test sweeps every
-   * allocation budget, so leaking its own baseline would look exactly like
-   * a real leak in the code under test; Valgrind can't tell the two apart,
-   * and running the test under valgrind would tell us nothing. Every other
-   * allocator-fault test of this file follows the same rule for its own
-   * baseline and reset step. */
   bool baseline_had_no_error = (baseline_err == NULL);
   bool baseline_succeeded = (baseline != NULL);
   if (baseline) cyaml_destroy(baseline);
@@ -4311,23 +3651,15 @@ TEST(oom, anchor_or_tag_decorated_key_oom_never_silently_succeeds) {
     char *err = NULL;
     cyaml doc = cyaml_parse_mp(doc_src, &err, &g_single_fault_mp);
     g_single_fail_at = -1;
-    /* Guards against a non-NULL doc even though one allocation was made to
-     * fail, since a correct parser reports a failure here every time
-     * for this document. doc is freed before the REQUIRE_EQ, for the reason
-     * above, because a failed REQUIRE_EQ returns past this cleanup. */
     bool doc_was_null = (doc == NULL);
     if (doc) cyaml_destroy(doc);
     REQUIRE_TRUE(doc_was_null);
   }
 }
 
+// Each failure gives either a failed parse with nothing leaked (memtest checks
+// that) or exactly the tree of an undisturbed parse.
 TEST(oom, every_allocation_failure_of_several_merge_keys_fails_cleanly) {
-  /* Several merge keys in one mapping go through the frame's merge-entry
-   * array, the temporary map that picks the winning values, the segment
-   * array and the moves that reorder the members. Failing each allocation
-   * of the parse in turn should give either a failed parse with no leak
-   * (valgrind checks that under make memtest) or exactly the tree of a parse
-   * without a failure. */
   static const char *const docs[] = {
       ("b: &b {x: 1, y: 2}\nc: &c {y: 3, z: 4}\n"
        "m:\n  p: 0\n  <<: *b\n  q: 1\n  <<: [*c, {w: 5}]\n  r: 2\n  x: 9\n"),
@@ -4363,30 +3695,10 @@ TEST(oom, every_allocation_failure_of_several_merge_keys_fails_cleanly) {
   }
 }
 
+// A failed allocation deep in a shared DOM helper reaches the parser's
+// fallback with no message of its own, and that fallback must name the memory
+// failure instead of "unknown parse error".
 TEST(oom, unreported_allocation_failure_reports_honest_fallback_not_vague_one) {
-  /* parse_common has a top-level fallback message that the parser reaches
-   * whenever a document fails to parse while ctx->error is empty. That
-   * message must not be the unhelpful "unknown parse error", which tells a
-   * caller nothing about a real memory failure.
-   *
-   * Every real syntax rejection in this parser calls parse_err() with a
-   * specific message before it reports the failure, which is this file's
-   * established convention. So the only thing that can reach the fallback
-   * with ctx->error empty is an allocation that failed deep in the call
-   * chain without a message of its own. Many low-level helpers that build
-   * the DOM are shared with the public API outside the parser, and they have
-   * no parse_ctx_t to report through.
-   *
-   * A sweep of the single-fault allocator across many document shapes
-   * confirms this. They cover block and flow mappings, block and flow
-   * sequences, scalars of every type, anchors, aliases, tags, merge keys,
-   * directives, block scalars and deeply nested structures, and with this
-   * guard in place the literal string "unknown parse error" can't be reached
-   * in any of them.
-   *
-   * This test drives two of those shapes directly, a plain block mapping and
-   * a flow sequence, and the guard's comment at its own call site gives the
-   * wider reasoning. */
   const char *docs[] = {"a: 1\nb: 2\n", "[1, 2, 3]\n"};
   bool saw_specific_oom_message = false;
   for (size_t d = 0; d < sizeof(docs) / sizeof(docs[0]); d++) {
@@ -4399,12 +3711,6 @@ TEST(oom, unreported_allocation_failure_reports_honest_fallback_not_vague_one) {
       if (doc) {
         cyaml_destroy(doc);
       } else if (err) {
-        /* The cleanup comes before the REQUIRE_* check below and not after
-         * it, because this test sweeps every allocation budget. Leaking its
-         * own err string on an assertion that already failed looks exactly
-         * like a real leak in the code under test, Valgrind can't tell the
-         * two apart, and running the test under valgrind would tell us
-         * nothing. */
         bool is_specific = strcmp(err, "unknown parse error") != 0;
         if (strstr(err, "out of memory") != NULL)
           saw_specific_oom_message = true;
@@ -4415,31 +3721,12 @@ TEST(oom, unreported_allocation_failure_reports_honest_fallback_not_vague_one) {
   REQUIRE_TRUE(saw_specific_oom_message);
 }
 
+// A continuation line is scanned straight into the shared buffer, and growing
+// it can fail. That must end in a clean parse failure, never a crash;
+// valgrind and a plain run both catch the crash.
 TEST(
     oom,
     plain_scalar_multiline_continuation_never_crashes_under_allocation_failure) {
-  /* parse_plain_scalar_multiline has a loop over the lines that continue a
-   * scalar, and that loop scans each such line's content straight into the
-   * shared accumulator buffer b. As the function's doc comment explains on
-   * line_floor, it appends into b directly and trims trailing whitespace
-   * back only to a recorded floor offset, so it needs no separate buffer per
-   * line.
-   *
-   * The allocator can fail while the scan grows b, and the parser should
-   * report that as a clean parse failure instead of crashing. The test
-   * guards against that whole class of hazard: an allocation failure while
-   * scanning a continuation line must not corrupt the parse or crash it.
-   * One such crash would be a strlen(NULL) on a scratch buffer whose own
-   * allocation failed.
-   *
-   * It fails an allocation at every budget across several plain scalars
-   * that continue over more than one line, some at the document root and
-   * some inside a flow collection.
-   *
-   * No assertion here can find a crash. The job is to drive this exact path
-   * under `make memtest`, which runs valgrind, and under a plain run too,
-   * and either of them aborts the whole suite on the defect this test
-   * guards against. */
   const char *docs[] = {
       "key: first line\n  second line\n",
       "key: first line\n  second line\n  third line\n",
@@ -4452,39 +3739,22 @@ TEST(
       char *err = NULL;
       cyaml doc = cyaml_parse_mp(docs[d], &err, &g_counting_mp);
       g_alloc_remaining = -1;
-      /* The parse error string is library storage and never freed; see the
-         ownership rule in common.h. */
       if (doc) cyaml_destroy(doc);
     }
   }
 }
 
-/* ========================================================================== */
-/*                         SERIALIZATION                                      */
-/* ========================================================================== */
+// Serialization
 
-/* A string whose spelling a YAML 1.1 reader resolves as a boolean must go
-   out QUOTED. This module parses it as a string, as YAML 1.2 requires, but
-   PyYAML in its default mode, Ruby's Psych and Go's yaml.v2 read a plain
-   unquoted "yes" in the output as the boolean true, so a document that
-   leaves this serializer and goes into one of those tools would quietly
-   change meaning. It's the "Norway problem", where the country code NO
-   turns into false. */
-/* The parse error message lives in LIBRARY storage. One rule covers the err
-   and err_str out-parameters of every module here: the library owns the
-   string and the caller never frees it (see the note at the top of
-   common.h). A message on the heap would give the same-looking parameter a
-   second, opposite ownership rule with nothing in the type or at the call
-   site to tell them apart, and it would allocate on a path a failed
-   allocation can reach. */
+// The parse error message lives in library storage, the same rule as for every
+// err and err_str out-parameter of the library (see common.h): the caller never
+// frees it, and a failed allocation can't make it disappear.
 TEST(parse_error_string, is_library_storage_and_survives_without_a_free) {
   char *err = NULL;
   cyaml bad = cyaml_parse("a: [1, 2", &err);
   REQUIRE_EQ((void *)bad, NULL);
   REQUIRE_NE((void *)err, NULL);
   REQUIRE_TRUE(strlen(err) > 0);
-  /* Nothing is freed here and nothing leaks, and the text stays readable
-     after the call that produced it has returned. */
   REQUIRE_TRUE(strlen(err) > 0);
 }
 
@@ -4497,9 +3767,6 @@ TEST(parse_error_string, a_successful_parse_clears_it) {
 }
 
 TEST(parse_error_string, the_next_failing_parse_replaces_the_text) {
-  /* The documented lifetime, the same one strerror(3) gives: the second
-     failure reuses the same storage, so the pointer stays the same and the
-     text is the new one. */
   char *first = NULL;
   cyaml a = cyaml_parse("a: [1, 2", &first);
   REQUIRE_EQ((void *)a, NULL);
@@ -4515,13 +3782,9 @@ TEST(parse_error_string, the_next_failing_parse_replaces_the_text) {
   REQUIRE_TRUE(strcmp(second, kept) != 0);
 }
 
+// The same failing parse runs with and without asking for the message, and
+// both runs must make the same number of allocations.
 TEST(parse_error_string, a_custom_allocator_never_sees_it) {
-  /* The message costs the caller's allocator nothing. We run the same
-     failing parse twice, once asking for the message and once discarding
-     it, and a message on the heap would make the first run cost exactly one
-     allocation more than the second. The comparison doesn't need to know
-     how many allocations the parse itself makes, so it doesn't go stale when
-     that number changes. */
   const char *doc = "\t- bad tab indent\n";
 
   g_tally = 0;
@@ -4540,6 +3803,9 @@ TEST(parse_error_string, a_custom_allocator_never_sees_it) {
   REQUIRE_EQ(allocs_with_msg, allocs_no_msg);
 }
 
+// PyYAML, Psych and yaml.v2 read a plain "yes" or "NO" as a boolean, so the
+// serializer quotes every YAML 1.1 boolean spelling even though this module
+// reads them as strings.
 TEST(serialize, yaml_1_1_boolean_spellings_are_quoted) {
   static const char *const words[] = {"y",  "Y",   "yes", "Yes", "YES", "n",
                                       "N",  "no",  "No",  "NO",  "on",  "On",
@@ -4557,10 +3823,9 @@ TEST(serialize, yaml_1_1_boolean_spellings_are_quoted) {
   }
 }
 
-/* Every spelling that a parse would read as another type gets quoted, and
- * the same text one byte longer or shorter is quoted only when that text is
- * itself on the list. The serializer compares the length before the bytes,
- * so this pins the exact list in both directions. */
+// Tells whether w is one of the spellings that a parse would read as another
+// type. The exact-list test uses it to check that a word one byte longer or
+// shorter than a listed one is quoted only when it is on the list itself.
 static bool cyaml_test_is_ambiguous_word(const char *w) {
   static const char *const list[] = {
       "~",     "null",  "Null",  "NULL", "true", "True",  "TRUE",  "false",
@@ -4573,6 +3838,8 @@ static bool cyaml_test_is_ambiguous_word(const char *w) {
   return false;
 }
 
+// Tells whether a string node holding w serializes in quotes, which the
+// quoting tests ask for every word of their lists.
 static bool cyaml_test_serializes_quoted(const char *w) {
   cyaml n = cyaml_create_string(w);
   if (!n) return false;
@@ -4594,9 +3861,6 @@ TEST(serialize, the_ambiguous_word_list_is_exact) {
     REQUIRE_TRUE(cyaml_test_serializes_quoted(words[i]));
     char longer[16];
     snprintf(longer, sizeof(longer), "%sz", words[i]);
-    /* A word that starts with a punctuation byte ("." or "-", say) needs
-     * quotes for other reasons whatever its length, so the longer and
-     * shorter forms are only checked for a word starting with a letter. */
     char c0 = words[i][0];
     if (!((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z'))) continue;
     REQUIRE_FALSE(cyaml_test_serializes_quoted(longer));
@@ -4611,10 +3875,9 @@ TEST(serialize, the_ambiguous_word_list_is_exact) {
   }
 }
 
-/* Every byte that can make a plain scalar unsafe in the middle of a string,
- * where only the scan over the whole string can find it, forces quotes,
- * while the same bytes in a harmless position leave the scalar plain. Each
- * string reads back as the same string. */
+// Every byte that makes a plain scalar unsafe in the middle of a string forces
+// quotes, while the same byte in a harmless position leaves it plain. Each
+// string reads back as the same string.
 TEST(serialize, a_byte_in_the_middle_that_needs_quotes_is_found) {
   static const char *const quoted[] = {"a #b",
                                        "a\t#b",
@@ -4674,7 +3937,6 @@ TEST(serialize, a_byte_in_the_middle_that_needs_quotes_is_found) {
     REQUIRE_TRUE(is_quoted);
     REQUIRE_TRUE(same);
   }
-  /* Every C0 control byte and DEL in the middle of a string. */
   for (int c = 0x01; c <= 0x7F; c = (c == 0x1F) ? 0x7F : c + 1) {
     char w[4] = {'a', (char)c, 'b', '\0'};
     cyaml n = cyaml_create_string(w);
@@ -4705,8 +3967,6 @@ TEST(serialize, a_byte_in_the_middle_that_needs_quotes_is_found) {
 }
 
 TEST(serialize, yaml_1_1_boolean_spellings_round_trip_as_strings) {
-  /* The quoting must not change what this module reads back, each of them
-     is the same string after parsing the serialized form. */
   static const char *const words[] = {"yes", "no", "on", "off", "y", "N"};
   for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
     cyaml n = cyaml_create_string(words[i]);
@@ -4725,9 +3985,6 @@ TEST(serialize, yaml_1_1_boolean_spellings_round_trip_as_strings) {
 }
 
 TEST(serialize, a_word_that_only_starts_like_a_keyword_stays_plain) {
-  /* The switch on the first byte must not quote more than the list names.
-     "yesterday" and "november" start with a candidate byte but they are
-     ordinary plain scalars. */
   static const char *const words[] = {"yesterday", "november", "online",
                                       "office",    "typical",  "format"};
   for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
@@ -4754,7 +4011,6 @@ TEST(serialize, null) {
 }
 
 TEST(serialize, null_handle_block) {
-  /* cyaml_serialize(NULL) gives "~\n" and not an empty string. */
   char *s = cyaml_serialize(NULL);
   REQUIRE_NE((void *)s, NULL);
   REQUIRE_STREQ(s, "~\n");
@@ -4762,7 +4018,6 @@ TEST(serialize, null_handle_block) {
 }
 
 TEST(serialize, null_handle_flow) {
-  /* cyaml_serialize_flow(NULL) must give "~". */
   char *s = cyaml_serialize_flow(NULL);
   REQUIRE_NE((void *)s, NULL);
   REQUIRE_STREQ(s, "~");
@@ -4805,12 +4060,9 @@ TEST(serialize, float_nan) {
   cyaml_destroy(n);
 }
 
+// "%.15g" writes 5.0 as "5", which would parse as an integer, so the
+// serializer appends ".0".
 TEST(serialize, float_whole_number_gets_dot_zero_suffix) {
-  /* yb_append_double formats a double with "%.15g", and for a double that
-   * holds a whole number such as 5.0 that gives "5", text with no '.', 'e'
-   * or 'E' that parses as a CYAML_INTEGER instead of the original
-   * CYAML_FLOAT. A branch of its own appends ".0" so the parse gives a float
-   * again, and this test pins the round trip through that branch. */
   cyaml n = cyaml_create_double(5.0);
   char *s = cyaml_serialize(n);
   REQUIRE_NE((void *)s, NULL);
@@ -4839,17 +4091,13 @@ TEST(serialize, quoted_string_null_like) {
   cyaml n = cyaml_create_string("null");
   char *s = cyaml_serialize(n);
   REQUIRE_NE((void *)s, NULL);
-  /* The text "null" needs quotes, otherwise parsing it would give
-     CYAML_NULL. */
   REQUIRE_NE(strstr(s, "null"), NULL);
-  REQUIRE_NE(s[0], 'n'); /* the output has quotes, and is not a plain 'null' */
+  REQUIRE_NE(s[0], 'n');
   cyaml_serialize_free(s);
   cyaml_destroy(n);
 }
 
 TEST(serialize, quoted_string_null_variants_round_trip) {
-  /* The serializer quotes "Null" and "NULL", so parsing the output
-   * gives CYAML_STRING and not CYAML_NULL. */
   const char *cases[] = {"Null", "NULL", NULL};
   for (int i = 0; cases[i]; i++) {
     cyaml n = cyaml_create_string(cases[i]);
@@ -4869,8 +4117,6 @@ TEST(serialize, quoted_string_null_variants_round_trip) {
 }
 
 TEST(serialize, quoted_string_bool_variants_round_trip) {
-  /* The serializer has to quote "True", "TRUE", "False" and "FALSE", so
-   * parsing the output gives CYAML_STRING and not CYAML_BOOL. */
   const char *cases[] = {"True", "TRUE", "False", "FALSE", NULL};
   for (int i = 0; cases[i]; i++) {
     cyaml n = cyaml_create_string(cases[i]);
@@ -4890,9 +4136,6 @@ TEST(serialize, quoted_string_bool_variants_round_trip) {
 }
 
 TEST(serialize, empty_string_round_trip) {
-  /* The serializer writes an empty CYAML_STRING as two quote
-   * characters, and parsing that output gives a CYAML_STRING with an
-   * empty value. */
   cyaml n = cyaml_create_string("");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
@@ -4915,7 +4158,6 @@ TEST(serialize, mapping_round_trip) {
   REQUIRE_EQ((void *)err, NULL);
   char *out = cyaml_serialize(doc);
   REQUIRE_NE((void *)out, NULL);
-  /* Parse the serialized form again and check that the values survive. */
   cyaml doc2 = cyaml_parse(out, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc2, NULL);
@@ -4966,14 +4208,9 @@ TEST(serialize, flow_mapping) {
   cyaml_destroy(m);
 }
 
+// The canonical text of a dictionary key sorts its keys, and that sort must
+// not leak into the public serializers, which keep insertion order.
 TEST(serialize, multi_key_flow_mapping_preserves_iteration_order) {
-  /* The internal canonical mode sorts the keys of a dictionary that is used
-   * as a key itself. See
-   * flow_collections.non_scalar_multi_key_dictionary_key_is_canonically_
-   * sorted. That sort must not leak into the output order of the public
-   * serializers, which write members in insertion order and must not sort
-   * them by key. The keys go in out of alphabetical order, so a sort, a
-   * reversal and the insertion order are all different. */
   cyaml m = cyaml_create_dictionary();
   cyaml_dictionary_set(m, "c", cyaml_create_int(3));
   cyaml_dictionary_set(m, "a", cyaml_create_int(1));
@@ -4990,8 +4227,6 @@ TEST(serialize, multi_key_flow_mapping_preserves_iteration_order) {
 }
 
 TEST(serialize, empty_sequence_nested_in_mapping_round_trip) {
-  /* The serializer should write a dictionary value that is an empty list
-   * with the right indentation, so parsing that output gives it back. */
   cyaml doc = cyaml_create_dictionary();
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(doc, "key", cyaml_create_list()),
@@ -5017,9 +4252,6 @@ TEST(serialize, empty_sequence_nested_in_mapping_round_trip) {
 }
 
 TEST(serialize, empty_mapping_nested_in_mapping_round_trip) {
-  /* Same for a dictionary value that is an empty dictionary: the serializer
-   * writes it with the right indentation, so parsing that output gives it
-   * back. */
   cyaml doc = cyaml_create_dictionary();
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(doc, "sub", cyaml_create_dictionary()),
@@ -5045,9 +4277,6 @@ TEST(serialize, empty_mapping_nested_in_mapping_round_trip) {
 }
 
 TEST(serialize, empty_sequence_as_sequence_element_round_trip) {
-  /* An empty list can be an element of an outer list, and the serializer has
-   * to write it with the right indentation so that parsing the output
-   * works. */
   cyaml outer = cyaml_create_list();
   REQUIRE_NE((void *)outer, NULL);
   REQUIRE_EQ(cyaml_list_push(outer, cyaml_create_int(1)), ccol_success);
@@ -5073,21 +4302,12 @@ TEST(serialize, empty_sequence_as_sequence_element_round_trip) {
   cyaml_destroy(doc2);
 }
 
+// Fails an allocation at every budget and requires that a serialization that
+// comes back holds every key, and that at least one budget succeeds, so a
+// serializer that always returns NULL doesn't pass.
 TEST(
     serialize,
     dictionary_never_serializes_incomplete_under_sustained_allocation_failure) {
-  /* The CYAML_DICTIONARY case of serialize_block() and serialize_flow()
-   * walks the dictionary with chmap_begin_iter_safe(), which can
-   * legitimately return NULL for a map that is NOT empty when memory stays
-   * out (see the helper's own doc comment).
-   *
-   * Code that read that NULL as "nothing left to walk" would let
-   * cyaml_serialize() and cyaml_serialize_flow() return a non-NULL string
-   * that looks fine but misses some of the dictionary's entries, which
-   * breaks the documented contract of "NULL when memory runs out".
-   *
-   * The test fails an allocation at every budget and checks one property at
-   * each budget: a non-NULL result holds every original key. */
   char *err = NULL;
   cyaml src =
       cyaml_parse_mp("a: 1\nb: 2\nc: 3\nd: 4\ne: 5\n", &err, &g_counting_mp);
@@ -5095,13 +4315,6 @@ TEST(
   REQUIRE_NE((void *)src, NULL);
   REQUIRE_EQ(cyaml_dictionary_size(src), (size_t)5);
 
-  /* Every REQUIRE_* below sits inside an "if (block)" or "if (flow)" guard,
-   * and most budgets of this sweep are deliberately too small to succeed at
-   * all, so the test also checks that at least one budget DID succeed.
-   * Without that, a regression could make cyaml_serialize() and
-   * cyaml_serialize_flow() return NULL for this tree at every budget, and a
-   * test that only checks that nothing crashes would pass exactly as it does
-   * for the correct behaviour it's here to pin. */
   bool saw_block_success = false;
   bool saw_flow_success = false;
 
@@ -5111,11 +4324,6 @@ TEST(
     g_alloc_remaining = -1;
     if (block) {
       saw_block_success = true;
-      /* The cleanup comes before the REQUIRE_* checks below and not after
-       * them, because this test sweeps every allocation budget. Leaking its
-       * own buffer on an assertion that already failed looks exactly like a
-       * real leak in the code under test, Valgrind can't tell the two apart,
-       * and running the test under valgrind would tell us nothing. */
       bool has_a = strstr(block, "a:") != NULL;
       bool has_b = strstr(block, "b:") != NULL;
       bool has_c = strstr(block, "c:") != NULL;
@@ -5134,7 +4342,6 @@ TEST(
     g_alloc_remaining = -1;
     if (flow) {
       saw_flow_success = true;
-      /* See the same comment on the block branch above for why. */
       bool has_a = strstr(flow, "a:") != NULL;
       bool has_b = strstr(flow, "b:") != NULL;
       bool has_c = strstr(flow, "c:") != NULL;
@@ -5156,9 +4363,7 @@ TEST(
   cyaml_destroy(src);
 }
 
-/* ========================================================================== */
-/*                         SCOPED LIFECYCLE                                   */
-/* ========================================================================== */
+// Scoped lifecycle
 
 TEST(lifecycle, scoped_destroy) {
   cyaml out = NULL;
@@ -5167,18 +4372,13 @@ TEST(lifecycle, scoped_destroy) {
     doc = cyaml_parse("key: 42\n", NULL);
     REQUIRE_NE((void *)doc, NULL);
     out = cyaml_clone(doc);
-    /* The scope ends here and the macro destroys doc for us. */
   }
-  /* The node out must be valid, because it is a clone. */
   REQUIRE_NE((void *)out, NULL);
   REQUIRE_EQ(cyaml_int_val(cyaml_dictionary_get(out, "key")), 42LL);
   cyaml_destroy(out);
 }
 
 TEST(lifecycle, declare_macro) {
-  /* cyaml_declare is just a declaration of a typed variable, so it
-   * behaves as a normal lvalue that an assignment, cyaml_get and
-   * cyaml_destroy all accept. */
   cyaml_declare(n);
   n = cyaml_create_int(42);
   REQUIRE_NE((void *)n, NULL);
@@ -5188,11 +4388,9 @@ TEST(lifecycle, declare_macro) {
   REQUIRE_EQ((void *)n, NULL);
 }
 
+// The fifth push needs a realloc, which the empty budget refuses, and the
+// push then destroys the child and reports the failure.
 TEST(lifecycle, list_push_oom) {
-  /* Fill a list backed by g_counting_mp up to the first cvector capacity,
-   * which is 4, so the next push needs a realloc. Then block every
-   * allocation of g_counting_mp and check that cyaml_list_push destroys the
-   * victim child and returns a failure code instead of leaking it. */
   g_alloc_remaining = -1;
   cyaml list = cyaml_create_list_mp(&g_counting_mp);
   REQUIRE_NE((void *)list, NULL);
@@ -5206,12 +4404,8 @@ TEST(lifecycle, list_push_oom) {
   g_alloc_remaining = 0;
   cyaml victim = cyaml_create_int(99);
   REQUIRE_NE((void *)victim, NULL);
-  ccol_retval_t r = cyaml_list_push(list, victim);
-  /* Reset the budget before checking the result. The same comment in
-   * path.set_single_component_oom above explains why the reset must not come
-   * after a REQUIRE_* check, which can return from this function early. */
+  ccol_retval r = cyaml_list_push(list, victim);
   g_alloc_remaining = -1;
-  /* list_push owns victim and destroys it whatever the outcome. */
   REQUIRE_NE(r, ccol_success);
 
   REQUIRE_EQ(cyaml_list_len(list), (size_t)4);
@@ -5219,9 +4413,6 @@ TEST(lifecycle, list_push_oom) {
 }
 
 TEST(lifecycle, dictionary_set_oom) {
-  /* The insert into the chmap behind the dictionary fails once
-   * g_counting_mp runs out, and then cyaml_dictionary_set has to destroy the
-   * child and return a failure code. */
   g_alloc_remaining = -1;
   cyaml doc = cyaml_create_dictionary_mp(&g_counting_mp);
   REQUIRE_NE((void *)doc, NULL);
@@ -5229,28 +4420,17 @@ TEST(lifecycle, dictionary_set_oom) {
   g_alloc_remaining = 0;
   cyaml val = cyaml_create_int(42);
   REQUIRE_NE((void *)val, NULL);
-  ccol_retval_t r = cyaml_dictionary_set(doc, "key", val);
-  /* Reset the budget before checking the result. The same comment in
-   * path.set_single_component_oom above explains why the reset must not come
-   * after a REQUIRE_* check, which can return from this function early. */
+  ccol_retval r = cyaml_dictionary_set(doc, "key", val);
   g_alloc_remaining = -1;
-  /* dictionary_set owns val and destroys it whatever the outcome. */
   REQUIRE_NE(r, ccol_success);
 
   REQUIRE_EQ(cyaml_dictionary_size(doc), (size_t)0);
   cyaml_destroy(doc);
 }
 
+// A node that already has a parent is refused and left alone. Accepting it
+// would give it two parents and a double free when both are destroyed.
 TEST(lifecycle, list_push_refuses_an_already_attached_child) {
-  /* The call rejects a node that already has a parent and leaves it
-   * completely alone instead of giving it a second owner. Accepting such a
-   * node would give it two parents, and both would free it when they're
-   * destroyed.
-   *
-   * Without the guard the push succeeds, and destroying the two lists is
-   * then a double free, which AddressSanitizer reports as a
-   * heap-use-after-free and an ordinary build turns into a crash or silent
-   * heap corruption. */
   cyaml first = cyaml_create_list();
   cyaml second = cyaml_create_list();
   cyaml child = cyaml_create_string("v");
@@ -5259,7 +4439,7 @@ TEST(lifecycle, list_push_refuses_an_already_attached_child) {
   REQUIRE_NE((void *)child, NULL);
   REQUIRE_EQ(cyaml_list_push(first, child), ccol_success);
 
-  ccol_retval_t r = cyaml_list_push(second, child);
+  ccol_retval r = cyaml_list_push(second, child);
   size_t first_size = cyaml_list_len(first);
   size_t second_size = cyaml_list_len(second);
 
@@ -5267,14 +4447,11 @@ TEST(lifecycle, list_push_refuses_an_already_attached_child) {
   cyaml_destroy(first);
 
   REQUIRE_EQ(r, ccol_invalid_args);
-  REQUIRE_EQ(first_size, (size_t)1); /* the first parent still owns it */
+  REQUIRE_EQ(first_size, (size_t)1);
   REQUIRE_EQ(second_size, (size_t)0);
 }
 
 TEST(lifecycle, dictionary_set_refuses_an_already_attached_child) {
-  /* The same rule on the dictionary side, reached the way a real caller gets
-   * there: cyaml_dictionary_get hands back a borrowed reference, and such a
-   * reference always names a node that already has a parent. */
   cyaml owner = cyaml_create_dictionary();
   cyaml other = cyaml_create_dictionary();
   cyaml val = cyaml_create_int(42);
@@ -5284,9 +4461,8 @@ TEST(lifecycle, dictionary_set_refuses_an_already_attached_child) {
   REQUIRE_EQ(cyaml_dictionary_set(owner, "k", val), ccol_success);
 
   cyaml borrowed = cyaml_dictionary_get(owner, "k");
-  ccol_retval_t r = cyaml_dictionary_set(other, "copy", borrowed);
+  ccol_retval r = cyaml_dictionary_set(other, "copy", borrowed);
   size_t other_size = cyaml_dictionary_size(other);
-  /* The original mapping is untouched and reading it works. */
   cyaml still_there = cyaml_dictionary_get(owner, "k");
   bool original_intact = (still_there == borrowed);
 
@@ -5299,10 +4475,6 @@ TEST(lifecycle, dictionary_set_refuses_an_already_attached_child) {
 }
 
 TEST(lifecycle, dictionary_set_accepts_a_key_set_to_its_own_current_value) {
-  /* In one case the call accepts a child that is already attached: the
-   * caller gives back the borrowed reference that this very slot holds, so
-   * there's nothing to do. The rejection above must not catch this case,
-   * and the call must not free the node the dictionary points at. */
   cyaml doc = cyaml_create_dictionary();
   cyaml val = cyaml_create_int(7);
   REQUIRE_NE((void *)doc, NULL);
@@ -5310,7 +4482,7 @@ TEST(lifecycle, dictionary_set_accepts_a_key_set_to_its_own_current_value) {
   REQUIRE_EQ(cyaml_dictionary_set(doc, "k", val), ccol_success);
 
   cyaml borrowed = cyaml_dictionary_get(doc, "k");
-  ccol_retval_t r = cyaml_dictionary_set(doc, "k", borrowed);
+  ccol_retval r = cyaml_dictionary_set(doc, "k", borrowed);
   cyaml after = cyaml_dictionary_get(doc, "k");
   bool same_node = (after == borrowed);
   long long v = after ? cyaml_int_val(after) : -1;
@@ -5323,16 +4495,13 @@ TEST(lifecycle, dictionary_set_accepts_a_key_set_to_its_own_current_value) {
 }
 
 TEST(lifecycle, a_container_refuses_to_be_attached_to_itself) {
-  /* A self attach makes the container its own child, so destroying it walks
-   * into itself. A tree's root isn't attached, so the attached flag alone
-   * doesn't cover this case, but the identity check does. */
   cyaml seq = cyaml_create_list();
   cyaml map = cyaml_create_dictionary();
   REQUIRE_NE((void *)seq, NULL);
   REQUIRE_NE((void *)map, NULL);
 
-  ccol_retval_t rs = cyaml_list_push(seq, seq);
-  ccol_retval_t rm = cyaml_dictionary_set(map, "self", map);
+  ccol_retval rs = cyaml_list_push(seq, seq);
+  ccol_retval rm = cyaml_dictionary_set(map, "self", map);
   size_t seq_size = cyaml_list_len(seq);
   size_t map_size = cyaml_dictionary_size(map);
 
@@ -5345,11 +4514,9 @@ TEST(lifecycle, a_container_refuses_to_be_attached_to_itself) {
   REQUIRE_EQ(map_size, (size_t)0);
 }
 
+// A bad container destroys a child the caller owns, but never a child that
+// belongs to another tree.
 TEST(lifecycle, a_rejected_attach_into_a_bad_container_spares_an_owned_child) {
-  /* The call always takes ownership of a child the caller owns, and that's
-   * why a container of the wrong type, or a NULL container, destroys that
-   * child. This rule must not reach a child that somebody else owns, since
-   * freeing it would tear a live node out of another tree. */
   cyaml owner = cyaml_create_list();
   cyaml scalar = cyaml_create_string("not a container");
   cyaml child = cyaml_create_string("v");
@@ -5358,10 +4525,8 @@ TEST(lifecycle, a_rejected_attach_into_a_bad_container_spares_an_owned_child) {
   REQUIRE_NE((void *)child, NULL);
   REQUIRE_EQ(cyaml_list_push(owner, child), ccol_success);
 
-  /* scalar isn't a list so the call rejects it, while child belongs to owner
-   * and survives this call. */
-  ccol_retval_t r = cyaml_list_push(scalar, child);
-  ccol_retval_t r2 = cyaml_list_push(NULL, child);
+  ccol_retval r = cyaml_list_push(scalar, child);
+  ccol_retval r2 = cyaml_list_push(NULL, child);
   size_t owner_size = cyaml_list_len(owner);
   cyaml still_there = cyaml_list_get(owner, 0);
   bool child_survived = (still_there == child);
@@ -5376,8 +4541,6 @@ TEST(lifecycle, a_rejected_attach_into_a_bad_container_spares_an_owned_child) {
 }
 
 TEST(lifecycle, remove_null_args) {
-  /* A remove function returns ccol_invalid_args, and doesn't crash, for a
-   * NULL map, a NULL seq and a NULL key. */
   cyaml doc = cyaml_create_dictionary();
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_dictionary_remove(NULL, "key"), ccol_invalid_args);
@@ -5387,9 +4550,7 @@ TEST(lifecycle, remove_null_args) {
   REQUIRE_EQ(cyaml_list_remove(NULL, 0), ccol_invalid_args);
 }
 
-/* ========================================================================== */
-/*                         COMPLEX / REAL-WORLD SCENARIOS                    */
-/* ========================================================================== */
+// Complex and real-world documents
 
 TEST(real_world, docker_compose_like) {
   const char *yaml =
@@ -5492,16 +4653,9 @@ TEST(real_world, github_actions_like) {
   cyaml_destroy(doc);
 }
 
+// Merge keys inside a realistic document, with an anchored mapping followed by
+// a sibling key at the same indentation, which the anchor must not swallow.
 TEST(real_world, ansible_like_with_anchors) {
-  /* Both tasks get &common through a "<<: *common" merge key instead of
-   * writing its fields out again, so the test catches a regression inside a
-   * realistic document of several levels, covering anchor registration,
-   * alias resolution and merge key expansion.
-   *
-   * The document also has an anchored mapping followed right by a sibling
-   * key ("tasks") at the SAME indentation. That's the riskiest shape,
-   * because a parser can swallow the sibling key into the anchor's value
-   * instead of making it an entry of its own. */
   const char *yaml =
       "defaults: &common\n"
       "  timeout: 30\n"
@@ -5530,7 +4684,6 @@ TEST(real_world, ansible_like_with_anchors) {
   REQUIRE_EQ(cyaml_type(tasks), CYAML_LIST);
   REQUIRE_EQ(cyaml_list_len(tasks), (size_t)2);
 
-  /* The first task takes both of its fields from the merge alone. */
   cyaml task0 = cyaml_list_get(tasks, 0);
   REQUIRE_NE((void *)task0, NULL);
   REQUIRE_STREQ(cyaml_str_val(cyaml_dictionary_get(task0, "name")),
@@ -5538,7 +4691,6 @@ TEST(real_world, ansible_like_with_anchors) {
   REQUIRE_EQ(cyaml_int_val(cyaml_dictionary_get(task0, "timeout")), 30LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_dictionary_get(task0, "max_retries")), 3LL);
 
-  /* In the second task the explicit keys override the merged values. */
   cyaml task1 = cyaml_list_get(tasks, 1);
   REQUIRE_NE((void *)task1, NULL);
   REQUIRE_STREQ(cyaml_str_val(cyaml_dictionary_get(task1, "name")),
@@ -5608,10 +4760,6 @@ TEST(real_world, comments_ignored) {
 }
 
 TEST(real_world, comment_terminated_by_bare_cr_does_not_swallow_next_line) {
-  /* A lone '\r' with no '\n' after it has to end a "# comment", just like a
-   * '\n' or a "\r\n". skip_ws_comments uses skip_to_eol, and if skip_to_eol
-   * only knew '\n', a comment ended by a bare CR would swallow the whole
-   * next line as part of the comment. */
   const char *yaml = "a: 1 # note\rb: 2\n";
   char *err = NULL;
   cyaml doc = cyaml_parse(yaml, &err);
@@ -5623,9 +4771,7 @@ TEST(real_world, comment_terminated_by_bare_cr_does_not_swallow_next_line) {
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         ERROR HANDLING                                     */
-/* ========================================================================== */
+// Error handling
 
 TEST(errors, unterminated_double_quote) {
   char *err = NULL;
@@ -5642,11 +4788,6 @@ TEST(errors, unterminated_single_quote) {
 }
 
 TEST(errors, indented_doc_end_marker_is_plain_scalar_continuation) {
-  /* An indented '...' isn't an end-of-document marker, because the YAML spec
-   * wants every document marker at column 0. This '...' is indented more
-   * than the mapping around it, so it's ordinary content continuing a plain
-   * scalar over more than one line and not an error. PyYAML agrees and gives
-   * {key: "value ..."}. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: value\n  ...\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -5675,58 +4816,30 @@ TEST(errors, null_input_ignored_error) {
 }
 
 TEST(errors, null_input_parse_n) {
-  /* cyaml_parse_n with a NULL input returns NULL and sets the error
-   * string, just like cyaml_parse does when the caller passes a non-NULL
-   * error pointer. */
   char *err = NULL;
   cyaml doc = cyaml_parse_n(NULL, 0, &err);
   REQUIRE_EQ((void *)doc, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
+// A finished flow list element followed by an invalid continuation line must
+// be freed on the error path together with the list.
 TEST(errors, flow_list_element_error_cleanup_no_leak) {
-  /* An element of a flow list can parse fine and then run into an invalid
-   * continuation. Here the continuation line comes after a newline indented
-   * by no space at all, since its tab is separation and not indentation, and
-   * "a"'s value needs one space. On the way out the error path must free
-   * that finished element and not only the flow list built so far, or this
-   * input leaks. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: [1\n\tb]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
   REQUIRE_NE((void *)err, NULL);
 
-  /* The closing bracket may only sit at the key's column after spaces, a tab
-   * in front of it leaves it indented by nothing. */
   err = NULL;
   doc = cyaml_parse("a: [1\n\t]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
+// A chain of "? " keys on one line makes the canonical key text grow as
+// 2^depth. The canonical key length limit refuses it at a shallow depth. The
+// clock bound catches a slow parse; a real hang is left to SUITE_TIMEOUT.
 TEST(errors, deeply_nested_explicit_keys_rejected_not_hung) {
-  /* One line can hold a chain of "? " explicit-key indicators where each
-   * one's key is the whole rest of the chain after it, and that shape is a
-   * real denial-of-service vector.
-   *
-   * node_to_dict_key_string turns a non-scalar key into canonical text by
-   * putting double quotes again around the text the level below has already
-   * produced. So the length of the canonical string, and the time to build
-   * it, grow as O(2^depth) and not O(depth). Without a guard an input of
-   * about 200 bytes with 100 levels eats an unbounded amount of time and
-   * memory.
-   *
-   * Two limits could stop this input, CYAML_MAX_CANONICAL_KEY_LEN and
-   * CYAML_MAX_NESTING_DEPTH. The length limit on a canonical key rejects
-   * the pattern at a shallow depth, so the parse never gets near the
-   * nesting limit.
-   *
-   * The parse should reject the input and return quickly, without hanging or
-   * crashing. The clock() bound, checked once the parse has returned, fails
-   * a regression that is slow but finishes; one that really hangs is left
-   * to the per-module SUITE_TIMEOUT of the run, since Tau has no per-test
-   * timeout. The correct parse takes well under a millisecond, so 2 seconds
-   * leaves room for any slow runner. */
   char input[203];
   int off = 0;
   for (int i = 0; i < 100; i++) {
@@ -5745,30 +4858,11 @@ TEST(errors, deeply_nested_explicit_keys_rejected_not_hung) {
   REQUIRE_LT(elapsed_s, 2.0);
 }
 
+// "?" lines at the same column are siblings whether a '\n' or a bare '\r'
+// ends them. A column scan that only knows '\n' would make them nest, and
+// the value type of the one entry tells the two parses apart.
 TEST(errors,
      repeated_explicit_key_lines_separated_by_bare_cr_flatten_not_nest) {
-  /* A guard on current_col() and line_start_pos() for a bare CR. A chain of
-   * separate "?" lines at the SAME column holds sibling entries and not
-   * nested ones, unlike the chain in
-   * deeply_nested_explicit_keys_rejected_not_hung above, whose "? ? ? ..."
-   * is on one line and really nested. Whether a '\n' or a bare '\r' sits
-   * between the lines makes no difference. PyYAML agrees, and it also
-   * collapses 100 repeated "?\n" lines at column 0 into one {null: null}
-   * entry, since each later bare key defines the same null key again.
-   *
-   * So current_col() and line_indent_has_tab() has to treat a bare '\r' as
-   * the start of a line in their backward scan. If they only knew '\n', a
-   * line ending in a lone '\r' would put every later "?" at a wrong,
-   * climbing column, and the parser would read this exact shape as real
-   * nesting.
-   *
-   * The parse finishes right away and gives the same flat, harmless
-   * dictionary of one entry as the '\n'-separated version. We check the key
-   * and value type of that one entry, not just the top-level size, because
-   * that's what tells the flat parse apart from the deeply nested misparse:
-   * a misparse as {null: {null: {...}}} also has exactly one entry at the
-   * top level, but that entry's value would be a CYAML_DICTIONARY instead of
-   * a CYAML_NULL. */
   char input[201];
   for (int i = 0; i < 100; i++) {
     input[i * 2] = '?';
@@ -5788,11 +4882,6 @@ TEST(errors,
 }
 
 TEST(errors, oversized_flat_non_scalar_key_rejected) {
-  /* CYAML_MAX_CANONICAL_KEY_LEN (64 KiB) guards the canonical text of every
-   * non-scalar dictionary key, not just the O(2^depth) shape of deeply
-   * nested explicit keys that deeply_nested_explicit_keys_rejected_not_hung
-   * above covers. The parser also rejects one flat key without any
-   * recursion whose own canonical text alone goes past the limit. */
   size_t str_len = 70000;
   size_t cap = str_len + 64;
   char *input = malloc(cap);
@@ -5808,18 +4897,9 @@ TEST(errors, oversized_flat_non_scalar_key_rejected) {
   REQUIRE_NE((void *)err, NULL);
 }
 
+// A plain deep chain of block sequences, which only the nesting depth limit
+// bounds.
 TEST(errors, excessive_parse_nesting_depth_rejected_not_crashed) {
-  /* An ordinary deep chain of nesting doesn't grow exponentially. This one
-   * is plain block sequences and not the non-scalar explicit key pattern
-   * above, and CYAML_MAX_NESTING_DEPTH alone is enough to bound it. That bound
-   * protects against a plain stack overflow from recursion without a depth
-   * limit, and it works separately from the canonical key length guard
-   * above, which this input never reaches since none of its keys is a
-   * non-scalar.
-   *
-   * Expect the parse to reject the input and return quickly, without hanging
-   * or crashing. The test asserts that directly with clock(), for the reason
-   * deeply_nested_explicit_keys_rejected_not_hung above gives. */
   size_t n = 2000;
   char *input = malloc(n * 2 + 1);
   REQUIRE_NE((void *)input, NULL);
@@ -5838,32 +4918,12 @@ TEST(errors, excessive_parse_nesting_depth_rejected_not_crashed) {
   free(input);
 }
 
+// A "billion laughs" document of nested aliases must hit the node budget
+// (CYAML_MAX_PARSE_NODES) and fail quickly. The CPU bound is generous because
+// the guard trips only after building that many clones (seconds under
+// valgrind).
 TEST(errors, exponential_alias_expansion_rejected_not_exhausted) {
-  /* Every alias reference builds an independent deep clone of its anchor's
-   * subtree. A document can nest aliases of aliases, so the final count of
-   * live nodes grows exponentially with the number of anchor levels while
-   * the source text and the parser's recursion depth stay small. This is
-   * the classic "billion laughs" entity expansion shape and a real
-   * denial-of-service vector.
-   *
-   * It's different from both guards above, since this input never nests
-   * explicit keys and its recursion depth never gets near
-   * CYAML_MAX_NESTING_DEPTH. The node allocation budget
-   * (CYAML_MAX_PARSE_NODES) needs to reject it quickly instead of exhausting
-   * memory or hanging, and the test asserts that directly with clock(), for
-   * the reason deeply_nested_explicit_keys_rejected_not_hung above gives.
-   *
-   * That other test is rejected within microseconds, because the canonical
-   * key length guard catches it at a shallow depth, while this guard only
-   * trips after the parser really builds and frees CYAML_MAX_PARSE_NODES
-   * clones, so the bound here is far more generous. A plain run takes about
-   * 0.5 seconds of CPU time and a run under valgrind's per-allocation
-   * instrumentation 8 to 13 seconds on a fast machine. The bound only fails
-   * a parse that is slow but finishes; what proves the limit is the refused
-   * parse, and a parse with no limit at all builds 2^30 nodes, which the
-   * per-module SUITE_TIMEOUT of the run ends. 300 seconds of CPU time leaves
-   * room for valgrind on a slow CI virtual machine. */
-  const int levels = 30; /* 2^30 nodes if ever fully materialized */
+  const int levels = 30;
   size_t cap = 64 + (size_t)levels * 40;
   char *input = malloc(cap);
   REQUIRE_NE((void *)input, NULL);
@@ -5883,8 +4943,8 @@ TEST(errors, exponential_alias_expansion_rejected_not_exhausted) {
   free(input);
 }
 
-/* Builds "- []\n" repeated n times. Each element costs one list node and its
- * empty backing vector, about 48 DOM bytes per input byte. */
+// Builds "- []\n" repeated n times, about 48 DOM bytes per input byte, for
+// the tests of the scaled byte limit. The caller frees it.
 static char *_empty_lists_doc(size_t n) {
   char *d = malloc(n * 5 + 1);
   if (!d) return NULL;
@@ -5894,10 +4954,6 @@ static char *_empty_lists_doc(size_t n) {
 }
 
 TEST(parse_budget, byte_limit_scales_with_the_input) {
-  /* A parse's DOM byte limit is max(floor, 512 x input length). The test
-   * lowers the floor to 1 MiB, so a 100 KB document whose DOM takes several
-   * MiB shows the scaling. A fixed limit equal to the floor would make the
-   * parse fail with the memory limit. */
   size_t saved = cyaml_test_parse_byte_floor;
   cyaml_test_parse_byte_floor = (size_t)1024 * 1024;
   char *d = _empty_lists_doc(20000);
@@ -5911,14 +4967,11 @@ TEST(parse_budget, byte_limit_scales_with_the_input) {
   REQUIRE_EQ(len, (size_t)20000);
 }
 
+// "[:,:,:]" charges the most per input byte of any document without aliases
+// or collection keys. With both floors far below its cost, only the scaled
+// limits decide, and the charges must stay at least 1.5 times below each
+// factor.
 TEST(parse_budget, worst_ordinary_shape_parses_above_the_floors) {
-  /* A flow sequence of empty pairs, "[:,:,:]", charges the most per input
-   * byte of any document without aliases or nested collection keys, about
-   * 331 DOM bytes and 1.5 nodes. The scaled limits (512 bytes and 4 nodes per
-   * input byte) leave it a margin of at least 1.5. The test lowers both
-   * floors far below what 20000 pairs need, so only the scaled limits
-   * decide. With a byte factor of 64 or a node factor of 1 the parse would
-   * fail with the limit. */
   size_t saved_nodes = cyaml_test_parse_node_floor;
   size_t saved_bytes = cyaml_test_parse_byte_floor;
   cyaml_test_parse_node_floor = 1000;
@@ -5947,21 +5000,13 @@ TEST(parse_budget, worst_ordinary_shape_parses_above_the_floors) {
   free(d);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_EQ(count, n);
-  /* The charges stay within the derivation, at least 1.5 times below each
-   * factor, so a new charge that pushes this shape past that margin fails
-   * here before it can ever refuse a real document. */
   REQUIRE_LE(nodes * 3, len * 4 * 2);
   REQUIRE_LE(bytes * 3, len * 512 * 2);
-  /* The floors really were below the charge, so the scaled limits decided. */
   REQUIRE_GT(nodes, (size_t)1000);
   REQUIRE_GT(bytes, (size_t)1024 * 1024);
 }
 
 TEST(parse_budget, node_limit_scales_with_the_input) {
-  /* A parse's node limit is max(floor, four nodes per input byte). With the
-   * floor lowered to 1000 a flow list of 3000 elements (6000 bytes) parses.
-   * Were the limit fixed at the floor, the parse would fail with the
-   * node-allocation limit. */
   size_t saved = cyaml_test_parse_node_floor;
   cyaml_test_parse_node_floor = 1000;
   size_t n = 3000;
@@ -5987,11 +5032,6 @@ TEST(parse_budget, node_limit_scales_with_the_input) {
 }
 
 TEST(parse_budget, alias_expansion_of_a_padded_input_is_still_refused) {
-  /* The scaled limits grow by a constant factor of the input, so an
-   * expansion that grows exponentially with the input hits them anyway. A
-   * nested-alias document padded with 200 KB of comment has a byte limit of
-   * 12.8 MB, and its expansion is refused quickly with a diagnostic that
-   * names the limit. */
   const int levels = 30;
   size_t pad = 200 * 1024;
   size_t cap = pad + 64 + (size_t)levels * 40;
@@ -6015,13 +5055,13 @@ TEST(parse_budget, alias_expansion_of_a_padded_input_is_still_refused) {
   free(input);
   REQUIRE_EQ((void *)doc, NULL);
   REQUIRE_TRUE(named);
-  /* Fails a parse that is slow but finishes, for the reason
-   * errors.exponential_alias_expansion_rejected_not_exhausted gives. */
   REQUIRE_LT(elapsed_s, 300.0);
 }
 
-/* Builds a nested-alias document (each level holds eight aliases of the one
- * below) with a comment of pad bytes in front. */
+// Builds a nested-alias document (each level holds eight aliases of the one
+// below) with a comment of pad bytes in front, for the tests that padding
+// buys no alias expansion. Stores the length in *len_out; the caller frees
+// the text.
 static char *_padded_alias_bomb(size_t pad, size_t *len_out) {
   const int levels = 30;
   size_t cap = pad + 256 + (size_t)levels * 64;
@@ -6046,18 +5086,10 @@ static char *_padded_alias_bomb(size_t pad, size_t *len_out) {
   return d;
 }
 
+// What aliases copy is charged to a separate budget with the fixed floors, so
+// padding a nested-alias document with a long comment buys no more
+// expansion.
 TEST(parse_budget, alias_expansion_limit_does_not_grow_with_padding) {
-  /* The ordinary limits scale with the input length. What anchors and aliases
-   * copy is charged to a separate budget that keeps the fixed floors, so
-   * padding a nested-alias document with a long comment doesn't let its
-   * expansion use more memory. The test lowers the floors to 1 MiB and 20000
-   * nodes. Every padding is refused with the alias expansion limit (the
-   * unpadded one hits the ordinary limit, which then equals the floor), and
-   * the DOM bytes the parse charged stay close to that floor. Suppose the
-   * copies were charged only to the scaled budget: the padded documents would
-   * then charge about 512 bytes per input byte before failing, far past the
-   * bound asserted here, and their diagnostic would name the document
-   * limit. */
   size_t saved_nodes = cyaml_test_parse_node_floor;
   size_t saved_bytes = cyaml_test_parse_byte_floor;
   cyaml_test_parse_node_floor = 20000;
@@ -6074,12 +5106,9 @@ TEST(parse_budget, alias_expansion_limit_does_not_grow_with_padding) {
     cyaml doc = cyaml_parse_n(d, len, &err);
     size_t bytes = cyaml_test_last_parse_bytes_charged;
     if (!doc) refused++;
-    /* Without padding the ordinary limit equals the floor and binds first,
-     * and with padding only the expansion limit can refuse the copies. */
     if (err &&
         strstr(err, pads[i] ? "alias expansion memory limit" : "memory limit"))
       named++;
-    /* The floor, plus what the ordinary text itself costs. */
     if (bytes <= (size_t)1024 * 1024 + 64 * 1024) bounded++;
     if (bytes > worst_bytes) worst_bytes = bytes;
     cyaml_destroy(doc);
@@ -6094,10 +5123,6 @@ TEST(parse_budget, alias_expansion_limit_does_not_grow_with_padding) {
 }
 
 TEST(parse_budget, merge_key_documents_meet_the_fixed_expansion_limit) {
-  /* A merge key copies every member of its source into its target, and the
-   * source is an alias, itself a copy. A source merged into many targets is
-   * amplification just like a plain alias, and it hits the same fixed limit
-   * however the input is padded. */
   size_t saved_bytes = cyaml_test_parse_byte_floor;
   cyaml_test_parse_byte_floor = (size_t)1024 * 1024;
   size_t pad = 256 * 1024;
@@ -6131,8 +5156,6 @@ TEST(parse_budget, merge_key_documents_meet_the_fixed_expansion_limit) {
 }
 
 TEST(parse_budget, scaled_limit_saturates_below_the_unarmed_sentinel) {
-  /* (size_t)-1 means "no parse runs". A limit computed for an input so large
-   * that the product overflows saturates one below it, whatever the width. */
   REQUIRE_EQ(cyaml_debug_parse_budget_for_input(100, 64, 1), (size_t)100);
   REQUIRE_EQ(cyaml_debug_parse_budget_for_input(100, 64, 10), (size_t)640);
   REQUIRE_EQ(cyaml_debug_parse_budget_for_input(100, 64, SIZE_MAX / 64),
@@ -6144,23 +5167,15 @@ TEST(parse_budget, scaled_limit_saturates_below_the_unarmed_sentinel) {
 }
 
 TEST(errors, trailing_garbage) {
-  /* The text "extra junk !!!" on the second line has no ':' separator, so
-   * the block dictionary stops after "key: value" and the parser reports
-   * trailing content.
-   */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: value\nextra junk !!!\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
-/* ========================================================================== */
-/*                         BLOCK SEQUENCE NEXT-LINE VALUE                     */
-/* ========================================================================== */
+// Block sequence value on the next line
 
 TEST(block_sequence, value_on_next_line_mapping) {
-  /* The block-in form, where each list entry's value is on the next, more
-   * indented line instead of on the same line as the '-'. */
   const char *yaml =
       "-\n"
       "  name: alice\n"
@@ -6189,7 +5204,6 @@ TEST(block_sequence, value_on_next_line_mapping) {
 }
 
 TEST(block_sequence, value_on_next_line_scalar) {
-  /* A scalar value on the line after the '-'. */
   const char *yaml =
       "-\n"
       "  hello\n"
@@ -6206,8 +5220,6 @@ TEST(block_sequence, value_on_next_line_scalar) {
 }
 
 TEST(block_sequence, null_when_sibling_follows_on_next_line) {
-  /* A '-', a newline and then another '-' at the same indent, so the first
-   * element is null and the second isn't. */
   const char *yaml =
       "-\n"
       "- value\n";
@@ -6224,8 +5236,6 @@ TEST(block_sequence, null_when_sibling_follows_on_next_line) {
 }
 
 TEST(block_sequence, nested_sequence_on_next_line) {
-  /* An inner list whose '-' entries are on the line after the outer '-'.
-   */
   const char *yaml =
       "matrix:\n"
       "  -\n"
@@ -6257,14 +5267,9 @@ TEST(block_sequence, nested_sequence_on_next_line) {
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         MAPPING KEY STARTING WITH '-'                      */
-/* ========================================================================== */
+// Mapping key starting with '-'
 
 TEST(block_mapping, second_key_starting_with_dash) {
-  /* A plain scalar key that starts with a '-' with no space after it, as the
-   * second key of a block dictionary. The dictionary loop must neither read
-   * that '-' as a sequence indicator nor stop there. */
   const char *yaml =
       "key: value\n"
       "-key: other\n";
@@ -6279,7 +5284,6 @@ TEST(block_mapping, second_key_starting_with_dash) {
 }
 
 TEST(block_mapping, multiple_keys_starting_with_dash) {
-  /* Many keys in a row that each start with a '-'. */
   const char *yaml =
       "-a: 1\n"
       "-b: 2\n"
@@ -6295,10 +5299,9 @@ TEST(block_mapping, multiple_keys_starting_with_dash) {
   cyaml_destroy(doc);
 }
 
+// A repeated key keeps the last value and frees the earlier one; this is
+// implementation-defined behaviour (see cyaml.h).
 TEST(block_mapping, duplicate_key_last_wins) {
-  /* A mapping can hold the same key twice. The last value wins, and the
-   * library frees the earlier value without leaking anything. This is
-   * implementation-defined behaviour; see cyaml.h. */
   const char *yaml =
       "key: first\n"
       "key: second\n";
@@ -6313,9 +5316,6 @@ TEST(block_mapping, duplicate_key_last_wins) {
 }
 
 TEST(block_mapping, duplicate_key_replaces_container) {
-  /* The first value is a list and the second value replaces it with a
-   * scalar. The library must free the whole replaced list down through
-   * every child, without leaking or corrupting anything. */
   const char *yaml =
       "key:\n"
       "  - 1\n"
@@ -6332,14 +5332,9 @@ TEST(block_mapping, duplicate_key_replaces_container) {
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         FLOAT-SPECIAL STRING ROUND-TRIPS                   */
-/* ========================================================================== */
+// Float-special string round trips
 
 TEST(serialize, float_special_strings_are_quoted) {
-  /* A string node can hold a value that matches one of YAML's special float
-   * tokens, and the serializer quotes such a value so that parsing the output
-   * gives a string and not a float. */
   const char *specials[] = {"+.inf", "+.Inf", "+.INF", "-.inf", "-.Inf",
                             "-.INF", ".inf",  ".Inf",  ".INF",  ".nan",
                             ".NaN",  ".NAN",  NULL};
@@ -6348,9 +5343,7 @@ TEST(serialize, float_special_strings_are_quoted) {
     REQUIRE_NE((void *)n, NULL);
     char *s = cyaml_serialize(n);
     REQUIRE_NE((void *)s, NULL);
-    /* The first non-whitespace byte can't be the plain token itself. */
     REQUIRE_NE(s[0], specials[i][0]);
-    /* Parsing the output should give a STRING and not a FLOAT. */
     char *err = NULL;
     cyaml back = cyaml_parse(s, &err);
     REQUIRE_EQ((void *)err, NULL);
@@ -6363,20 +5356,13 @@ TEST(serialize, float_special_strings_are_quoted) {
   }
 }
 
-/* ========================================================================== */
-/*                         TAB-WHITESPACE QUOTING (needs_quoting)             */
-/* ========================================================================== */
+// Quoting of tabs and white space
 
 TEST(serialize, string_with_colon_tab_round_trip) {
-  /* A string can hold a ':' followed by a tab, and the serializer has to
-   * quote it, because without quotes the plain scalar ends at the colon and
-   * parsing the output gives a dictionary instead of a string. */
   cyaml n = cyaml_create_string("proto:\thttp");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
   REQUIRE_NE((void *)s, NULL);
-  /* The value must NOT start with the plain token 'p' directly followed by
-   * an unquoted colon; the first byte is a quote character. */
   char *err = NULL;
   cyaml back = cyaml_parse(s, &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -6389,9 +5375,6 @@ TEST(serialize, string_with_colon_tab_round_trip) {
 }
 
 TEST(serialize, string_with_tab_hash_round_trip) {
-  /* A string can hold a tab followed by a '#', and the serializer quotes
-   * it. Without quotes the plain scalar parser reads the tab and the
-   * '#' as the start of a same-line comment and cuts the value short. */
   cyaml n = cyaml_create_string("text\t#comment");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
@@ -6408,7 +5391,6 @@ TEST(serialize, string_with_tab_hash_round_trip) {
 }
 
 TEST(serialize, string_with_hash_after_tab_in_mapping_round_trip) {
-  /* The same tab-and-'#' rule, with the string as a dictionary value. */
   cyaml doc = cyaml_create_dictionary();
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(doc, "key", cyaml_create_string("val\t#x")),
@@ -6430,9 +5412,6 @@ TEST(serialize, string_with_hash_after_tab_in_mapping_round_trip) {
 }
 
 TEST(serialize, string_starting_with_tab_round_trip) {
-  /* The serializer quotes a string whose value starts with a tab,
-   * otherwise the parser takes that first tab for whitespace and the value
-   * changes without a word. */
   cyaml n = cyaml_create_string("\thello");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
@@ -6449,8 +5428,6 @@ TEST(serialize, string_starting_with_tab_round_trip) {
 }
 
 TEST(serialize, string_ending_with_space_round_trip) {
-  /* The serializer quotes a string whose value ends in a space, because
-   * without quotes the plain scalar parser strips that trailing space. */
   cyaml n = cyaml_create_string("hello ");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
@@ -6467,8 +5444,6 @@ TEST(serialize, string_ending_with_space_round_trip) {
 }
 
 TEST(serialize, string_ending_with_tab_round_trip) {
-  /* Same for a value that ends in a tab, because without quotes the plain
-   * scalar parser strips that trailing tab. */
   cyaml n = cyaml_create_string("hello\t");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
@@ -6485,14 +5460,10 @@ TEST(serialize, string_ending_with_tab_round_trip) {
 }
 
 TEST(serialize, plus_word_not_quoted) {
-  /* A string such as "+extra" doesn't start a numeric literal, so
-   * needs_quoting() returns false, and the plain scalar round-trips
-   * correctly. */
   cyaml n = cyaml_create_string("+extra");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
   REQUIRE_NE((void *)s, NULL);
-  /* The serialized form must hold NO quotes. */
   REQUIRE_STREQ(s, "+extra\n");
   char *err = NULL;
   cyaml back = cyaml_parse(s, &err);
@@ -6506,8 +5477,6 @@ TEST(serialize, plus_word_not_quoted) {
 }
 
 TEST(serialize, plus_digit_is_quoted) {
-  /* make_typed_scalar parses "+42" as the integer 42, so needs_quoting() has
-   * to quote it. */
   cyaml n = cyaml_create_string("+42");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
@@ -6524,9 +5493,6 @@ TEST(serialize, plus_digit_is_quoted) {
 }
 
 TEST(serialize, plus_dot_digit_is_quoted) {
-  /* Without quotes in the output strtod parses "+.3" as the float 0.3, so
-   * the serializer needs to quote it for it to round-trip as a
-   * CYAML_STRING. */
   cyaml n = cyaml_create_string("+.3");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
@@ -6543,8 +5509,6 @@ TEST(serialize, plus_dot_digit_is_quoted) {
 }
 
 TEST(serialize, plus_dot_float_strings_are_quoted) {
-  /* strtod parses some +.N patterns as floats, so the serializer must
-   * quote every one of them for each to round-trip as a CYAML_STRING. */
   const char *cases[] = {"+.3", "+.5", "+.1e10", "+.0", "+.99e-5", NULL};
   for (int i = 0; cases[i]; i++) {
     cyaml n = cyaml_create_string(cases[i]);
@@ -6563,19 +5527,9 @@ TEST(serialize, plus_dot_float_strings_are_quoted) {
   }
 }
 
+// The parser reads "+.1e-400" and its overflowing and subnormal relatives as
+// floats, so the serializer quotes them like every other "+.N" text.
 TEST(serialize, plus_dot_underflowing_float_strings_are_quoted) {
-  /* strtod() parses "+.1e-400", "+.999e-320" and "+.1e400" and sets errno
-   * to ERANGE for each. The first underflows all the way to 0.0, the second
-   * underflows to a legitimate subnormal and the third overflows to +inf,
-   * but all three are real CYAML_FLOAT values that the parser accepts; see
-   * implicit_types.float_subnormal_underflow_is_still_a_float,
-   * float_underflow_to_zero_is_still_a_float and
-   * float_overflow_is_an_infinity.
-   *
-   * So needs_quoting() quotes them, exactly as it does for the "+.N"
-   * cases above that don't underflow. Without quotes a CYAML_STRING holding
-   * this text would parse back as a CYAML_FLOAT instead of round-tripping
-   * as a string. */
   const char *cases[] = {"+.1e-400", "+.999e-320", "+.1e400", NULL};
   for (int i = 0; cases[i]; i++) {
     cyaml n = cyaml_create_string(cases[i]);
@@ -6594,22 +5548,9 @@ TEST(serialize, plus_dot_underflowing_float_strings_are_quoted) {
   }
 }
 
+// A tree built through the API has no depth bound, so each serializer applies
+// the cap itself and returns NULL for a chain of 1000 levels.
 TEST(serialize, excessive_depth_rejected_not_crashed) {
-  /* A tree that a caller gives to cyaml_serialize() or
-   * cyaml_serialize_flow() doesn't have to come from cyaml_parse().
-   * CYAML_MAX_NESTING_DEPTH bounds what a parse builds, but a caller can
-   * also build a tree directly with cyaml_create_list() and
-   * cyaml_list_push(), and construction puts no bound on the depth.
-   *
-   * So each serializer has to apply CYAML_MAX_NESTING_DEPTH itself and
-   * report NULL, its documented contract for a memory failure, instead of
-   * overflowing the stack and crashing on a tree that is just deep and has
-   * no cycle.
-   *
-   * The depth of 1000 is well past CYAML_MAX_NESTING_DEPTH (500) and still
-   * shallow enough for this test's cleanup, which is cyaml_destroy's tree
-   * walk. That walk has no depth guard, and at this depth it can't exhaust
-   * the stack. */
   size_t depth = 1000;
   cyaml root = cyaml_create_null();
   REQUIRE_NE((void *)root, NULL);
@@ -6629,32 +5570,13 @@ TEST(serialize, excessive_depth_rejected_not_crashed) {
   cyaml_destroy(root);
 }
 
+// Once the depth guard or a failed allocation sets the out-of-memory flag, the
+// whole walk must stop. The white-box counter of refused visits is exactly 1
+// for any number of deep branches; a walk that kept going would count one per
+// branch.
 TEST(serialize, oom_short_circuits_remaining_siblings_after_depth_exceeded) {
-  /* serialize_block() and serialize_flow() must stop the WHOLE walk as soon as
-   * b->oom is set, whether because CYAML_MAX_NESTING_DEPTH tripped on one
-   * branch or because the allocator really failed, rather than only stop
-   * appending to the buffer. Otherwise they would walk every sibling branch
-   * again and find the same failure once more.
-   *
-   * So both functions need an "if (b->oom) return;" guard at the top.
-   * Without it a wide top-level list of many deep branches costs
-   * O(branches * CYAML_MAX_NESTING_DEPTH) after the very first branch trips
-   * the depth guard, where the right cost is O(1). Every dictionary those
-   * repeated walks visit pays for a real chmap_begin_iter_safe()
-   * allocation, and the walk throws its own output away at once because
-   * b->oom is already true.
-   *
-   * The test builds branch_count independent deep chains of one-key
-   * dictionaries, each one safely past CYAML_MAX_NESTING_DEPTH, and counts
-   * through _cyaml_serialize_oom_visits_for_tests every node a serializer
-   * refuses for its depth or meets with b->oom already set. Done right, the
-   * walk refuses the first branch once and stops, so the count is exactly 1
-   * for any branch_count. A walk that keeps going after the flag is set adds
-   * at least one per remaining branch, and one that also drops the guard at
-   * the top of the head descends into every branch and refuses each of
-   * them. */
   size_t branch_count = 3000;
-  size_t chain_depth = 520; /* > CYAML_MAX_NESTING_DEPTH (500) */
+  size_t chain_depth = 520;
 
   cyaml top = cyaml_create_list();
   REQUIRE_NE((void *)top, NULL);
@@ -6670,12 +5592,12 @@ TEST(serialize, oom_short_circuits_remaining_siblings_after_depth_exceeded) {
     REQUIRE_EQ(cyaml_list_push(top, chain), ccol_success);
   }
 
-  _cyaml_serialize_oom_visits_for_tests = 0;
+  cyaml__serialize_oom_visits_for_tests = 0;
   char *block = cyaml_serialize(top);
-  size_t block_visits = _cyaml_serialize_oom_visits_for_tests;
-  _cyaml_serialize_oom_visits_for_tests = 0;
+  size_t block_visits = cyaml__serialize_oom_visits_for_tests;
+  cyaml__serialize_oom_visits_for_tests = 0;
   char *flow = cyaml_serialize_flow(top);
-  size_t flow_visits = _cyaml_serialize_oom_visits_for_tests;
+  size_t flow_visits = cyaml__serialize_oom_visits_for_tests;
   cyaml_serialize_free(block);
   cyaml_serialize_free(flow);
   cyaml_destroy(top);
@@ -6687,11 +5609,6 @@ TEST(serialize, oom_short_circuits_remaining_siblings_after_depth_exceeded) {
 }
 
 TEST(block_mapping, document_start_marker_no_separator) {
-  /* YAML 1.2 section 9.1.4 says when the '---' token starts a document: the
-   * three dashes have to be followed by whitespace, a comment '#' or the end
-   * of the input. In '---42' the fourth character is '4', which isn't a
-   * separator, so it is NOT a document start marker and the parser reads it
-   * as the plain scalar string "---42". */
   char *err = NULL;
   cyaml doc = cyaml_parse("---42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -6701,16 +5618,11 @@ TEST(block_mapping, document_start_marker_no_separator) {
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         BOUNDED PARSE (cyaml_parse_n)                      */
-/* ========================================================================== */
+// Bounded parse (cyaml_parse_n)
 
 TEST(parse_n, basic_bounded_parse) {
-  /* cyaml_parse_n has to parse only the first len bytes, so the parser can't
-   * see any byte past that length. */
   const char *buf = "key: value\ntrailing garbage";
   char *err = NULL;
-  /* "key: value\n" is exactly 11 bytes. */
   cyaml doc = cyaml_parse_n(buf, 11, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
@@ -6720,11 +5632,8 @@ TEST(parse_n, basic_bounded_parse) {
 }
 
 TEST(parse_n, not_null_terminated) {
-  /* cyaml_parse_n must not read past len, also when there's no null byte
-   * there. */
   char buf[16];
   memcpy(buf, "42", 2);
-  /* The rest of buf stays uninitialised on purpose. */
   char *err = NULL;
   cyaml doc = cyaml_parse_n(buf, 2, &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -6735,7 +5644,6 @@ TEST(parse_n, not_null_terminated) {
 }
 
 TEST(parse_n, sequence_bounded) {
-  /* Round-trip a list through the length-bounded parser. */
   const char *yaml = "- 1\n- 2\n- 3\n";
   char *err = NULL;
   cyaml doc = cyaml_parse_n(yaml, strlen(yaml), &err);
@@ -6748,8 +5656,6 @@ TEST(parse_n, sequence_bounded) {
 }
 
 TEST(parse_n, bom_prefix) {
-  /* cyaml_parse_n steps over a UTF-8 BOM (EF BB BF) at the start and
-   * then parse the rest as usual. */
   const char bom_yaml[] =
       "\xEF\xBB\xBF"
       "key: value\n";
@@ -6762,9 +5668,7 @@ TEST(parse_n, bom_prefix) {
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         DELETE                                             */
-/* ========================================================================== */
+// Delete
 
 TEST(delete, list_remove_middle) {
   char *err = NULL;
@@ -6828,8 +5732,6 @@ TEST(delete, list_remove_out_of_bounds) {
 }
 
 TEST(delete, list_remove_subtree_freed) {
-  /* A list element can be a nested mapping itself, and removing such an
-   * element must not leak. */
   char *err = NULL;
   cyaml root = cyaml_parse("- a: 1\n  b:\n    - 10\n    - 20\n- 99\n", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -6866,8 +5768,6 @@ TEST(delete, dictionary_remove_missing_key) {
 }
 
 TEST(delete, dictionary_remove_subtree_freed) {
-  /* A key's value can be a nested container, and removing such a key must
-   * not leak. */
   char *err = NULL;
   cyaml root = cyaml_parse("keep: 1\ndrop:\n  x:\n    - 1\n    - 2\n", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -6917,8 +5817,6 @@ TEST(delete, path_delete_list_element) {
 }
 
 TEST(delete, path_delete_on_list_root) {
-  /* cyaml_delete(list_root, "#N") works when the root node is a
-   * CYAML_LIST itself and not a dictionary. */
   char *err = NULL;
   cyaml root = cyaml_parse("- 10\n- 20\n- 30\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -6951,11 +5849,6 @@ TEST(delete, path_missing_leaf_returns_key_not_found) {
 }
 
 TEST(path, a_list_index_too_large_for_any_integer_is_absent) {
-  /* A well-formed "#N" index that the list doesn't reach is absent, however
-   * many digits it has and whatever the target width: get gives NULL, and set
-   * and delete give ccol_key_not_found. An index parser that refused a value
-   * too large for a long would report ccol_invalid_args for the indexes beyond
-   * LONG_MAX. */
   static const char *const paths[] = {
       "items.#4294967296", "items.#9223372036854775808",
       "items.#18446744073709551615", "items.#18446744073709551616",
@@ -6969,7 +5862,6 @@ TEST(path, a_list_index_too_large_for_any_integer_is_absent) {
     ok = ok && cyaml_set(root, paths[i], 5) == ccol_key_not_found;
     ok = ok && cyaml_delete(root, paths[i]) == ccol_key_not_found;
   }
-  /* An index in an intermediate component follows the same rule. */
   ok = ok && cyaml_set(root, "items.#18446744073709551616.x", 5) ==
                  ccol_key_not_found;
   ok = ok && cyaml_list_len(cyaml_dictionary_get(root, "items")) == 2;
@@ -6977,21 +5869,10 @@ TEST(path, a_list_index_too_large_for_any_integer_is_absent) {
   REQUIRE_TRUE(ok);
 }
 
+// For cyaml_delete() an out-of-range "#N" is an absent component
+// (ccol_key_not_found), while cyaml_list_remove() called directly refuses the
+// same index with ccol_invalid_args.
 TEST(delete, path_out_of_range_list_index_returns_key_not_found) {
-  /* A "#N" leaf component with valid syntax and an out-of-range index is an
-   * absent path component, the same kind of absent component as a missing
-   * dictionary key. cyaml_delete's documented contract says
-   * "ccol_key_not_found if any path component is absent".
-   *
-   * This case must stay separate from ccol_invalid_args, which
-   * cyaml_delete keeps for a malformed path, that is an empty path or a leaf
-   * that isn't a "#N" on a list parent.
-   *
-   * cyaml_list_remove() is a different function and this rule doesn't touch
-   * it: called directly it rightly returns ccol_invalid_args for the same
-   * out-of-range index (see list_remove_out_of_bounds above). The
-   * distinction belongs only to the higher-level path contract of
-   * cyaml_delete. */
   char *err = NULL;
   cyaml root = cyaml_parse("items:\n  - 1\n  - 2\n  - 3\n", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -7001,17 +5882,10 @@ TEST(delete, path_out_of_range_list_index_returns_key_not_found) {
   cyaml_destroy(root);
 }
 
+// A malformed "#N" in the middle of a path is a caller error, not an absent
+// component.
 TEST(delete,
      path_malformed_index_syntax_in_non_leaf_component_returns_invalid_args) {
-  /* A malformed "#N" index, one that isn't a '#' followed by digits, is an
-   * error in the path the caller built and not a question about the data
-   * that's there, and that holds at ANY position in the path and not just at
-   * the leaf.
-   *
-   * So navigate_y() needs to keep a malformed index in the middle of a path
-   * apart from a middle component that really is absent, instead of giving
-   * the same NULL for both. With one shared NULL the caller would get
-   * ccol_key_not_found here instead of ccol_invalid_args. */
   char *err = NULL;
   cyaml root = cyaml_parse("items:\n  - a: 1\n  - a: 2\n", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -7022,16 +5896,6 @@ TEST(delete,
 }
 
 TEST(delete, path_wrong_type_in_non_leaf_component_returns_invalid_args) {
-  /* A scalar can sit in the middle of a path with more components after it,
-   * which is different from a scalar that is the leaf's direct parent. Such
-   * a scalar has no children to walk into, so this is a wrong-type error in
-   * the path (ccol_invalid_args) and not an absent component
-   * (ccol_key_not_found).
-   *
-   * Here "a" is the scalar 1, so "a.b.c" has to fail inside navigate_y()
-   * itself while it tries to resolve the parent segment "a.b", and not in
-   * the separate wrong-type check that _cyaml_delete runs on the direct
-   * parent afterwards. */
   char *err = NULL;
   cyaml root = cyaml_parse("a: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -7042,7 +5906,6 @@ TEST(delete, path_wrong_type_in_non_leaf_component_returns_invalid_args) {
 }
 
 TEST(delete, path_delete_with_escaped_dot_in_key) {
-  /* A key literally named "a.b" is reachable through "a\\.b". */
   cyaml root = cyaml_create_dictionary();
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(root, "a.b", cyaml_create_int(7)),
@@ -7057,7 +5920,6 @@ TEST(delete, path_delete_with_escaped_dot_in_key) {
 }
 
 TEST(delete, degenerate_path_empty) {
-  /* The call rejects an empty path with ccol_invalid_args. */
   char *err = NULL;
   cyaml root = cyaml_parse("key: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -7068,8 +5930,6 @@ TEST(delete, degenerate_path_empty) {
 }
 
 TEST(delete, degenerate_path_trailing_dot) {
-  /* A path ending in a dot gives an empty leaf component, and cyaml_delete
-   * should reject it with ccol_invalid_args and leave the document whole. */
   char *err = NULL;
   cyaml root = cyaml_parse("key: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -7080,16 +5940,6 @@ TEST(delete, degenerate_path_trailing_dot) {
 }
 
 TEST(delete, degenerate_path_consecutive_dots) {
-  /* A path with two dots in a row has an empty component in the middle of
-   * the parent path, so navigate_y fails and the call returns
-   * ccol_invalid_args, just as for an empty LEAF component (see "key." in
-   * delete.degenerate_path_trailing_dot above).
-   *
-   * An empty path component has no valid reading anywhere in a path. It's
-   * neither a literal empty-string key nor a "#N" index, so it's an error of
-   * malformed syntax in the path the caller built and not a well-formed but
-   * absent component, whether the empty component is the leaf or one in the
-   * middle. */
   char *err = NULL;
   cyaml root = cyaml_parse("a:\n  b: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
@@ -7100,16 +5950,11 @@ TEST(delete, degenerate_path_consecutive_dots) {
 }
 
 TEST(delete, an_empty_component_after_an_absent_key_is_invalid) {
-  /* An empty component makes a path malformed at any position, also behind a
-   * key that doesn't exist, so set and delete report ccol_invalid_args and
-   * never ccol_key_not_found for such a path, as cjson does. If the walk
-   * stopped at the absent "x" and the empty leaf were only judged after it,
-   * every call below would report ccol_key_not_found. */
   char *err = NULL;
   cyaml root = cyaml_parse("a:\n  b: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
   static const char *const paths[] = {"x.", "x..y", "x.y.", "a.x..y"};
-  ccol_retval_t set_rv[4], del_rv[4];
+  ccol_retval set_rv[4], del_rv[4];
   for (int i = 0; i < 4; i++) {
     set_rv[i] = cyaml_set(root, paths[i], 1);
     del_rv[i] = cyaml_delete(root, paths[i]);
@@ -7123,16 +5968,9 @@ TEST(delete, an_empty_component_after_an_absent_key_is_invalid) {
   REQUIRE_TRUE(intact);
 }
 
-/* ========================================================================== */
-/*                         MULTI-DOCUMENT PARSING                             */
-/* ========================================================================== */
+// Multi-document parsing
 
 TEST(multi_document, a_marker_after_a_lone_property_ends_the_document) {
-  /* A document holding only a tag or an anchor ends at the next document
-   * marker, as in PyYAML, and the marker is never the property's value. If the
-   * descent after a property took the marker as a plain scalar, the first
-   * document would read "..." and the two documents of the third input would
-   * merge into one string "--- b". */
   char *err = NULL;
   cyaml a = cyaml_parse("--- !!str\n...\n", &err);
   bool a_ok =
@@ -7159,7 +5997,6 @@ TEST(multi_document, a_marker_after_a_lone_property_ends_the_document) {
 }
 
 TEST(multi_document, two_scalars_with_markers) {
-  /* Two plain scalar documents with a '---' between them. */
   char *err = NULL;
   cyaml root = cyaml_parse("---\nhello\n---\nworld\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7174,8 +6011,6 @@ TEST(multi_document, two_scalars_with_markers) {
 }
 
 TEST(multi_document, two_mappings_no_leading_marker) {
-  /* The first document has no '---' in front, but the second one needs
-   * one. */
   char *err = NULL;
   cyaml root = cyaml_parse("a: 1\nb: 2\n---\nx: 10\ny: 20\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7196,7 +6031,6 @@ TEST(multi_document, two_mappings_no_leading_marker) {
 }
 
 TEST(multi_document, two_sequences) {
-  /* Two sequence documents. */
   char *err = NULL;
   cyaml root = cyaml_parse("---\n- 1\n- 2\n---\n- 3\n- 4\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7221,7 +6055,6 @@ TEST(multi_document, two_sequences) {
 }
 
 TEST(multi_document, with_document_end_markers) {
-  /* Explicit '...' end markers sit between the documents. */
   char *err = NULL;
   cyaml root = cyaml_parse("---\na: 1\n...\n---\nb: 2\n...\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7234,7 +6067,6 @@ TEST(multi_document, with_document_end_markers) {
 }
 
 TEST(multi_document, empty_document_between_markers) {
-  /* A '---' followed right by another '---' gives a null document. */
   char *err = NULL;
   cyaml root = cyaml_parse("---\nhello\n---\n---\nworld\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7250,7 +6082,6 @@ TEST(multi_document, empty_document_between_markers) {
 }
 
 TEST(multi_document, three_documents) {
-  /* Three mapping documents. */
   char *err = NULL;
   cyaml root = cyaml_parse(
       "---\nkind: Service\n---\nkind: Deployment\n---\nkind: ConfigMap\n",
@@ -7269,8 +6100,6 @@ TEST(multi_document, three_documents) {
 }
 
 TEST(multi_document, single_document_not_wrapped) {
-  /* The parser hands back one document directly instead of wrapping it in a
-   * list. */
   char *err = NULL;
   cyaml root = cyaml_parse("---\na: 1\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7281,7 +6110,6 @@ TEST(multi_document, single_document_not_wrapped) {
 }
 
 TEST(multi_document, anchors_do_not_leak_across_documents) {
-  /* An anchor that doc1 defines must not resolve in doc2. */
   char *err = NULL;
   cyaml root = cyaml_parse("---\nval: &anchor 42\n---\nref: *anchor\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -7289,8 +6117,6 @@ TEST(multi_document, anchors_do_not_leak_across_documents) {
 }
 
 TEST(multi_document, doc_start_marker_in_mapping_value_is_data) {
-  /* A '---' can be the value of a key on the same line, and then it's plain
-   * string data and NOT a boundary between two documents. */
   char *err = NULL;
   cyaml root = cyaml_parse("key: ---\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7301,8 +6127,6 @@ TEST(multi_document, doc_start_marker_in_mapping_value_is_data) {
 }
 
 TEST(multi_document, triple_doc_start_in_sequence_value_is_data) {
-  /* A '---' after a '- ' (a sequence item indicator) is plain string
-   * data. */
   char *err = NULL;
   cyaml root = cyaml_parse("- ---\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7314,11 +6138,6 @@ TEST(multi_document, triple_doc_start_in_sequence_value_is_data) {
 }
 
 TEST(multi_document, bare_document_after_end_marker_is_a_new_document) {
-  /* YAML 1.2 section 6.9 defines l-yaml-stream, and under it a document may
-   * leave out its own '---' in one case only, when a '...' end marker comes
-   * right before it. That '...' alone is enough to start the next document,
-   * which can then be bare without a '---', so such content isn't trailing
-   * garbage but a second, valid document. */
   char *err = NULL;
   cyaml root = cyaml_parse("a: 1\n...\nsome text\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7335,15 +6154,10 @@ TEST(multi_document, bare_document_after_end_marker_is_a_new_document) {
   cyaml_destroy(root);
 }
 
+// A run of "..." markers is one separator, so the extra ones add no empty
+// document (PyYAML agrees).
 TEST(multi_document,
      redundant_consecutive_end_markers_do_not_fabricate_a_document) {
-  /* The l-yaml-stream rule of YAML 1.2 section 6.9 groups one or more '...'
-   * markers in a row. That group, l-document-suffix+, is one unit of
-   * separator material and not one document boundary per marker, so a
-   * second '...' right after the first adds nothing. The parser must not
-   * read it as "the next document is empty" or build an extra CYAML_NULL
-   * document that nobody wrote. PyYAML agrees and parses this as one
-   * document without a list around it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: 1\n...\n...\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7355,10 +6169,6 @@ TEST(multi_document,
 
 TEST(multi_document,
      redundant_consecutive_end_markers_then_real_next_document) {
-  /* The same kind of '...' that adds nothing, with a real second document
-   * after it. The parse gives exactly two documents with no extra NULL
-   * document in between, and PyYAML agrees and parses this as exactly two
-   * documents. */
   char *err = NULL;
   cyaml root = cyaml_parse("a: 1\n...\n...\n---\nb: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7375,10 +6185,6 @@ TEST(multi_document,
 }
 
 TEST(multi_document, three_consecutive_end_markers_then_bare_document) {
-  /* Three '...' markers in a row and then a valid bare document without a
-   * '---', which the rule letting a document leave out its '---' after a
-   * '...' covers. This checks that the loop over the extra markers doesn't
-   * eat into the content of the document after them. */
   char *err = NULL;
   cyaml root = cyaml_parse("a: 1\n...\n...\n...\nsome text\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7396,9 +6202,6 @@ TEST(multi_document, three_consecutive_end_markers_then_bare_document) {
 }
 
 TEST(multi_document, bare_document_without_preceding_end_marker_is_error) {
-  /* Without a '...' between them a second document MUST start with '---'.
-   * The first document here has no end marker, so bare content right after
-   * it really is ambiguous trailing material and not a new document. */
   char *err = NULL;
   cyaml root = cyaml_parse("a: 1\nsome garbage\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -7406,11 +6209,6 @@ TEST(multi_document, bare_document_without_preceding_end_marker_is_error) {
 }
 
 TEST(errors, duplicate_yaml_directive_rejected) {
-  /* YAML 1.2 section 6.8.1 says "it is an error to define more than one
-   * YAML directive for the same document, even if both occurrences give the
-   * same version", and the SF5V case of the vendored YAML Test Suite
-   * confirms it. Two directives for two SEPARATE documents, each with its
-   * own '---', are a different case and this rule doesn't touch them. */
   char *err = NULL;
   cyaml doc = cyaml_parse("%YAML 1.2\n%YAML 1.2\n---\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -7418,9 +6216,6 @@ TEST(errors, duplicate_yaml_directive_rejected) {
 }
 
 TEST(errors, content_after_end_marker_on_same_line_rejected) {
-  /* Only whitespace or a comment can share a '...' marker's line. Real
-   * trailing content there, such as "... invalid", has no valid reading, as
-   * the 3HFZ case of the vendored YAML Test Suite confirms. */
   char *err = NULL;
   cyaml doc = cyaml_parse("---\nkey: value\n... invalid\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -7428,14 +6223,6 @@ TEST(errors, content_after_end_marker_on_same_line_rejected) {
 }
 
 TEST(errors, hash_glued_directly_onto_start_marker_is_plain_scalar) {
-  /* A '#' directly on '---' with no whitespace in between isn't a comment,
-   * because YAML 1.2's s-l-comments grammar wants s-separate-in-line, real
-   * whitespace, before a comment's '#'; this parser's skip_ws_comments() and
-   * rest_of_line_is_blank() rule says the same elsewhere.
-   *
-   * So the text "---#x" is ordinary plain-scalar content and not a
-   * document start marker followed by a comment. PyYAML and Psych both
-   * agree and parse this as the plain scalar "---#x". */
   char *err = NULL;
   cyaml doc = cyaml_parse("---#x\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7446,10 +6233,6 @@ TEST(errors, hash_glued_directly_onto_start_marker_is_plain_scalar) {
 }
 
 TEST(errors, hash_glued_directly_onto_end_marker_is_plain_scalar) {
-  /* The same rule as above for a '...'. A '#' directly on it doesn't end the
-   * plain scalar content, so the text "...#x" folds together with the next
-   * line into one plain scalar over two lines. PyYAML agrees and parses this
-   * document as the string "...#x foo". */
   char *err = NULL;
   cyaml doc = cyaml_parse("...#x\nfoo\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7460,9 +6243,6 @@ TEST(errors, hash_glued_directly_onto_end_marker_is_plain_scalar) {
 }
 
 TEST(errors, hash_after_real_whitespace_on_start_marker_still_a_comment) {
-  /* A '#' with real whitespace before it after a '---' is an ordinary
-   * comment, and the marker keeps its meaning. This guards against the rule
-   * above reaching too far. */
   char *err = NULL;
   cyaml doc = cyaml_parse("--- #comment\nkey: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7476,7 +6256,6 @@ TEST(errors, hash_after_real_whitespace_on_start_marker_still_a_comment) {
 }
 
 TEST(multi_document, parse_n_multi_document) {
-  /* cyaml_parse_n also accepts a stream of more than one document. */
   const char buf[] = "---\n1\n---\n2\n";
   char *err = NULL;
   cyaml root = cyaml_parse_n(buf, sizeof(buf) - 1, &err);
@@ -7490,8 +6269,6 @@ TEST(multi_document, parse_n_multi_document) {
 }
 
 TEST(parse_n, zero_length_input) {
-  /* cyaml_parse_n with len=0 behaves like an empty document, returning
-   * a CYAML_NULL node and reporting no error. */
   char *err = NULL;
   cyaml root = cyaml_parse_n("ignored", 0, &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7500,13 +6277,9 @@ TEST(parse_n, zero_length_input) {
   cyaml_destroy(root);
 }
 
-/* ========================================================================== */
-/*              FLOW SERIALIZATION ROUND-TRIPS (needs_quoting)                */
-/* ========================================================================== */
+// Flow serialization round trips
 
 TEST(flow_serialize, comma_in_string_round_trip) {
-  /* A string holding a bare ',' needs double quotes in flow output, because
-   * without them parsing {key: a,b} gives two separate entries. */
   cyaml doc = cyaml_create_dictionary();
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(doc, "key", cyaml_create_string("a,b")),
@@ -7525,9 +6298,6 @@ TEST(flow_serialize, comma_in_string_round_trip) {
 }
 
 TEST(flow_serialize, close_bracket_in_string_round_trip) {
-  /* A string inside a flow sequence can hold a ']' in the middle, and it
-   * needs quotes because without them the plain scalar ends early at that
-   * ']'. */
   cyaml seq = cyaml_create_list();
   REQUIRE_NE((void *)seq, NULL);
   REQUIRE_EQ(cyaml_list_push(seq, cyaml_create_string("x]y")), ccol_success);
@@ -7546,9 +6316,6 @@ TEST(flow_serialize, close_bracket_in_string_round_trip) {
 }
 
 TEST(flow_serialize, close_brace_in_string_round_trip) {
-  /* A string inside a flow mapping can hold a '}' in the middle, and it
-   * needs quotes because without them the plain scalar ends early at that
-   * '}'. */
   cyaml doc = cyaml_create_dictionary();
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(doc, "key", cyaml_create_string("p}q")),
@@ -7567,8 +6334,6 @@ TEST(flow_serialize, close_brace_in_string_round_trip) {
 }
 
 TEST(flow_serialize, colon_before_comma_round_trip) {
-  /* A colon followed right by a ',' needs quotes, because the plain scalar
-   * parser reads ':,' as the end of the value indicator. */
   cyaml doc = cyaml_create_dictionary();
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(doc, "k", cyaml_create_string("v:,rest")),
@@ -7587,7 +6352,6 @@ TEST(flow_serialize, colon_before_comma_round_trip) {
 }
 
 TEST(flow_serialize, colon_before_close_bracket_round_trip) {
-  /* A colon followed right by a ']' needs quotes in a flow sequence. */
   cyaml seq = cyaml_create_list();
   REQUIRE_NE((void *)seq, NULL);
   REQUIRE_EQ(cyaml_list_push(seq, cyaml_create_string("v:]rest")),
@@ -7607,7 +6371,6 @@ TEST(flow_serialize, colon_before_close_bracket_round_trip) {
 }
 
 TEST(flow_serialize, colon_before_close_brace_round_trip) {
-  /* A colon followed right by a '}' needs quotes in a flow mapping. */
   cyaml doc = cyaml_create_dictionary();
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_dictionary_set(doc, "k", cyaml_create_string("v:}rest")),
@@ -7625,13 +6388,9 @@ TEST(flow_serialize, colon_before_close_brace_round_trip) {
   cyaml_destroy(doc2);
 }
 
-/* ========================================================================== */
-/*                         YAML DIRECTIVES AND TAGS                           */
-/* ========================================================================== */
+// YAML directives and tags
 
 TEST(directives, yaml_directive_ignored) {
-  /* The parser accepts a %YAML directive line before a '---' without
-   * complaining about it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("%YAML 1.2\n---\nkey: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7642,8 +6401,6 @@ TEST(directives, yaml_directive_ignored) {
 }
 
 TEST(directives, tag_directive_ignored) {
-  /* The parser should accept a %TAG directive line before a '---' without
-   * complaining about it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("%TAG ! foo:\n---\nval: 1\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7653,8 +6410,6 @@ TEST(directives, tag_directive_ignored) {
 }
 
 TEST(directives, multiple_directives_ignored) {
-  /* Many directive lines before a '---' are accepted too, without
-   * complaining about any of them. */
   const char *yaml =
       "%YAML 1.2\n"
       "%TAG ! foo:\n"
@@ -7670,10 +6425,6 @@ TEST(directives, multiple_directives_ignored) {
 }
 
 TEST(directives, custom_node_tag_preserved_and_has_no_typing_effect) {
-  /* A scalar can carry a custom local tag such as !foo, which the parser
-   * keeps and a caller can read with cyaml_node_tag(). The tag never forces
-   * a type of its own, the implicit type rules resolve the bare value as
-   * usual. */
   char *err = NULL;
   cyaml doc = cyaml_parse("value: !foo 42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7687,8 +6438,6 @@ TEST(directives, custom_node_tag_preserved_and_has_no_typing_effect) {
 }
 
 TEST(directives, double_exclamation_tag_forces_string_type) {
-  /* A secondary tag such as !!str on a scalar forces CYAML_STRING, whatever
-   * type the bare value would resolve to without the tag. */
   char *err = NULL;
   cyaml doc = cyaml_parse("val: !!str 42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7701,10 +6450,6 @@ TEST(directives, double_exclamation_tag_forces_string_type) {
 }
 
 TEST(errors, yaml_directive_extra_word_rejected) {
-  /* YAML 1.2 section 6.8.1 defines l-yaml-directive as "YAML", then
-   * s-separate-in-line, then ns-yaml-version, so exactly one version token
-   * and nothing else, and a word after the version has no valid reading.
-   * PyYAML agrees and rejects it the same way. */
   char *err = NULL;
   cyaml doc = cyaml_parse("%YAML 1.2 foo\n---\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -7712,10 +6457,6 @@ TEST(errors, yaml_directive_extra_word_rejected) {
 }
 
 TEST(errors, yaml_directive_comment_without_separating_space_rejected) {
-  /* A '#' directly on the version with no whitespace in between isn't a
-   * valid comment, since this codebase's general rule is that a comment
-   * needs whitespace before it. So the '#' is malformed trailing content on
-   * the directive line, and PyYAML agrees and rejects it the same way. */
   char *err = NULL;
   cyaml doc = cyaml_parse("%YAML 1.1#comment\n---\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -7723,8 +6464,6 @@ TEST(errors, yaml_directive_comment_without_separating_space_rejected) {
 }
 
 TEST(directives, yaml_directive_extra_spaces_accepted) {
-  /* The parser accepts any number of spaces between "YAML" and the version
-   * token, not just one, and PyYAML agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("%YAML  1.1\n---\nkey: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7734,24 +6473,16 @@ TEST(directives, yaml_directive_extra_spaces_accepted) {
 }
 
 TEST(directives, yaml_directive_tab_separator_accepted) {
-  /* A directive's separators are s-separate-in-line (YAML 1.2 section 6.8),
-   * which may hold tabs, and the YAML Test Suite case MUS6-3 holds
-   * "%YAML \t 1.1". A parser that refused a tab there would fail every case
-   * below. */
   REQUIRE_TRUE(
       _tab_accepted_as("%YAML\t1.1\n---\nkey: value\n", "{key: value}"));
   REQUIRE_TRUE(
       _tab_accepted_as("%YAML \t1.1\n---\nkey: value\n", "{key: value}"));
   REQUIRE_TRUE(_tab_accepted_as("%YAML 1.2\t# comment\n---\nk: v\n", "{k: v}"));
-  /* A tab doesn't turn a malformed directive into a well-formed one. */
   require_tab_rejected("%YAML\t\n---\nk: v\n");
   require_tab_rejected("%YAML 1.2\tx\n---\nk: v\n");
 }
 
 TEST(directives, tag_directive_tab_separator_accepted) {
-  /* Both separators of a %TAG directive, and the one before a comment after
-   * its prefix, may hold tabs, for the reason given in
-   * yaml_directive_tab_separator_accepted. */
   const char *cases[] = {
       "%TAG\t!e! tag:e.com,2000:\n--- !e!x y\n",
       "%TAG \t!e! tag:e.com,2000:\n--- !e!x y\n",
@@ -7772,8 +6503,6 @@ TEST(directives, tag_directive_tab_separator_accepted) {
 }
 
 TEST(directives, yaml_directive_trailing_comment_with_separator_accepted) {
-  /* A comment with proper whitespace between it and the version is a valid
-   * ordinary trailing comment, and PyYAML agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("%YAML 1.1  # comment\n---\nkey: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7783,11 +6512,6 @@ TEST(directives, yaml_directive_trailing_comment_with_separator_accepted) {
 }
 
 TEST(directives, unrecognized_directive_name_with_extra_words_accepted) {
-  /* Only the name "YAML" gets the strict grammar above with its fixed number
-   * of tokens. Every other directive name, even one that looks like "YAML"
-   * such as "YAM" or "YAMLL", falls under ns-reserved-directive of YAML 1.2
-   * section 6.8.2, which lets a directive carry any number of trailing
-   * parameters. PyYAML agrees and accepts both names. */
   char *err = NULL;
   cyaml doc = cyaml_parse("%YAM 1.1\n---\nkey: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7803,13 +6527,9 @@ TEST(directives, unrecognized_directive_name_with_extra_words_accepted) {
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                    DOCUMENT-START MARKER EDGE CASES                        */
-/* ========================================================================== */
+// Document-start marker edge cases
 
 TEST(block_mapping, indented_triple_dash_is_plain_scalar) {
-  /* A '---' after whitespace, at a column above 0, is NOT a document start
-   * marker, so the parser reads it as the plain string "---". */
   char *err = NULL;
   cyaml doc = cyaml_parse("   ---\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7820,17 +6540,6 @@ TEST(block_mapping, indented_triple_dash_is_plain_scalar) {
 }
 
 TEST(errors, block_mapping_cannot_start_on_document_marker_line) {
-  /* Content can sit on the same physical line as an explicit '---', but
-   * YAML 1.2's s-l+block-node grammar gives it only the "flow-in-block"
-   * choice, which covers a plain scalar, a quoted scalar and a flow
-   * collection and never "block-in-block".
-   *
-   * A block mapping needs "block-in-block", and that choice needs
-   * s-l-comments (only whitespace, a comment or a newline) right after the
-   * '---', so a block mapping has to start on its OWN line. Two independent
-   * reference parsers agree: both reject this document, and both accept the
-   * same content with no '---' at all or with a '---' and a newline in
-   * front of it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("--- a: b\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -7838,10 +6547,6 @@ TEST(errors, block_mapping_cannot_start_on_document_marker_line) {
 }
 
 TEST(errors, block_sequence_cannot_start_on_document_marker_line) {
-  /* The same restriction as in
-   * block_mapping_cannot_start_on_document_marker_line, for a block
-   * sequence, which has no "flow-in-block" choice either. Two independent
-   * reference parsers agree. */
   char *err = NULL;
   cyaml doc = cyaml_parse("--- - a\n    - b\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -7849,11 +6554,6 @@ TEST(errors, block_sequence_cannot_start_on_document_marker_line) {
 }
 
 TEST(errors, anchored_mapping_cannot_start_on_document_marker_line) {
-  /* The same restriction again, reached here through an anchor on the text
-   * that would be the key, so the document "--- &anchor a: b" has no valid
-   * reading either. The same "&anchor a: b" without any marker is an
-   * ordinary valid anchored key, and so is one with the marker on its own
-   * line. Two independent reference parsers agree. */
   char *err = NULL;
   cyaml doc = cyaml_parse("--- &anchor a: b\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -7861,9 +6561,6 @@ TEST(errors, anchored_mapping_cannot_start_on_document_marker_line) {
 }
 
 TEST(block_mapping, mapping_on_own_line_after_document_marker_still_works) {
-  /* A block mapping starting on the line AFTER a '---' is completely
-   * ordinary, it's content on the '---' line itself that is restricted. Two
-   * independent reference parsers agree. */
   char *err = NULL;
   cyaml doc = cyaml_parse("---\na: b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7873,11 +6570,6 @@ TEST(block_mapping, mapping_on_own_line_after_document_marker_still_works) {
 }
 
 TEST(block_mapping, scalar_on_document_marker_line_still_works) {
-  /* A plain scalar, which is neither a mapping nor a sequence, can sit right
-   * on the same line as a '---' and works there, with or without an anchor
-   * on it. Only "block-in-block" content (a mapping or a sequence) has to
-   * move to a later line, since a scalar has the "flow-in-block" choice open
-   * to it. Two independent reference parsers agree. */
   char *err = NULL;
   cyaml doc = cyaml_parse("--- foo\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7893,7 +6585,7 @@ TEST(block_mapping, scalar_on_document_marker_line_still_works) {
   cyaml_destroy(doc);
 }
 
-/* Explicit "? key" / ": value" block mapping entries */
+// Explicit "? key" / ": value" block mapping entries
 
 TEST(explicit_block_mapping, simple_key_and_value) {
   char *err = NULL;
@@ -7906,8 +6598,6 @@ TEST(explicit_block_mapping, simple_key_and_value) {
 }
 
 TEST(explicit_block_mapping, explicit_key_with_no_value_is_null) {
-  /* YAML 1.2 section 8.2.2 says an explicit key without a ':' after it at
-   * the same indent has a null value. */
   char *err = NULL;
   cyaml doc = cyaml_parse("? a\nb: c\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7952,18 +6642,6 @@ TEST(explicit_block_mapping, block_scalar_key) {
 }
 
 TEST(explicit_block_mapping, anchored_key_and_alias_value) {
-  /* A later alias can point at an anchor on an explicit key, such as "&a a".
-   *
-   * The third line is a bare ": *a" with nothing before the ':'. It's an
-   * entry of its own whose implicit key is an empty plain scalar, and it
-   * doesn't join the "&b b" entry above it.
-   *
-   * Under YAML 1.2's core schema an empty scalar resolves to null, just like
-   * the spellings "~" and "null", so this key canonicalizes to the same
-   * "null" string key they give (see node_to_dict_key_string()'s doc
-   * comment). Every site that captures a key, implicit or explicit,
-   * canonicalizes through the same core-schema typing, empty keys
-   * included. */
   char *err = NULL;
   cyaml doc = cyaml_parse("? &a a\n: &b b\n: *a\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7979,9 +6657,6 @@ TEST(explicit_block_mapping, anchored_key_and_alias_value) {
 }
 
 TEST(explicit_block_mapping, anchored_implicit_key_at_second_entry) {
-  /* An anchor can sit on an ordinary implicit-style key and not only on an
-   * explicit '?' key, and that holds for an entry after the first one as
-   * well. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: 1\n&anchor c: 3\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -7993,10 +6668,6 @@ TEST(explicit_block_mapping, anchored_implicit_key_at_second_entry) {
 }
 
 TEST(explicit_block_mapping, non_scalar_key_canonicalized_to_flow_text) {
-  /* A sequence as an explicit key is valid YAML (see sections 7.4.1 and
-   * 8.2.2). A dictionary of this DOM always maps a char * to a node, so the
-   * library canonicalizes the key into its compact flow YAML text with
-   * cyaml_serialize_flow instead of rejecting it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("? - a\n  - b\n: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8007,10 +6678,6 @@ TEST(explicit_block_mapping, non_scalar_key_canonicalized_to_flow_text) {
 }
 
 TEST(explicit_block_mapping, tagged_root_object) {
-  /* This also checks cyaml_node_tag(doc) itself and not only the mapping's
-   * content, because otherwise the assertions would be the same as for the
-   * untagged "---\n? a\n: b\n" case and couldn't tell whether "!!map" was
-   * really parsed and attached to the right node or quietly thrown away. */
   char *err = NULL;
   cyaml doc = cyaml_parse("--- !!map\n? a\n: b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8022,12 +6689,9 @@ TEST(explicit_block_mapping, tagged_root_object) {
   cyaml_destroy(doc);
 }
 
-/* Flow collection single-pair / bare-key shorthands */
+// Flow collection single-pair and bare-key shorthands
 
 TEST(flow_collections, sequence_bare_pair_shorthand) {
-  /* "[foo: bar]" is shorthand for "[{foo: bar}]", one "key: value" pair
-   * without '{' and '}' around it means a mapping element with one
-   * entry. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[foo: bar]", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8041,10 +6705,6 @@ TEST(flow_collections, sequence_bare_pair_shorthand) {
 }
 
 TEST(flow_collections, sequence_bare_pair_empty_key) {
-  /* Under the core schema an empty key resolves to CYAML_NULL, the same as a
-   * plain scalar value does, since an empty string is null just like "~".
-   * node_to_dict_key_string then canonicalizes it to the string key "null",
-   * the same as every other null dictionary key in this DOM. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[: empty key]", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8070,11 +6730,6 @@ TEST(flow_collections, dictionary_bare_key_no_colon_is_null) {
 }
 
 TEST(block_mapping, indicator_prefixed_keys_not_immediately_followed_by_space) {
-  /* A '?', a ':' and a '-' followed right by a non-whitespace character are
-   * ordinary plain scalar content and not the explicit key, value or list
-   * indicators. That holds for a dictionary's first key and for a later
-   * one, and it drives the check in parse_one_dict_entry_key that asks
-   * whether a character really is an indicator. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "?foo: safe question mark\n:bar: safe colon\n-baz: safe dash\n", &err);
@@ -8103,10 +6758,6 @@ TEST(flow_collections, dictionary_colon_no_value_is_null) {
 }
 
 TEST(block_mapping, anchored_first_key_does_not_swallow_sibling_entries) {
-  /* "&a a: b" as the very first entry of a dictionary anchors only the key
-   * scalar "a" and not the whole dictionary this entry starts, so a sibling
-   * entry on the next line is a separate entry of its own without an
-   * anchor. */
   char *err = NULL;
   cyaml doc = cyaml_parse("&a a: b\nc: &d d\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8128,22 +6779,9 @@ TEST(block_mapping, alias_used_directly_as_key) {
   cyaml_destroy(doc);
 }
 
-/* parse_anchor_name() ends an alias name at a ':' followed by whitespace or
- * the end of the input, the same rule scan_plain_scalar_line has, where a
- * colon with a space or a colon at the end of a line ends the scan.
- *
- * Without that rule the stop set holds only whitespace, the flow indicators
- * and '#', so the colon would become part of the parsed alias name, "x:"
- * instead of "x". That happens for an alias used directly as a key with no
- * space before the colon, such as "*x: y", which is the most natural way to
- * write it since an ordinary key is written "key: value" the same way. The
- * parser would then report an "unknown alias" error even though the anchor
- * is defined correctly.
- *
- * The other alias-as-key tests all put a space before the colon (see
- * alias_used_directly_as_key above and alias_used_as_key_still_works
- * below), so this test is the only one covering the form without a
- * space. */
+// An alias name ends at a ':' followed by white space or the end of input, as
+// a plain scalar does, so "*x: y" names the alias "x". Every other alias-key
+// test puts a space before the colon.
 TEST(block_mapping, alias_used_as_key_with_no_space_before_colon) {
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x foo\n*x: y\n", &err);
@@ -8156,10 +6794,6 @@ TEST(block_mapping, alias_used_as_key_with_no_space_before_colon) {
 }
 
 TEST(block_mapping, anchor_for_empty_node_does_not_swallow_sibling_entry) {
-  /* "a: &anchor" has nothing else on its line, so it anchors an empty node,
-   * which is null. A sibling key on the next line at the same indentation as
-   * "a" stays an entry of its own and is not taken as the anchor's
-   * nested content. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &anchor\nb: *anchor\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8176,9 +6810,6 @@ TEST(block_mapping, anchor_for_empty_node_does_not_swallow_sibling_entry) {
 }
 
 TEST(block_list, anchor_for_empty_node_does_not_swallow_sibling_entry) {
-  /* The same hazard as the mapping case above but for a sequence, the line
-   * "- &anchor" has nothing else on it and must not swallow the sibling
-   * element after it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- &anchor\n- next\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8193,9 +6824,6 @@ TEST(block_list, anchor_for_empty_node_does_not_swallow_sibling_entry) {
 }
 
 TEST(block_mapping, sequence_value_same_indent_as_key) {
-  /* YAML 1.2 section 8.2.2 lets a block sequence value sit at exactly the
-   * same indentation as the mapping key above it, while any other kind of
-   * value has to be indented more than that key. */
   char *err = NULL;
   cyaml doc = cyaml_parse("one:\n- 2\n- 3\nfour: 5\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8212,8 +6840,6 @@ TEST(block_mapping, sequence_value_same_indent_as_key) {
 }
 
 TEST(block_mapping, sequence_value_same_indent_mixed_with_more_indented) {
-  /* One mapping can hold both forms side by side, one at its key's
-   * indentation and the ordinary, more indented one. */
   char *err = NULL;
   cyaml doc = cyaml_parse("foo:\n- 42\nbar:\n  - 44\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8228,9 +6854,6 @@ TEST(block_mapping, sequence_value_same_indent_mixed_with_more_indented) {
 }
 
 TEST(block_mapping, sibling_scalar_key_at_same_indent_is_not_swallowed) {
-  /* A sibling at the same indent that is NOT a '-' sequence indicator gives
-   * a null value followed by a new sibling entry, since the exception above
-   * for a same-indent sequence value only covers the '-'. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a:\nb: 1\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8263,17 +6886,11 @@ TEST(flow_collections, non_scalar_flow_sequence_pair_key_canonicalized) {
   cyaml_destroy(doc);
 }
 
+// A dictionary used as a key is canonicalized with its keys sorted, whatever
+// their order in the source, so two keys with the same content collide. The
+// public flow serializer keeps insertion order instead.
 TEST(flow_collections,
      non_scalar_multi_key_dictionary_key_is_canonically_sorted) {
-  /* A dictionary with many keys can be a key itself. The library
-   * canonicalizes it with its entries sorted alphabetically by key, whatever
-   * the source's insertion order, and this source deliberately uses reverse
-   * alphabetical order.
-   *
-   * cyaml_serialize_flow()'s public output is different, it isn't sorted
-   * and follows insertion order (see
-   * serialize.multi_key_flow_mapping_preserves_iteration_order below). This
-   * canonicalization depends on the content alone. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{z: 1, a: 2}: outer_value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8285,12 +6902,6 @@ TEST(flow_collections,
 
 TEST(flow_collections,
      non_scalar_dictionary_keys_collide_regardless_of_insertion_order) {
-  /* This is what the canonicalization is for. Two dictionary keys with the
-   * same content but a different insertion order must collide onto
-   * exactly the same stored key instead of staying two separate entries. For
-   * a key that appears twice the last value wins (see
-   * block_mapping.duplicate_key_last_wins), so here the second entry's value
-   * wins. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{{a: 1, b: 2}: first, {b: 2, a: 1}: second}", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8303,10 +6914,6 @@ TEST(flow_collections,
 
 TEST(flow_collections,
      non_scalar_dictionary_key_sorted_recursively_when_nested) {
-  /* The sort applies at every nesting level inside the canonicalized key and
-   * not only at the top. A dictionary key's VALUE can itself be a dictionary
-   * with unsorted keys, and the library sorts that nested dictionary's
-   * keys too. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{outer: {z: 1, a: 2}}: v\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8317,9 +6924,6 @@ TEST(flow_collections,
 }
 
 TEST(block_mapping, flow_collection_compact_implicit_key) {
-  /* A flow collection followed right by a ':' is a valid non-scalar implicit
-   * key of a block mapping, which YAML 1.2 section 8.2.2 calls the compact
-   * mapping form. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[a, b]: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8331,16 +6935,9 @@ TEST(block_mapping, flow_collection_compact_implicit_key) {
   cyaml_destroy(doc);
 }
 
+// Later entries go through parse_one_dict_entry_key(), which must not filter
+// out '[' and '{' before try_parse_scalar_dict_key().
 TEST(block_mapping, flow_collection_compact_implicit_key_not_only_first_entry) {
-  /* An implicit key can be a bare flow collection without an anchor, and the
-   * parser has to accept such a key at ANY entry position and not only as
-   * the mapping's first entry.
-   *
-   * parse_one_dict_entry_key handles every entry after the first, and it
-   * must not filter out a '[' or '{' before calling
-   * try_parse_scalar_dict_key, the function that knows how to parse a flow
-   * collection as a key. With such a filter the same construct would work as
-   * the first entry and fail as "trailing content" for any later one. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: 1\n[1, 2]: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8357,8 +6954,6 @@ TEST(block_mapping, flow_collection_compact_implicit_key_not_only_first_entry) {
 }
 
 TEST(block_mapping, flow_dictionary_compact_implicit_key_not_only_first_entry) {
-  /* The same rule as above for a flow dictionary key ('{') instead of a flow
-   * list key ('['). */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: 1\n{x: 1}: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8371,16 +6966,9 @@ TEST(block_mapping, flow_dictionary_compact_implicit_key_not_only_first_entry) {
   cyaml_destroy(doc);
 }
 
+// "? []: x" is a mapping whose key is the mapping {[]: x}. Its canonical text
+// quotes "[]" so the key doesn't read back as an empty list.
 TEST(block_mapping, explicit_key_with_compact_flow_list_content) {
-  /* The document is "? []: x". The explicit key's content is a compact block
-   * mapping on one line, "[]: x", which the "compact" choice of
-   * s-l+block-indented in YAML 1.2 section 8.2.2 allows.
-   *
-   * So the whole document is a one-entry mapping whose key is the one-entry
-   * mapping {[]: x}. The library canonicalizes that key into its own flow
-   * YAML text and quotes "[]", because an unquoted "[]" parses as a flow list
-   * that opens and closes. The entry's value is null since nothing follows
-   * on the line. */
   char *err = NULL;
   cyaml doc = cyaml_parse("? []: x\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8393,10 +6981,6 @@ TEST(block_mapping, explicit_key_with_compact_flow_list_content) {
 }
 
 TEST(block_mapping, multiline_flow_collection_not_a_valid_implicit_key) {
-  /* A flow collection over more than one line can never be an implicit key,
-   * while one on a single line can. The ns-s-implicit-yaml-key rule wants one
-   * line whether or not the key is a scalar, so the ':' at the end is
-   * content the parser can't read. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[23\n]: 42\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8404,10 +6988,6 @@ TEST(block_mapping, multiline_flow_collection_not_a_valid_implicit_key) {
 }
 
 TEST(directives, verbatim_tag_with_comma_not_swallowed_as_flow_terminator) {
-  /* A verbatim tag's content, written "!<...>", can legitimately hold a
-   * literal ',', because its delimiters are the angle brackets and not
-   * whitespace. A shorthand tag has a different character set without
-   * ','. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "--- !<tag:clarkevans.com,2002:invoice>\ninvoice: 34843\n", &err);
@@ -8418,19 +6998,10 @@ TEST(directives, verbatim_tag_with_comma_not_swallowed_as_flow_terminator) {
   cyaml_destroy(doc);
 }
 
+// A tagged key must not take in a tagged sibling entry. The key's tag isn't
+// kept, since keys are plain strings, while "!!str" on a value stays on the
+// node.
 TEST(block_mapping, tagged_key_does_not_swallow_sibling_entry) {
-  /* The counterpart of the '&' branch test, where a key must not swallow its
-   * sibling: a tagged key must not let its recursive parse take in an
-   * unrelated sibling entry that carries a tag as well.
-   *
-   * The tag "!!null" sits on an empty scalar, since there's nothing between
-   * the tag and the ':'. The tag types the key as null, and a null key's
-   * canonical text is "null". This DOM's keys are plain strings and not
-   * nodes, so the tag itself isn't kept; see cyaml_node_tag()'s doc
-   * comment.
-   *
-   * "b"'s VALUE is "!!str" with nothing after it, so the tag forces an empty
-   * string and not null; a tag in a value position stays on the node. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!null : a\nb: !!str\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8447,10 +7018,6 @@ TEST(block_mapping, tagged_key_does_not_swallow_sibling_entry) {
 }
 
 TEST(block_mapping, tag_then_anchor_property_order) {
-  /* The c-ns-properties rule allows the tag and the anchor in either order.
-   * This key puts the tag first, as in "!!str &a1 ...", and another test
-   * covers anchor first and tag second. The anchor on this key should
-   * register and a later alias should resolve to it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!str &a1 \"foo\": bar\nbaz: *a1\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8465,11 +7032,6 @@ TEST(block_mapping, tag_then_anchor_property_order) {
 }
 
 TEST(block_mapping, alias_key_reached_through_anchor_recursion) {
-  /* The document is "top: &node\n  *alias : value". The anchor for "top"'s
-   * value has nothing else on its line, so parse_node's general recursion
-   * resolves its content. That recursive entry point is the '*' alias
-   * branch and not try_parse_scalar_dict_key, and it must read an alias
-   * followed by a ':' as an implicit key as well. */
   char *err = NULL;
   cyaml doc = cyaml_parse("&a a: &b b\ntop: &node\n  *a : *b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8482,12 +7044,6 @@ TEST(block_mapping, alias_key_reached_through_anchor_recursion) {
 }
 
 TEST(errors, implicit_value_sequence_cannot_start_inline) {
-  /* A block sequence value can never start on the same line as its own
-   * "key:", because the implicit mapping value grammar,
-   * ns-l-block-map-implicit-value, has no compact choice at all, so the
-   * sequence always begins on a later line. A mapping under a '-'
-   * sequence entry does have that "compact" right. The reference parser
-   * PyYAML confirms this. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: - a\n     - b\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8495,9 +7051,6 @@ TEST(errors, implicit_value_sequence_cannot_start_inline) {
 }
 
 TEST(errors, sequence_cannot_start_inline_after_anchor) {
-  /* The same restriction for content on an anchor's line. "&anchor - x" has
-   * no valid reading, and a plain scalar can't start with a bare '-'
-   * indicator either, so the parser reports a hard error. */
   char *err = NULL;
   cyaml doc = cyaml_parse("&anchor - sequence entry\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8505,11 +7058,6 @@ TEST(errors, sequence_cannot_start_inline_after_anchor) {
 }
 
 TEST(errors, sequence_cannot_start_inline_after_tag) {
-  /* The same restriction as in sequence_cannot_start_inline_after_anchor,
-   * for content on a tag's line. "!!seq - x" has no valid reading either,
-   * just like the anchor case: a tag and an anchor are both
-   * c-ns-properties, and neither gets the extra right that the "compact
-   * mapping" choice gives a sequence on the same line. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!seq - sequence entry\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8517,10 +7065,6 @@ TEST(errors, sequence_cannot_start_inline_after_tag) {
 }
 
 TEST(block_mapping, explicit_value_sequence_can_start_inline) {
-  /* Explicit-style content, the '?' key's content and the ':' value after
-   * it, follows the s-l+block-indented grammar, which an implicit value
-   * doesn't. That grammar's "compact" choice DOES let a bare '-' sequence
-   * start on the same line, and PyYAML agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("? k\n: - a\n  - b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8535,10 +7079,6 @@ TEST(block_mapping, explicit_value_sequence_can_start_inline) {
 }
 
 TEST(block_mapping, explicit_key_sequence_can_start_inline) {
-  /* The same "compact" right holds for the '?' key's content and not only
-   * for the ':' value. It's the construct that
-   * explicit_block_mapping.non_scalar_key_canonicalized_to_flow_text drives
-   * end to end, and this test only looks at the start on the same line. */
   char *err = NULL;
   cyaml doc = cyaml_parse("? - a\n  - b\n: v\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8548,8 +7088,6 @@ TEST(block_mapping, explicit_key_sequence_can_start_inline) {
 }
 
 TEST(block_list, sequence_compact_mapping_under_dash_still_works) {
-  /* The difference above only goes one way, a mapping under a '-' sequence
-   * entry keeps its own "compact" right. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- k: v\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8562,9 +7100,6 @@ TEST(block_list, sequence_compact_mapping_under_dash_still_works) {
 }
 
 TEST(errors, block_scalar_comment_needs_preceding_whitespace) {
-  /* '>#comment' has no whitespace between the folded scalar indicator and the
-   * '#', so it isn't a comment, and a '#' right after the header is an
-   * invalid trailing character. */
   char *err = NULL;
   cyaml doc = cyaml_parse("block: ># comment\n  scalar\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8572,11 +7107,6 @@ TEST(errors, block_scalar_comment_needs_preceding_whitespace) {
 }
 
 TEST(errors, block_scalar_leading_blank_line_more_indented_folded) {
-  /* YAML 1.2 section 8.1.1 says "It is an error for any of the leading empty
-   * lines to contain more spaces than the first non-empty line." Here the
-   * parser detects the block's indentation as 1, from " invalid", while an
-   * earlier blank line holds 3 spaces. The 5LLU case of the vendored YAML
-   * Test Suite confirms it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("scalar: >\n \n  \n   \n invalid\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8584,10 +7114,6 @@ TEST(errors, block_scalar_leading_blank_line_more_indented_folded) {
 }
 
 TEST(errors, block_scalar_leading_blank_line_more_indented_literal) {
-  /* The same restriction as in
-   * block_scalar_leading_blank_line_more_indented_folded, for a literal
-   * ('|') block scalar instead of a folded ('>') one. The W9L4 case of the
-   * vendored YAML Test Suite confirms it. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "block scalar: |\n     \n  more spaces at the beginning\n"
@@ -8598,11 +7124,6 @@ TEST(errors, block_scalar_leading_blank_line_more_indented_literal) {
 }
 
 TEST(errors, block_scalar_leading_blank_line_more_indented_before_comment) {
-  /* The same restriction again, but here the first non-blank line, the one
-   * that would set block_indent, is a comment inside the run of leading
-   * blank lines. The check on those leading blank lines has to fire before
-   * the parser gets to the comment. The S98Z case of the vendored YAML Test
-   * Suite confirms it. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("empty block scalar: >\n \n  \n   \n # comment\n", &err);
@@ -8611,11 +7132,6 @@ TEST(errors, block_scalar_leading_blank_line_more_indented_before_comment) {
 }
 
 TEST(errors, multiline_double_quoted_implicit_key_rejected) {
-  /* An implicit key always sits on one line, as the ns-s-implicit-yaml-key
-   * rule says and a plain scalar key obeys as well, so a double-quoted
-   * scalar over more than one line has no valid reading as a key. Two
-   * independent reference parsers agree, and the 7LBH case of the vendored
-   * YAML Test Suite matches. */
   char *err = NULL;
   cyaml doc = cyaml_parse("\"a\nb\": 1\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8623,9 +7139,6 @@ TEST(errors, multiline_double_quoted_implicit_key_rejected) {
 }
 
 TEST(errors, multiline_single_quoted_implicit_key_rejected) {
-  /* The same restriction as in multiline_double_quoted_implicit_key_rejected
-   * for a single-quoted key. Two independent reference parsers agree, and
-   * the D49Q case of the vendored YAML Test Suite matches. */
   char *err = NULL;
   cyaml doc = cyaml_parse("'c\n d': 1\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8633,9 +7146,6 @@ TEST(errors, multiline_single_quoted_implicit_key_rejected) {
 }
 
 TEST(errors, multiline_quoted_key_nested_in_sequence_rejected) {
-  /* The same restriction reached through a nested sequence element instead
-   * of a top-level key. Two independent reference parsers agree, and the
-   * JKF3 case of the vendored YAML Test Suite matches. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- - \"bar\nbar\": x\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8643,11 +7153,6 @@ TEST(errors, multiline_quoted_key_nested_in_sequence_rejected) {
 }
 
 TEST(errors, multiline_double_quoted_implicit_key_rejected_bare_cr) {
-  /* The bare CR form of multiline_double_quoted_implicit_key_rejected. This
-   * parser never normalizes CR and LF in its input, so a key can span two
-   * physical lines with a bare '\r' and no '\n' at all, and it should fail
-   * exactly like the LF version above. A check that only looks at '\n' would
-   * accept this key as if it were on one line. */
   char *err = NULL;
   cyaml doc = cyaml_parse("\"a\rb\": 1\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8655,9 +7160,6 @@ TEST(errors, multiline_double_quoted_implicit_key_rejected_bare_cr) {
 }
 
 TEST(errors, multiline_single_quoted_implicit_key_rejected_bare_cr) {
-  /* The bare CR form of multiline_single_quoted_implicit_key_rejected; see
-   * multiline_double_quoted_implicit_key_rejected_bare_cr above for the
-   * reasoning. */
   char *err = NULL;
   cyaml doc = cyaml_parse("'c\r d': 1\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8665,11 +7167,6 @@ TEST(errors, multiline_single_quoted_implicit_key_rejected_bare_cr) {
 }
 
 TEST(block_mapping, multiline_quoted_value_still_works) {
-  /* Regression guard. A quoted scalar over several lines can be an ordinary
-   * VALUE and not a key, and the one-line rule for implicit keys must not
-   * touch it, so such a value stays fully supported. YAML 1.2 section
-   * 7.3.3's line folding covers quoted scalar VALUES, and only an implicit
-   * KEY's position is held to one line. */
   char *err = NULL;
   cyaml doc = cyaml_parse("quoted: \"a\nb\nc\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8679,11 +7176,6 @@ TEST(block_mapping, multiline_quoted_value_still_works) {
 }
 
 TEST(block_mapping, anchored_multiline_quoted_value_still_works) {
-  /* A guard for the copy of the same restriction inside
-   * try_parse_scalar_dict_key. An anchor can sit on a quoted scalar VALUE over
-   * several lines rather than on a key, and that value resolves as an ordinary
-   * anchored value instead of going through the fast path that detects a
-   * key. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x \"multi\nline\"\nb: *x\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8694,13 +7186,6 @@ TEST(block_mapping, anchored_multiline_quoted_value_still_works) {
 }
 
 TEST(errors, document_marker_inside_unclosed_flow_collection_rejected) {
-  /* YAML 1.2 section 6.9's c-forbidden rule says a '---' or '...' document
-   * marker at the start of a line can never be plain scalar content. An open
-   * flow collection has no valid way to end at a document boundary, since
-   * only its own ']' or '}' can close it, unlike a block context where the
-   * same marker ends the current collection normally. Two independent
-   * reference parsers agree, and the N782 case of the vendored YAML Test
-   * Suite matches. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[\n--- ,\n...\n]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8708,20 +7193,6 @@ TEST(errors, document_marker_inside_unclosed_flow_collection_rejected) {
 }
 
 TEST(errors, flow_dictionary_continuation_lines_at_column_zero_rejected) {
-  /* Every line a flow collection crosses must be indented more than the
-   * surrounding block value's indent, as YAML 1.2's s-separate(n,c) rule
-   * says. Here each continuation line ("k", ":", "v" and "}") sits at
-   * column 0, which is never more indented than anything, so the parser
-   * rejects this input on that indentation rule alone. The VJP3-0 case of
-   * the vendored YAML Test Suite matches.
-   *
-   * It isn't a rule that makes an implicit key's ':' share the key's line.
-   * VJP3-0's sibling in the same suite, VJP3-1, has the same shape with each
-   * continuation line indented by exactly one space, carries fail=0, and
-   * this parser accepts it (see implicit_key_colon_may_fold_to_a_later_line_ok
-   * below). An ordinary flow dictionary's implicit key really can have its
-   * ':' on a later line, while the "[key: value]" shorthand for a sequence
-   * of one pair is stricter, because ns-s-implicit-yaml-key covers it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("k: {\nk\n:\nv\n}\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8729,10 +7200,6 @@ TEST(errors, flow_dictionary_continuation_lines_at_column_zero_rejected) {
 }
 
 TEST(flow_collections, implicit_key_colon_may_fold_to_a_later_line_ok) {
-  /* The sibling of the rejection above with correct indentation on every
-   * continuation line, matched by the VJP3-1 case of the vendored YAML Test
-   * Suite, which carries fail=0: a flow dictionary's implicit key can
-   * legitimately have its ':' on a line after the key. */
   char *err = NULL;
   cyaml doc = cyaml_parse("k: {\n k\n :\n v\n }\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8745,8 +7212,6 @@ TEST(flow_collections, implicit_key_colon_may_fold_to_a_later_line_ok) {
 }
 
 TEST(flow_collections, implicit_key_colon_value_folds_to_next_line_ok) {
-  /* Regression guard. Once the parser finds the ':' the VALUE half can fold
-   * onto a later line, and a reference parser agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{k: \nv}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8756,9 +7221,6 @@ TEST(flow_collections, implicit_key_colon_value_folds_to_next_line_ok) {
 }
 
 TEST(flow_collections, explicit_key_colon_on_later_line_still_works) {
-  /* Regression guard. An EXPLICIT '?' key's ':' can be on a later line too,
-   * as in the block style "? key\n: value", and a reference parser
-   * agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{? key\n: value}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8768,12 +7230,6 @@ TEST(flow_collections, explicit_key_colon_on_later_line_still_works) {
 }
 
 TEST(errors, flow_collection_continuation_line_not_indented_enough_rejected) {
-  /* YAML 1.2's s-separate(n,c) grammar goes through s-separate-lines(n) to
-   * s-flow-line-prefix(n), and it wants every line a flow collection crosses
-   * to be indented more than the surrounding block value's indent. Here
-   * "flow:" sits at column 0, and so do the continuation lines "b," and
-   * "c]". Two independent reference parsers agree, and the 9C9N case of the
-   * vendored YAML Test Suite matches. */
   char *err = NULL;
   cyaml doc = cyaml_parse("flow: [a,\nb,\nc]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8781,10 +7237,6 @@ TEST(errors, flow_collection_continuation_line_not_indented_enough_rejected) {
 }
 
 TEST(flow_collections, continuation_line_indented_enough_still_works) {
-  /* Regression guard. The parser accepts the same content with one more
-   * space of indent everywhere, because the continuation lines are then at
-   * column 1, more than "flow:"'s column 0. Two independent reference
-   * parsers agree. */
   char *err = NULL;
   cyaml doc = cyaml_parse("flow: [a,\n b,\n c]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8800,13 +7252,6 @@ TEST(flow_collections, continuation_line_indented_enough_still_works) {
 }
 
 TEST(errors, anchor_flow_continuation_line_not_indented_enough_rejected) {
-  /* An anchor's value can wrap onto a later line inside a flow collection:
-   * in "a: {b: &x\nc}\n" the "&x" is the last thing on its line and its
-   * value "c" comes on the next one. That newline has to obey, and not get
-   * around, the same s-separate(n,c) indentation rule as every other flow
-   * collection continuation line in this file. Here "a:"'s indent is column
-   * 0 and the continuation line "c}" is at column 0 as well, which isn't
-   * more indented. Two independent reference parsers agree. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: {b: &x\nc}\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8814,10 +7259,6 @@ TEST(errors, anchor_flow_continuation_line_not_indented_enough_rejected) {
 }
 
 TEST(flow_collections, anchor_continuation_line_indented_enough_still_works) {
-  /* Regression guard. The same content with one more space of indentation
-   * puts the continuation line at column 1, more than column 0 where "a:"
-   * sits, so the parser accepts it and the anchor's value round-trips
-   * correctly. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: {b: &x\n c}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8833,20 +7274,11 @@ TEST(flow_collections, anchor_continuation_line_indented_enough_still_works) {
 }
 
 TEST(errors, anchor_flow_continuation_line_tab_indentation_rejected) {
-  /* The tab form of
-   * anchor_flow_continuation_line_not_indented_enough_rejected. The tab on
-   * the continuation line is separation and not indentation, so the line is
-   * indented by no space, and "a"'s value needs one. At the root, where the
-   * collection needs no indentation, the same line is valid. */
   require_tab_rejected("a: {b: &x\n\tc}\n");
   REQUIRE_TRUE(_tab_accepted_as("{a: &x\n\tc}\n", "{a: c}"));
 }
 
 TEST(errors, tag_flow_continuation_line_not_indented_enough_rejected) {
-  /* The tag form of
-   * anchor_flow_continuation_line_not_indented_enough_rejected. A tagged value
-   * can wrap onto a continuation line inside a flow collection, and when that
-   * line isn't indented enough the parser rejects it the same way. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: {b: !!str\nc}\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8874,12 +7306,6 @@ TEST(errors, tag_flow_continuation_line_tab_indentation_rejected) {
 }
 
 TEST(errors, tab_directly_after_dash_rejected) {
-  /* YAML 1.2 section 6.1 says a tab is never valid as indentation or
-   * separation of a block structure, so a bare '-' followed right by a tab
-   * has no valid reading at all, not even as an ordinary plain scalar
-   * starting with '-'. Two independent reference parsers agree and reject
-   * every case, and the Y79Y-4 case of the vendored YAML Test Suite
-   * matches. */
   char *err = NULL;
   cyaml doc = cyaml_parse("-\t-\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8887,10 +7313,6 @@ TEST(errors, tab_directly_after_dash_rejected) {
 }
 
 TEST(errors, tab_after_dash_and_separator_space_rejected) {
-  /* The same restriction as in tab_directly_after_dash_rejected one step
-   * further away: a tab after the one separator space following a '-' is
-   * just as invalid. Two independent reference parsers agree, and the Y79Y-5
-   * case of the vendored YAML Test Suite matches. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- \t-\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8898,9 +7320,6 @@ TEST(errors, tab_after_dash_and_separator_space_rejected) {
 }
 
 TEST(errors, tab_directly_after_question_mark_rejected) {
-  /* The same restriction as in tab_directly_after_dash_rejected, for an
-   * explicit key's '?' indicator. Two independent reference parsers agree,
-   * and the Y79Y-6 case of the vendored YAML Test Suite matches. */
   char *err = NULL;
   cyaml doc = cyaml_parse("?\t-\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8908,10 +7327,6 @@ TEST(errors, tab_directly_after_question_mark_rejected) {
 }
 
 TEST(errors, tab_after_question_mark_before_key_rejected) {
-  /* The same restriction again, for a '?' followed right by a tab and then a
-   * plain scalar key, where the case above has a sequence. Two independent
-   * reference parsers agree, and the Y79Y-8 case of the vendored YAML Test
-   * Suite matches. */
   char *err = NULL;
   cyaml doc = cyaml_parse("?\tkey:\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -8919,16 +7334,11 @@ TEST(errors, tab_after_question_mark_before_key_rejected) {
 }
 
 TEST(block_mapping, tab_after_question_mark_before_scalar_key_accepted) {
-  /* A tab after a '?', with or without a space before it, is separation in
-   * front of a scalar key, for the first entry and every later one. Only a
-   * block collection may not follow the tab (Y79Y-6 and Y79Y-8). */
   REQUIRE_TRUE(_tab_accepted_as("? \ta\n: 1\n", "{a: 1}"));
   REQUIRE_TRUE(_tab_accepted_as("?\ta\n:\t1\n", "{a: 1}"));
 }
 
 TEST(block_mapping, tab_after_question_mark_accepted_for_later_entry) {
-  /* The block dictionary loop reads every later entry without the node
-   * dispatch, so it applies the same rule itself. */
   char *err = NULL;
   cyaml doc = cyaml_parse("? a\n: 1\n?\tb\n: 2\n? \tc\n: 3\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8941,8 +7351,6 @@ TEST(block_mapping, tab_after_question_mark_accepted_for_later_entry) {
 }
 
 TEST(block_mapping, second_explicit_entry_with_ordinary_space_still_works) {
-  /* Regression guard. One ordinary space after a '?' on a later entry isn't
-   * a tab, and the rules above leave it completely alone. */
   char *err = NULL;
   cyaml doc = cyaml_parse("? a\n: 1\n? b\n: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8953,8 +7361,6 @@ TEST(block_mapping, second_explicit_entry_with_ordinary_space_still_works) {
 }
 
 TEST(block_list, dash_space_content_still_works) {
-  /* Regression guard. One ordinary space after a '-' isn't a tab, and the
-   * rules above leave it completely alone. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- a\n- b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8966,10 +7372,6 @@ TEST(block_list, dash_space_content_still_works) {
 }
 
 TEST(flow_collections, root_level_flow_collection_column_0_continuation_ok) {
-  /* Regression guard. A flow collection at the document root has no
-   * surrounding block indent to obey. Its indent is -1, the sentinel this
-   * whole parser uses, so a continuation line at column 0 is fine there. Two
-   * independent reference parsers agree. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{\"foo\"\n: \"bar\"}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8979,10 +7381,6 @@ TEST(flow_collections, root_level_flow_collection_column_0_continuation_ok) {
 }
 
 TEST(flow_collections, multiline_flow_list_not_confused_by_unindented_dash) {
-  /* Regression guard. An ordinary flow list can span more than one line, and
-   * one of its elements can start with a '-' at column 0 on a continuation
-   * line without being a "---". The document marker check above should
-   * leave it alone. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[\n-1,\n-2\n]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -8994,9 +7392,6 @@ TEST(flow_collections, multiline_flow_list_not_confused_by_unindented_dash) {
 }
 
 TEST(block_scalars, leading_blank_line_indent_at_or_below_ok) {
-  /* Regression guard. A leading blank line can hold FEWER spaces than the
-   * block indentation the parser finds later, or the same number. Both are
-   * completely ordinary and the parser must not reject them. */
   char *err = NULL;
   cyaml doc = cyaml_parse("scalar: |\n \n  content\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9007,10 +7402,6 @@ TEST(block_scalars, leading_blank_line_indent_at_or_below_ok) {
 }
 
 TEST(errors, hash_immediately_after_comma_is_not_a_valid_element) {
-  /* A '#' can never start a plain scalar, in a flow context or anywhere
-   * else. A '#' right after a ',' has no whitespace before it, so it's not a
-   * valid comment (skip_ws_comments wants whitespace before a '#'), and it's
-   * not valid content either. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[ a, b, c,#invalid\n]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9018,11 +7409,6 @@ TEST(errors, hash_immediately_after_comma_is_not_a_valid_element) {
 }
 
 TEST(errors, flow_list_comment_line_does_not_substitute_for_missing_comma) {
-  /* The parser skips a comment line between two flow sequence elements just
-   * like any other whitespace or comment, but that comment doesn't remove
-   * the need for a ',' between the two elements. The test drives a second
-   * property as well: a comment line properly ends a plain scalar running
-   * over several lines, and the scalar doesn't swallow it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: [ word1\n#  xxx\n  word2 ]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9030,9 +7416,6 @@ TEST(errors, flow_list_comment_line_does_not_substitute_for_missing_comma) {
 }
 
 TEST(block_mapping, multiline_plain_scalar_stops_before_comment_line) {
-  /* A comment line can show up in the middle of a plain scalar's
-   * continuation over several lines. The scalar must not take the comment
-   * in as content, it ends at the line before the comment. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: word1\n# a comment\nword2: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9044,18 +7427,6 @@ TEST(block_mapping, multiline_plain_scalar_stops_before_comment_line) {
 }
 
 TEST(errors, flow_sequence_pair_key_followed_by_newline_then_colon) {
-  /* The key of the one-pair "[key: value]" shorthand is an implicit key
-   * under ns-s-implicit-yaml-key, so like any other implicit key it has to
-   * fit on one line. A ':' the parser only reaches after crossing a newline
-   * isn't this shorthand at all; here the key's plain scalar continues over
-   * lines and folds right up to that ':'.
-   *
-   * The reference parser PyYAML confirms this on the vendored fixture's
-   * exact bytes. It's a real difference from a KEY over several lines,
-   * which IS valid inside a real "{ }" flow dictionary (see the
-   * multiline_flow_dictionary_key test below, next to
-   * flow_collections.non_scalar_flow_dictionary_key_canonicalized), and the
-   * two rules don't conflict. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[ key\n  : value ]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9070,12 +7441,6 @@ TEST(errors, flow_sequence_pair_quoted_key_followed_by_newline_then_colon) {
 }
 
 TEST(errors, flow_sequence_pair_quoted_key_followed_by_bare_cr_then_colon) {
-  /* The bare CR form of
-   * flow_sequence_pair_quoted_key_followed_by_newline_then_colon. This
-   * parser never normalizes CR and LF in its input, so a "[key ':value]"
-   * shorthand can split its key and its ':' across a bare '\r' with no '\n'
-   * at all, and the parser rejects it exactly like the '\n' version
-   * above. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[ \"key\"\r  :value ]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9083,11 +7448,6 @@ TEST(errors, flow_sequence_pair_quoted_key_followed_by_bare_cr_then_colon) {
 }
 
 TEST(flow_collections, multiline_flow_dictionary_key) {
-  /* A real "{ }" flow dictionary's key isn't held to one line here, while
-   * the key of the "[key: value]" sequence shorthand above is. The vendored
-   * YAML Test Suite fixture confirms this, and this library's
-   * KNOWN_DEVIATIONS list has no exception for that fixture, so the parser
-   * really accepts it and it isn't a known gap. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{ multi\n  line: value}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9099,10 +7459,6 @@ TEST(flow_collections, multiline_flow_dictionary_key) {
 }
 
 TEST(flow_collections, explicit_single_pair_entry) {
-  /* YAML 1.2 section 7.4.1, Spec Example 7.20, shows "[? key: value]", an
-   * explicit-style one-pair entry that mirrors the bare "[key: value]"
-   * shorthand and starts with a '?'. Here the key can fold over more than
-   * one line, which an implicit key can't. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[\n? foo\n bar : baz\n]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9133,12 +7489,6 @@ TEST(flow_collections, explicit_single_pair_entry_no_value) {
 }
 
 TEST(flow_collections, explicit_key_entry_in_flow_dictionary) {
-  /* YAML 1.2 section 7.4.2 defines ns-flow-map-explicit-entry, in Spec
-   * Example 7.16: an explicit '?' can start a flow dictionary entry's key,
-   * just like in a flow sequence's "[? key: value]" shorthand. The key has
-   * to be the real content after the '?' and not the "? " text itself, and a
-   * bare "?" at the end with nothing else gives a null key and a null value.
-   * A reference parser agrees. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("{\n? explicit: entry,\nimplicit: entry,\n?\n}\n", &err);
@@ -9159,12 +7509,6 @@ TEST(flow_collections, explicit_key_entry_in_flow_dictionary) {
 }
 
 TEST(errors, chained_implicit_mapping_values_rejected) {
-  /* Content on the same line as an ordinary implicit value can't open
-   * another nested mapping, so "a: b: c: d" has no valid reading under YAML
-   * 1.2 section 8.2.2: the ns-l-block-map-implicit-value rule has no
-   * "compact mapping" choice, and no sequence value choice there either.
-   * The reference parser PyYAML agrees and reports "mapping values are not
-   * allowed here". */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: b: c: d\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9172,10 +7516,6 @@ TEST(errors, chained_implicit_mapping_values_rejected) {
 }
 
 TEST(errors, chained_implicit_mapping_value_quoted_key_rejected) {
-  /* The same restriction as in chained_implicit_mapping_values_rejected,
-   * with a single-quoted scalar as the chain's inner key. It applies to
-   * every form of key, a plain scalar, a quoted scalar and a flow
-   * collection. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: 'b': c\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9183,10 +7523,6 @@ TEST(errors, chained_implicit_mapping_value_quoted_key_rejected) {
 }
 
 TEST(errors, chained_implicit_mapping_value_flow_collection_key_rejected) {
-  /* The same restriction again with a flow collection as the chain's inner
-   * key, which is a valid non-scalar key under YAML 1.2 section 8.2.2's
-   * "compact mapping" form. The parser rejects "a: [1,2]: c" just as it
-   * rejects "a: b: c", and PyYAML agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: [1,2]: c\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9194,10 +7530,6 @@ TEST(errors, chained_implicit_mapping_value_flow_collection_key_rejected) {
 }
 
 TEST(errors, chained_implicit_mapping_value_under_sequence_element_rejected) {
-  /* The restriction also reaches through a sequence element's compact
-   * mapping. The parser rejects "- a: b: c" exactly like the bare "a: b: c",
-   * because the dash starts a compact mapping and inside it "a"'s value
-   * "b: c" is an ordinary implicit value. PyYAML agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- a: b: c\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9205,11 +7537,6 @@ TEST(errors, chained_implicit_mapping_value_under_sequence_element_rejected) {
 }
 
 TEST(errors, chained_implicit_mapping_value_after_same_line_anchor_rejected) {
-  /* The restriction also reaches through a same-line anchor on the chain's
-   * inner key, so the parser rejects "a: &x b: c" just like the same
-   * document without an anchor, and PyYAML agrees. The parser passes
-   * allow_inline_map along instead of setting the flag back to true when an
-   * anchor's content stays on the anchor's own line. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x b: c\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9217,14 +7544,6 @@ TEST(errors, chained_implicit_mapping_value_after_same_line_anchor_rejected) {
 }
 
 TEST(errors, chained_implicit_mapping_value_explicit_key_form_rejected) {
-  /* The restriction also reaches through a key's explicit '?' form, so
-   * "a: ? b\n   : c" has no valid reading either, even though the explicit
-   * form is perfectly legal once the parse is inside explicit-style content.
-   * PyYAML agrees and reports "mapping keys are not allowed here".
-   *
-   * Every other dispatch that asks "can a fresh mapping open here" applies
-   * this rule, for a plain scalar key, a quoted scalar key and a flow
-   * collection key, and the explicit '?' form needs to apply it too. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: ? b\n   : c\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9232,11 +7551,6 @@ TEST(errors, chained_implicit_mapping_value_explicit_key_form_rejected) {
 }
 
 TEST(block_mapping, anchor_on_own_line_still_permits_nested_mapping_value) {
-  /* A value that starts on its own, more indented line always keeps the
-   * right to open a fresh mapping there, with or without an anchor on it,
-   * so "top: &x\n  b: c\n" nests as usual. PyYAML agrees. Only a chain
-   * on the SAME line after an already open implicit value is restricted,
-   * never the content of an anchor on a later line. */
   char *err = NULL;
   cyaml doc = cyaml_parse("top: &x\n  b: c\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9248,9 +7562,6 @@ TEST(block_mapping, anchor_on_own_line_still_permits_nested_mapping_value) {
 }
 
 TEST(block_mapping, tag_on_own_line_still_permits_nested_mapping_value) {
-  /* The same rule with a tag instead of the anchor. A value on its own line
-   * always opens a fresh mapping, so "top: !!map\n  b: c\n" nests as
-   * usual, and PyYAML agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("top: !!map\n  b: c\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9262,10 +7573,6 @@ TEST(block_mapping, tag_on_own_line_still_permits_nested_mapping_value) {
 }
 
 TEST(block_mapping, explicit_value_still_permits_chained_nested_mapping) {
-  /* Explicit-style value content has the same "compact" right for a nested
-   * mapping as it has for a nested sequence, so "? k\n: a: b" nests as
-   * usual, unlike the implicit "a: b: c" case above. PyYAML agrees, it
-   * accepts this document and rejects the implicit form. */
   char *err = NULL;
   cyaml doc = cyaml_parse("? k\n: a: b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9277,13 +7584,6 @@ TEST(block_mapping, explicit_value_still_permits_chained_nested_mapping) {
 }
 
 TEST(block_mapping, value_on_later_line_not_fooled_by_trailing_comment) {
-  /* A value can start on its own, more indented line, and the parser must
-   * read it that way when a comment stands right after the key's ':', since
-   * the comment isn't a newline. "a: # comment\n  b: c\n" is an ordinary
-   * nested mapping and not a same-line chain, so it opens a fresh
-   * mapping, and PyYAML agrees. That's why rest_of_line_is_blank exists, a
-   * simple at_eol() check gets "same line" versus "later line" wrong when a
-   * comment trails the key. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: # comment\n  b: c\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9295,12 +7595,6 @@ TEST(block_mapping, value_on_later_line_not_fooled_by_trailing_comment) {
 }
 
 TEST(block_mapping, sibling_entry_after_anchor_trailing_comment_not_swallowed) {
-  /* The same trailing-comment hazard as above, for an anchor that has
-   * nothing else of its own. In "a: &x # comment\nb: 2\n" the parser should
-   * see "b: 2" as a SIBLING entry at "a"'s indent and not as the anchor's
-   * value. An anchor must not swallow its sibling, and that guard has to
-   * hold when a comment rather than a newline comes right after the anchor
-   * name. PyYAML agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x # comment\nb: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9316,10 +7610,6 @@ TEST(block_mapping, sibling_entry_after_anchor_trailing_comment_not_swallowed) {
 }
 
 TEST(block_mapping, tagged_value_on_later_line_after_trailing_comment) {
-  /* The same trailing-comment hazard as in
-   * value_on_later_line_not_fooled_by_trailing_comment, for a tag instead of
-   * a bare value: "a: !!map # comment\n  b: c\n" nests as usual. PyYAML
-   * agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: !!map # comment\n  b: c\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9331,13 +7621,6 @@ TEST(block_mapping, tagged_value_on_later_line_after_trailing_comment) {
 }
 
 TEST(errors, bare_dash_in_flow_sequence_rejected) {
-  /* YAML 1.2 section 6.6 defines ns-plain-first(c): a '-' can only start a
-   * plain scalar when it's followed right by an ns-plain-safe(c) character,
-   * one that may itself legally appear WITHIN the scalar. A flow indicator,
-   * ']' here, isn't one, so a lone "-" has no valid reading as a flow
-   * sequence element. The YJV2 case of the vendored YAML Test Suite
-   * confirms it, although some other implementations are less strict about
-   * it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[-]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9345,10 +7628,6 @@ TEST(errors, bare_dash_in_flow_sequence_rejected) {
 }
 
 TEST(errors, bare_dashes_separated_by_comma_in_flow_sequence_rejected) {
-  /* The same restriction as in bare_dash_in_flow_sequence_rejected for two
-   * lone dashes with a comma between them. Each "-" is followed right by a
-   * flow indicator (a ',' and then a ']'), so neither dash has a valid
-   * reading. The G5U8 case of the vendored YAML Test Suite confirms it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[-, -]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9356,12 +7635,6 @@ TEST(errors, bare_dashes_separated_by_comma_in_flow_sequence_rejected) {
 }
 
 TEST(flow_collections, dash_followed_by_plain_content_still_valid) {
-  /* A '-' followed right by ordinary content is perfectly valid in a flow
-   * context, because that content is safe inside a plain scalar and there's
-   * no whitespace before a flow indicator; a bare "-" is the failing case.
-   * This guards against at_valid_flow_plain_scalar_start being too strict,
-   * since in a flow context "-1" and "-foo" are ordinary scalars and not
-   * sequence indicators. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[-1, -foo]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9374,10 +7647,6 @@ TEST(flow_collections, dash_followed_by_plain_content_still_valid) {
 }
 
 TEST(flow_collections, bare_colon_key_shorthand_still_works) {
-  /* A guard for the deliberate exclusion of ':' in
-   * at_valid_flow_plain_scalar_start (see that function's doc comment). An
-   * empty implicit key started by a bare ':' inside a flow sequence keeps
-   * working. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[: empty key]", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9389,10 +7658,6 @@ TEST(flow_collections, bare_colon_key_shorthand_still_works) {
 }
 
 TEST(errors, bare_question_mark_in_flow_sequence_rejected) {
-  /* The same ns-plain-first(c) restriction as for '-', for '?'. A lone "?"
-   * followed right by a flow indicator has no valid reading as a plain
-   * scalar. This isn't the "? key" syntax of an explicit pair, which needs
-   * whitespace after the '?' and not a flow indicator. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[?]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9400,11 +7665,6 @@ TEST(errors, bare_question_mark_in_flow_sequence_rejected) {
 }
 
 TEST(errors, scalar_with_two_stacked_anchors_rejected) {
-  /* The c-ns-properties rule allows at most one anchor per node.
-   * "&node2\n  &v2 val2" puts a SECOND bare anchor right around the same
-   * scalar value, with nothing between them and no key, which has no valid
-   * reading. Two independent reference parsers agree, both reject a scalar
-   * with two anchors around it, here split across a newline. */
   char *err = NULL;
   cyaml doc = cyaml_parse("top2: &node2\n  &v2 val2\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9412,8 +7672,6 @@ TEST(errors, scalar_with_two_stacked_anchors_rejected) {
 }
 
 TEST(errors, scalar_with_two_stacked_anchors_same_line_rejected) {
-  /* The same restriction as in scalar_with_two_stacked_anchors_rejected, but
-   * with both anchors on one line instead of split across a newline. */
   char *err = NULL;
   cyaml doc = cyaml_parse("&a &b val\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9421,9 +7679,6 @@ TEST(errors, scalar_with_two_stacked_anchors_same_line_rejected) {
 }
 
 TEST(errors, two_stacked_tags_rejected) {
-  /* The same restriction as in scalar_with_two_stacked_anchors_rejected for
-   * two tags instead of two anchors, since the c-ns-properties rule also
-   * allows at most one tag per node. A reference parser agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!str !!int 5\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9431,16 +7686,6 @@ TEST(errors, two_stacked_tags_rejected) {
 }
 
 TEST(block_mapping, anchor_decorating_a_mapping_whose_key_is_also_anchored) {
-  /* Regression guard that tells two shapes apart. The first puts two anchors
-   * on the SAME node and is invalid (see
-   * scalar_with_two_stacked_anchors_rejected). The second puts an anchor on
-   * a mapping whose own first key carries an anchor too, and since the key
-   * is a completely different node, that shape is valid.
-   *
-   * "top1: &node1\n  &k1 key1: val1\n" anchors the mapping {key1: val1} as
-   * node1 and, separately, the key scalar "key1" as k1. Two independent
-   * reference parsers agree, both accept this and both reject the
-   * two-anchor shape above. */
   char *err = NULL;
   cyaml doc = cyaml_parse("top1: &node1\n  &k1 key1: val1\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9451,17 +7696,9 @@ TEST(block_mapping, anchor_decorating_a_mapping_whose_key_is_also_anchored) {
   cyaml_destroy(doc);
 }
 
-/* A dictionary key can carry an anchor, and an alias to that anchor must
- * resolve to the key's real type and structure and not to a plain
- * CYAML_STRING the library builds from the key's canonical text. Anything
- * else would disagree with an anchor in a value position, which always
- * keeps the anchored node's real type.
- *
- * An anchored plain-scalar key with an implicit type, such as "&n 42:",
- * aliases back to the real integer, and a non-scalar flow-collection key
- * such as "&x [1, 2]:" back to the real list; neither may alias to a
- * string of its canonical text. A quoted-scalar key isn't affected, since
- * its own natural value already is a string. */
+// An alias to an anchored key resolves to the key's real type and structure
+// ("&n 42:" to an integer, "&x [1, 2]:" to a list), never to a string of its
+// canonical text, just as an anchor in a value position does.
 TEST(block_mapping, anchored_plain_scalar_key_alias_preserves_implicit_type) {
   char *err = NULL;
   cyaml doc = cyaml_parse("&n 42: v\nlater: *n\n", &err);
@@ -9489,8 +7726,6 @@ TEST(block_mapping, anchored_flow_collection_key_alias_preserves_structure) {
 }
 
 TEST(block_mapping, anchored_quoted_scalar_key_alias_still_a_string) {
-  /* The behaviour above leaves this case alone, a quoted scalar's natural
-   * value is always a string and it matches the key text exactly. */
   char *err = NULL;
   cyaml doc = cyaml_parse("&q \"42\": v\nlater: *q\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9503,9 +7738,6 @@ TEST(block_mapping, anchored_quoted_scalar_key_alias_still_a_string) {
 }
 
 TEST(block_mapping, anchored_plain_scalar_key_as_later_entry_preserves_type) {
-  /* The same rule, driven through parse_one_dict_entry_key (the key isn't
-   * the mapping's first entry) rather than parse_node's own '&' fast
-   * path. */
   char *err = NULL;
   cyaml doc = cyaml_parse("first: 1\n&b true: v\nlater: *b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9519,10 +7751,6 @@ TEST(block_mapping, anchored_plain_scalar_key_as_later_entry_preserves_type) {
 
 TEST(block_mapping,
      tag_and_anchor_decorated_key_alias_resolves_to_the_tagged_node) {
-  /* Drives the fast path of the '!' dispatch with a key that carries both a
-   * tag and an anchor. The anchor names the key's node as its tag types it,
-   * exactly like an anchor in a value position: "!!str 3.5" is the string
-   * "3.5" and an untagged "3.5" is the float 3.5. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("!!str &f 3.5: v\nlater: *f\n&g 3.5: w\nother: *g\n", &err);
@@ -9541,15 +7769,6 @@ TEST(block_mapping,
 }
 
 TEST(errors, two_stacked_anchors_same_line_decorating_a_key_rejected) {
-  /* Neither scalar_with_two_stacked_anchors_same_line_rejected nor
-   * anchor_decorating_a_mapping_whose_key_is_also_anchored covers this case:
-   * two anchors on the SAME line, followed by something that looks like a
-   * valid compact-mapping key ("&a &b foo: bar"). Since the second anchor's
-   * content can look like a valid key, the "is this an anchored key" fast path
-   * must not take priority over the ordinary had_anchor rejection there.
-   * Without that rule the parser would quietly accept this document, which two
-   * independent reference parsers reject just like the same-line case without
-   * a key. */
   char *err = NULL;
   cyaml doc = cyaml_parse("&a &b foo: bar\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9557,8 +7776,6 @@ TEST(errors, two_stacked_anchors_same_line_decorating_a_key_rejected) {
 }
 
 TEST(errors, two_stacked_tags_same_line_decorating_a_key_rejected) {
-  /* Same restriction as two_stacked_anchors_same_line_decorating_a_key_
-   * rejected above, for two tags instead of two anchors. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!str !!int foo: bar\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9566,10 +7783,6 @@ TEST(errors, two_stacked_tags_same_line_decorating_a_key_rejected) {
 }
 
 TEST(errors, anchor_decorating_a_bare_alias_rejected) {
-  /* c-ns-alias-node is a top-level alternative of its own in ns-flow-node's
-   * grammar, separate from the c-ns-properties branch that an anchor or a
-   * tag decorates, so an alias can never carry a property at all. Two
-   * independent reference parsers agree. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key1: &a value\nkey2: &b *a\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9577,12 +7790,6 @@ TEST(errors, anchor_decorating_a_bare_alias_rejected) {
 }
 
 TEST(errors, tag_decorating_a_bare_alias_rejected) {
-  /* The same restriction as anchor_decorating_a_bare_alias_rejected for a
-   * named tag instead of an anchor, and a reference parser agrees. The
-   * alias's target ("&n") is deliberately defined and otherwise valid, so
-   * the document fails on the tag-on-alias restriction itself and not on an
-   * unrelated "unknown alias" error that a weakened check would also
-   * produce. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key1: &n value\nkey2: !!int *n\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9590,11 +7797,6 @@ TEST(errors, tag_decorating_a_bare_alias_rejected) {
 }
 
 TEST(block_mapping, alias_used_as_key_still_works) {
-  /* Regression guard. The rule that a bare alias can't carry a property must
-   * not affect an alias used AS A KEY ("*alias: value"). That's a completely
-   * different construct, which the library supports through
-   * try_parse_scalar_dict_key's fast path, and no property decorates the
-   * alias there. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x foo\n*x : bar\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9605,10 +7807,6 @@ TEST(block_mapping, alias_used_as_key_still_works) {
 }
 
 TEST(errors, comma_directly_after_tag_rejected) {
-  /* ns-tag-char excludes every c-flow-indicator character everywhere and not
-   * only in a flow context, so a comma right at the end of a shorthand tag,
-   * with no whitespace in between, has no valid meaning as content. A
-   * reference parser agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- !!str, xxx\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9616,31 +7814,15 @@ TEST(errors, comma_directly_after_tag_rejected) {
 }
 
 TEST(errors, flow_indicator_directly_after_anchor_rejected) {
-  /* The same restriction as comma_directly_after_tag_rejected, with an
-   * anchor name right against a flow indicator and no whitespace in
-   * between. A reference parser agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- &a[1,2]\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
-/* A '[' or '{' right after an anchor or tag name has no valid meaning in ANY
- * context, since nothing in the grammar lets a name carry a brand new
- * nested collection without a separator, so the rule on a glued flow
- * indicator must not be gated on "!in_flow". A gate like that would quietly
- * accept an anchor or a tag glued right onto the opener of a NESTED flow
- * collection, one inside an enclosing flow collection, while the parser
- * rightly rejects the same construct in block context. With the gate
- * "[&a{x: 1}, *a]" parses: the anchor decorates the nested map and the alias
- * resolves to a clone of it, which really changes the meaning and isn't
- * just trailing text nobody consumes. A reference parser rejects the
- * document.
- * A ',', a ']' and a '}' are the contrast. Each is legitimate flow
- * collection structure right after an anchor or a tag INSIDE a flow
- * collection (see the two _still_works guards below), and each is illegal
- * only in block context, where it has no valid meaning at all.
- */
+// A '[' or '{' glued to an anchor or tag name has no valid meaning in any
+// context, including a flow collection nested in another one. A ',', ']' or
+// '}' there is ordinary flow structure inside a flow collection.
 TEST(errors, anchor_directly_before_nested_flow_map_rejected_in_flow_context) {
   char *err = NULL;
   cyaml doc = cyaml_parse("[&a{x: 1}, *a]", &err);
@@ -9663,10 +7845,6 @@ TEST(errors, tag_directly_before_nested_flow_list_rejected_in_flow_context) {
 }
 
 TEST(flow_list, anchor_followed_by_comma_still_works_in_flow_context) {
-  /* Regression guard. An anchor can stand right before a flow TERMINATOR, a
-   * ',' or a ']', which isn't the OPENER of a nested collection but
-   * legitimate flow collection structure, and the parser should keep
-   * accepting it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[&a, b]", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9693,10 +7871,6 @@ TEST(flow_list, tag_followed_by_comma_still_works_in_flow_context) {
 }
 
 TEST(block_list, tag_followed_by_space_then_comma_content_still_works) {
-  /* Regression guard. The glued flow indicator rule must not affect a tag
-   * separated from its content by real whitespace. That content is a plain
-   * scalar holding a comma here, which is valid in block context where a
-   * ',' isn't a terminator. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- !!str a, b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9706,8 +7880,6 @@ TEST(block_list, tag_followed_by_space_then_comma_content_still_works) {
 }
 
 TEST(block_mapping, anchor_and_tag_combo_still_works_either_order) {
-  /* Regression guard. The rule on two stacked properties must not affect the
-   * ordinary, valid pair of one anchor and one tag, in either order. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x !!str foo\nb: *x\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9725,24 +7897,10 @@ TEST(block_mapping, anchor_and_tag_combo_still_works_either_order) {
   cyaml_destroy(doc);
 }
 
-/* ==========================================================================
- * Differential-testing coverage, which you can reproduce with
- * tests/cyaml/differential/compare_pyyaml.py against the vendored YAML Test
- * Suite and the fuzz corpus. A second reference parser, the Psych of Ruby,
- * independently confirms every expectation below.
- * ========================================================================== */
-
+// This test and the ones after it come from differential testing against the
+// YAML Test Suite and the fuzz corpus (tests/cyaml/differential/
+// compare_pyyaml.py), and Ruby's Psych agrees with every expectation.
 TEST(multi_document, two_consecutive_directive_documents_without_end_marker) {
-  /* Two documents back to back without a "..." end marker between them, each
-   * with its own %YAML directive. YAML 1.2 section 6.9's l-yaml-stream
-   * grammar lets a document follow directly without "..." only through its
-   * own l-explicit-document alternative, which excludes a document with a
-   * directive, since l-directive-document is a separate top-level
-   * alternative. So this construct is a real parse error and not two
-   * accepted empty documents. The first document's "is this document empty"
-   * check has to treat a fresh directive line as a document boundary,
-   * otherwise the parser quietly reads the second document's directive text
-   * as the first one's scalar content and never gets to this error. */
   char *err = NULL;
   cyaml doc = cyaml_parse("%YAML 1.2\n---\n%YAML 1.2\n---\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -9750,9 +7908,6 @@ TEST(multi_document, two_consecutive_directive_documents_without_end_marker) {
 }
 
 TEST(multi_document, directive_document_after_end_marker_still_works) {
-  /* Regression guard. A document with a directive IS allowed right after an
-   * explicit "..." end marker, unlike the case above without a marker, and
-   * that keeps working. */
   char *err = NULL;
   cyaml doc = cyaml_parse("%YAML 1.2\n---\na\n...\n%YAML 1.2\n---\nb\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9764,12 +7919,6 @@ TEST(multi_document, directive_document_after_end_marker_still_works) {
 }
 
 TEST(multi_document, trailing_comment_after_start_marker_still_works) {
-  /* A trailing "# comment" right after "---" isn't "same-line content", so
-   * doc_marker_same_line_content needs to look past it, and an at_eol check
-   * alone isn't enough since a comment isn't a newline. Otherwise the parser
-   * would wrongly take a later block mapping or block sequence for invalid
-   * same-line content and reject it with "mapping values are not allowed
-   * here" or with "a block sequence cannot start on the same line...". */
   char *err = NULL;
   cyaml doc = cyaml_parse("---  # comment\na: b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9789,9 +7938,6 @@ TEST(multi_document, trailing_comment_after_start_marker_still_works) {
 }
 
 TEST(multi_document, tab_after_start_marker_accepted) {
-  /* The separator of a '---' before same-line content may hold tabs (K54U).
-   * parse_one_document reads the marker at two call sites, after a directive
-   * and without one, and both are covered. */
   REQUIRE_TRUE(_tab_accepted_as("---\tfoo\n", "foo"));
   REQUIRE_TRUE(_tab_accepted_as("--- \tfoo\n", "foo"));
   REQUIRE_TRUE(_tab_accepted_as("%YAML 1.2\n---\tfoo\n", "foo"));
@@ -9800,8 +7946,6 @@ TEST(multi_document, tab_after_start_marker_accepted) {
 }
 
 TEST(multi_document, tab_after_end_marker) {
-  /* Spaces and tabs may separate a '...' from a comment, while content after
-   * the marker is an error whatever separates it. */
   REQUIRE_TRUE(_tab_accepted_as("--- x\n...\t# c\n", "x"));
   REQUIRE_TRUE(_tab_accepted_as("--- x\n... \t# c\n", "x"));
   require_tab_rejected("a: 1\n...\tb\n");
@@ -9809,7 +7953,6 @@ TEST(multi_document, tab_after_end_marker) {
 }
 
 TEST(multi_document, space_after_start_and_end_marker_still_works) {
-  /* An ordinary space can separate after a '---' or a '...'. */
   char *err = NULL;
   cyaml doc = cyaml_parse("---   foo\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9827,39 +7970,18 @@ TEST(multi_document, space_after_start_and_end_marker_still_works) {
   cyaml_destroy(doc);
 }
 
+// A directive can't follow the "---" that a document already consumed, and
+// without a "..." in between this is a parse error, not two documents.
 TEST(multi_document, bare_start_marker_then_directive_document_is_error) {
-  /* Here a bare "---" with nothing else on its line and no "..." suffix
-   * comes before a document with a directive, the same class of construct
-   * as two_consecutive_directive_documents_without_end_marker above. YAML
-   * 1.2 section 6.9's l-yaml-stream grammar says a document following one
-   * without a "..." suffix may only be an l-explicit-document, a bare "---"
-   * without directives, while l-directive-document is only reachable as
-   * l-any-document behind a "..." in front of it. A directive can never
-   * follow the leading "---" a document has already consumed, because a
-   * directive only ever stands before the "---" it configures. So this is a
-   * real parse error and not a stream of two documents. The empty first
-   * document's "is this document empty" check has to run here as well,
-   * otherwise the loop parsing directives runs right after the leading
-   * "---", quietly absorbs the second document's whole
-   * "%directive\n---\ncontent" as trailing content of the first one, and the
-   * parser never gets to this error. */
   char *err = NULL;
   cyaml doc = cyaml_parse("---\n%YAML 1.2\n---\nfoo\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
 
-/* A literal or folded block scalar can have an indent of zero, with its
- * content flush at column 0, which is the indent the parser detects at the
- * document root. Such a scalar can't tell a real "---" or "..." document
- * marker at column 0 from an ordinary content line at column 0 by the
- * indent alone, because both have spaces == 0 == block_indent. So
- * scan_block_scalar_line() checks at_doc_marker() explicitly, like every
- * other block content parser in this file, and without that check it would
- * absorb the marker as scalar content instead of ending the scalar and the
- * document. A block scalar with a positive indent never needs the check,
- * because a marker there always has fewer leading spaces than block_indent
- * and so ends the scalar anyway. */
+// A block scalar of indent 0 can't tell a "---" or "..." at column 0 from
+// content by the indent alone, so scan_block_scalar_line() checks for a
+// document marker explicitly.
 TEST(multi_document, zero_indented_literal_scalar_ends_at_document_marker) {
   char *err = NULL;
   cyaml doc = cyaml_parse("|\nfoo\n---\nbar\n", &err);
@@ -9896,8 +8018,6 @@ TEST(multi_document, zero_indented_literal_scalar_ends_at_end_marker) {
 
 TEST(multi_document,
      zero_indented_literal_keep_scalar_ends_at_document_marker) {
-  /* The same hazard with an explicit KEEP chomp indicator ("|+"), which
-   * shows that the rule holds whatever the chomp mode. */
   char *err = NULL;
   cyaml doc = cyaml_parse("|+\nfoo\n---\nbar\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9910,10 +8030,6 @@ TEST(multi_document,
 }
 
 TEST(multi_document, indented_literal_scalar_still_ends_at_document_marker) {
-  /* A control case. A block scalar indented past column 0 needs no explicit
-   * marker check of its own, because a marker's 0 leading spaces are always
-   * fewer than a positive block_indent, which ends the scalar anyway. This
-   * test makes sure the column 0 check above leaves that case alone. */
   char *err = NULL;
   cyaml doc = cyaml_parse("|\n  foo\n---\nbar\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -9926,13 +8042,6 @@ TEST(multi_document, indented_literal_scalar_still_ends_at_document_marker) {
 }
 
 TEST(quoted, double_quoted_blank_line_with_only_a_tab_folds_to_newline) {
-  /* A line between two content lines can hold only inline whitespace, a
-   * single tab here, and such a line is a real blank line when the parser
-   * folds a double-quoted scalar, so it folds to a newline and not a
-   * space (see YAML 1.2 section 6.5, spec example 6.5). A bare check of
-   * cur(ctx) == '\n' or '\r' right after reading the first newline isn't
-   * enough, because it can't see past the tab to the real newline behind it
-   * and folds this line to a space. */
   const char *yaml = "\"Empty line\n \t\nas a line feed\"\n";
   char *err = NULL;
   cyaml n = cyaml_parse(yaml, &err);
@@ -9943,8 +8052,6 @@ TEST(quoted, double_quoted_blank_line_with_only_a_tab_folds_to_newline) {
 }
 
 TEST(quoted, single_quoted_blank_line_with_only_spaces_folds_to_newline) {
-  /* The same rule on the single-quoted side, a blank continuation line with
-   * its own trailing spaces folds to a newline. */
   const char *yaml = "'foo\n \nbar'\n";
   char *err = NULL;
   cyaml n = cyaml_parse(yaml, &err);
@@ -9955,12 +8062,6 @@ TEST(quoted, single_quoted_blank_line_with_only_spaces_folds_to_newline) {
 }
 
 TEST(quoted, double_quoted_escaped_tab_before_fold_is_preserved) {
-  /* An escaped tab ("\t") right before a line break is real content the
-   * author asked for and not incidental source whitespace, so YAML 1.2
-   * section 8.1.2's "strip trailing whitespace before a fold" rule must not
-   * trim it; that rule only covers literal, unescaped whitespace the parser
-   * copies straight from the source. A trim loop without a condition would
-   * quietly drop the escaped tab. */
   const char *yaml = "\"a\\t\nb\"\n";
   char *err = NULL;
   cyaml n = cyaml_parse(yaml, &err);
@@ -9972,9 +8073,6 @@ TEST(quoted, double_quoted_escaped_tab_before_fold_is_preserved) {
 
 TEST(quoted,
      double_quoted_literal_trailing_spaces_after_escape_still_stripped) {
-  /* The fold must still strip ordinary literal trailing whitespace AFTER
-   * an escape, and only the bytes the escape itself produced are
-   * protected. */
   const char *yaml = "\"a\\t  \nb\"\n";
   char *err = NULL;
   cyaml n = cyaml_parse(yaml, &err);
@@ -9985,12 +8083,6 @@ TEST(quoted,
 }
 
 TEST(block_scalars, literal_keep_blank_line_excess_indentation_preserved) {
-  /* A blank line can be indented more than the block itself, and then it
-   * keeps its extra spaces as literal content just like a non-blank line,
-   * because the "more indented lines" rule of YAML 1.2 section 8.1.1.2 makes
-   * no exception for a blank line. That holds when the line is the scalar's
-   * very last line under CHOMP_KEEP too. Code that always threw away a
-   * blank line's indent would lose every space past the block indent. */
   const char *yaml = "|+\n ab\n \n  \n...\n";
   char *err = NULL;
   cyaml n = cyaml_parse(yaml, &err);
@@ -10001,9 +8093,6 @@ TEST(block_scalars, literal_keep_blank_line_excess_indentation_preserved) {
 }
 
 TEST(block_scalars, literal_clip_mid_content_blank_excess_indentation) {
-  /* The same rule for a blank line in the middle of the content rather than
-   * at the end, under CHOMP_CLIP. The extra indent survives, and the
-   * scalar has more real content after that line. */
   const char *yaml = "text: |\n  a\n    \n  b\n";
   char *err = NULL;
   cyaml doc = cyaml_parse(yaml, &err);
@@ -10014,8 +8103,6 @@ TEST(block_scalars, literal_clip_mid_content_blank_excess_indentation) {
 }
 
 TEST(block_scalars, folded_keep_blank_line_excess_indentation_preserved) {
-  /* The same rule in the folded (">") style, a blank line in a folded scalar
-   * keeps its extra indent just like a blank line in a literal scalar. */
   const char *yaml = "foo: >+\n  x\n   \n";
   char *err = NULL;
   cyaml doc = cyaml_parse(yaml, &err);
@@ -10026,17 +8113,6 @@ TEST(block_scalars, folded_keep_blank_line_excess_indentation_preserved) {
 }
 
 TEST(block_scalars, literal_clip_no_source_trailing_newline_omits_final_lf) {
-  /* YAML 1.2's b-chomped-last production governs a scalar's very last line
-   * under every chomp mode, CLIP and KEEP included, and it reads
-   * "b-as-line-feed | <end of file>". When the input ends right after the
-   * scalar's last line the source has no real line break there, so the
-   * parser adds no newline for that line, not even under CLIP, which
-   * otherwise always appends exactly one. CLIP must not add a trailing '\n'
-   * just because there's some content; whether the source had a final line
-   * break decides it. We use cyaml_parse_n and not cyaml_parse, which needs
-   * a NUL-terminated string, so parse_n sees exactly the input's missing
-   * trailing newline and not an artifact of a C string literal, which
-   * always has an implicit NUL after its last byte. */
   const char *yaml = "foo: |\n  x\n   ";
   char *err = NULL;
   cyaml doc = cyaml_parse_n(yaml, strlen(yaml), &err);
@@ -10047,8 +8123,6 @@ TEST(block_scalars, literal_clip_no_source_trailing_newline_omits_final_lf) {
 }
 
 TEST(block_scalars, folded_keep_no_source_trailing_newline_omits_final_lf) {
-  /* The same b-chomped-last rule in the folded (">") style under
-   * CHOMP_KEEP. */
   const char *yaml = "foo: >+\n  x\n   ";
   char *err = NULL;
   cyaml doc = cyaml_parse_n(yaml, strlen(yaml), &err);
@@ -10059,10 +8133,6 @@ TEST(block_scalars, folded_keep_no_source_trailing_newline_omits_final_lf) {
 }
 
 TEST(block_scalars, literal_keep_leading_blank_only_no_source_newline) {
-  /* The same rule against a synthetic newline in one more case: the scalar's
-   * ENTIRE content is a single leading blank line, the parser finds no real
-   * content line at all, and the source has no trailing newline either. The
-   * result is a truly empty string and not a bare "\n". */
   const char *yaml = "- |+\n   ";
   char *err = NULL;
   cyaml doc = cyaml_parse_n(yaml, strlen(yaml), &err);
@@ -10073,12 +8143,6 @@ TEST(block_scalars, literal_keep_leading_blank_only_no_source_newline) {
 }
 
 TEST(block_list, dash_followed_only_by_comment_is_a_null_entry) {
-  /* A block sequence entry can hold just a '-' and a trailing comment with no
-   * scalar value, and it is a null entry, exactly like a bare '-' with
-   * nothing after it. The parser must never hand the comment text to
-   * parse_node() as real content, because then parse_node() walks past the
-   * comment and swallows every later sibling entry as nested content instead
-   * of separate siblings. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- # Empty\n- two\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10092,13 +8156,6 @@ TEST(block_list, dash_followed_only_by_comment_is_a_null_entry) {
 }
 
 TEST(block_list, dash_followed_only_by_tag_is_an_empty_string_entry) {
-  /* The same kind of hazard through a tag instead of a comment. The line
-   * "- !!str" has nothing else on it, and parse_node()'s tag branch must not
-   * recurse past the newline and swallow the next sibling entry as this
-   * tag's value. The tag branch carries the same at_block_value_col() guard
-   * as the '&' anchor branch. The entry itself resolves to an empty string
-   * and not to null, because !!str forces CYAML_STRING even on empty
-   * text. */
   char *err = NULL;
   cyaml doc = cyaml_parse("- !!str\n- two\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10111,12 +8168,6 @@ TEST(block_list, dash_followed_only_by_tag_is_an_empty_string_entry) {
 }
 
 TEST(block_mapping, key_with_tag_only_value_is_an_empty_string_entry) {
-  /* The same rule for the tag branch, in a dictionary value position rather
-   * than a sequence entry. "a: !!str" has nothing else on its line, and it
-   * has to leave "a" mapped to an empty string, since !!str forces
-   * CYAML_STRING even on empty text, and leave "b" as a really separate
-   * sibling key; the parser must not swallow "b: two" as "a"'s tagged
-   * value. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: !!str\nb: two\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10127,43 +8178,26 @@ TEST(block_mapping, key_with_tag_only_value_is_an_empty_string_entry) {
   cyaml_destroy(doc);
 }
 
-/* ==========================================================================
- * A full audit of the tab as indent, made with the same differential testing
- * tool as above, which probes every decision about indent in the parser that
- * current_col() drives. The cases below separate two groups: the positions
- * that truly need a rejection, and ordinary, legitimate same-line separator
- * whitespace, or content that is already open.
- * ========================================================================== */
-
+// This test and the ones after it cover every place where a tab can stand as
+// indentation. They separate the positions that must be refused from same-line
+// separator white space and content that is already open.
 TEST(errors, tab_as_pure_block_mapping_indentation_rejected) {
-  /* 4EJS: tabs are the ONLY indent of nested block mapping entries, with no
-   * space character at all. */
   require_tab_rejected("---\na:\n\tb:\n\t\tc: value\n");
 }
 
 TEST(errors, tab_as_pure_block_sequence_indentation_rejected) {
-  /* The sequence form of 4EJS. */
   require_tab_rejected("-\n\t- a\n\t- b\n");
 }
 
 TEST(errors, tab_at_start_of_document_rejected) {
-  /* A tab as the very first byte of the whole input, before any real
-   * document content. parse_common's top-level skip consumes it before
-   * parse_one_document or parse_node ever see it. */
   require_tab_rejected("\ta: 1\n");
 }
 
 TEST(errors, tab_before_anchor_after_fresh_line_rejected) {
-  /* A tab as a fresh line's indent right before a node property, here an
-   * anchor decorating a sequence value. */
   require_tab_rejected("-\n\t&x val\n");
 }
 
 TEST(errors, tab_after_anchor_same_line_still_works) {
-  /* Regression guard. A tab can be ordinary SAME-LINE separator whitespace
-   * between an anchor and its own inline value, which is legitimate since
-   * s-separate-in-line allows it, so the tab check above, which only covers
-   * a fresh line, must not reject it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: &x\tvalue\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10173,45 +8207,22 @@ TEST(errors, tab_after_anchor_same_line_still_works) {
 }
 
 TEST(errors, tab_on_flow_collection_continuation_line_rejected) {
-  /* Y79Y-3: a tab is the indent of a flow list's continuation line, a line
-   * that crosses a newline inside open "[...]" content. */
   require_tab_rejected("- [\n\tfoo,\n foo\n ]\n");
 }
 
 TEST(errors, tab_on_flow_dictionary_continuation_line_rejected) {
-  /* The flow dictionary counterpart of
-   * tab_on_flow_collection_continuation_line_rejected above.
-   * parse_flow_dictionary is a sibling of parse_flow_list written out by
-   * hand rather than sharing one implementation, so the same continuation
-   * line tab check needs its own regression coverage on the "{...}" side,
-   * and the flow list test alone doesn't cover it. */
   require_tab_rejected("- {\n\tfoo: 1,\n bar: 2\n }\n");
 }
 
 TEST(errors, tab_on_flow_collection_continuation_line_rejected_bare_cr) {
-  /* The bare CR counterpart of
-   * tab_on_flow_collection_continuation_line_rejected. This parser never
-   * normalizes CR and LF in its input, so a document with only bare '\r'
-   * line breaks and no '\n' at all triggers the same continuation line
-   * tab rejection as the LF version above. flow_skip_ws() decides whether
-   * the text really crossed a line by asking span_crosses_newline(), which
-   * has to treat a bare '\r' exactly like a '\n'. */
   require_tab_rejected("- [\r\tfoo,\r foo\r ]\r");
 }
 
 TEST(errors, tab_on_flow_dictionary_continuation_line_rejected_bare_cr) {
-  /* The bare CR counterpart of
-   * tab_on_flow_dictionary_continuation_line_rejected. See the flow list
-   * bare CR test above for the reasoning. */
   require_tab_rejected("- {\r\tfoo: 1,\r bar: 2\r }\r");
 }
 
 TEST(block_mapping, tab_after_colon_value_indicator) {
-  /* A tab after a ':' is separation in front of a scalar or a flow
-   * collection ("key:\tvalue", the YAML Test Suite case 6BCT, and the JSON
-   * Go's json.MarshalIndent writes with a tab indent), but a block
-   * collection may not follow it (Y79Y-7 and Y79Y-9). A parser that refused
-   * every tab after ':' would fail the accepted cases. */
   REQUIRE_TRUE(_tab_accepted_as("key:\tvalue\n", "{key: value}"));
   REQUIRE_TRUE(_tab_accepted_as("key: \tvalue\n", "{key: value}"));
   REQUIRE_TRUE(_tab_accepted_as("key:\t[1, 2]\n", "{key: [1, 2]}"));
@@ -10224,63 +8235,36 @@ TEST(block_mapping, tab_after_colon_value_indicator) {
 }
 
 TEST(block_mapping, tab_after_colon_before_newline_value) {
-  /* A tab between a ':' and the end of its line is trailing separation, and
-   * the value on the next line keeps its usual meaning (DC7X). */
   REQUIRE_TRUE(_tab_accepted_as("seq:\t\n - a\n", "{seq: [a]}"));
   REQUIRE_TRUE(_tab_accepted_as("a:\t# c\n  b: 1\n", "{a: {b: 1}}"));
 }
 
 TEST(block_mapping,
      explicit_key_value_split_across_tab_indented_lines_rejected) {
-  /* An explicit "? key" / ": value" pair where BOTH key and value sit on
-   * their own continuation lines, indented with a tab. */
   require_tab_rejected("?\n\tkey\n:\n\tvalue\n");
 }
 
+// A lone leading tab can land exactly on map_indent by byte count, and it is
+// still refused like every other tab indent.
 TEST(block_mapping, explicit_key_value_indicator_tab_indented_rejected) {
-  /* A narrower case than the one above. A tab indents only the line of the
-   * ':' value indicator, while a space validly indents the key itself.
-   * current_col() counts a tab as one byte of width, the same as a space, so
-   * by byte offset alone a lone leading tab can land exactly at map_indent.
-   * The parser has to reject it anyway, like every other indent comparison
-   * in this file, instead of quietly accepting it because the byte count
-   * happens to match. */
   require_tab_rejected("a:\n ? b\n\t: c\n");
 }
 
 TEST(block_scalars, tab_only_leading_blank_line_rejected) {
-  /* Y79Y-0: a tab is the very first character of what would be a block
-   * scalar's leading blank line, where block_indent isn't known yet, so the
-   * tab really is ambiguous (it could be more indent, or content at indent
-   * 0), and that's a hard error. */
   require_tab_rejected("foo: |\n\t\nbar: 1\n");
 }
 
 TEST(block_scalars, tab_after_one_leading_space_on_blank_line_still_works) {
-  /* Y79Y-1: when even one real space comes before the tab on the same kind
-   * of leading blank line the ambiguity above is gone, because that single
-   * space fixes this line's indent. The parser accepts the line and a
-   * reference parser agrees. It's the one-space counterpart of the
-   * zero-space rejection right above, and it should stay accepted if that
-   * check is ever widened. */
   char *err = NULL;
   cyaml doc = cyaml_parse("foo: |\n \t\nbar: 1\n", &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  /* The one leading space fixes block_indent = 1, so the tab after it is the
-   * literal content of this one-line scalar. CLIP chomping is the default
-   * and appends the usual single trailing newline. */
   REQUIRE_STREQ(cyaml_str_val(cyaml_dictionary_get(doc, "foo")), "\t\n");
   REQUIRE_EQ(cyaml_int_val(cyaml_dictionary_get(doc, "bar")), 1LL);
   cyaml_destroy(doc);
 }
 
 TEST(block_scalars, tab_right_after_established_indent_is_content_literal) {
-  /* The "1 space" on the scalar's very first content line fixes block_indent
-   * here, so a tab right after it is ordinary literal content and not
-   * indent. The s-indent(n) production covers only spaces, and whatever
-   * follows is nb-char* content, a tab included. A reference parser
-   * agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("foo: |-\n \tbar", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10291,16 +8275,6 @@ TEST(block_scalars, tab_right_after_established_indent_is_content_literal) {
 
 TEST(block_scalars,
      tab_right_after_established_indent_folded_is_content_literal) {
-  /* The folded ('>') sibling of the literal scalar case above, where the
-   * fold adds one detail of its own. YAML 1.2 section 8.1.3's
-   * s-nb-spaced-text(n) production covers a "more indented" or "spaced" line
-   * and reads s-indent(n) s-white nb-char*, where s-white is a space OR a
-   * tab, so a line whose first byte past block_indent is a tab is a spaced
-   * line, and a reference parser agrees. The tab doesn't add a literal SPACE
-   * of its own the way a real extra space would, but the parser keeps the
-   * leading break of a spaced line literally instead of folding it to a
-   * space. The plain literal case above is different because it never
-   * folds anything. */
   char *err = NULL;
   cyaml doc = cyaml_parse("foo: >\n  real\n  \tmore\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10310,9 +8284,7 @@ TEST(block_scalars,
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                         TAGS                                              */
-/* ========================================================================== */
+// Tags
 
 TEST(tags, shorthand_secondary_resolves_to_core_schema_uri) {
   char *err = NULL;
@@ -10324,8 +8296,6 @@ TEST(tags, shorthand_secondary_resolves_to_core_schema_uri) {
 }
 
 TEST(tags, shorthand_primary_resolves_to_local_tag) {
-  /* Without a %TAG giving "!" a new meaning its default prefix is "!"
-   * itself, so a shorthand "!foo" resolves to the literal local tag "!foo". */
   char *err = NULL;
   cyaml doc = cyaml_parse("!foo bar\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10355,10 +8325,6 @@ TEST(tags, verbatim_local_tag_used_as_is) {
 }
 
 TEST(tags, verbatim_tag_glued_directly_to_content_rejected) {
-  /* c-ns-properties wants s-separate(n,c) before any content that follows,
-   * while "!<a>b" glues ordinary scalar content right onto the tag's closing
-   * '>' without whitespace, and the grammar has no valid path for that. A
-   * reference parser agrees. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!<a>b\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -10366,8 +8332,6 @@ TEST(tags, verbatim_tag_glued_directly_to_content_rejected) {
 }
 
 TEST(tags, verbatim_tag_glued_directly_to_value_content_rejected) {
-  /* The same rule in a mapping value position, not only at the document
-   * root. */
   char *err = NULL;
   cyaml doc = cyaml_parse("k: !<a>b\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -10375,8 +8339,6 @@ TEST(tags, verbatim_tag_glued_directly_to_value_content_rejected) {
 }
 
 TEST(tags, verbatim_tag_glued_directly_to_block_scalar_rejected) {
-  /* The same rule with a block scalar indicator glued right onto the tag
-   * instead of plain scalar text. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!<a>|\n  x\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -10384,11 +8346,6 @@ TEST(tags, verbatim_tag_glued_directly_to_block_scalar_rejected) {
 }
 
 TEST(tags, verbatim_tag_with_real_separator_still_works) {
-  /* The glued content rejection above must not reach too far, real
-   * whitespace can separate a tag from its content. verbatim_tag_used_as_is
-   * covers that ordinary case with a named tag, and this test repeats it with
-   * content that trips that check if the parser handles the separator
-   * wrongly. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!<a> b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10398,11 +8355,9 @@ TEST(tags, verbatim_tag_with_real_separator_still_works) {
   cyaml_destroy(doc);
 }
 
-/* The non-specific tag, a bare "!", makes a plain scalar a string whatever its
- * text (YAML 1.2 section 6.9.1), leaves a collection as its syntax made it,
- * and isn't stored on any node. Treat "!" as no tag at all and the parser
- * would give an integer for "! 42", a null for "! ~" and the key 17 for
- * "! 0x11". */
+// The non-specific tag "!" makes a plain scalar a string whatever its text
+// (YAML 1.2 section 6.9.1), leaves a collection as it is and isn't stored.
+// Reading it as no tag would give 42 for "! 42".
 TEST(tags, bare_non_specific_tag_makes_a_plain_scalar_a_string) {
   char *err = NULL;
   cyaml doc = cyaml_parse(
@@ -10448,17 +8403,16 @@ TEST(tags, bare_non_specific_tag_makes_a_plain_scalar_a_string) {
   cyaml_destroy(doc);
 }
 
-/* A written tag that resolves to "!" is refused. YAML 1.2 example 6.25
- * declares the verbatim "!<!>" invalid because a verbatim tag isn't
- * resolved, and the setter refuses "!" because no written tag can carry it
- * through a serialize and a parse. */
+// A written tag that resolves to "!" is refused, like the verbatim "!<!>" of
+// YAML 1.2 example 6.25; the setter refuses "!" because no written tag could
+// carry it through a round trip.
 TEST(tags, a_written_tag_that_names_the_non_specific_tag_is_refused) {
   char *err = NULL;
   cyaml doc = cyaml_parse("!<!> x\n", &err);
   bool refused = doc == NULL && err != NULL;
   cyaml_destroy(doc);
   cyaml n = cyaml_create_string("x");
-  ccol_retval_t rv = n ? cyaml_node_set_tag(n, "!") : ccol_unexpected_failure;
+  ccol_retval rv = n ? cyaml_node_set_tag(n, "!") : ccol_unexpected_failure;
   bool untagged = n && cyaml_node_tag(n) == NULL;
   cyaml_destroy(n);
   REQUIRE_TRUE(refused);
@@ -10500,11 +8454,6 @@ TEST(tags, tag_on_collection_has_no_override_effect_on_parsing) {
 }
 
 TEST(tags, tag_on_mapping_introduced_by_anchored_key_is_preserved) {
-  /* "!!map" decorates the dictionary that "&a key: value" starts on the next
-   * line. The anchor belongs only to the key scalar and not to the mapping
-   * (see the anchored key tests in block_mapping), so the outer tag should
-   * reach the mapping itself and not get quietly dropped by the anchor
-   * branch's "is this a key" fast path. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!map\n  &a key: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10516,10 +8465,6 @@ TEST(tags, tag_on_mapping_introduced_by_anchored_key_is_preserved) {
 }
 
 TEST(tags, tag_on_mapping_introduced_by_anchored_key_mismatch_rejected) {
-  /* The same shape with a "!!seq" that doesn't match the structure. The
-   * parser catches it as a hard mismatch between tag and content
-   * instead of letting the fast path that built the previous test's mapping
-   * quietly ignore it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!seq\n  &a key: value\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -10527,9 +8472,6 @@ TEST(tags, tag_on_mapping_introduced_by_anchored_key_mismatch_rejected) {
 }
 
 TEST(tags, tag_on_mapping_introduced_by_aliased_key_is_preserved) {
-  /* The same shape through the fast path that takes a '*' alias as a key
-   * instead of '&'. A space before the ':' is needed, just as a plain scalar
-   * key needs ": ", because a glued "key:value" isn't a map separator. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("top:\n  a: &x k\n  b: !!map\n    *x : value\n", &err);
@@ -10543,11 +8485,6 @@ TEST(tags, tag_on_mapping_introduced_by_aliased_key_is_preserved) {
 }
 
 TEST(tags, tag_on_mapping_introduced_by_tagged_key_is_preserved) {
-  /* The outer "!!map" is on its own line and reaches the mapping that
-   * the inner "!!str" starts on the next line. That inner tag belongs to the
-   * key and the parser rightly discards it (see
-   * tag_on_dictionary_key_parses_but_is_not_preserved), but that must not
-   * swallow the outer tag too, which is a structurally different thing. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!map\n  !!str key: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10564,8 +8501,6 @@ TEST(tags, unknown_custom_tag_preserved_scalar_gets_implicit_type) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_STREQ(cyaml_node_tag(doc), "!mytag");
-  /* A custom tag never overrides a scalar's type. The value falls through to
-   * implicit resolution, so 42 becomes an integer. */
   REQUIRE_EQ(cyaml_type(doc), CYAML_INTEGER);
   REQUIRE_EQ(cyaml_int_val(doc), 42LL);
   cyaml_destroy(doc);
@@ -10597,27 +8532,15 @@ TEST(tags, alias_cannot_carry_a_tag) {
 }
 
 TEST(tags, non_specific_tag_then_named_tag_rejected_in_flow_context) {
-  /* A bare non-specific "!" resolves to no forced type (see
-   * parse_tag_token()'s doc comment), but it's a real tag for
-   * c-ns-properties' "at most one tag" rule, so the parser rejects a
-   * second, named tag stacked under it, just as it rejects two named tags
-   * stacked on each other, such as "!!str !!int 5" above. Block context's
-   * ordinary same-line check ("cur(ctx) == '!'") doesn't apply inside a flow
-   * collection, so this test drives the guard that had_tag carries and not
-   * that separate character check. */
   char *err = NULL;
   cyaml doc = cyaml_parse("[! !!str x]\n", &err);
   REQUIRE_NE((void *)err, NULL);
   REQUIRE_EQ((void *)doc, NULL);
 }
 
+// The second tag sits on the next line, so had_tag has to travel into the
+// recursive parse; the resolved tag of "!" is NULL and can't tell.
 TEST(tags, non_specific_tag_then_named_tag_rejected_on_own_line) {
-  /* The same rule through the "value starts on its own line" path, which the
-   * '&' branch uses as well, so the second tag isn't glued onto the first
-   * one's line. The parser needs to carry had_tag into the recursive
-   * parse_node call, since a check against resolved_tag alone isn't enough:
-   * resolved_tag is NULL for the enclosing non-specific "!", so that check
-   * would miss this document. */
   char *err = NULL;
   cyaml doc = cyaml_parse("key: !\n  !!int 5\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -10625,9 +8548,6 @@ TEST(tags, non_specific_tag_then_named_tag_rejected_on_own_line) {
 }
 
 TEST(tags, alias_cannot_carry_a_non_specific_tag) {
-  /* Mirrors alias_cannot_carry_a_tag above with a bare non-specific "!"
-   * instead of a named tag. An alias can never carry any tag at all, not
-   * even one whose resolved_tag is NULL. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x foo\nb: ! *x\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -10635,14 +8555,6 @@ TEST(tags, alias_cannot_carry_a_non_specific_tag) {
 }
 
 TEST(tags, tag_on_dictionary_key_parses_but_is_not_preserved) {
-  /* A tag decorating a dictionary key runs into a real, permanent structural
-   * limitation of this DOM, whose keys are a plain char* and not a
-   * cyaml_node_t*. Such a tag parses without error, since the grammar
-   * accepts it, but once the key is typed it has nowhere to live, so the
-   * parser doesn't keep it. Checking that cyaml_node_tag(doc) is NULL is
-   * what proves "not preserved". A regression could leak the key's tag onto
-   * the enclosing mapping node instead of discarding it, and without that
-   * check this test wouldn't catch it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!str key: value\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -10653,10 +8565,6 @@ TEST(tags, tag_on_dictionary_key_parses_but_is_not_preserved) {
 }
 
 TEST(tags, undefined_tag_handle_on_dictionary_key_rejected) {
-  /* The parser parses a tag on a key anyway, to check that it's valid (see
-   * the doc comments of the previous test and of cyaml_node_tag()), so it
-   * has to reject an undefined %TAG handle here just as it does when the
-   * same tag decorates a value. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!x!foo key: value\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -10664,9 +8572,6 @@ TEST(tags, undefined_tag_handle_on_dictionary_key_rejected) {
 }
 
 TEST(tags, malformed_verbatim_tag_on_dictionary_key_rejected) {
-  /* The same validity check rule as the previous test, but here a verbatim
-   * tag rejects a percent-escaped null byte instead of an undefined
-   * handle. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!<tag:x,2002:%00> key: value\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -10747,7 +8652,7 @@ TEST(tags, cyaml_set_on_tagged_node_preserves_tag) {
   cyaml leaf = cyaml_dictionary_get(doc, "a");
   REQUIRE_NE((void *)leaf, NULL);
   REQUIRE_STREQ(cyaml_node_tag(leaf), CYAML_TAG_STR);
-  ccol_retval_t rv = cyaml_set(doc, "a", "bar");
+  ccol_retval rv = cyaml_set(doc, "a", "bar");
   REQUIRE_EQ((int)rv, (int)ccol_success);
   leaf = cyaml_dictionary_get(doc, "a");
   REQUIRE_STREQ(cyaml_str_val(leaf), "bar");
@@ -10759,15 +8664,15 @@ TEST(tags, node_set_tag_refuses_a_core_tag_of_another_type) {
   cyaml n = cyaml_create_int(42);
   REQUIRE_NE((void *)n, NULL);
   REQUIRE_EQ((void *)cyaml_node_tag(n), NULL);
-  ccol_retval_t rv = cyaml_node_set_tag(n, CYAML_TAG_STR);
+  ccol_retval rv = cyaml_node_set_tag(n, CYAML_TAG_STR);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
   REQUIRE_EQ(cyaml_type(n), CYAML_INTEGER);
   REQUIRE_EQ(cyaml_int_val(n), 42LL);
   REQUIRE_EQ((void *)cyaml_node_tag(n), NULL);
-  ccol_retval_t rv2 = cyaml_node_set_tag(n, CYAML_TAG_INT);
+  ccol_retval rv2 = cyaml_node_set_tag(n, CYAML_TAG_INT);
   REQUIRE_EQ((int)rv2, (int)ccol_success);
   REQUIRE_STREQ(cyaml_node_tag(n), CYAML_TAG_INT);
-  ccol_retval_t rv3 = cyaml_node_set_tag(n, NULL);
+  ccol_retval rv3 = cyaml_node_set_tag(n, NULL);
   REQUIRE_EQ((int)rv3, (int)ccol_success);
   REQUIRE_EQ((void *)cyaml_node_tag(n), NULL);
   cyaml_destroy(n);
@@ -10777,9 +8682,7 @@ TEST(tags, node_tag_of_null_node_is_null) {
   REQUIRE_EQ((void *)cyaml_node_tag(NULL), NULL);
 }
 
-/* ========================================================================== */
-/*                         TAG DIRECTIVES (%TAG)                             */
-/* ========================================================================== */
+// Tag directives (%TAG)
 
 TEST(tag_directives, custom_secondary_handle_shorthand_resolves) {
   char *err = NULL;
@@ -10812,11 +8715,6 @@ TEST(tag_directives, redefining_secondary_handle) {
 }
 
 TEST(tag_directives, per_document_scoping) {
-  /* A %TAG directive in document 1 must not leak into document 2. The second
-   * document gives the same handle "!e!" a DIFFERENT prefix, which shows
-   * that the first document's registration didn't survive. If it had, this
-   * would be a redefinition of one handle, which the parser rejects, while
-   * here the parse succeeds with a different resolved tag. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "%TAG !e! tag:example.com,2000:\n---\n!e!foo a\n"
@@ -10834,9 +8732,6 @@ TEST(tag_directives, per_document_scoping) {
 }
 
 TEST(tag_directives, undefined_handle_in_second_document_fails_whole_parse) {
-  /* An undefined tag handle in ANY document of a multi-document stream fails
-   * the whole cyaml_parse call and not just that document, because a parse
-   * of several documents has no way to report partial success. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "%TAG !e! tag:example.com,2000:\n---\n!e!foo a\n"
@@ -10872,11 +8767,6 @@ TEST(tag_directives, same_document_handle_redefinition_rejected) {
 }
 
 TEST(tag_directives, extra_content_after_prefix_rejected) {
-  /* Only whitespace, and a comment separated by whitespace, may follow a
-   * %TAG directive's prefix, because YAML 1.2 section 6.8.2's l-tag-directive
-   * ends in the same s-l-comments production as every other directive line.
-   * The parser should reject a bare extra word just as it rejects
-   * "%YAML 1.2 garbage". */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "%TAG !e! tag:example.com,2000:app/ garbage-text\n---\na: 1\n", &err);
@@ -10885,9 +8775,6 @@ TEST(tag_directives, extra_content_after_prefix_rejected) {
 }
 
 TEST(tag_directives, trailing_comment_with_separator_accepted) {
-  /* A comment properly separated from the prefix by whitespace is a valid
-   * ordinary trailing comment; the same %YAML case is
-   * yaml_directive_trailing_comment_with_separator_accepted. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "%TAG !e! tag:example.com,2000:  # comment\n---\n!e!foo bar\n", &err);
@@ -10898,12 +8785,6 @@ TEST(tag_directives, trailing_comment_with_separator_accepted) {
 }
 
 TEST(tag_directives, hash_glued_to_prefix_is_part_of_the_uri) {
-  /* ns-uri-char, YAML 1.2's tag prefix grammar, explicitly allows '#' as an
-   * ordinary URL character. A '#' glued right onto the prefix without
-   * whitespace in front can't be a comment, because a comment needs
-   * s-b-comment, real whitespace in front of it. So the parser has to treat
-   * that '#' as part of the prefix text and not quietly cut the prefix there
-   * and throw the rest away as a comment. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "%TAG !e! tag:example.com,2000:app#\n---\n!e!foo bar\n", &err);
@@ -10914,9 +8795,6 @@ TEST(tag_directives, hash_glued_to_prefix_is_part_of_the_uri) {
 }
 
 TEST(tag_directives, hash_glued_mid_prefix_is_part_of_the_uri) {
-  /* The same rule with the '#' in the middle of the prefix rather than at
-   * its very end, which shows the parser captures the whole rest of the
-   * token as prefix text rather than only a trailing '#'. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("%TAG !e! tag:example.com/#zzz\n---\n!e!foo bar\n", &err);
@@ -10927,9 +8805,6 @@ TEST(tag_directives, hash_glued_mid_prefix_is_part_of_the_uri) {
 }
 
 TEST(tag_directives, hash_after_real_whitespace_is_still_a_comment) {
-  /* A '#' separated from the prefix by real whitespace is an ordinary
-   * trailing comment. This guards against the glued '#' rule above reaching
-   * too far and treating every '#' as prefix content wherever it is. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "%TAG !e! tag:example.com,2000:app #comment\n---\n!e!foo bar\n", &err);
@@ -10963,10 +8838,6 @@ TEST(tag_directives, verbatim_tag_malformed_percent_escape_rejected) {
 }
 
 TEST(tag_directives, shorthand_tag_percent_escaped_slash_resolves) {
-  /* ns-tag-char, YAML 1.2 section 5.5's shorthand suffix grammar, derives
-   * from ns-uri-char just like the verbatim form's content, so a shorthand
-   * tag's suffix decodes a "%XX" escape as well (see
-   * verbatim_tag_percent_escaped_slash above). */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "%TAG !e! tag:example.com,2000:\n---\n!e!app%2Ffoo bar\n", &err);
@@ -10977,10 +8848,6 @@ TEST(tag_directives, shorthand_tag_percent_escaped_slash_resolves) {
 }
 
 TEST(tag_directives, shorthand_tag_secondary_handle_percent_escape_resolves) {
-  /* The default secondary handle carries the well-known prefix
-   * "tag:yaml.org,2002:". That prefix with a percent-escaped suffix should
-   * resolve to the same core schema tag as its plain spelling !!str, and
-   * not to an unknown custom tag carrying the literal, undecoded "%74". */
   char *err = NULL;
   cyaml doc = cyaml_parse("val: !!s%74r 42\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -11009,9 +8876,7 @@ TEST(tag_directives, shorthand_tag_malformed_percent_escape_rejected) {
   REQUIRE_EQ((void *)doc, NULL);
 }
 
-/* ========================================================================== */
-/*                         TAG-DRIVEN TYPE RESOLUTION                        */
-/* ========================================================================== */
+// Tag-driven type resolution
 
 TEST(tag_typing, null_forces_on_plain) {
   char *err = NULL;
@@ -11103,10 +8968,6 @@ TEST(tag_typing, int_forces_on_plain) {
 }
 
 TEST(tag_typing, int_rejects_hex_with_embedded_sign) {
-  /* finalize_scalar_node's !!int branch shares try_parse_int_scalar with
-   * implicit typing, so it must reject the same malformed "0x-0"-style
-   * literal that the plain scalar regression test above covers, instead of
-   * accepting it as 0. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!int 0x-0\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -11114,10 +8975,6 @@ TEST(tag_typing, int_rejects_hex_with_embedded_sign) {
 }
 
 TEST(tag_typing, int_rejects_uppercase_hex_prefix) {
-  /* finalize_scalar_node's !!int branch shares try_parse_int_scalar with
-   * implicit typing, so an uppercase "0X" prefix is rejected here too
-   * (see implicit_types.uppercase_hex_prefix_is_a_string) and not quietly
-   * accepted as 16. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!int 0X10\n", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -11192,11 +9049,6 @@ TEST(tag_typing, float_forces_on_literal_block_keep_multiple_newlines) {
 }
 
 TEST(tag_typing, float_rejects_inrange_hex) {
-  /* The YAML core schema gives hex and octal integer syntax no float form at
-   * all, so a small in-range hex literal fails under !!float. Without a tag
-   * forcing the type, try_parse_int_scalar accepts such a literal as a real
-   * CYAML_INTEGER, and the parser must not quietly turn it into a float of the
-   * same magnitude. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!float 0x10\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -11211,11 +9063,6 @@ TEST(tag_typing, float_rejects_inrange_octal) {
 }
 
 TEST(tag_typing, float_rejects_uppercase_hex_prefix) {
-  /* The critical regression case. strtod() itself accepts an uppercase "0X"
-   * hex prefix, because the C standard says "0x or 0X" without regard to
-   * case, so try_parse_float_scalar rejects an uppercase prefix explicitly.
-   * Otherwise this literal would fall through to the generic strtod() call,
-   * whose extension quietly accepts it as 16.0. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!float 0X10\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -11230,8 +9077,6 @@ TEST(tag_typing, float_rejects_uppercase_octal_prefix) {
 }
 
 TEST(tag_typing, float_refuses_oversized_hex) {
-  /* The hex form has no float reading at any magnitude, so !!float refuses
-   * a hex literal too wide for a long long just as it refuses "0x10". */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!float 0xFFFFFFFFFFFFFFFF\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -11266,12 +9111,6 @@ TEST(tag_typing, bool_forces_on_double_quoted) {
 }
 
 TEST(tag_typing, bool_accepts_wider_yes_no_on_off_vocabulary) {
-  /* An explicit !!bool tag accepts a wider vocabulary than implicit bool
-   * typing, ignoring case, while implicit typing only accepts true, True,
-   * TRUE, false, False and FALSE. Measuring against PyYAML's
-   * construct_yaml_bool confirms the wider set, since that function matches
-   * {yes, no, true, false, on, off} ignoring case whatever the loader. See
-   * try_parse_bool_scalar_explicit's doc comment in src/cyaml.c. */
   char *err = NULL;
   cyaml doc_yes = cyaml_parse("!!bool yes\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -11321,13 +9160,9 @@ TEST(tag_typing, bool_mismatch_rejected) {
   REQUIRE_EQ((void *)doc, NULL);
 }
 
+// !!bool doesn't trim before matching (as in PyYAML), so a KEEP-chomped "true"
+// with trailing newlines is refused.
 TEST(tag_typing, bool_forces_on_literal_block_keep_untrimmed_rejected) {
-  /* !!int and !!float trim trailing whitespace (see
-   * int_forces_on_literal_block_keep_multiple_newlines above), but !!bool
-   * deliberately does NOT trim before matching against its vocabulary, like
-   * PyYAML's stricter lookup, which doesn't trim either. The parser must
-   * NOT quietly accept a KEEP-chomped block scalar's trailing newlines as
-   * "true". */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!bool |+\n  true\n\n\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -11349,11 +9184,6 @@ TEST(tag_typing, float_mismatch_rejected) {
 }
 
 TEST(tag_typing, int_rejects_leading_whitespace) {
-  /* Regression guard. The core schema's int grammar has no production for
-   * leading whitespace, but the library parses the trimmed text with
-   * strtoll(), which quietly skips such whitespace. The parser has to reject
-   * this document as a tag/content mismatch instead of quietly accepting it
-   * as untrimmed text. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!int \" 42\"\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -11361,22 +9191,16 @@ TEST(tag_typing, int_rejects_leading_whitespace) {
 }
 
 TEST(tag_typing, float_rejects_leading_whitespace) {
-  /* Regression guard for the same kind of defect as
-   * int_rejects_leading_whitespace above, for strtod()'s identical tolerance
-   * of leading whitespace. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!float \" 3.5\"\n", &err);
   REQUIRE_NE((void *)err, NULL);
   REQUIRE_EQ((void *)doc, NULL);
 }
 
+// strtoll() and strtod() skip VT and FF too, and a double-quoted scalar can
+// carry both through escapes, so a guard that only knows space, tab, LF and CR
+// would accept "\v42".
 TEST(tag_typing, numeric_tags_reject_every_leading_isspace_byte) {
-  /* strtoll(), strtoull() and strtod() skip every leading byte that
-   * isspace() accepts, VT and FF as well as space, tab, LF and CR, and a
-   * double-quoted scalar carries VT and FF through the \v and \f escapes.
-   * Each of these documents is refused as a tag/content mismatch. A guard
-   * that only refused space, tab, LF and CR would accept "\v42" as the
-   * integer 42. */
   static const char *const docs[] = {
       "!!int \"\\v42\"\n",    "!!int \"\\f42\"\n",      "!!int \"\\v-42\"\n",
       "!!int \"\\f0x10\"\n",  "!!int \"\\v0o7\"\n",     "!!float \"\\v3.5\"\n",
@@ -11392,7 +9216,6 @@ TEST(tag_typing, numeric_tags_reject_every_leading_isspace_byte) {
   }
   REQUIRE_EQ(accepted, (size_t)0);
 
-  /* The same digits with nothing in front parse fine under both tags. */
   char *err = NULL;
   cyaml doc = cyaml_parse("!!int \"42\"\n", &err);
   REQUIRE_NE((void *)doc, NULL);
@@ -11436,8 +9259,8 @@ TEST(tag_typing, map_stored_without_altering_collection_parsing) {
   cyaml_destroy(doc);
 }
 
-/* Structural-kind-mismatch: the 9 combinations. */
-
+// This test and the ones after it go through the nine structural mismatches
+// between a tag and a collection or scalar.
 TEST(tag_typing, str_on_collection_rejected) {
   char *err = NULL;
   cyaml doc = cyaml_parse("!!str {a: b}\n", &err);
@@ -11501,9 +9324,7 @@ TEST(tag_typing, map_on_scalar_syntax_rejected) {
   REQUIRE_EQ((void *)doc, NULL);
 }
 
-/* ========================================================================== */
-/*                         SERIALIZE TAGS                                    */
-/* ========================================================================== */
+// Serialize tags
 
 TEST(serialize_tags, core_schema_tags_omitted_but_queryable) {
   const char *docs[] = {
@@ -11523,7 +9344,6 @@ TEST(serialize_tags, core_schema_tags_omitted_but_queryable) {
 
     char *out = cyaml_serialize(doc);
     REQUIRE_NE((void *)out, NULL);
-    /* None of the seven core-schema tag URIs ever shows up in the output. */
     REQUIRE_EQ((void *)strstr(out, "tag:yaml.org,2002:"), NULL);
 
     char *err2 = NULL;
@@ -11608,7 +9428,7 @@ TEST(serialize_tags, custom_tag_round_trips_via_flow_serializer) {
 
 TEST(serialize_tags, matching_core_schema_tag_set_via_api_still_omitted) {
   cyaml n = cyaml_create_int(42);
-  ccol_retval_t rv = cyaml_node_set_tag(n, CYAML_TAG_INT);
+  ccol_retval rv = cyaml_node_set_tag(n, CYAML_TAG_INT);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 
   char *out = cyaml_serialize(n);
@@ -11627,13 +9447,11 @@ TEST(serialize_tags, matching_core_schema_tag_set_via_api_still_omitted) {
   cyaml_destroy(reparsed);
 }
 
-/* cyaml_node_set_tag() refuses a core-schema tag that names another type, so
- * no public call can put such a tag in front of the serializer. The node
- * keeps the tag it had, and its serialization round-trips to the same type
- * and value. */
+// cyaml_node_set_tag() refuses a core-schema tag of another type, so no such
+// tag reaches the serializer. The node keeps its tag and round-trips.
 TEST(serialize_tags, mismatched_core_schema_scalar_tag_is_refused) {
   cyaml n = cyaml_create_int(42);
-  ccol_retval_t rv = cyaml_node_set_tag(n, CYAML_TAG_STR);
+  ccol_retval rv = cyaml_node_set_tag(n, CYAML_TAG_STR);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 
   char *out = cyaml_serialize(n);
@@ -11654,7 +9472,7 @@ TEST(serialize_tags, mismatched_core_schema_scalar_tag_is_refused) {
 
 TEST(serialize_tags, mismatched_core_schema_scalar_tag_via_flow_serializer) {
   cyaml n = cyaml_create_bool(true);
-  ccol_retval_t rv = cyaml_node_set_tag(n, CYAML_TAG_INT);
+  ccol_retval rv = cyaml_node_set_tag(n, CYAML_TAG_INT);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 
   char *out = cyaml_serialize_flow(n);
@@ -11665,12 +9483,10 @@ TEST(serialize_tags, mismatched_core_schema_scalar_tag_via_flow_serializer) {
   cyaml_destroy(n);
 }
 
-/* A mismatched CYAML_TAG_SEQ or CYAML_TAG_MAP is a structural mismatch that
- * a reparse could never accept, and cyaml_node_set_tag() refuses it the
- * same way. */
+// The same for a mismatched sequence or mapping tag.
 TEST(serialize_tags, mismatched_core_schema_collection_tag_is_refused) {
   cyaml n = cyaml_create_list();
-  ccol_retval_t rv = cyaml_node_set_tag(n, CYAML_TAG_MAP);
+  ccol_retval rv = cyaml_node_set_tag(n, CYAML_TAG_MAP);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
   REQUIRE_EQ((void *)cyaml_node_tag(n), NULL);
 
@@ -11687,9 +9503,7 @@ TEST(serialize_tags, mismatched_core_schema_collection_tag_is_refused) {
   cyaml_destroy(reparsed);
 }
 
-/* ========================================================================== */
-/*                         MERGE KEYS (<<:)                                  */
-/* ========================================================================== */
+// Merge keys (<<:)
 
 TEST(merge_keys, single_anchor_block) {
   char *err = NULL;
@@ -11721,12 +9535,6 @@ TEST(merge_keys, single_anchor_flow_with_reference) {
 }
 
 TEST(merge_keys, anchored_key_flow_still_merges) {
-  /* An anchor can decorate the "<<" key itself, and that does NOT stop the
-   * key from being a merge candidate, just as on the block dictionary side
-   * (see try_parse_scalar_dict_key's doc comment). A flow dictionary's key
-   * peek excludes a '!' and a quote, but it must not exclude a '&' the same
-   * way, since that would leave "<<" as a literal key with no merge whenever
-   * an anchor decorates it in flow context. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x {k: 1}\nb: {&y <<: *x, k2: 2}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -11741,14 +9549,6 @@ TEST(merge_keys, anchored_key_flow_still_merges) {
 }
 
 TEST(merge_keys, anchored_and_tagged_key_flow_dict_not_merged) {
-  /* A tag stops a key from being a merge candidate also when it follows an
-   * anchor on the same "<<" key ("&y !!str <<"), and not only when the tag
-   * is the very first character, which
-   * tagged_double_angle_bracket_key_is_literal_not_merge covers. A flow
-   * dictionary's implicit key peek must not look at the first character
-   * alone to decide "is this plain and untagged", because that check would
-   * miss a tag hidden behind an anchor in front and then merge when it must
-   * not. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x {k: 1}\nb: {&y !!str <<: *x, k2: 2}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -11791,13 +9591,6 @@ TEST(merge_keys, non_mapping_source_rejected) {
 }
 
 TEST(merge_keys, non_mapping_scalar_alias_source_rejected) {
-  /* non_mapping_source_rejected above covers a literal non-mapping merge
-   * value written directly as "<<: [1, 2]". This one covers a separate code
-   * path where the only merge source is an ALIAS resolving to a scalar, the
-   * single-mapping case of merge_apply's source check and not the loop over
-   * a sequence's elements that non_mapping_element_in_source_sequence_rejected
-   * below drives. The parser should reject it the same way instead of
-   * quietly running zero iterations over it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &a 5\nb:\n  <<: *a\n", &err);
   REQUIRE_NE((void *)err, NULL);
@@ -11828,9 +9621,6 @@ TEST(merge_keys, transitive_merge_source) {
 }
 
 TEST(merge_keys, same_anchor_merged_into_two_targets) {
-  /* The memtest target covers this test, which drives the ownership rule
-   * that gives each target its own cyaml_clone, since here one anchored
-   * value merges into two different mappings. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "a: &base\n  x: 1\nb:\n  <<: *base\n  y: 2\nc:\n  <<: *base\n  z: 3\n",
@@ -11870,13 +9660,6 @@ TEST(merge_keys, tagged_double_angle_bracket_key_is_literal_not_merge) {
 }
 
 TEST(merge_keys, tag_on_enclosing_mapping_does_not_disable_merge) {
-  /* A tag can sit on the ENCLOSING mapping, and a '!' layer passes it down to
-   * the whole resulting dictionary. That's a completely different thing from
-   * a tag right on the "<<" key itself (see
-   * tagged_double_angle_bracket_key_is_literal_not_merge above, where the
-   * tag decorates the key). Code that treated the two as one would leave
-   * "<<" as a literal key with no merge whenever a tag decorates the
-   * enclosing mapping. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("base: &b\n  x: 1\nm: !!map\n  <<: *b\n  y: 2\n", &err);
@@ -11905,11 +9688,6 @@ TEST(merge_keys, plain_form_baseline_contrast) {
 }
 
 TEST(merge_keys, explicit_key_form_block_expands) {
-  /* The explicit '? <<' / ': value' form is just as real a merge trigger as
-   * the implicit '<<: value' shorthand, as two independent reference parsers
-   * confirm, because the key is the same plain, untagged "<<" scalar either
-   * way. This DOM detects a merge where it captures the key and not with a
-   * later lookup, so both forms need to be recognized there. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x\n  k: 1\nb:\n  ? <<\n  : *x\n  k2: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -11924,10 +9702,6 @@ TEST(merge_keys, explicit_key_form_block_expands) {
 }
 
 TEST(merge_keys, explicit_key_form_as_first_entry_expands) {
-  /* The mapping's very first entry takes a different dispatch path than every
-   * later one. It goes through parse_node's '?' branch with first_key == NULL,
-   * while a later entry goes through parse_one_dict_entry_key, and the first
-   * entry expands the same way. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x\n  k: 1\nb:\n  ? <<\n  : *x\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -11940,8 +9714,6 @@ TEST(merge_keys, explicit_key_form_as_first_entry_expands) {
 }
 
 TEST(merge_keys, explicit_key_form_block_anchored_still_expands) {
-  /* An anchor decorating the explicit key does NOT disqualify it, just like
-   * in the implicit form, where "&y <<: *x" is a real trigger too. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("a: &x\n  k: 1\nb:\n  ? &z <<\n  : *x\n  k2: 2\n", &err);
@@ -11955,14 +9727,9 @@ TEST(merge_keys, explicit_key_form_block_anchored_still_expands) {
   cyaml_destroy(doc);
 }
 
+// An explicit key's content can start on the next line, so the merge check
+// looks where the key's content starts, not right after the '?'.
 TEST(merge_keys, explicit_key_form_block_key_on_own_line_expands) {
-  /* YAML 1.2 section 8.2.2 lets an explicit key's content start on a fresh,
-   * more indented line instead of staying on the '?' line, unlike an
-   * implicit key, which always sits on one line. So the merge key candidate
-   * check has to run from wherever the key's real content starts, not from
-   * whatever follows the '?' on its own line, which here is nothing but the
-   * newline this construct exists to cross. A reference parser confirms that
-   * this expands the same way as the same-line "? <<" form. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("a: &x\n  k: 1\nb:\n  ?\n    <<\n  : *x\n  k2: 2\n", &err);
@@ -11978,10 +9745,6 @@ TEST(merge_keys, explicit_key_form_block_key_on_own_line_expands) {
 }
 
 TEST(merge_keys, explicit_key_form_anchored_key_on_own_line_expands) {
-  /* The same key-pushed-to-a-fresh-line case with an anchor decorating the
-   * key as well. The loop inside explicit_key_peek_is_merge_candidate skips
-   * an anchor and a tag, and it reaches the real "<<" text across the
-   * same newline. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("a: &x\n  k: 1\nb:\n  ?\n    &z <<\n  : *x\n  k2: 2\n", &err);
@@ -12023,8 +9786,6 @@ TEST(merge_keys, explicit_key_form_block_tagged_not_merged) {
 }
 
 TEST(merge_keys, explicit_key_form_block_prefix_not_merged) {
-  /* "<<x" is a plain scalar starting with "<<", and the parser must not take
-   * it for the merge trigger, which is exactly two characters. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("a: &x\n  k: 1\nb:\n  ? <<x\n  : *x\n  k2: 2\n", &err);
@@ -12037,14 +9798,9 @@ TEST(merge_keys, explicit_key_form_block_prefix_not_merged) {
   cyaml_destroy(doc);
 }
 
+// The merge peek flags "<< foo", and only the fully parsed key text decides
+// that it is an ordinary key.
 TEST(merge_keys, explicit_key_form_block_followed_by_word_not_merged) {
-  /* "<< foo" has whitespace right after "<<" and then more plain scalar
-   * content on the same line. The merge candidate peek gets it wrong,
-   * because its whitespace check is deliberately coarse and doesn't repeat
-   * scan_plain_scalar_line's real termination rules. Under those rules plain
-   * internal whitespace never ends a scalar, so the fully parsed key is the
-   * whole two-word scalar "<< foo" and never the exact trigger "<<", and the
-   * parser stores it as an ordinary literal key with no merge. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("a: &x\n  k: 1\nb:\n  ? << foo\n  : *x\n  k2: 2\n", &err);
@@ -12098,11 +9854,6 @@ TEST(merge_keys, explicit_key_form_flow_quoted_not_merged) {
 }
 
 TEST(merge_keys, explicit_key_form_flow_colon_glued_not_merged) {
-  /* "<<:*x" has no separating whitespace, so it doesn't end at the ':',
-   * because scan_plain_scalar_line's colon rule in flow context wants the
-   * next character to be whitespace or a flow terminator. So the whole text
-   * is one literal plain scalar key and not a merge trigger with an alias
-   * value. A reference parser confirms this. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x {k: 1}\nb: {? <<:*x, k2: 2}\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12115,12 +9866,6 @@ TEST(merge_keys, explicit_key_form_flow_colon_glued_not_merged) {
 }
 
 TEST(merge_keys, flow_sequence_implicit_shorthand_expands) {
-  /* "[<<: *x]" is a flow SEQUENCE's "[key: value]" compact mapping shorthand
-   * (see YAML 1.2 section 7.4.1, ns-flow-pair), and it must expand a real
-   * merge key exactly like three other forms do: the flow dictionary
-   * "{<<: *x}", the block dictionary and a block sequence's compact mapping
-   * "- <<: *x". This list holds one element, a one-entry mapping whose only
-   * key is "<<". */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x {k: 1}\nb: [<<: *x]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12139,10 +9884,6 @@ TEST(merge_keys, flow_sequence_implicit_shorthand_expands) {
 }
 
 TEST(merge_keys, flow_sequence_bare_key_value_anchored_and_tagged_not_merged) {
-  /* Mirrors merge_keys.anchored_and_tagged_key_flow_dict_not_merged for a
-   * flow SEQUENCE's bare "[key: value]" shorthand. A tag after an anchor on
-   * the "<<" key stops the merge here as well, and a peek that only
-   * reads the very first character can't see that tag. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x {k: 1}\nb: [&y !!str <<: *x]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12159,10 +9900,6 @@ TEST(merge_keys, flow_sequence_bare_key_value_anchored_and_tagged_not_merged) {
 }
 
 TEST(merge_keys, flow_sequence_bare_key_value_two_elements_only_first_merges) {
-  /* "[<<: *x, k2: 2]" holds two SEPARATE list elements, because the
-   * shorthand makes each of them a one-pair compact mapping instead of one
-   * mapping with two keys. Only the first element has the key "<<", so only
-   * it expands. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x {k: 1}\nb: [<<: *x, k2: 2]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12182,9 +9919,6 @@ TEST(merge_keys, flow_sequence_bare_key_value_two_elements_only_first_merges) {
 }
 
 TEST(merge_keys, flow_sequence_explicit_shorthand_expands) {
-  /* "[? <<: *x]" is the explicit-key counterpart of the implicit "[<<: *x]"
-   * shorthand right above (see YAML 1.2 section 7.4.1, spec example 7.20),
-   * and it expands the same way. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x {k: 1}\nb: [? <<: *x]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12202,11 +9936,6 @@ TEST(merge_keys, flow_sequence_explicit_shorthand_expands) {
 }
 
 TEST(merge_keys, flow_sequence_explicit_shorthand_followed_by_word_not_merged) {
-  /* "[? << foo: 5]" drives a flow sequence's "[? key: value]" shorthand,
-   * where the merge candidate peek over-approximates and flags the key
-   * "<< foo". The test drives flow_pair_store's check of the fully parsed
-   * key text, which stores the literal key "<< foo" as an ordinary
-   * member. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x {k: 1}\nb: [? << foo: 5]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12225,8 +9954,6 @@ TEST(merge_keys, flow_sequence_explicit_shorthand_followed_by_word_not_merged) {
 }
 
 TEST(merge_keys, flow_sequence_quoted_double_angle_bracket_key_is_literal) {
-  /* Mirrors the flow-dictionary/block-dictionary "quoted '<<' is never a
-   * merge trigger" coverage, for the flow-sequence shorthand. */
   char *err = NULL;
   cyaml doc = cyaml_parse("a: &x {k: 1}\nb: [\"<<\": *x]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12239,19 +9966,14 @@ TEST(merge_keys, flow_sequence_quoted_double_angle_bracket_key_is_literal) {
   cyaml_destroy(doc);
 }
 
-/* A mapping can hold several "<<" entries. Every merge entry expands, and a
- * quoted or tagged "<<" is an ordinary member that never collides with a
- * merge entry, in either order. These tests fail if the parser stores the
- * merge entries under the key "<<", because then the later entry replaces
- * the earlier one. */
-
-/* Checks that map's members, in member order, are exactly keys[i] with the
- * integer values vals[i]. */
+// Tells whether map's members, in member order, are exactly keys[i] with the
+// integer values vals[i], so the merge tests can pin both the members and
+// their order.
 static bool merge_test_members_are(cyaml map, const char *const *keys,
                                    const long long *vals, size_t n) {
   if (cyaml_type(map) != CYAML_DICTIONARY || cyaml_dictionary_size(map) != n)
     return false;
-  cyaml_dictionary_iter_t it;
+  cyaml_dictionary_iter it;
   size_t i = 0;
   for (bool more = cyaml_dictionary_first(map, &it); more;
        more = cyaml_dictionary_next(&it), i++) {
@@ -12263,6 +9985,10 @@ static bool merge_test_members_are(cyaml map, const char *const *keys,
   return i == n;
 }
 
+// This test and the ones after it hold several "<<" entries in one mapping.
+// Every merge entry expands, and a quoted or tagged "<<" is an ordinary member
+// that never collides with one. They fail when merge entries are stored under
+// the key "<<", because the later one then replaces the earlier one.
 TEST(merge_keys,
      block_duplicate_double_angle_bracket_later_quoted_string_not_merged) {
   char *err = NULL;
@@ -12303,8 +10029,6 @@ TEST(merge_keys,
 
 TEST(merge_keys,
      block_duplicate_double_angle_bracket_earlier_quoted_still_merges) {
-  /* The reverse order, an earlier literal "<<" stays a member and a later
-   * merge entry expands. */
   char *err = NULL;
   cyaml doc =
       cyaml_parse("a: &x\n  k: 1\nb:\n  \"<<\": 7\n  <<: *x\n  k2: 2\n", &err);
@@ -12374,8 +10098,6 @@ TEST(merge_keys, flow_tagged_double_angle_bracket_before_a_merge_is_a_member) {
 }
 
 TEST(merge_keys, a_later_merge_entry_wins_over_an_earlier_one) {
-  /* PyYAML gives {k: 2}, of two merge entries the later one wins, while an
-   * explicit member wins over both. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "a: {<<: {k: 1}, <<: {k: 2}}\nb: {<<: {k: 1}, k: 0, <<: {k: 2}}\n", &err);
@@ -12394,9 +10116,6 @@ TEST(merge_keys, a_later_merge_entry_wins_over_an_earlier_one) {
 }
 
 TEST(merge_keys, block_merge_entries_with_lists_and_aliases_keep_their_place) {
-  /* Each merge entry puts the members no earlier entry placed at that
-   * entry's position. Values follow PyYAML, y from the later entry *c and x
-   * from the explicit member. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "b: &b {x: 1, y: 2}\n"
@@ -12439,7 +10158,6 @@ TEST(merge_keys, explicit_and_tagged_merge_entries_with_quoted_members) {
 }
 
 TEST(merge_keys, a_second_merge_source_error_is_reported) {
-  /* Every merge entry is checked, the second one included. */
   char *err = NULL;
   cyaml doc = cyaml_parse("{<<: {a: 1}, <<: [{b: 2}, 3]}", &err);
   REQUIRE_EQ((void *)doc, NULL);
@@ -12447,10 +10165,8 @@ TEST(merge_keys, a_second_merge_source_error_is_reported) {
   REQUIRE_NE((void *)strstr(err, "merge key source is not a mapping"), NULL);
 }
 
-/* A merge SOURCE can legitimately hold a literal, quoted "<<" key of its
- * own, which isn't a merge trigger itself. The merge copies it like any
- * other member. The target's merge entry is never a member of the target,
- * so the "does the target already have this key" check never matches it. */
+// A merge source can hold a quoted "<<" member of its own, which the merge
+// copies like any other member.
 TEST(merge_keys, source_containing_literal_double_angle_bracket_key_preserved) {
   char *err = NULL;
   cyaml doc = cyaml_parse(
@@ -12470,9 +10186,6 @@ TEST(merge_keys, source_containing_literal_double_angle_bracket_key_preserved) {
 
 TEST(merge_keys,
      sequence_source_containing_literal_double_angle_bracket_key_preserved) {
-  /* The same hazard through the "<<: [source1, source2]" form, a sequence of
-   * mappings. The first source in the list has a literal "<<" key of its
-   * own, which should survive the merge exactly like any other key. */
   char *err = NULL;
   cyaml doc = cyaml_parse(
       "a: &x\n  \"<<\": literal_value\ny: &z\n  other: 9\nb:\n  <<: [*x, "
@@ -12492,15 +10205,9 @@ TEST(merge_keys,
   cyaml_destroy(doc);
 }
 
-/* ========================================================================== */
-/*                    RAW CONTROL CHARACTERS IN SCALARS                      */
-/* ========================================================================== */
+// Raw control characters in scalars
 
 TEST(errors, raw_control_byte_rejected_in_double_quoted_scalar) {
-  /* nb-json governs double-quoted content in YAML 1.2 and reads
-   * "#x9 | [#x20-#x10FFFF]", so a raw, unescaped C0 control byte other than a
-   * tab has no valid literal form there. PyYAML rejects the same byte with
-   * "special characters are not allowed". */
   char src[] = "a: \"x\x01y\"\n";
   char *err = NULL;
   cyaml n = cyaml_parse_n(src, sizeof(src) - 1, &err);
@@ -12525,8 +10232,6 @@ TEST(errors, raw_control_byte_rejected_in_plain_scalar) {
 }
 
 TEST(errors, raw_control_byte_rejected_in_plain_scalar_continuation_line) {
-  /* The same check through the continuation line scan inside
-   * parse_plain_scalar_multiline rather than the first-line scan. */
   char src[] = "a: x\n  y\x01z\n";
   char *err = NULL;
   cyaml n = cyaml_parse_n(src, sizeof(src) - 1, &err);
@@ -12551,12 +10256,6 @@ TEST(errors, raw_control_byte_rejected_in_folded_block_scalar) {
 }
 
 TEST(errors, escaped_control_byte_still_accepted_in_double_quoted_scalar) {
-  /* The rejection above only covers a RAW byte in the source text. An
-   * explicit escape sequence that produces the same byte in the decoded
-   * string is the deliberate, documented way to embed a non-null C0 control
-   * byte, with one exception, an escape that decodes to codepoint zero (see
-   * the null_byte_escape_* tests below for why the parser rejects that
-   * one). */
   char *err = NULL;
   cyaml n = cyaml_parse("a: \"x\\x01y\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12568,11 +10267,6 @@ TEST(errors, escaped_control_byte_still_accepted_in_double_quoted_scalar) {
 }
 
 TEST(errors, null_byte_escape_zero_rejected) {
-  /* "\0" decodes to codepoint U+0000. Unlike every other double-quoted
-   * escape it can't live inside a node's scalar value, because that value is
-   * a plain NUL-terminated char* with no separate length field. So it has to
-   * be a hard parse error, and the parser must not quietly cut the string
-   * at the null byte inside it. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"a\\0b\"\n", &err);
   REQUIRE_EQ((void *)n, NULL);
@@ -12580,8 +10274,6 @@ TEST(errors, null_byte_escape_zero_rejected) {
 }
 
 TEST(errors, null_byte_escape_hex_rejected) {
-  /* The same restriction as null_byte_escape_zero_rejected for the
-   * two-hex-digit "\x00" form. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"a\\x00b\"\n", &err);
   REQUIRE_EQ((void *)n, NULL);
@@ -12589,7 +10281,6 @@ TEST(errors, null_byte_escape_hex_rejected) {
 }
 
 TEST(errors, null_byte_escape_u4_rejected) {
-  /* The same restriction again for the four-hex-digit "\u0000" form. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"a\\u0000b\"\n", &err);
   REQUIRE_EQ((void *)n, NULL);
@@ -12597,8 +10288,6 @@ TEST(errors, null_byte_escape_u4_rejected) {
 }
 
 TEST(errors, null_byte_escape_u8_rejected) {
-  /* The same restriction again for the eight-hex-digit "\U00000000"
-   * form. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"a\\U00000000b\"\n", &err);
   REQUIRE_EQ((void *)n, NULL);
@@ -12606,12 +10295,6 @@ TEST(errors, null_byte_escape_u8_rejected) {
 }
 
 TEST(quoted, surrogate_pair_combination_never_produces_null_byte) {
-  /* A \u escape can only reach codepoint zero directly. The smallest result
-   * a surrogate pair can give is U+10000, and a lone surrogate without its
-   * pair is refused and never decodes to zero. We check that the surrogate
-   * paths never produce a null byte by accident by asserting that the
-   * parser ACCEPTS the pair and decodes it to U+10000, while
-   * null_byte_escape_u4_rejected really rejects its own input. */
   char *err = NULL;
   cyaml n = cyaml_parse("\"\\ud800\\udc00\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12622,12 +10305,6 @@ TEST(quoted, surrogate_pair_combination_never_produces_null_byte) {
 }
 
 TEST(serialize_scalars, control_byte_in_string_is_quoted_and_escaped) {
-  /* A string value can hold a raw control byte, a state the node-building API
-   * can reach whatever the parser rejects on input. The serializer must never
-   * write such a value as unquoted plain scalar content, which would put the
-   * raw byte straight into the output where no spec-conforming YAML 1.2 parser
-   * can read it back, this one included. It writes the value double-quoted
-   * with the byte escaped instead. */
   cyaml n = cyaml_create_string("x\x01y");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
@@ -12635,8 +10312,6 @@ TEST(serialize_scalars, control_byte_in_string_is_quoted_and_escaped) {
   REQUIRE_EQ(strstr(s, "\x01") != NULL, false);
   REQUIRE_NE((void *)strstr(s, "\\x01"), NULL);
 
-  /* A round trip: parsing the serialized form again gives back the same
-   * string. */
   char *err = NULL;
   cyaml back = cyaml_parse(s, &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12648,9 +10323,9 @@ TEST(serialize_scalars, control_byte_in_string_is_quoted_and_escaped) {
   cyaml_destroy(back);
 }
 
-/* Serializes the double v alone with each serializer, and requires the text
- * `want` from both and that each output parses back to exactly v as a
- * CYAML_FLOAT. */
+// Serializes v alone with both serializers and tells whether both give the
+// text want and parse back to exactly v as a float. The float text tests use
+// it to pin the shortest round-trip form.
 static bool _float_text_round_trips(double v, const char *want) {
   cyaml n = cyaml_create_double(v);
   char *block = n ? cyaml_serialize(n) : NULL;
@@ -12669,10 +10344,6 @@ static bool _float_text_round_trips(double v, const char *want) {
 }
 
 TEST(serialize_scalars, float_mantissa_always_carries_a_point) {
-  /* YAML 1.1 only reads a float when its mantissa has a '.', so "1e+20"
-   * loads as a string in PyYAML and Psych. The serializer writes "1.0e+20",
-   * which both spec versions read as the same double. Leave the point out of
-   * the mantissa and the exponent cases fail on the text. */
   REQUIRE_TRUE(_float_text_round_trips(1e20, "1.0e+20"));
   REQUIRE_TRUE(_float_text_round_trips(1e-5, "1.0e-05"));
   REQUIRE_TRUE(_float_text_round_trips(-1e300, "-1.0e+300"));
@@ -12684,16 +10355,10 @@ TEST(serialize_scalars, float_mantissa_always_carries_a_point) {
 }
 
 TEST(serialize_scalars, subnormal_float_text_is_the_shortest_that_round_trips) {
-  /* A subnormal double carries fewer significant bits than a normal one, so
-   * its shortest text can have fewer than 15 digits even though its 15-digit
-   * text has no trailing zeros. A rule starting at 15 digits would write
-   * "4.94065645841247e-324" for the smallest one. */
   REQUIRE_TRUE(_float_text_round_trips(5e-324, "5.0e-324"));
   REQUIRE_TRUE(_float_text_round_trips(-5e-324, "-5.0e-324"));
   REQUIRE_TRUE(_float_text_round_trips(1e-310, "1.0e-310"));
   REQUIRE_TRUE(_float_text_round_trips(2.5e-320, "2.5e-320"));
-  /* Every subnormal of a sweep reads back as itself, and so does the
-   * smallest normal double, which follows the 15 to 17 digit rule. */
   bool all_ok = true;
   for (double v = 5e-324; v < 2.3e-308 && all_ok; v = v * 3.7 + 5e-324) {
     char *text = NULL;
@@ -12713,9 +10378,6 @@ TEST(serialize_scalars, subnormal_float_text_is_the_shortest_that_round_trips) {
 }
 
 TEST(serialize_scalars, a_subnormal_float_key_keeps_one_canonical_text) {
-  /* A subnormal float key's key text is its shortest text, and parsing that
-   * text again gives the same key, so both spellings below name one
-   * member. */
   char *err = NULL;
   cyaml n = cyaml_parse("{4.9406564584124654e-324: a, 5e-324: b}", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12731,13 +10393,10 @@ TEST(serialize_scalars, a_subnormal_float_key_keeps_one_canonical_text) {
 }
 
 TEST(serialize_scalars, float_text_is_the_shortest_that_round_trips) {
-  /* 1/3 needs 16 significant digits and not 17. A rule that jumps from 15
-   * digits straight to 17 would write "0.33333333333333331". */
   REQUIRE_TRUE(_float_text_round_trips(1.0 / 3.0, "0.3333333333333333"));
   REQUIRE_TRUE(_float_text_round_trips(0.1 + 0.2, "0.30000000000000004"));
   REQUIRE_TRUE(_float_text_round_trips(0.1, "0.1"));
 
-  /* A float key uses the same digits, with no ".0". */
   char *err = NULL;
   cyaml d = cyaml_parse("0.333333333333333314829616256247: a\n1e20: b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12753,7 +10412,6 @@ TEST(serialize_scalars, float_text_is_the_shortest_that_round_trips) {
   REQUIRE_TRUE(big);
   REQUIRE_TRUE(out_ok);
 
-  /* A sweep where every text parses back to the double it came from. */
   static const double samples[] = {1e-310,
                                    123456789012345678.0,
                                    9.5e15,
@@ -12780,9 +10438,6 @@ TEST(serialize_scalars, float_text_is_the_shortest_that_round_trips) {
 }
 
 TEST(errors, raw_del_byte_rejected_in_double_quoted_scalar) {
-  /* Unescaped scalar content excludes DEL (0x7F) in every style and treats
-   * it just like a C0 control byte, which a measurement against PyYAML
-   * confirms. See is_disallowed_control_byte's doc comment. */
   char src[] = "a: \"x\x7Fy\"\n";
   char *err = NULL;
   cyaml n = cyaml_parse_n(src, sizeof(src) - 1, &err);
@@ -12807,10 +10462,6 @@ TEST(errors, raw_del_byte_rejected_in_literal_block_scalar) {
 }
 
 TEST(errors, escaped_del_byte_still_accepted_in_double_quoted_scalar) {
-  /* The same exception as
-   * escaped_control_byte_still_accepted_in_double_quoted_scalar above, the
-   * rejection only covers a RAW byte and the parser accepts an explicit
-   * "\x7f" escape. */
   char *err = NULL;
   cyaml n = cyaml_parse("a: \"x\\x7fy\"\n", &err);
   REQUIRE_EQ((void *)err, NULL);
@@ -12822,12 +10473,6 @@ TEST(errors, escaped_del_byte_still_accepted_in_double_quoted_scalar) {
 }
 
 TEST(serialize_scalars, del_byte_in_string_is_quoted_and_escaped) {
-  /* The same round-trip guarantee as
-   * control_byte_in_string_is_quoted_and_escaped above, here for DEL (0x7F).
-   * needs_quoting() and yb_append_yaml_dquoted() must agree on this byte,
-   * otherwise a string holding it comes out in one of two wrong ways: the
-   * serializer writes it as invalid raw plain scalar content, or it quotes
-   * the value and escapes nothing. */
   cyaml n = cyaml_create_string("x\x7Fy");
   REQUIRE_NE((void *)n, NULL);
   char *s = cyaml_serialize(n);
@@ -12846,24 +10491,15 @@ TEST(serialize_scalars, del_byte_in_string_is_quoted_and_escaped) {
   cyaml_destroy(back2);
 }
 
-/* ========================================================================== */
-/*                         THREAD-LOCAL NODE POOL                             */
-/* ========================================================================== */
+// Thread-local node pool
 
-/* This mirrors _CYAML_POOL_CAP in cyaml.c. No public header holds it since
- * it's an internal tuning constant, so this file states it again here
- * instead of sharing it, as other white-box tests of the codebase do when
- * they pin a literal internal constant. */
+// The pool cap, the same value as CYAML_POOL_CAP in cyaml.c, which no header
+// exports. The pool tests need it to check that the pool stops at the cap.
 #define CYAML_TEST_POOL_CAP 512
 
+// Destroying more than the cap of nodes in one go leaves the pool holding
+// exactly the cap, whatever earlier tests left in it.
 TEST(node_pool, cap_eviction_keeps_pool_bounded) {
-  /* When this test runs this thread's pool already holds something, a count
-   * between 0 and CYAML_TEST_POOL_CAP left by earlier tests of the same
-   * binary. We destroy strictly more than CYAML_TEST_POOL_CAP default
-   * allocator nodes in one go, and after that the pool holds EXACTLY
-   * the cap. The free list takes every node_free() call below the cap and
-   * evicts every call past it by freeing that node directly, which is what
-   * keeps the pool from growing without bound. */
   cyaml list = cyaml_create_list();
   REQUIRE_NE((void *)list, NULL);
   size_t n = CYAML_TEST_POOL_CAP + 100;
@@ -12874,22 +10510,19 @@ TEST(node_pool, cap_eviction_keeps_pool_bounded) {
   REQUIRE_EQ(cyaml_debug_pool_size(), (size_t)CYAML_TEST_POOL_CAP);
 }
 
+// The pool sizes a worker thread saw when it started and when it finished.
 typedef struct {
   size_t start_pool_size;
   size_t end_pool_size;
 } pool_populate_result_t;
 
+// The worker of the fresh-thread pool test: records its pool size, allocates
+// 50 nodes and only then frees them all, and records the size again in the
+// pool_populate_result_t at arg. All 50 are alive at once, so each is a fresh
+// allocation and the pool grows by one entry per node.
 static void *pool_populate_thread(void *arg) {
   pool_populate_result_t *r = (pool_populate_result_t *)arg;
   r->start_pool_size = cyaml_debug_pool_size();
-  /* Allocate all 50 first and THEN free all 50. An allocate followed
-   * directly by a free would recycle the same single node fifty times and the
-   * pool would hold 1 and not 50, because node_alloc() always prefers a
-   * node the pool already holds. Here all 50 are alive at once, so each of
-   * them is a fresh calloc with nothing in the pool to recycle, and freeing
-   * them afterwards grows the pool by exactly one entry per node.
-   * cap_eviction_keeps_pool_bounded above has the same shape, allocating
-   * and then freeing in bulk. */
   cyaml nodes[50];
   for (int i = 0; i < 50; i++) nodes[i] = cyaml_create_null();
   for (int i = 0; i < 50; i++) cyaml_destroy(nodes[i]);
@@ -12897,29 +10530,20 @@ static void *pool_populate_thread(void *arg) {
   return NULL;
 }
 
+// The pool is per thread, so a new thread starts empty and its frees go to its
+// own pool. The worker exits holding 50 nodes, so memtest also checks that the
+// thread-exit drain frees them.
 TEST(node_pool, fresh_thread_starts_with_an_empty_pool) {
-  /* The node pool is per thread (see the THREAD-LOCAL NODE POOL section of
-   * cyaml.c), so a brand new thread must never see the nodes the main
-   * thread's pool holds when this test runs. Every node_free() the worker
-   * makes below gives the node back to ITS OWN pool and never to this
-   * thread's. The test joins the worker before reading either result field,
-   * as the codebase's rule says to join always, before any REQUIRE_*. The
-   * worker's pool holds 50 nodes when the thread exits, so this test also
-   * drives _pool_drain, the pool drain of the pthread destructor, under
-   * `make memtest`, where a broken drain shows up as a leak of 50
-   * allocations. */
   pool_populate_result_t result = {(size_t)-1, (size_t)-1};
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, pool_populate_thread, &result), 0);
   pthread_join(tid, NULL);
 
   REQUIRE_EQ(result.start_pool_size, (size_t)0);
-  /* Starting from an empty pool, 50 round trips of one allocate and one free
-   * grow it by exactly one node per round trip, since each is a fresh calloc
-   * with nothing left to recycle, and that stays well under the cap. */
   REQUIRE_EQ(result.end_pool_size, (size_t)50);
 }
 
+// The nodes a worker frees, and the pool sizes it saw before and after.
 typedef struct {
   cyaml *nodes;
   size_t count;
@@ -12927,6 +10551,9 @@ typedef struct {
   size_t end_pool_size;
 } cross_thread_free_arg_t;
 
+// The worker of the cross-thread free test: destroys the nodes in the
+// cross_thread_free_arg_t at arg and records its own pool size before and
+// after.
 static void *cross_thread_free_thread(void *arg) {
   cross_thread_free_arg_t *a = (cross_thread_free_arg_t *)arg;
   a->start_pool_size = cyaml_debug_pool_size();
@@ -12935,13 +10562,9 @@ static void *cross_thread_free_thread(void *arg) {
   return NULL;
 }
 
+// node_free() gives a node to the pool of the thread that frees it, never to
+// the thread that allocated it.
 TEST(node_pool, node_freed_on_a_different_thread_joins_that_threads_own_pool) {
-  /* A node belongs to no particular thread. node_free() always gives it to
-   * the thread that calls it NOW and never to the one that allocated it
-   * (see node_free()'s doc comment in cyaml.c). We allocate every node on
-   * the main thread, free them all from a worker thread, and then check that
-   * the freed nodes end up in the WORKER's pool while the main thread's pool
-   * count doesn't move at all. */
   size_t count = 20;
   cyaml *nodes = malloc(count * sizeof(cyaml));
   REQUIRE_NE((void *)nodes, NULL);
@@ -12958,8 +10581,6 @@ TEST(node_pool, node_freed_on_a_different_thread_joins_that_threads_own_pool) {
   if (create_rv == 0) {
     pthread_join(tid, NULL);
   } else {
-    /* The worker never ran to destroy these nodes, so destroy them here,
-     * because the REQUIRE_EQ below can return early and leak them. */
     for (size_t i = 0; i < count; i++) cyaml_destroy(nodes[i]);
   }
   free(nodes);
@@ -12972,13 +10593,15 @@ TEST(node_pool, node_freed_on_a_different_thread_joins_that_threads_own_pool) {
   REQUIRE_EQ(main_pool_after, main_pool_before);
 }
 
-/* A tree that the child below destroys from its own destructor, after the
- * library's destructor has drained the thread's pool and deleted the pool
- * key, plus the pipe that destructor reports on. A destructor with a
- * priority runs after every destructor without one. */
+// The tree that late_destroy_from_destructor() destroys, and the pipe it
+// reports on.
 static cyaml late_destroy_tree;
 static int late_destroy_report_fd = -1;
 
+// Destroys late_destroy_tree after the library's destructor has run (a
+// destructor with a priority runs after every one without), for the test that
+// a late destroy frees its nodes. Writes 'Y' to late_destroy_report_fd when
+// the thread's pool stayed empty, else 'N', and closes the fd.
 __attribute__((destructor(101))) static void late_destroy_from_destructor(
     void) {
   if (!late_destroy_tree || late_destroy_report_fd < 0) return;
@@ -12989,11 +10612,9 @@ __attribute__((destructor(101))) static void late_destroy_from_destructor(
   close(late_destroy_report_fd);
 }
 
-/* A tree that an application destroys from a late destructor gets freed and
- * isn't left in a pool that nothing drains. The child ends with exit(), so
- * the library's destructor runs first and the late destructor reports on a
- * pipe. If we pooled the nodes of a thread whose key isn't armed, they would
- * stay in the pool and the child would report 'N'. */
+// A tree destroyed after the library's destructor drained the pool and deleted
+// its key must be freed, not pooled where nothing drains it. The child ends
+// with exit() so both destructors run.
 TEST(node_pool, a_tree_destroyed_after_the_library_destructor_is_freed) {
   int fds[2];
   REQUIRE_EQ(pipe(fds), 0);
@@ -13013,20 +10634,14 @@ TEST(node_pool, a_tree_destroyed_after_the_library_destructor_is_freed) {
   if (pid > 0) waitpid(pid, &status, 0);
   REQUIRE_GT(pid, 0);
 #if defined(__OpenBSD__)
-  /* On OpenBSD a clang-built program that links libpthread runs none of its
-   * own destructors, so there's nothing to report. */
   if (got == 0) return;
 #endif
   REQUIRE_EQ(got, (ssize_t)1);
   REQUIRE_EQ(verdict, 'Y');
 }
 
-/* ========================================================================== */
-/*                         cyaml_type_str */
-/* ========================================================================== */
+// cyaml_type_str
 
-/* The same contract as cjson_type_str. The spelling reaches users through
- * diagnostics, and every other test here is blind to a mismapped arm. */
 TEST(cyaml_type_str, every_node_type_maps_to_its_own_spelling) {
   cyaml nodes[7];
   nodes[0] = cyaml_create_null();
@@ -13051,7 +10666,7 @@ TEST(cyaml_type_str, every_node_type_maps_to_its_own_spelling) {
   }
 
   for (size_t i = 0; i < 7; i++)
-    if (nodes[i]) __cyaml_destroy(nodes[i]);
+    if (nodes[i]) cyaml__destroy(nodes[i]);
 
   REQUIRE_TRUE(all_created);
   REQUIRE_TRUE(all_named);
@@ -13061,24 +10676,9 @@ TEST(cyaml_type_str, a_null_handle_reports_the_null_type) {
   REQUIRE_STREQ(cyaml_type_str(NULL), "CYAML_NULL");
 }
 
-/* ========================================================================== */
-/*                         PARSE MEMORY BUDGET                                */
-/* ========================================================================== */
+// Parse memory budget
 
 TEST(errors, alias_expansion_bounded_in_bytes_not_only_in_node_count) {
-  /* The node allocation budget counts nodes, and a node isn't a fixed amount
-   * of memory: a scalar owns its text and every alias reference deep-copies
-   * that text. Take an anchored scalar that several hundred aliases
-   * reference. The live DOM grows to hundreds of times the input while the
-   * node count stays in the hundreds, far below the node limit. The parse's
-   * byte budget is what rejects such a document once the copies pass 512
-   * bytes per input byte, and it names its own limit instead of giving a
-   * generic "an allocation failed" report.
-   *
-   * The test lowers the byte budget's fixed floor to 1 MiB so the scaled
-   * limit of this 16 KiB document (about 8.4 MB) decides, and 600 copies of
-   * the scalar (about 9.8 MB) pass it. Remove the byte budget and the
-   * document parses fine, so the test fails. */
   size_t saved = cyaml_test_parse_byte_floor;
   cyaml_test_parse_byte_floor = (size_t)1024 * 1024;
   const size_t scalar_len = 16u * 1024u;
@@ -13109,9 +10709,6 @@ TEST(errors, alias_expansion_bounded_in_bytes_not_only_in_node_count) {
 }
 
 TEST(anchors, large_anchored_scalar_aliased_a_few_times_still_parses) {
-  /* The counterpart of the byte budget guard above. A big scalar that a few
-   * aliases reuse is ordinary, legitimate document content well inside the
-   * budget, and the parser must not reject it. */
   const size_t scalar_len = 1024u * 1024u;
   const int refs = 16;
   size_t cap = scalar_len + (size_t)refs * 4u + 64u;
@@ -13141,20 +10738,10 @@ TEST(anchors, large_anchored_scalar_aliased_a_few_times_still_parses) {
   REQUIRE_EQ(len, (size_t)refs);
 }
 
-/* ========================================================================== */
-/*              EXPLICIT KEY: ':' GLUED TO A FOLLOWING KEY                    */
-/* ========================================================================== */
+// Explicit key: ':' glued to a following key
 
 TEST(explicit_block_mapping,
      colon_glued_to_the_next_key_is_not_a_value_indicator) {
-  /* When a non-space character follows a ':', ns-plain-first(c) allows that
-   * ':' as a plain scalar's first character, so the key ":adapter" at the
-   * mapping's indent is an ordinary entry and not the explicit key's value
-   * indicator. The key keeps its null value and the ":adapter" entry stays
-   * an entry of its own.
-   *
-   * Without the next-character check the ":adapter" entry disappears
-   * completely and the parser gives "a" a submap it made up. */
   const char *yaml =
       "? a\n"
       ":adapter: pg\n"
@@ -13184,8 +10771,6 @@ TEST(explicit_block_mapping,
 }
 
 TEST(explicit_block_mapping, colon_glued_to_the_next_key_nested_in_a_mapping) {
-  /* The same shape one level in, going through parse_block_dictionary's loop
-   * instead of the document root. */
   const char *yaml =
       "outer:\n"
       "  ? a\n"
@@ -13214,10 +10799,6 @@ TEST(explicit_block_mapping, colon_glued_to_the_next_key_nested_in_a_mapping) {
 }
 
 TEST(explicit_block_mapping, colon_glued_to_the_next_key_after_an_empty_key) {
-  /* An explicit key with no content of its own, followed by a glued ':'
-   * entry. The empty key's canonical form is the string "null", because this
-   * DOM's keys are plain strings, and the ":s" entry stays an entry of
-   * its own and not that key's value. */
   const char *yaml =
       "?\n"
       ":s: 1\n";
@@ -13243,9 +10824,6 @@ TEST(explicit_block_mapping, colon_glued_to_the_next_key_after_an_empty_key) {
 
 TEST(explicit_block_mapping,
      bare_colon_on_its_own_line_is_still_the_value_indicator) {
-  /* The legitimate spelling the check above must leave alone. A ':' at the
-   * mapping's indent with nothing after it on the line really is the
-   * explicit key's value indicator and introduces an empty value. */
   const char *yaml =
       "? a\n"
       ":\n";
@@ -13265,27 +10843,13 @@ TEST(explicit_block_mapping,
   REQUIRE_TRUE(a_is_null);
 }
 
-/* ========================================================================== */
-/*              TAGS NEEDING AN ESCAPE IN VERBATIM OUTPUT                     */
-/* ========================================================================== */
+// Tags that need an escape in verbatim output
 
 TEST(serialize_tags, tag_bytes_that_end_the_verbatim_token_round_trip) {
-  /* A tag may legitimately hold a '>', a line break or a '%'. The first two
-   * end a verbatim "!<...>" token and the third introduces the escape the
-   * parser decodes, so the serializer writes all three as a percent escape,
-   * and the document it writes reparses to the same tag with its value
-   * whole.
-   *
-   * Write the tag's bytes without escaping and the first and last documents
-   * below fail to reparse at all, while the middle two reparse to a truncated
-   * tag whose value is corrupt or lost entirely. */
   const char *docs[] = {
-      "key: !a%3Eb value\n",       /* '>' inside the tag */
-      "key: !a%3E%20b value\n",    /* '>' then a space */
-      "key: !a%3E%20%23b value\n", /* '>' then " #", which would start a comment
-                                    */
-      "key: !a%0Ab value\n",       /* a line feed inside the tag */
-      "key: !a%25b value\n",       /* a literal '%' inside the tag */
+      "key: !a%3Eb value\n",       "key: !a%3E%20b value\n",
+      "key: !a%3E%20%23b value\n", "key: !a%0Ab value\n",
+      "key: !a%25b value\n",
   };
   const char *expected_tags[] = {"!a>b", "!a> b", "!a> #b", "!a\nb", "!a%b"};
 
@@ -13339,10 +10903,6 @@ TEST(serialize_tags, tag_bytes_that_end_the_verbatim_token_round_trip) {
 
 TEST(serialize_tags,
      tag_set_through_the_api_round_trips_whatever_bytes_it_holds) {
-  /* cyaml_node_set_tag() accepts any string, so a tag that needs an escape
-   * can be reached without any parsing at all. A collection's tag takes the
-   * other emission path (its own line, ahead of the entries), so we exercise
-   * both here. */
   const char *tags[] = {"urn:a> b", "urn:a%b", "urn:a\nb"};
   for (size_t i = 0; i < sizeof(tags) / sizeof(tags[0]); i++) {
     cyaml doc = cyaml_create_dictionary();
@@ -13384,21 +10944,11 @@ TEST(serialize_tags,
   }
 }
 
-/* ========================================================================== */
-/*                          EMPTY CUSTOM TAG REJECTION                        */
-/* ========================================================================== */
+// Empty custom tag rejection
 
-/*
- * An empty tag serializes as the verbatim form "!<>", which cyaml_parse()
- * refuses as an empty verbatim tag, so accepting an empty tag would let the
- * library write a document it can't read back. That's why
- * cyaml_node_set_tag() rejects it and leaves whatever tag the node already
- * carries in place; NULL is how you clear a tag.
- *
- * Remove cyaml_node_set_tag()'s empty-string guard and the first assertion
- * reports ccol_success, after which serializing and reparsing the result fails
- * with "empty verbatim tag".
- */
+// An empty tag serializes as "!<>", which the parser refuses, so
+// cyaml_node_set_tag() refuses it and keeps the node's tag. NULL clears a
+// tag.
 TEST(cyaml_tags,
      an_empty_custom_tag_is_rejected_and_leaves_the_node_untouched) {
   cyaml scalar = cyaml_create_string("hello");
@@ -13407,63 +10957,37 @@ TEST(cyaml_tags,
   REQUIRE_EQ(cyaml_node_set_tag(scalar, "!keepme"), ccol_success);
   REQUIRE_STREQ(cyaml_node_tag(scalar), "!keepme");
 
-  /* Rejected, and the tag that was there survives the rejection. */
   REQUIRE_EQ(cyaml_node_set_tag(scalar, ""), ccol_invalid_args);
   REQUIRE_STREQ(cyaml_node_tag(scalar), "!keepme");
 
-  /* NULL clears the tag, which is the documented way to remove one. */
   REQUIRE_EQ(cyaml_node_set_tag(scalar, NULL), ccol_success);
   REQUIRE_EQ((void *)cyaml_node_tag(scalar), NULL);
 
   cyaml_destroy(scalar);
 }
 
-/* ========================================================================== */
-/*        OWNERSHIP: ONE RETURN CODE, ONE RULE ABOUT THE CHILD                */
-/* ========================================================================== */
+// Ownership: one return code, one rule about the child
 
-/*
- * cyaml_list_push()/cyaml_dictionary_set() answer ccol_invalid_args for
- * every argument rejection, and every one of them leaves the child exactly
- * as it was, owned by the caller. So a caller acting on the return code
- * alone destroys the child on that code and never on any other code, which
- * is the only way one code can be acted on at all.
- *
- * The node pool's free-list length is what makes this observable without
- * reading freed memory. A node the default allocator creates comes off that
- * list and goes back onto it when something destroys it, so a rejection
- * that wrongly destroyed the child shows up as one extra entry before the
- * caller's cyaml_destroy() ever runs.
- *
- * Make any of these rejections destroy the child, and the "unchanged after
- * the rejection" assertion reports one more pooled node than the call
- * started with.
- */
+// Every argument rejection returns ccol_invalid_args and leaves the child with
+// the caller. The pool's free-list length shows a wrongly destroyed child as
+// one extra pooled node, without reading freed memory.
 TEST(ownership, every_rejected_list_push_leaves_the_child_with_the_caller) {
   cyaml wrong_kind = cyaml_create_dictionary();
   REQUIRE_NE((void *)wrong_kind, NULL);
 
-  /* A NULL container. Each of these destroys the child only once the pooled
-   * count says the rejection really left it alone, so a build that destroys
-   * it instead reports a failed assertion rather than taking the whole
-   * binary down with a double free. */
   cyaml child = cyaml_create_int(5);
   size_t pooled = cyaml_debug_pool_size();
-  ccol_retval_t r_null = cyaml_list_push(NULL, child);
+  ccol_retval r_null = cyaml_list_push(NULL, child);
   size_t pooled_after_null = cyaml_debug_pool_size();
   if (pooled_after_null == pooled) cyaml_destroy(child);
 
-  /* A container that is not a list. */
   child = cyaml_create_int(6);
   size_t pooled2 = cyaml_debug_pool_size();
-  ccol_retval_t r_kind = cyaml_list_push(wrong_kind, child);
+  ccol_retval r_kind = cyaml_list_push(wrong_kind, child);
   size_t pooled_after_kind = cyaml_debug_pool_size();
   if (pooled_after_kind == pooled2) cyaml_destroy(child);
 
-  /* Here one handle is both the container and the child, and it isn't a
-   * list, so both the self-attach rejection and the container-kind
-   * rejection apply. */
-  ccol_retval_t r_self = cyaml_list_push(wrong_kind, wrong_kind);
+  ccol_retval r_self = cyaml_list_push(wrong_kind, wrong_kind);
   bool wrong_kind_alive = (cyaml_dictionary_size(wrong_kind) == 0);
   cyaml_destroy(wrong_kind);
 
@@ -13482,32 +11006,25 @@ TEST(ownership,
   REQUIRE_NE((void *)wrong_kind, NULL);
   REQUIRE_NE((void *)map, NULL);
 
-  /* Each of these destroys the child only once the pooled count says the
-   * rejection really left it alone, so a build that destroys it instead
-   * reports a failed assertion rather than taking the whole binary down
-   * with a double free. */
   cyaml child = cyaml_create_int(5);
   size_t pooled_null = cyaml_debug_pool_size();
-  ccol_retval_t r_null = cyaml_dictionary_set(NULL, "k", child);
+  ccol_retval r_null = cyaml_dictionary_set(NULL, "k", child);
   size_t pooled_after_null = cyaml_debug_pool_size();
   if (pooled_after_null == pooled_null) cyaml_destroy(child);
 
   child = cyaml_create_int(6);
   size_t pooled_key = cyaml_debug_pool_size();
-  ccol_retval_t r_key = cyaml_dictionary_set(map, NULL, child);
+  ccol_retval r_key = cyaml_dictionary_set(map, NULL, child);
   size_t pooled_after_key = cyaml_debug_pool_size();
   if (pooled_after_key == pooled_key) cyaml_destroy(child);
 
   child = cyaml_create_int(7);
   size_t pooled_kind = cyaml_debug_pool_size();
-  ccol_retval_t r_kind = cyaml_dictionary_set(wrong_kind, "k", child);
+  ccol_retval r_kind = cyaml_dictionary_set(wrong_kind, "k", child);
   size_t pooled_after_kind = cyaml_debug_pool_size();
   if (pooled_after_kind == pooled_kind) cyaml_destroy(child);
 
-  /* Here one handle is both the container and the child, and it isn't a
-   * dictionary, so both the self-attach rejection and the container-kind
-   * rejection apply. */
-  ccol_retval_t r_self = cyaml_dictionary_set(wrong_kind, "k", wrong_kind);
+  ccol_retval r_self = cyaml_dictionary_set(wrong_kind, "k", wrong_kind);
   bool wrong_kind_alive = (cyaml_list_len(wrong_kind) == 0);
 
   cyaml_destroy(wrong_kind);
@@ -13523,19 +11040,9 @@ TEST(ownership,
   REQUIRE_TRUE(wrong_kind_alive);
 }
 
-/*
- * A caller often doesn't know whether a lookup found a container, and then
- * writes this shape: push, and destroy the child when the push says no. A
- * rejection that also destroyed the child would put that one node onto the
- * pool's free list twice, so its "next" pointer would point at itself and
- * the next two allocations would hand out the same address twice.
- *
- * Make the NULL-container rejection destroy the child and the pooled count
- * grows across the rejection, which the assertion below checks. The destroy
- * depends on that count, so the mutated build reports a failure instead of
- * walking a free list that points at itself, which would neither fail nor
- * return.
- */
+// A caller that destroys the child when the push says no must not free it
+// twice. A rejection that also destroyed the child would put one node on the
+// free list twice, and two later allocations would get the same address.
 TEST(ownership, a_rejected_push_never_recycles_one_node_twice) {
   cyaml doc = cyaml_parse("a: 1\n", NULL);
   REQUIRE_NE((void *)doc, NULL);
@@ -13544,11 +11051,10 @@ TEST(ownership, a_rejected_push_never_recycles_one_node_twice) {
 
   cyaml child = cyaml_create_int(5);
   size_t pooled = cyaml_debug_pool_size();
-  ccol_retval_t r = cyaml_list_push(absent, child);
+  ccol_retval r = cyaml_list_push(absent, child);
   size_t pooled_after = cyaml_debug_pool_size();
   if (r != ccol_success && pooled_after == pooled) cyaml_destroy(child);
 
-  /* The pool still hands out one node per request. */
   cyaml first = cyaml_create_int(1);
   cyaml second = cyaml_create_int(2);
   bool distinct = ((void *)first != (void *)second);
@@ -13561,35 +11067,23 @@ TEST(ownership, a_rejected_push_never_recycles_one_node_twice) {
   REQUIRE_TRUE(distinct);
 }
 
-/* ========================================================================== */
-/*        _cyaml_set_typed: raw_size DESCRIBES THE OBJECT raw NAMES           */
-/* ========================================================================== */
+// cyaml__set_typed: raw_size describes the object raw names
 
-/*
- * _cyaml_set_typed() reads *raw as a pointer to character for CYAML_STRING,
- * as an integer for CYAML_INTEGER and as a floating value for CYAML_FLOAT,
- * so it checks raw_size against that width before reading anything.
- * Without the check a caller could describe a narrower object, and the
- * function would read sizeof(const char *) bytes out of it and pass
- * whatever follows on as a string.
- *
- * Remove the raw_size check for CYAML_STRING and the first assertion reports
- * something other than ccol_invalid_args, while AddressSanitizer reports a
- * stack-buffer-overflow read at the same point.
- */
+// cyaml__set_typed() checks raw_size against the width it is about to read.
+// Without the check a narrower object would be read as a pointer, which
+// AddressSanitizer reports as a stack-buffer-overflow.
 TEST(cyaml_set_typed, a_string_write_checks_the_width_of_the_object_raw_names) {
   cyaml doc = cyaml_parse("k: 1\n", NULL);
   REQUIRE_NE((void *)doc, NULL);
 
   char too_narrow = 'q';
-  ccol_retval_t r_narrow = _cyaml_set_typed(doc, "k", CYAML_STRING, &too_narrow,
-                                            sizeof(too_narrow), false);
-  /* The leaf is left exactly as it was. */
+  ccol_retval r_narrow = cyaml__set_typed(doc, "k", CYAML_STRING, &too_narrow,
+                                          sizeof(too_narrow), false);
   long long still_int = cyaml_int_val(cyaml_get(doc, "k"));
 
   const char *proper = "hello";
-  ccol_retval_t r_ok =
-      _cyaml_set_typed(doc, "k", CYAML_STRING, &proper, sizeof(proper), false);
+  ccol_retval r_ok =
+      cyaml__set_typed(doc, "k", CYAML_STRING, &proper, sizeof(proper), false);
   const char *written = cyaml_str_val(cyaml_get(doc, "k"));
   bool written_ok = (written && strcmp(written, "hello") == 0);
 
@@ -13601,35 +11095,35 @@ TEST(cyaml_set_typed, a_string_write_checks_the_width_of_the_object_raw_names) {
   REQUIRE_TRUE(written_ok);
 }
 
-/* A bool payload must be exactly sizeof(bool) wide, and only CYAML_NULL
- * may come without any payload. Each refusal leaves the leaf untouched,
- * both for a key that exists and for one that doesn't. */
+// A bool payload must be exactly sizeof(bool) wide, and only CYAML_NULL may
+// come without a payload. Each refusal leaves the leaf untouched, for an
+// existing key and for a new one.
 TEST(cyaml_set_typed, a_bool_write_checks_its_width_and_raw_must_be_present) {
   cyaml doc = cyaml_parse("k: 1\n", NULL);
   REQUIRE_NE((void *)doc, NULL);
 
   int not_a_bool = 0x0100;
-  ccol_retval_t r_wide = _cyaml_set_typed(doc, "k", CYAML_BOOL, &not_a_bool,
-                                          sizeof(not_a_bool), false);
-  ccol_retval_t r_new = _cyaml_set_typed(doc, "n", CYAML_BOOL, &not_a_bool,
-                                         sizeof(not_a_bool), false);
-  ccol_retval_t r_null_bool =
-      _cyaml_set_typed(doc, "k", CYAML_BOOL, NULL, sizeof(bool), false);
-  ccol_retval_t r_null_int =
-      _cyaml_set_typed(doc, "k", CYAML_INTEGER, NULL, sizeof(int), true);
-  ccol_retval_t r_null_float =
-      _cyaml_set_typed(doc, "k", CYAML_FLOAT, NULL, sizeof(double), false);
-  ccol_retval_t r_null_str =
-      _cyaml_set_typed(doc, "k", CYAML_STRING, NULL, sizeof(char *), false);
+  ccol_retval r_wide = cyaml__set_typed(doc, "k", CYAML_BOOL, &not_a_bool,
+                                        sizeof(not_a_bool), false);
+  ccol_retval r_new = cyaml__set_typed(doc, "n", CYAML_BOOL, &not_a_bool,
+                                       sizeof(not_a_bool), false);
+  ccol_retval r_null_bool =
+      cyaml__set_typed(doc, "k", CYAML_BOOL, NULL, sizeof(bool), false);
+  ccol_retval r_null_int =
+      cyaml__set_typed(doc, "k", CYAML_INTEGER, NULL, sizeof(int), true);
+  ccol_retval r_null_float =
+      cyaml__set_typed(doc, "k", CYAML_FLOAT, NULL, sizeof(double), false);
+  ccol_retval r_null_str =
+      cyaml__set_typed(doc, "k", CYAML_STRING, NULL, sizeof(char *), false);
   cyaml k = cyaml_get(doc, "k");
   bool untouched = k && cyaml_type(k) == CYAML_INTEGER && cyaml_int_val(k) == 1;
   bool no_new_key = cyaml_get(doc, "n") == NULL;
 
   bool b = true;
-  ccol_retval_t r_ok =
-      _cyaml_set_typed(doc, "k", CYAML_BOOL, &b, sizeof(b), false);
-  ccol_retval_t r_null_ok =
-      _cyaml_set_typed(doc, "z", CYAML_NULL, NULL, 0, false);
+  ccol_retval r_ok =
+      cyaml__set_typed(doc, "k", CYAML_BOOL, &b, sizeof(b), false);
+  ccol_retval r_null_ok =
+      cyaml__set_typed(doc, "z", CYAML_NULL, NULL, 0, false);
   k = cyaml_get(doc, "k");
   bool bool_ok = k && cyaml_type(k) == CYAML_BOOL && cyaml_bool_val(k);
   bool null_ok = cyaml_type(cyaml_get(doc, "z")) == CYAML_NULL &&
@@ -13651,21 +11145,11 @@ TEST(cyaml_set_typed, a_bool_write_checks_its_width_and_raw_must_be_present) {
   REQUIRE_TRUE(null_ok);
 }
 
-/* ========================================================================== */
-/*        A SCALAR THAT STARTS WITH A BYTE ORDER MARK                         */
-/* ========================================================================== */
+// A scalar that starts with a byte order mark
 
-/*
- * A UTF-8 U+FEFF at offset 0 of a document is a byte order mark and not
- * content, and a parse removes it, so the serializer quotes a scalar whose
- * own first character is U+FEFF. Otherwise a dictionary whose first key
- * starts with one would serialize with the mark at offset 0 and reparse
- * under a shorter key, losing both the original key and its value.
- *
- * Without needs_quoting()'s byte order mark clause the round-tripped
- * dictionary answers NULL for the original key, while the root scalar comes
- * back as "z".
- */
+// A parse drops a U+FEFF at offset 0, so the serializer quotes a scalar that
+// starts with one. Otherwise the first key of a dictionary would come back
+// shorter and lose its value.
 TEST(serialize, a_scalar_beginning_with_a_byte_order_mark_round_trips) {
 #define CYAML_TEST_BOM_KEY \
   "\xEF\xBB\xBF"           \
@@ -13710,24 +11194,20 @@ TEST(serialize, a_scalar_beginning_with_a_byte_order_mark_round_trips) {
 #undef CYAML_TEST_BOM_KEY
 }
 
-/* ========================================================================== */
-/*        DEEP TREES: WALKED WITH A WORKLIST, NOT WITH THE CALL STACK         */
-/* ========================================================================== */
+// Deep trees are walked with a worklist, not the call stack
 
-/* The deepest tree a cyaml_clone() or cyaml_serialize*() walk accepts,
- * counted in nested containers including the root. It's the same number as
- * the parser's limit, because every tree one of them accepts has to be
- * accepted by the others. The number is stated here and not read back from
- * the library's constants, because a test that pins a limit must not move
- * with the knob it tests. */
+// The deepest tree, in nested containers counting the root, that cyaml_clone()
+// and the serializers accept; the same as the parser's limit. The deep-walk
+// tests build trees at and past it. It is a literal so it doesn't move with the
+// constant it tests.
 #define CYAML_TEST_MAX_WALK_LEVELS 500
 
-/* Builds a chain of `levels` nested containers alternating between list and
- * dictionary, so walking the chain drives both kinds of traversal frame at
- * every depth. Gives NULL when any allocation fails and leaves nothing
- * behind. */
+// Builds a chain of levels nested containers through mp, alternating list and
+// dictionary, so the deep-walk tests drive both kinds of traversal frame.
+// Gives NULL and leaves nothing behind when an allocation fails; each failed
+// attach already took ownership of the child, so only root is released.
 static cyaml cyaml_test_build_deep_chain(size_t levels,
-                                         ccol_memmgmt_procs_t *mp) {
+                                         ccol_memmgmt_procs *mp) {
   if (levels == 0) return NULL;
   cyaml root = cyaml_create_list_mp(mp);
   if (!root) return NULL;
@@ -13739,12 +11219,10 @@ static cyaml cyaml_test_build_deep_chain(size_t levels,
       cyaml_destroy(root);
       return NULL;
     }
-    ccol_retval_t r = (cyaml_type(cur) == CYAML_LIST)
-                          ? cyaml_list_push(cur, next)
-                          : cyaml_dictionary_set(cur, "n", next);
+    ccol_retval r = (cyaml_type(cur) == CYAML_LIST)
+                        ? cyaml_list_push(cur, next)
+                        : cyaml_dictionary_set(cur, "n", next);
     if (r != ccol_success) {
-      /* Every failure that can happen here takes ownership of next, so root
-       * is all that's left to release. */
       cyaml_destroy(root);
       return NULL;
     }
@@ -13753,15 +11231,10 @@ static cyaml cyaml_test_build_deep_chain(size_t levels,
   return root;
 }
 
-/* An allocator that injects a fault and also tracks how many blocks are alive
- * right now. The single-fault allocator above reaches every failure path, but
- * the live count is what turns "this failure path leaks" into a failed
- * assertion in this suite; without it only a leak checker over the whole
- * binary would notice. A worklist walk attaches each container it hands out to
- * its parent before walking that container's children, so a failure at any
- * depth leaves the whole partial result reachable from one root. A walk that
- * kept a parentless container in a frame instead would leak one container per
- * open level here. */
+// A single-fault allocator for the deep-walk sweeps. These fail only the call
+// whose index (counted in g_walk_call_idx) is g_walk_fail_at, and keep the
+// number of live blocks in g_walk_live, so a walk that leaks on a failure
+// path fails an assertion.
 static int g_walk_fail_at = -1;
 static int g_walk_call_idx;
 static long g_walk_live;
@@ -13791,11 +11264,12 @@ static void walk_fault_free(void *p) {
   if (p) g_walk_live--;
   free(p);
 }
-static ccol_memmgmt_procs_t g_walk_fault_mp = {.malloc = walk_fault_malloc,
-                                               .calloc = walk_fault_calloc,
-                                               .realloc = walk_fault_realloc,
-                                               .free = walk_fault_free};
+static ccol_memmgmt_procs g_walk_fault_mp = {.malloc = walk_fault_malloc,
+                                             .calloc = walk_fault_calloc,
+                                             .realloc = walk_fault_realloc,
+                                             .free = walk_fault_free};
 
+// The tree a worker walks and whether each walk succeeded.
 typedef struct {
   cyaml tree;
   bool clone_ok;
@@ -13803,6 +11277,8 @@ typedef struct {
   bool flow_ok;
 } cyaml_deep_walk_args_t;
 
+// The worker of the small-stack walk test: clones and serializes a->tree in
+// both styles and records in *a which walks succeeded.
 static void *cyaml_deep_walk_thread(void *arg) {
   cyaml_deep_walk_args_t *a = (cyaml_deep_walk_args_t *)arg;
   cyaml copy = cyaml_clone(a->tree);
@@ -13817,18 +11293,9 @@ static void *cyaml_deep_walk_thread(void *arg) {
   return NULL;
 }
 
-/*
- * cyaml_clone() and both serializers walk their tree with an explicit stack
- * of container frames, so the native call stack they need is a constant
- * that doesn't grow with the nesting depth, and a tree at the depth the caps
- * accept runs fine on a thread with a small stack. That's what makes those
- * caps policy limits rather than a restatement of whatever stack the caller
- * happens to have.
- *
- * A recursive tree walk would fail it: that walk needs about 60 KiB for the
- * clone at this depth and about 84 KiB for either serializer, so the worker
- * thread dies on its 64 KiB stack and reports nothing.
- */
+// The clone and the serializers walk with an explicit stack, so a tree at the
+// cap runs on a 64 KiB thread stack. A recursive walk needs more and dies
+// there.
 TEST(deep_trees, a_tree_at_the_depth_cap_is_walked_on_a_small_thread_stack) {
   cyaml_deep_walk_args_t args = {NULL, false, false, false};
   args.tree = cyaml_test_build_deep_chain(CYAML_TEST_MAX_WALK_LEVELS, NULL);
@@ -13838,9 +11305,6 @@ TEST(deep_trees, a_tree_at_the_depth_cap_is_walked_on_a_small_thread_stack) {
   if (stack_bytes < (size_t)PTHREAD_STACK_MIN)
     stack_bytes = (size_t)PTHREAD_STACK_MIN;
 
-  /* Every outcome is captured into a local and every resource is released
-   * before the first assertion, so a failing assertion that returns early
-   * can't leave the tree or the worker behind. */
   pthread_attr_t attr;
   int attr_ok = pthread_attr_init(&attr);
   int size_ok =
@@ -13861,11 +11325,6 @@ TEST(deep_trees, a_tree_at_the_depth_cap_is_walked_on_a_small_thread_stack) {
   REQUIRE_TRUE(args.flow_ok);
 }
 
-/*
- * The depth caps apply at exactly the nesting they name. A walk accepts a
- * tree of CYAML_TEST_MAX_WALK_LEVELS nested containers and refuses one
- * container more by returning NULL.
- */
 TEST(deep_trees, the_walk_depth_caps_are_enforced_at_their_own_boundary) {
   cyaml at_cap = cyaml_test_build_deep_chain(CYAML_TEST_MAX_WALK_LEVELS, NULL);
   cyaml past_cap =
@@ -13896,15 +11355,8 @@ TEST(deep_trees, the_walk_depth_caps_are_enforced_at_their_own_boundary) {
   REQUIRE_TRUE(past_refused);
 }
 
-/*
- * A deep clone and a deep serialization each make many allocations, and
- * this test fails each of them in turn, the growth of the traversal stack
- * included. Each failure should come back as NULL with everything the walk
- * took already released. The allocator counts live blocks, so a walk that
- * abandoned a partly built subtree would leave the count above what the
- * source tree itself holds. The chain is deeper than the traversal stack's
- * inline capacity, so the sweep also covers the growth allocations.
- */
+// Fails every allocation of a deep clone and serialization in turn, the stack
+// growth included, and requires NULL with nothing leaked.
 TEST(deep_trees, a_deep_walk_reports_every_allocation_failure_cleanly) {
   g_walk_fail_at = -1;
   g_walk_call_idx = 0;
@@ -13956,8 +11408,6 @@ TEST(deep_trees, a_deep_walk_reports_every_allocation_failure_cleanly) {
   g_walk_fail_at = -1;
   g_walk_call_idx = 0;
 
-  /* Without an injected failure everything succeeds again, so the sweep
-   * left no state behind. */
   cyaml copy = cyaml_clone(tree);
   char *block = cyaml_serialize(tree);
   bool recovered = (copy != NULL && block != NULL);
@@ -13971,23 +11421,19 @@ TEST(deep_trees, a_deep_walk_reports_every_allocation_failure_cleanly) {
   REQUIRE_GT(block_failures, 0L);
   REQUIRE_GT(flow_failures, 0L);
   REQUIRE_TRUE(recovered);
-  /* No failure path abandoned a block, and the source tree's own teardown
-   * released everything it held. */
   REQUIRE_EQ(max_excess, 0L);
   REQUIRE_EQ(final_live, 0L);
 }
 
-/* ========================================================================== */
-/*        PARSING: DRIVEN BY A WORKLIST, NOT BY THE CALL STACK                */
-/* ========================================================================== */
+// Parsing is driven by a worklist, not the call stack
 
-/* The deepest nesting a document may have before cyaml_parse*() refuses
- * it. The number is stated here and not read back from the library's
- * constant, because a test that pins a limit must not move with the knob it
- * tests. */
+// The deepest nesting a document may have before cyaml_parse*() refuses it,
+// for the deep-parse tests that build documents at and past it. It is a
+// literal so it doesn't move with the library constant.
 #define CYAML_TEST_MAX_PARSE_LEVELS 500
 
-/* Builds a document of `levels` nested flow sequences, "[[[ ... ]]]". */
+// Builds levels nested flow sequences, "[[[ ... ]]]", for the deep-parse
+// tests. The caller frees it.
 static char *cyaml_test_deep_flow_doc(size_t levels) {
   char *s = (char *)malloc(levels * 2 + 2);
   if (!s) return NULL;
@@ -13998,8 +11444,8 @@ static char *cyaml_test_deep_flow_doc(size_t levels) {
   return s;
 }
 
-/* Builds a document of `levels` nested block mappings, each one column
- * further in: "k:\n k:\n  k:\n ...". */
+// Builds levels nested block mappings, each one column further in, for the
+// deep-parse tests. The caller frees it.
 static char *cyaml_test_deep_block_doc(size_t levels) {
   size_t cap = levels * (levels + 5) + 8;
   char *s = (char *)malloc(cap);
@@ -14015,12 +11461,15 @@ static char *cyaml_test_deep_block_doc(size_t levels) {
   return s;
 }
 
+// The document a worker parses and what the parse did.
 typedef struct {
   const char *doc;
   bool parsed;
   bool saw_depth_error;
 } cyaml_deep_parse_args_t;
 
+// The worker of cyaml_run_parse_on_small_stack(): parses a->doc and records in
+// *a whether it parsed and whether it failed on the nesting depth.
 static void *cyaml_deep_parse_thread(void *arg) {
   cyaml_deep_parse_args_t *a = (cyaml_deep_parse_args_t *)arg;
   char *err = NULL;
@@ -14033,8 +11482,10 @@ static void *cyaml_deep_parse_thread(void *arg) {
   return NULL;
 }
 
-/* Runs one parse on a thread with a 64 KiB stack and reports what that
- * parse did. */
+// Runs one parse of doc on a thread with a 64 KiB stack, for the tests that a
+// deep parse needs only a constant native stack. Stores whether it parsed and
+// whether it failed on the depth in the out-parameters. Returns false when
+// the thread couldn't run.
 static bool cyaml_run_parse_on_small_stack(const char *doc, bool *parsed_out,
                                            bool *depth_error_out) {
   cyaml_deep_parse_args_t args = {doc, false, false};
@@ -14054,20 +11505,9 @@ static bool cyaml_run_parse_on_small_stack(const char *doc, bool *parsed_out,
   return ok;
 }
 
-/*
- * The parse is driven by an explicit stack of frames, so the native stack
- * one parse needs is a constant that doesn't grow with the document's
- * nesting depth, and a document at exactly the depth cyaml_parse*() accepts
- * parses on a thread with a small stack. That's what makes the cap a policy
- * limit rather than a restatement of whatever stack the caller happens to
- * have. A document one level past the cap is refused with the documented
- * error instead of overrunning the stack first.
- *
- * With a recursive parse this fails, since it needs about 204 KiB for the
- * flow document at this depth and about 220 KiB for the block one, so the
- * worker thread dies on its 64 KiB stack and reports nothing, and the
- * nesting depth guard never even runs.
- */
+// The parse is driven by an explicit stack of frames, so a document at the cap
+// parses on a 64 KiB thread stack and one level more is refused with the
+// documented error. A recursive parse would overrun the stack first.
 TEST(deep_documents, a_document_at_the_depth_cap_parses_on_a_small_thread) {
   char *at_cap = cyaml_test_deep_flow_doc(CYAML_TEST_MAX_PARSE_LEVELS);
   char *past_cap = cyaml_test_deep_flow_doc(CYAML_TEST_MAX_PARSE_LEVELS + 1);
@@ -14096,21 +11536,12 @@ TEST(deep_documents, a_document_at_the_depth_cap_parses_on_a_small_thread) {
   REQUIRE_TRUE(at_parsed);
   REQUIRE_TRUE(block_parsed);
   REQUIRE_FALSE(past_parsed);
-  /* One level past the cap the guard refuses it, by name. */
   REQUIRE_TRUE(past_depth_err);
   REQUIRE_FALSE(at_depth_err);
 }
 
-/*
- * A document can open many nested collections and then fail half way,
- * leaving one container under construction per open level with no root
- * that reaches any of them. The parser has to release all of them when it
- * abandons the parse. The allocator counts live blocks, so a frame that
- * abandoned its container would leave the count above zero.
- *
- * Release only the innermost frame's container instead of sweeping the whole
- * stack, and hundreds of blocks stay alive at the end of each of these parses.
- */
+// A parse that fails deep down leaves one open container per level with no
+// root, and the parser must release all of them.
 TEST(deep_documents, an_abandoned_deep_parse_releases_every_open_container) {
   static const char *shapes[] = {"[[[[",
                                  "{{{{",
@@ -14130,7 +11561,6 @@ TEST(deep_documents, an_abandoned_deep_parse_releases_every_open_container) {
   bool any_parsed = false;
   for (size_t i = 0; i < sizeof(shapes) / sizeof(*shapes); i++) {
     for (int depth = 1; depth <= 200; depth += 37) {
-      /* Repeat the shape `depth` times so the abandoned stack is deep. */
       size_t unit = strlen(shapes[i]);
       char *doc = (char *)malloc(unit * (size_t)depth + 2);
       if (!doc) continue;
@@ -14153,17 +11583,11 @@ TEST(deep_documents, an_abandoned_deep_parse_releases_every_open_container) {
   }
   long final_live = g_walk_live;
 
-  /* Every shape here is malformed, so each parse gets abandoned. */
   REQUIRE_FALSE(any_parsed);
   REQUIRE_EQ(max_live, 0L);
   REQUIRE_EQ(final_live, 0L);
 }
 
-/*
- * Every allocation a deep parse makes, the frame stack's own growth included,
- * gets failed in turn, and each failure is expected to be reported with
- * nothing left allocated.
- */
 TEST(deep_documents, a_deep_parse_reports_every_allocation_failure_cleanly) {
   char *doc = cyaml_test_deep_flow_doc(60);
   REQUIRE_NE((void *)doc, NULL);
@@ -14208,20 +11632,9 @@ TEST(deep_documents, a_deep_parse_reports_every_allocation_failure_cleanly) {
   (void)successes;
 }
 
-/*
- * When a block mapping entry starts with a '[', a '{', a '*' or a node
- * property, the parser reads it speculatively as a key. It parses the
- * content in full and, when no ':' follows, rewinds the position and reads
- * the same bytes again as something else. For a flow collection that
- * speculative read is a complete nested parse of its own, which shares this
- * parse's nesting budget and has to leave both the position and that budget
- * exactly as it found them. A test build checks this directly; see
- * try_parse_scalar_dict_key.
- *
- * The pairs below differ only in the ':' that decides the question, so each
- * pins the accepted reading of the same bytes against the reading the
- * parser declines.
- */
+// An entry that starts with '[', '{', '*' or a property is first read as a
+// possible key, then re-read as something else when no ':' follows. Each pair
+// differs only in that ':', so it pins both readings of the same bytes.
 TEST(deep_documents, a_declined_key_speculation_re_reads_the_same_bytes) {
   cyaml as_value = cyaml_parse("&x [1, 2]\n", NULL);
   cyaml as_key = cyaml_parse("&x [1, 2]: v\n", NULL);
@@ -14243,8 +11656,6 @@ TEST(deep_documents, a_declined_key_speculation_re_reads_the_same_bytes) {
   bool alias_key_ok =
       (alias_key && cyaml_dictionary_get(alias_key, "1") != NULL);
 
-  /* A speculation deep enough to need a several-level traversal, which the
-   * parser runs and then throws away. */
   char *deep = cyaml_test_deep_flow_doc(200);
   char *deep_doc = NULL;
   cyaml deep_value = NULL;
@@ -14277,14 +11688,10 @@ TEST(deep_documents, a_declined_key_speculation_re_reads_the_same_bytes) {
   REQUIRE_TRUE(deep_ok);
 }
 
-/* Builds a document of `outer` nested block mappings whose innermost entry
- * is an anchored flow sequence, nested `inner` levels deep, used as a
- * mapping key. The parser reads that sequence speculatively and the ':'
- * after it makes the speculation succeed, so the parser never reads the
- * consumed content again. Without that ':' the same document reaches the
- * same depth a second time through the ordinary value path, which is why
- * the accepted form is the one that tells a shared nesting budget from a
- * separate one. */
+// Builds outer nested block mappings whose innermost key is an anchored flow
+// sequence inner levels deep, for the test that a key speculation shares the
+// nesting budget. The ':' after it makes the speculation succeed, so the
+// content is read only once. The caller frees it.
 static char *cyaml_test_nested_speculation_doc(size_t outer, size_t inner) {
   size_t cap = outer * (outer + 8) + inner * 2 + 64;
   char *s = (char *)malloc(cap);
@@ -14310,25 +11717,9 @@ static char *cyaml_test_nested_speculation_doc(size_t outer, size_t inner) {
   return s;
 }
 
-/*
- * A key speculation runs a complete nested traversal that shares the
- * enclosing parse's nesting budget instead of getting one of its own. The
- * parser accepts or refuses a document on the total depth it reaches and
- * not on the depth of whichever traversal happens to be running, so a
- * speculation `inner` levels deep reached `outer` levels into a document is
- * refused exactly when outer + inner passes the cap.
- *
- * That's what pins the speculation's design. The nested traversal is
- * independent in every other respect: it has its own frame stack, which it
- * drains or sweeps before returning, and it rewinds ctx->pos when the
- * content turns out not to be a key. The shared budget is the one thing
- * that is deliberately not independent.
- *
- * Give the nested traversal a budget of its own and every refused case here
- * parses instead. The form the parser accepts as a key is what tells the two
- * apart, for the reason the comment of cyaml_test_nested_speculation_doc
- * gives.
- */
+// The nested traversal of a key speculation has its own frame stack but
+// shares the parse's nesting budget, so a document is refused exactly when
+// outer + inner passes the cap.
 TEST(deep_documents, a_key_speculation_shares_the_enclosing_nesting_budget) {
   static const struct {
     size_t outer, inner;
@@ -14358,39 +11749,19 @@ TEST(deep_documents, a_key_speculation_shares_the_enclosing_nesting_budget) {
   REQUIRE_TRUE(refusal_named_the_cap);
 }
 
-/* ========================================================================== */
-/*                       GROWABLE BUFFER READ GUARDS                          */
-/* ========================================================================== */
+// Growable buffer read guards
 
-/* A parse and a serialization both build text in a growable buffer that
- * latches one out-of-memory flag instead of reporting on every single
- * append. Several places read back through that buffer's backing store: the
- * three trailing-whitespace trims (one in a folded quoted scalar, one in a
- * plain scalar and one on each continuation line of a multi-line plain
- * scalar), the flush of a deferred newline in the block scalar emitter, and
- * finally the serializer's "does this already end with a newline" test.
- * Each of them decides independently whether the buffer holds anything it can
- * read, so the state a failed append leaves the buffer in makes no
- * difference to any of them.
- *
- * To check that, the test hands each helper a buffer with the flag
- * latched, no backing store and a length nothing rolled back. Drop any one
- * guard and the matching call dereferences a null pointer and takes the
- * process down instead of returning a smaller bitmask. */
+// Every helper that reads back through the growable buffer (the three
+// trailing-white-space trims, the deferred newline of the block scalar
+// emitter, the serializer's final newline test) checks for a backing store
+// itself. Each gets a buffer with the out-of-memory flag set and no store, and
+// must not dereference it.
 TEST(cyaml_growbuf_guards, every_backing_store_read_tests_the_buffer_itself) {
   REQUIRE_EQ(cyaml_debug_growbuf_guard_bits(), 7u);
 }
 
-/*
- * Every frame a traversal opens gives back the nesting level it took, on the
- * path that finishes and on the path it abandons, so a document's budget is
- * spent on its deepest point and not on its total size. So three sibling
- * values each 400 levels deep all parse, while a single level left behind
- * by the first would push the second past the 500-level cap.
- *
- * Drop the release and the parser refuses the second value with "maximum
- * nesting depth (500) exceeded".
- */
+// Every frame gives back its nesting level when it finishes or is abandoned,
+// so three sibling values of 400 levels each all parse.
 TEST(deep_documents, a_finished_frame_releases_the_nesting_level_it_took) {
   const size_t depth = 400;
   const size_t siblings = 3;
@@ -14443,28 +11814,12 @@ TEST(deep_documents, a_finished_frame_releases_the_nesting_level_it_took) {
   REQUIRE_TRUE(every_sibling_is_deep);
 }
 
-/* ========================================================================== */
-/*        RAW CONTROL BYTES IN AN ANCHOR NAME OR A TAG TOKEN                  */
-/* ========================================================================== */
+// Raw control bytes in an anchor name or a tag token
 
-/* The parser refuses a raw control byte anywhere in the stream, and for
- * anchor names and tags there's a reason beyond the grammar: both are
- * stored as a plain char* ending at a NUL byte, with no length field next to
- * it. A raw NUL inside the token would end the stored form early and
- * nothing would be reported.
- *
- * Only cyaml_parse_n can bring such a byte into the parser. cyaml_parse
- * stops at the first NUL, so a NUL-terminated document can never reach
- * these paths. cyaml_parse_n is the documented entry point for a bounded
- * buffer from outside, which is exactly where untrusted bytes come in. */
-
-/* Two anchors that only differ AFTER an embedded NUL must not collapse into
- * one name. Without the rejection both would register as "a", the second
- * would overwrite the first in the anchor map, and the alias would resolve
- * to the node the OTHER anchor named, while the parse reports success.
- *
- * Against a build that doesn't refuse the byte the parse SUCCEEDS and
- * "third" comes out as 222 instead of 111. */
+// Anchor names and tags are stored as NUL-terminated strings, so a raw NUL
+// would cut them short. Two anchors that differ only after a NUL would become
+// one, and the alias would resolve to the wrong node. Only cyaml_parse_n() can
+// bring such a byte in.
 TEST(nul_in_tokens, anchor_name_with_a_raw_nul_is_rejected) {
   static const char doc[] =
       "first: &a\0X  111\n"
@@ -14486,10 +11841,8 @@ TEST(nul_in_tokens, alias_name_with_a_raw_nul_is_rejected) {
   REQUIRE_NE((void *)err, NULL);
 }
 
-/* A verbatim tag whose whole content is one NUL byte would store the EMPTY
- * tag if the parser took the byte, and cyaml_serialize() would then write
- * "!<>", which cyaml_parse() refuses. cyaml_node_set_tag() refuses an empty
- * tag for exactly this invariant, and the parse path keeps it as well. */
+// Accepting the byte would store the empty tag, which serializes as "!<>" and
+// doesn't parse back.
 TEST(nul_in_tokens, verbatim_tag_of_one_raw_nul_is_rejected) {
   static const char doc[] = "!<\0> v";
   char *err = NULL;
@@ -14516,14 +11869,13 @@ TEST(nul_in_tokens, shorthand_tag_suffix_with_a_raw_nul_is_rejected) {
   REQUIRE_NE((void *)err, NULL);
 }
 
-/* Other C0 bytes and DEL go down the same path as the NUL. They can't cut a
- * stored string short, but they're outside c-printable, so the stream check
- * refuses them in a token just like everywhere else. */
+// Other C0 bytes and DEL can't cut a string short, but they are outside
+// c-printable and refused like everywhere else.
 TEST(nul_in_tokens, other_control_bytes_are_rejected_in_anchors_and_tags) {
   const char controls[] = {0x01, 0x08, 0x0b, 0x0c, 0x1f, 0x7f};
   for (size_t i = 0; i < sizeof(controls); i++) {
     char anchor_doc[] = "x: &aXb 1\n";
-    anchor_doc[5] = controls[i]; /* the byte after '&a' */
+    anchor_doc[5] = controls[i];
     char *err = NULL;
     cyaml root = cyaml_parse_n(anchor_doc, sizeof(anchor_doc) - 1, &err);
     REQUIRE_EQ((void *)root, NULL);
@@ -14542,9 +11894,6 @@ TEST(nul_in_tokens, other_control_bytes_are_rejected_in_anchors_and_tags) {
   }
 }
 
-/* HTAB is the one byte below 0x20 that this rule doesn't count as a control
- * byte. It ends an anchor name and a tag token exactly like a space does,
- * and it must keep doing that instead of becoming a rejection. */
 TEST(nul_in_tokens, a_tab_still_terminates_an_anchor_and_a_tag) {
   char *err = NULL;
   cyaml root = cyaml_parse("a: &anc\tvalue\n", &err);
@@ -14557,9 +11906,6 @@ TEST(nul_in_tokens, a_tab_still_terminates_an_anchor_and_a_tag) {
   cyaml_destroy(root);
 }
 
-/* The rejection must not cost any legitimate anchor, alias or tag. This pins
- * the accepting side, so a later tightening that goes too far fails here and
- * not in a user's document. */
 TEST(nul_in_tokens, ordinary_anchors_aliases_and_tags_still_parse) {
   char *err = NULL;
   cyaml root = cyaml_parse(
@@ -14582,9 +11928,6 @@ TEST(nul_in_tokens, ordinary_anchors_aliases_and_tags_still_parse) {
   cyaml_destroy(root);
 }
 
-/* The library must never write a document it can't read back. That's the
- * property cyaml_node_set_tag's empty-tag guard states, applied end to end
- * across the parse and serialize paths. */
 TEST(nul_in_tokens, every_parsed_document_round_trips_through_both_emitters) {
   static const char *const docs[] = {
       "! ~",
@@ -14614,8 +11957,6 @@ TEST(nul_in_tokens, every_parsed_document_round_trips_through_both_emitters) {
     bool flow_ok = (flow_again != NULL);
     if (flow_again) cyaml_destroy(flow_again);
 
-    /* Free everything BEFORE the assertions, since a failing REQUIRE_*
-     * returns from this function immediately and skips every line after it. */
     cyaml_serialize_free(block);
     cyaml_serialize_free(flow);
     cyaml_destroy(root);
@@ -14625,20 +11966,16 @@ TEST(nul_in_tokens, every_parsed_document_round_trips_through_both_emitters) {
   }
 }
 
-/* ========================================================================== */
-/*          cyaml_set: EVERY ACCEPTED C VALUE TYPE, INCLUDING ARRAYS          */
-/* ========================================================================== */
+// cyaml_set: every accepted C value type, arrays included
 
-/* cyaml_set() copies its argument into a local of the decayed, unqualified
- * type. A named char array therefore arrives as a pointer to its first
- * character and a pointer that is const itself arrives as an ordinary
- * pointer, and neither can be mistaken for the bytes of the string. */
-
+// A pointer that is const itself, at file scope. cyaml_set() copies its value
+// into a decayed, unqualified local, so such a pointer and a named char array
+// both arrive as a plain pointer to the string.
 static const char *const _cyaml_set_types_file_scope_name = "prod";
 
 TEST(set_value_types, string_literal) {
   cyaml root = cyaml_create_dictionary();
-  ccol_retval_t r = cyaml_set(root, "k", "champion");
+  ccol_retval r = cyaml_set(root, "k", "champion");
   cyaml leaf = cyaml_get(root, "k");
   bool ok = leaf && cyaml_type(leaf) == CYAML_STRING &&
             strcmp(cyaml_str_val(leaf), "champion") == 0;
@@ -14651,8 +11988,7 @@ TEST(set_value_types, char_array_filled_by_snprintf) {
   cyaml root = cyaml_create_dictionary();
   char buf[32];
   snprintf(buf, sizeof(buf), "host-%d", 7);
-  ccol_retval_t r = cyaml_set(root, "k", buf);
-  /* The node has its own copy, so writing to buf later changes nothing. */
+  ccol_retval r = cyaml_set(root, "k", buf);
   buf[0] = 'X';
   cyaml leaf = cyaml_get(root, "k");
   bool ok = leaf && cyaml_type(leaf) == CYAML_STRING &&
@@ -14665,7 +12001,7 @@ TEST(set_value_types, char_array_filled_by_snprintf) {
 TEST(set_value_types, const_char_array) {
   cyaml root = cyaml_create_dictionary();
   const char cbuf[] = "fixed";
-  ccol_retval_t r = cyaml_set(root, "k", cbuf);
+  ccol_retval r = cyaml_set(root, "k", cbuf);
   cyaml leaf = cyaml_get(root, "k");
   bool ok = leaf && cyaml_type(leaf) == CYAML_STRING &&
             strcmp(cyaml_str_val(leaf), "fixed") == 0;
@@ -14680,10 +12016,10 @@ TEST(set_value_types, every_pointer_qualification) {
   const char *p_const = "a";
   char *const p_top_const = storage;
   const char *const p_both = "b";
-  ccol_retval_t r1 = cyaml_set(root, "c", p_const);
-  ccol_retval_t r2 = cyaml_set(root, "t", p_top_const);
-  ccol_retval_t r3 = cyaml_set(root, "b", p_both);
-  ccol_retval_t r4 = cyaml_set(root, "f", _cyaml_set_types_file_scope_name);
+  ccol_retval r1 = cyaml_set(root, "c", p_const);
+  ccol_retval r2 = cyaml_set(root, "t", p_top_const);
+  ccol_retval r3 = cyaml_set(root, "b", p_both);
+  ccol_retval r4 = cyaml_set(root, "f", _cyaml_set_types_file_scope_name);
   const char *keys[4] = {"c", "t", "b", "f"};
   const char *want[4] = {"a", "mutable", "b", "prod"};
   bool ok = true;
@@ -14703,8 +12039,8 @@ TEST(set_value_types, every_pointer_qualification) {
 TEST(set_value_types, bool_stays_bool) {
   cyaml root = cyaml_create_dictionary();
   const bool cb = true;
-  ccol_retval_t r1 = cyaml_set(root, "a", (bool)false);
-  ccol_retval_t r2 = cyaml_set(root, "b", cb);
+  ccol_retval r1 = cyaml_set(root, "a", (bool)false);
+  ccol_retval r2 = cyaml_set(root, "b", cb);
   cyaml a = cyaml_get(root, "a"), b = cyaml_get(root, "b");
   bool ok = a && b && cyaml_type(a) == CYAML_BOOL &&
             cyaml_type(b) == CYAML_BOOL && !cyaml_bool_val(a) &&
@@ -14722,7 +12058,7 @@ TEST(set_value_types, narrow_integers_keep_their_sign) {
   unsigned char uc = 250;
   short sh = -30000;
   unsigned short ush = 65535;
-  ccol_retval_t r[5];
+  ccol_retval r[5];
   r[0] = cyaml_set(root, "c", c);
   r[1] = cyaml_set(root, "sc", sc);
   r[2] = cyaml_set(root, "uc", uc);
@@ -14751,8 +12087,8 @@ TEST(set_value_types, float_and_double) {
   cyaml root = cyaml_create_dictionary();
   const float f = 0.5f;
   volatile double d = 0.25;
-  ccol_retval_t r1 = cyaml_set(root, "f", f);
-  ccol_retval_t r2 = cyaml_set(root, "d", d);
+  ccol_retval r1 = cyaml_set(root, "f", f);
+  ccol_retval r2 = cyaml_set(root, "d", d);
   cyaml a = cyaml_get(root, "f"), b = cyaml_get(root, "d");
   bool ok = a && b && cyaml_type(a) == CYAML_FLOAT &&
             cyaml_type(b) == CYAML_FLOAT && cyaml_double_val(a) == 0.5 &&
@@ -14766,7 +12102,7 @@ TEST(set_value_types, float_and_double) {
 TEST(set_value_types, null_literal) {
   cyaml root = cyaml_create_dictionary();
   cyaml_set(root, "k", "x");
-  ccol_retval_t r = cyaml_set(root, "k", NULL);
+  ccol_retval r = cyaml_set(root, "k", NULL);
   cyaml leaf = cyaml_get(root, "k");
   bool ok = leaf && cyaml_type(leaf) == CYAML_NULL;
   cyaml_destroy(root);
@@ -14775,12 +12111,10 @@ TEST(set_value_types, null_literal) {
 }
 
 TEST(set_value_types, const_pointer_round_trips_through_serialize) {
-  /* The serialized text gets the string and not the bytes of the pointer
-   * that names it. */
   char *err = NULL;
   cyaml doc = cyaml_parse("name: dev\n", &err);
   REQUIRE_NE((void *)doc, NULL);
-  ccol_retval_t r = cyaml_set(doc, "name", _cyaml_set_types_file_scope_name);
+  ccol_retval r = cyaml_set(doc, "name", _cyaml_set_types_file_scope_name);
   char *out = cyaml_serialize(doc);
   bool ok = out && strcmp(out, "name: prod\n") == 0;
   if (out) cyaml_serialize_free(out);
@@ -14789,13 +12123,11 @@ TEST(set_value_types, const_pointer_round_trips_through_serialize) {
   REQUIRE_TRUE(ok);
 }
 
-/* ========================================================================== */
-/*        SHARED HELPERS: DEEP COMPARISON AND A SERIALIZE ROUND TRIP          */
-/* ========================================================================== */
+// Shared helpers: deep comparison and a serialize round trip
 
-/* The tag a round trip can keep. The serializer leaves out a core-schema tag
- * that matches its node's type, because implicit typing restores the type
- * without help, so only a custom tag takes part in the comparison. */
+// Returns the tag of n that a round trip keeps: a custom tag, or NULL for a
+// core tag, which the serializer leaves out because implicit typing restores
+// it. _rt_deep_equal() compares tags through it.
 static const char *_rt_custom_tag(cyaml n) {
   const char *t = cyaml_node_tag(n);
   if (t && strncmp(t, "tag:yaml.org,2002:", 18) == 0 &&
@@ -14807,6 +12139,9 @@ static const char *_rt_custom_tag(cyaml n) {
   return t;
 }
 
+// Tells whether two trees are equal in types, custom tags, values (NaN equals
+// NaN), list order and dictionary members. The round-trip and walk tests
+// compare trees with it.
 static bool _rt_deep_equal(cyaml a, cyaml b) {
   if (!a || !b) return a == b;
   if (cyaml_type(a) != cyaml_type(b)) return false;
@@ -14837,7 +12172,7 @@ static bool _rt_deep_equal(cyaml a, cyaml b) {
     case CYAML_DICTIONARY: {
       size_t n = cyaml_dictionary_size(a);
       if (n != cyaml_dictionary_size(b)) return false;
-      cyaml_dictionary_iter_t it;
+      cyaml_dictionary_iter it;
       for (bool more = cyaml_dictionary_first(a, &it); more;
            more = cyaml_dictionary_next(&it)) {
         cyaml other = cyaml_dictionary_get(b, it.key);
@@ -14851,9 +12186,9 @@ static bool _rt_deep_equal(cyaml a, cyaml b) {
   }
 }
 
-/* Serializes doc in block style and in flow style, parses each result again,
- * and tells whether both parses succeed and give a tree deep-equal to
- * doc. */
+// Tells whether doc survives a block and a flow serialization, each parsed
+// back into a tree deep-equal to doc; the core-tag tests check every edited
+// tree with it.
 static bool _rt_round_trips(cyaml doc) {
   bool ok = true;
   for (int flow = 0; flow < 2 && ok; flow++) {
@@ -14868,9 +12203,7 @@ static bool _rt_round_trips(cyaml doc) {
   return ok;
 }
 
-/* ========================================================================== */
-/*               FLOAT DICTIONARY KEYS: SHORTEST ROUND-TRIP TEXT              */
-/* ========================================================================== */
+// Float dictionary keys: shortest round-trip text
 
 TEST(float_keys, canonical_text_is_the_shortest_round_trip) {
   char *err = NULL;
@@ -14897,8 +12230,6 @@ TEST(float_keys, canonical_text_is_the_shortest_round_trip) {
 }
 
 TEST(float_keys, negative_zero_and_integral_floats_share_the_integer_key) {
-  /* -0.0 and 0.0 are one number and 1.0 equals 1, so each pair is one key. A
-   * duplicate key isn't an error here, the later entry wins. */
   char *err = NULL;
   cyaml doc = cyaml_parse("-0.0: a\n0.0: b\n1.0: c\n", &err);
   REQUIRE_NE((void *)doc, NULL);
@@ -14959,8 +12290,6 @@ TEST(float_keys, serialize_parse_round_trip_keeps_every_key) {
 }
 
 TEST(float_keys, non_canonical_numeric_text_stays_quoted) {
-  /* A string key that looks like a number but isn't its canonical text has
-   * to stay quoted, or a parse would store it under another key. */
   cyaml doc = cyaml_create_dictionary();
   REQUIRE_NE((void *)doc, NULL);
   static const char *const keys[] = {"3.10", "010",   "-0", "+5",
@@ -14981,19 +12310,22 @@ TEST(float_keys, non_canonical_numeric_text_stays_quoted) {
   REQUIRE_TRUE(rt);
 }
 
-/* ========================================================================== */
-/*          CORE-SCHEMA TAGS STAY CONSISTENT WITH THE TYPE OF A NODE          */
-/* ========================================================================== */
+// Core-schema tags stay consistent with the type of a node
 
+// The core tags and, at the same index, the node type each one names, so the
+// core-tag tests can try every tag on every type.
 static const char *const _ct_core_tags[] = {
     CYAML_TAG_NULL, CYAML_TAG_BOOL, CYAML_TAG_INT, CYAML_TAG_FLOAT,
     CYAML_TAG_STR,  CYAML_TAG_SEQ,  CYAML_TAG_MAP};
-static const cyaml_node_type_t _ct_core_tag_types[] = {
+static const cyaml_node_type _ct_core_tag_types[] = {
     CYAML_NULL,   CYAML_BOOL, CYAML_INTEGER,   CYAML_FLOAT,
     CYAML_STRING, CYAML_LIST, CYAML_DICTIONARY};
+// The number of core tags, the bound of the loops over the two arrays above.
 #define _CT_N 7
 
-static cyaml _ct_make_node(cyaml_node_type_t type) {
+// Builds a small node of the given type, so the core-tag tests can try every
+// tag on every type. NULL when memory runs out.
+static cyaml _ct_make_node(cyaml_node_type type) {
   switch (type) {
     case CYAML_NULL:
       return cyaml_create_null();
@@ -15033,7 +12365,7 @@ TEST(core_tag_consistency, set_tag_accepts_only_the_matching_core_tag) {
         continue;
       }
       cyaml_node_set_tag(node, "!keep");
-      ccol_retval_t r = cyaml_node_set_tag(node, _ct_core_tags[ti]);
+      ccol_retval r = cyaml_node_set_tag(node, _ct_core_tags[ti]);
       bool should_match = ti == ni;
       const char *tag = cyaml_node_tag(node);
       bool tag_ok = should_match ? (r == ccol_success && tag &&
@@ -15066,9 +12398,9 @@ TEST(core_tag_consistency, custom_tags_are_accepted_on_every_type) {
       cyaml_destroy(node);
       continue;
     }
-    ccol_retval_t r1 = cyaml_node_set_tag(node, "!custom");
-    ccol_retval_t r2 = cyaml_node_set_tag(node, "tag:yaml.org,2002:binary");
-    ccol_retval_t r3 = cyaml_node_set_tag(node, "tag:yaml.org,2002:");
+    ccol_retval r1 = cyaml_node_set_tag(node, "!custom");
+    ccol_retval r2 = cyaml_node_set_tag(node, "tag:yaml.org,2002:binary");
+    ccol_retval r3 = cyaml_node_set_tag(node, "tag:yaml.org,2002:");
     cyaml_dictionary_set(doc, "v", node);
     bool rt = _rt_round_trips(doc);
     if (r1 != ccol_success || r2 != ccol_success || r3 != ccol_success || !rt)
@@ -15078,16 +12410,18 @@ TEST(core_tag_consistency, custom_tags_are_accepted_on_every_type) {
   REQUIRE_EQ(wrong, (size_t)0);
 }
 
-/* The source text of one node of each type, with each core tag naming its
- * type and with a custom tag. */
+// Source text of one node of each type, each core tag naming its own type,
+// and the same with a custom tag. The set test edits each of them.
 static const char *const _ct_tagged_sources[] = {
     "v: !!null ~\n",     "v: !!bool true\n",   "v: !!int 8080\n",
     "v: !!float 1.5\n",  "v: !!str x\n",       "v: !!seq [1]\n",
     "v: !!map {a: 1}\n", "v: !custom 8080\n",  "v: !custom x\n",
     "v: !custom [1]\n",  "v: !custom {a: 1}\n"};
 
-/* Apply one cyaml_set() of kind k to the leaf "v". */
-static ccol_retval_t _ct_apply_set(cyaml doc, int k) {
+// Applies the cyaml_set() of kind k (bool, int, float, string, null) to the
+// leaf "v" of doc, so the core-tag test can change each tagged node in every
+// way. Returns what cyaml_set() returns.
+static ccol_retval _ct_apply_set(cyaml doc, int k) {
   switch (k) {
     case 0:
       return cyaml_set(doc, "v", (bool)false);
@@ -15103,7 +12437,9 @@ static ccol_retval_t _ct_apply_set(cyaml doc, int k) {
       return ccol_invalid_args;
   }
 }
-static const cyaml_node_type_t _ct_set_types[] = {
+// The type that each kind of _ct_apply_set() gives the leaf, which the set
+// test compares with the tag that survives.
+static const cyaml_node_type _ct_set_types[] = {
     CYAML_BOOL, CYAML_INTEGER, CYAML_FLOAT, CYAML_STRING, CYAML_NULL};
 
 TEST(core_tag_consistency, set_drops_a_core_tag_that_stops_matching) {
@@ -15119,25 +12455,21 @@ TEST(core_tag_consistency, set_drops_a_core_tag_that_stops_matching) {
         wrong++;
         continue;
       }
-      /* Copy the tag, because the set below can free the node's string. */
       char before[64] = "";
       const char *tag0 = cyaml_node_tag(cyaml_get(doc, "v"));
       if (tag0) snprintf(before, sizeof(before), "%s", tag0);
       bool was_custom = before[0] == '!';
-      ccol_retval_t r = _ct_apply_set(doc, k);
+      ccol_retval r = _ct_apply_set(doc, k);
       cyaml v = cyaml_get(doc, "v");
       const char *after = v ? cyaml_node_tag(v) : NULL;
       bool ok = r == ccol_success && v && cyaml_type(v) == _ct_set_types[k];
       if (ok && was_custom) {
-        /* A custom tag survives every change of value. */
         ok = after && strcmp(after, "!custom") == 0;
       } else if (ok && after) {
-        /* A core tag that survives must name the new type. */
         size_t ti = 0;
         while (ti < _CT_N && strcmp(after, _ct_core_tags[ti]) != 0) ti++;
         ok = ti < _CT_N && _ct_core_tag_types[ti] == cyaml_type(v);
       } else if (ok) {
-        /* No tag survives only where the core tag stopped matching. */
         size_t ti = 0;
         while (ti < _CT_N && strcmp(before, _ct_core_tags[ti]) != 0) ti++;
         ok = ti < _CT_N && _ct_core_tag_types[ti] != cyaml_type(v);
@@ -15158,8 +12490,8 @@ TEST(core_tag_consistency, set_keeps_a_core_tag_that_still_matches) {
   char *err = NULL;
   cyaml doc = cyaml_parse("port: !!int 8080\nname: !!str x\n", &err);
   REQUIRE_NE((void *)doc, NULL);
-  ccol_retval_t r1 = cyaml_set(doc, "port", 9090);
-  ccol_retval_t r2 = cyaml_set(doc, "name", "y");
+  ccol_retval r1 = cyaml_set(doc, "port", 9090);
+  ccol_retval r2 = cyaml_set(doc, "name", "y");
   const char *t1 = cyaml_node_tag(cyaml_get(doc, "port"));
   const char *t2 = cyaml_node_tag(cyaml_get(doc, "name"));
   bool ok = t1 && t2 && strcmp(t1, CYAML_TAG_INT) == 0 &&
@@ -15174,7 +12506,7 @@ TEST(core_tag_consistency, int_node_set_to_string_serializes_without_its_tag) {
   char *err = NULL;
   cyaml doc = cyaml_parse("port: !!int 8080\n", &err);
   REQUIRE_NE((void *)doc, NULL);
-  ccol_retval_t r = cyaml_set(doc, "port", "auto");
+  ccol_retval r = cyaml_set(doc, "port", "auto");
   char *out = cyaml_serialize(doc);
   bool ok = out && strcmp(out, "port: auto\n") == 0;
   if (out) cyaml_serialize_free(out);
@@ -15183,13 +12515,11 @@ TEST(core_tag_consistency, int_node_set_to_string_serializes_without_its_tag) {
   REQUIRE_TRUE(ok);
 }
 
-/* ========================================================================== */
-/*    FLOW COLLECTION CLOSED BY AN INDICATOR AT THE INDENT OF ITS PARENT      */
-/* ========================================================================== */
+// Flow collection closed by an indicator at the indent of its parent
 
-/* Parses src and deep-compares the tree with the parse of want, which spells
- * the same content on one line. With want NULL the parse of src has to
- * fail. */
+// Parses src and tells whether its tree deep-equals the parse of want, which
+// spells the same content on one line; the flow-closing-indent tests compare
+// each layout with it. With want NULL the parse of src must fail.
 static bool _fc_check(const char *src, const char *want) {
   char *err = NULL;
   cyaml doc = cyaml_parse(src, &err);
@@ -15245,12 +12575,11 @@ TEST(flow_closing_indent, closing_left_of_the_parent_is_still_refused) {
   REQUIRE_TRUE(_fc_check("- - [\n    a\n]\n", NULL));
 }
 
-/* ========================================================================== */
-/*          DUPLICATE KEYS: THE LAST VALUE WINS AND NOTHING LEAKS             */
-/* ========================================================================== */
+// Duplicate keys: the last value wins and nothing leaks
 
-/* An allocator that counts the live blocks, so a test can assert that every
- * block it caused gets freed again. */
+// A counting allocator for the duplicate-key tests, which check that every
+// block they caused is freed again. These forward to the C library and keep
+// the number of live blocks in _dup_live.
 static long _dup_live = 0;
 static void *_dup_malloc(size_t sz) {
   void *p = malloc(sz);
@@ -15271,10 +12600,10 @@ static void _dup_free(void *p) {
   if (p) _dup_live--;
   free(p);
 }
-static ccol_memmgmt_procs_t _dup_mp = {.malloc = _dup_malloc,
-                                       .calloc = _dup_calloc,
-                                       .realloc = _dup_realloc,
-                                       .free = _dup_free};
+static ccol_memmgmt_procs _dup_mp = {.malloc = _dup_malloc,
+                                     .calloc = _dup_calloc,
+                                     .realloc = _dup_realloc,
+                                     .free = _dup_free};
 
 TEST(duplicate_keys, parse_keeps_the_last_value_and_frees_the_others) {
   static const char *const docs[] = {
@@ -15324,11 +12653,10 @@ TEST(duplicate_keys, dictionary_set_replaces_and_frees_the_old_subtree) {
   REQUIRE_NE((void *)root, NULL);
   cyaml first = cyaml_create_list_mp(&_dup_mp);
   cyaml_list_push(first, cyaml_create_string_mp("old", &_dup_mp));
-  ccol_retval_t r1 = cyaml_dictionary_set(root, "k", first);
-  ccol_retval_t r2 =
+  ccol_retval r1 = cyaml_dictionary_set(root, "k", first);
+  ccol_retval r2 =
       cyaml_dictionary_set(root, "k", cyaml_create_int_mp(7, &_dup_mp));
-  /* Setting a key to the node it already holds changes nothing. */
-  ccol_retval_t r3 = cyaml_dictionary_set(root, "k", cyaml_get(root, "k"));
+  ccol_retval r3 = cyaml_dictionary_set(root, "k", cyaml_get(root, "k"));
   cyaml k = cyaml_get(root, "k");
   bool ok = k && cyaml_type(k) == CYAML_INTEGER && cyaml_int_val(k) == 7 &&
             cyaml_dictionary_size(root) == 1;
@@ -15346,7 +12674,7 @@ TEST(duplicate_keys, attached_child_of_another_key_is_refused_untouched) {
   REQUIRE_NE((void *)root, NULL);
   cyaml_dictionary_set(root, "a", cyaml_create_int(1));
   cyaml_dictionary_set(root, "b", cyaml_create_int(2));
-  ccol_retval_t r = cyaml_dictionary_set(root, "b", cyaml_get(root, "a"));
+  ccol_retval r = cyaml_dictionary_set(root, "b", cyaml_get(root, "a"));
   cyaml a = cyaml_get(root, "a"), b = cyaml_get(root, "b");
   bool ok = a && b && cyaml_int_val(a) == 1 && cyaml_int_val(b) == 2;
   cyaml_destroy(root);
@@ -15371,12 +12699,11 @@ TEST(duplicate_keys, merge_keeps_the_explicit_value_and_frees_nothing_live) {
   REQUIRE_EQ(live, 0L);
 }
 
-/* ========================================================================== */
-/*     SET OF A NEW KEY: A FAILED BUILD LEAVES NO PLACEHOLDER BEHIND          */
-/* ========================================================================== */
+// Set of a new key: a failed build leaves no placeholder behind
 
-/* An allocator that refuses every allocation once _ff_left reaches zero and
- * counts the live blocks. With _ff_left at -1 it never refuses. */
+// A budget allocator for the failed-set tests. These refuse every allocation
+// once _ff_left (decremented on each call) reaches zero, and keep the number
+// of live blocks in _ff_live. With _ff_left at -1 they never refuse.
 static long _ff_left = -1;
 static long _ff_live = 0;
 static void *_ff_malloc(size_t sz) {
@@ -15404,28 +12731,24 @@ static void _ff_free(void *p) {
   if (p) _ff_live--;
   free(p);
 }
-static ccol_memmgmt_procs_t _ff_mp = {.malloc = _ff_malloc,
-                                      .calloc = _ff_calloc,
-                                      .realloc = _ff_realloc,
-                                      .free = _ff_free};
+static ccol_memmgmt_procs _ff_mp = {.malloc = _ff_malloc,
+                                    .calloc = _ff_calloc,
+                                    .realloc = _ff_realloc,
+                                    .free = _ff_free};
 
-/* Every allocation of a set that creates a new string leaf gets refused
- * once, in turn. The last one is the copy of the string while the new node
- * is built, and that runs after the key is already in the map, so the
- * budget just below the one that succeeds drives the removal of that key.
- * The size check catches a key left behind with a NULL child, which a
- * lookup alone would report as absent. Each refusal should report
- * ccol_not_enough_memory, leave the key absent and leak nothing. */
+// Refuses each allocation of a set that creates a new string leaf in turn.
+// The last one runs after the key is already in the map, so the set must take
+// the key out again; the size check catches a key left with a NULL child.
 TEST(set_new_key, a_failed_build_removes_the_key_and_leaks_nothing) {
   _ff_left = -1;
   _ff_live = 0;
   cyaml root = cyaml_create_dictionary_mp(&_ff_mp);
   REQUIRE_NE((void *)root, NULL);
-  ccol_retval_t pre = cyaml_set(root, "keep", 1);
+  ccol_retval pre = cyaml_set(root, "keep", 1);
   long live_before = _ff_live;
 
   size_t failures = 0, wrong = 0;
-  ccol_retval_t r = ccol_not_enough_memory;
+  ccol_retval r = ccol_not_enough_memory;
   for (long budget = 0; budget < 64 && r != ccol_success; budget++) {
     _ff_left = budget;
     r = cyaml_set(root, "fresh", "a string value");
@@ -15451,21 +12774,10 @@ TEST(set_new_key, a_failed_build_removes_the_key_and_leaks_nothing) {
   REQUIRE_EQ(live_after, 0L);
 }
 
-/* ========================================================================== */
-/*                    NUMBERS UNDER A COMMA-DECIMAL LOCALE                    */
-/* ========================================================================== */
+// Numbers under a comma-decimal locale
 
-/*
- * The core schema writes a float's decimal point as '.', whatever the
- * locale. These tests switch the test thread to a locale whose LC_NUMERIC
- * writes ',' (uselocale() only changes this thread) and check that parsing
- * and serializing still use '.'.
- *
- * Such a locale often isn't installed. When it can, the Makefile builds a
- * private copy of de_DE.UTF-8 into tests_locale/ with localedef, and
- * _comma_locale_open() falls back to it through LOCPATH. When neither
- * exists, each test prints why and returns without asserting anything.
- */
+// Opens the LC_NUMERIC locale name for _comma_locale_open(). Returns it when
+// its decimal point is ',', else frees it and returns (locale_t)0.
 static locale_t _comma_locale_try(const char *name) {
   locale_t loc = newlocale(LC_NUMERIC_MASK, name, (locale_t)0);
   if (!loc) return (locale_t)0;
@@ -15475,6 +12787,14 @@ static locale_t _comma_locale_try(const char *name) {
   return (locale_t)0;
 }
 
+// Finds a locale whose decimal point is ',' for the comma-locale tests, which
+// switch the thread to it with uselocale(). Returns it, or (locale_t)0 after
+// printing why the test is skipped. It tries the usual installed names, then
+// the private de_DE.UTF-8 that the Makefile builds into tests_locale/. That
+// one is loaded through setlocale() and copied with duplocale(), because
+// glibc's newlocale() leaks its LOCPATH search path. It sets LOCPATH (glibc
+// only, the one C library that reads it) and the global LC_NUMERIC only for
+// that attempt and puts both back.
 static locale_t _comma_locale_open(void) {
   static const char *const names[] = {
       "de_DE.UTF-8", "de_DE.utf8",  "de_DE",       "fr_FR.UTF-8",
@@ -15484,18 +12804,8 @@ static locale_t _comma_locale_open(void) {
     locale_t loc = _comma_locale_try(names[i]);
     if (loc) return loc;
   }
-  /* The private copy the Makefile builds, found through LOCPATH, which is
-   * only set around this one attempt. glibc's newlocale() never frees the
-   * search path it builds from LOCPATH, which memtest reports as a definite
-   * leak, while setlocale() frees its own. So we load the locale into the
-   * global LC_NUMERIC for a moment, copy it out with duplocale() and put the
-   * global setting back immediately. No other thread of this binary runs
-   * while a test body runs. */
   locale_t loc = (locale_t)0;
 #if defined(__GLIBC__)
-  /* Only glibc reads LOCPATH. Elsewhere setenv() would change nothing about
-   * locale loading and still leave the C library's environment blocks
-   * reachable at exit, which the memtest of musl reports. */
   const char *old_path = getenv("LOCPATH");
   char *saved_path = old_path ? strdup(old_path) : NULL;
   setenv("LOCPATH", "tests_locale", 1);
@@ -15533,7 +12843,6 @@ TEST(number_locale, parse_reads_dot_decimal_floats_under_a_comma_locale) {
   locale_t comma = _comma_locale_open();
   if (!comma) return;
   locale_t prev = uselocale(comma);
-  /* The locale really is in effect for this thread. */
   char probe[16];
   snprintf(probe, sizeof(probe), "%.2f", 1.5);
 
@@ -15553,11 +12862,8 @@ TEST(number_locale, parse_reads_dot_decimal_floats_under_a_comma_locale) {
   double l0 = types_ok ? cyaml_double_val(cyaml_list_get(list, 0)) : 0.0;
   double l1 = types_ok ? cyaml_double_val(cyaml_list_get(list, 1)) : 0.0;
   double l2 = types_ok ? cyaml_double_val(cyaml_list_get(list, 2)) : 0.0;
-  /* A float key is stored as its canonical text "2.5", and the explicitly
-   * tagged 7 as "7". */
   bool float_key = d && cyaml_dictionary_get(d, "2.5") != NULL;
   bool tagged_key = d && cyaml_dictionary_get(d, "7") != NULL;
-  /* The parse hands the thread back the locale it found. */
   bool restored = uselocale((locale_t)0) == comma;
   bool parsed = d != NULL;
   cyaml_destroy(d);
@@ -15614,13 +12920,10 @@ TEST(number_locale, serialize_writes_dot_decimal_floats_under_a_comma_locale) {
   REQUIRE_TRUE(restored);
 }
 
-/* ========================================================================== */
-/*                    TAGS ON IMPLICIT BLOCK MAPPING KEYS                     */
-/* ========================================================================== */
+// Tags on implicit block mapping keys
 
-/* The tag of an implicit block key types the key exactly as it types the
- * same key in a flow mapping or after "? ", and the dictionary stores the
- * typed key's canonical text. */
+// A tag types an implicit block key exactly as it types the same key in a
+// flow mapping or after "? ", and the key is stored as its canonical text.
 TEST(block_mapping, tag_on_implicit_key_types_the_key) {
   char *err = NULL;
   cyaml two = cyaml_parse("perm:\n  !!str 010: a\n  !!str 10: b\n", &err);
@@ -15632,7 +12935,6 @@ TEST(block_mapping, tag_on_implicit_key_types_the_key) {
   bool k10_ok = k10 && strcmp(cyaml_str_val(k10), "b") == 0;
   cyaml_destroy(two);
 
-  /* The same keys in flow context give the same result. */
   cyaml flow = cyaml_parse("{!!str 010: a, !!str 10: b}", &err);
   size_t flow_size = flow ? cyaml_dictionary_size(flow) : 0;
   cyaml_destroy(flow);
@@ -15654,13 +12956,10 @@ TEST(block_mapping, tag_on_implicit_key_types_the_key) {
   cyaml yes = cyaml_parse("!!bool yes: v\n", &err);
   bool yes_ok = yes && cyaml_dictionary_get(yes, "true") != NULL;
   cyaml_destroy(yes);
-  /* A custom tag leaves the key as implicit typing gives it, and the
-   * non-specific "!" makes it a string. */
   cyaml custom = cyaml_parse("!x 0x10: v\n! 0x11: w\n", &err);
   bool custom_ok = custom && cyaml_dictionary_get(custom, "16") != NULL &&
                    cyaml_dictionary_get(custom, "0x11") != NULL;
   cyaml_destroy(custom);
-  /* A flow collection key checks its tag too. */
   cyaml map_key = cyaml_parse("!!map {a: 1}: v\n", &err);
   bool map_key_ok = map_key && cyaml_dictionary_size(map_key) == 1;
   cyaml_destroy(map_key);
@@ -15678,7 +12977,6 @@ TEST(block_mapping, tag_on_implicit_key_types_the_key) {
   REQUIRE_TRUE(map_key_ok);
 }
 
-/* An anchor on a tagged key names the node as the tag types it. */
 TEST(block_mapping, anchor_on_tagged_quoted_key_resolves_to_the_tagged_node) {
   char *err = NULL;
   cyaml d =
@@ -15696,8 +12994,6 @@ TEST(block_mapping, anchor_on_tagged_quoted_key_resolves_to_the_tagged_node) {
   REQUIRE_TRUE(keys_ok);
 }
 
-/* A tag that disagrees with an implicit block key is a parse error, just as
- * on a value and on a key in flow context. */
 TEST(errors, tag_that_disagrees_with_an_implicit_key_rejected) {
   static const char *const docs[] = {
       "!!int abc: v\n",     "{!!int abc: v}\n",    "a: 1\n!!float x: v\n",
@@ -15716,11 +13012,11 @@ TEST(errors, tag_that_disagrees_with_an_implicit_key_rejected) {
   REQUIRE_EQ(accepted, (size_t)0);
 }
 
-/* ========================================================================== */
-/*          SPECULATIVE KEY PARSE: A VALUE IS NEVER TREATED AS A KEY          */
-/* ========================================================================== */
+// Speculative key parse: a value is never treated as a key
 
-/* Builds "<prefix>[item00000, item00001, ...]\n" with n items. */
+// Builds "<prefix>[item00000, item00001, ...]<suffix>" with n items, a flow
+// collection longer than the canonical key limit for the speculative key
+// tests. The caller frees it.
 static char *_big_flow_doc(const char *prefix, const char *suffix, int n) {
   size_t cap = (size_t)n * 12 + strlen(prefix) + strlen(suffix) + 8;
   char *s = malloc(cap);
@@ -15732,9 +13028,8 @@ static char *_big_flow_doc(const char *prefix, const char *suffix, int n) {
   return s;
 }
 
-/* A one-line flow collection in a value position may be longer than the
- * canonical text limit of a collection KEY. The parser only computes that
- * text for a real key, so every decorated form of the value parses. */
+// A one-line flow value may be longer than the canonical text limit of a key,
+// because the parser computes that text only for a real key.
 TEST(block_sequence, long_one_line_flow_value_is_not_limited_like_a_key) {
   static const char *const prefixes[] = {"- ",     "- &a ",  "- !foo ", "&a ",
                                          "!!seq ", "k: &a ", "- &a !x "};
@@ -15750,7 +13045,6 @@ TEST(block_sequence, long_one_line_flow_value_is_not_limited_like_a_key) {
     cyaml_destroy(d);
     free(doc);
   }
-  /* The anchored value stays usable through an alias. */
   char *doc = _big_flow_doc("- &a ", "- *a\n", 8000);
   char *err = NULL;
   cyaml d = doc ? cyaml_parse(doc, &err) : NULL;
@@ -15762,11 +13056,9 @@ TEST(block_sequence, long_one_line_flow_value_is_not_limited_like_a_key) {
   REQUIRE_EQ(alias_len, (size_t)8000);
 }
 
-/* The same limit applies to a real key. */
 TEST(errors, long_one_line_flow_key_still_rejected) {
   char *doc = _big_flow_doc("", "", 8000);
   REQUIRE_NE((void *)doc, NULL);
-  /* Turn the trailing "\n" into ": v\n". */
   size_t len = strlen(doc);
   char *key_doc = malloc(len + 4);
   bool built = key_doc != NULL;
@@ -15783,7 +13075,8 @@ TEST(errors, long_one_line_flow_key_still_rejected) {
   REQUIRE_TRUE(rejected);
 }
 
-/* An allocator that counts every allocation call. */
+// A counting allocator for the alias copy tests. These forward to the C
+// library and count every call in _alias_allocs.
 static size_t _alias_allocs = 0;
 static void *_alias_malloc(size_t sz) {
   _alias_allocs++;
@@ -15797,12 +13090,13 @@ static void *_alias_realloc(void *old, size_t sz) {
   _alias_allocs++;
   return realloc(old, sz);
 }
-static ccol_memmgmt_procs_t _alias_mp = {.malloc = _alias_malloc,
-                                         .calloc = _alias_calloc,
-                                         .realloc = _alias_realloc,
-                                         .free = free};
+static ccol_memmgmt_procs _alias_mp = {.malloc = _alias_malloc,
+                                       .calloc = _alias_calloc,
+                                       .realloc = _alias_realloc,
+                                       .free = free};
 
-/* Builds an anchor of 40 strings and then n "- *a" entries. */
+// Builds an anchor of 40 strings followed by n "- *a" entries, so the alias
+// copy test can compare the cost of two list lengths. The caller frees it.
 static char *_alias_list_doc(int n) {
   size_t cap = 1024 + (size_t)n * 8;
   char *s = malloc(cap);
@@ -15817,6 +13111,8 @@ static char *_alias_list_doc(int n) {
   return s;
 }
 
+// Parses doc through _alias_mp into *out and returns how many allocations the
+// parse made. Resets _alias_allocs first.
 static size_t _allocs_to_parse(const char *doc, cyaml *out) {
   char *err = NULL;
   _alias_allocs = 0;
@@ -15824,16 +13120,14 @@ static size_t _allocs_to_parse(const char *doc, cyaml *out) {
   return _alias_allocs;
 }
 
-/* "- *a" is a value, so the parser copies the anchored node once for it and
- * never again to try the alias as a key, and each such copy is also charged
- * to the parse's node and byte budgets. */
+// "- *a" is a value, so the parser copies the anchored node once for it and
+// never again to try it as a key, and charges each copy to the budgets.
 TEST(block_sequence, alias_entry_is_copied_once) {
   char *five = _alias_list_doc(5);
   char *six = _alias_list_doc(6);
   cyaml d5 = NULL, d6 = NULL;
   size_t a5 = five ? _allocs_to_parse(five, &d5) : 0;
   size_t a6 = six ? _allocs_to_parse(six, &d6) : 0;
-  /* What one copy of the anchored node costs. */
   cyaml anchor = d5 ? cyaml_get(d5, "anchor") : NULL;
   _alias_allocs = 0;
   cyaml copy = anchor ? cyaml_clone(anchor) : NULL;
@@ -15848,19 +13142,14 @@ TEST(block_sequence, alias_entry_is_copied_once) {
   free(six);
   REQUIRE_TRUE(shapes_ok);
   REQUIRE_GT(one_copy, (size_t)40);
-  /* The sixth entry costs one copy and a bit of list bookkeeping, never two
-   * copies. */
   REQUIRE_GE(a6 - a5, one_copy);
   REQUIRE_LT(a6 - a5, one_copy + one_copy / 2);
 }
 
-/* ========================================================================== */
-/*                  RAW CONTROL BYTES IN A %TAG PREFIX                        */
-/* ========================================================================== */
+// Raw control bytes in a %TAG prefix
 
-/* A %TAG prefix is ns-uri-char, which excludes every raw control byte. A raw
- * NUL would also end the stored prefix early, so "!e!int" below would
- * resolve to the core tag CYAML_TAG_INT and type the scalar as an integer. */
+// A raw NUL in a %TAG prefix would also cut the stored prefix, so "!e!int"
+// would resolve to the core int tag.
 TEST(nul_in_tokens, raw_control_byte_in_tag_directive_prefix_rejected) {
   static const char nul_doc[] =
       "%TAG !e! tag:yaml.org,2002:\0evil/\n--- !e!int 42\n";
@@ -15892,12 +13181,11 @@ TEST(nul_in_tokens, raw_control_byte_in_tag_directive_prefix_rejected) {
   REQUIRE_TRUE(ok_tag);
 }
 
-/* ========================================================================== */
-/*                 KEYS LONGER THAN AN IMPLICIT KEY MAY BE                    */
-/* ========================================================================== */
+// Keys longer than an implicit key may be
 
-/* Builds a dictionary with one key of the given text, holding a scalar, a
- * dictionary and a list under three suffixes of that text. */
+// Builds a dictionary with three keys made from base plus a suffix, holding a
+// scalar, a dictionary and a list, for the long-key round-trip tests. NULL
+// when memory runs out.
 static cyaml _long_key_tree(const char *base) {
   size_t n = strlen(base);
   char *k = malloc(n + 2);
@@ -15923,9 +13211,10 @@ static cyaml _long_key_tree(const char *base) {
   return d;
 }
 
-/* Both serializers write a key whose rendered text is longer than 1024 bytes
- * in the explicit "? key" form, and the parser reads it back as the same
- * entry. A key of up to 1024 rendered bytes stays implicit. */
+// Tells whether both serializers write the keys of _long_key_tree(base) in the
+// explicit "? key" form exactly when expect_explicit is true (a rendered key
+// longer than 1024 bytes), and whether the text parses back to the same tree.
+// The long-key tests call it with keys just below and above the limit.
 static bool _long_key_round_trip(const char *base, bool expect_explicit) {
   cyaml d = _long_key_tree(base);
   if (!d) return false;
@@ -15970,15 +13259,12 @@ static bool _long_key_round_trip(const char *base, bool expect_explicit) {
 TEST(serialize, key_longer_than_an_implicit_key_goes_out_explicit) {
   char plain_1023[1024], plain_1024[1025];
   memset(plain_1023, 'a', 1023);
-  plain_1023[1023] = '\0'; /* 1023 + one suffix byte: exactly 1024 */
+  plain_1023[1023] = '\0';
   memset(plain_1024, 'a', 1024);
-  plain_1024[1024] = '\0'; /* 1025 rendered bytes */
-  /* 600 raw 0x01 bytes, 601 bytes of text that render as far more than 1024
-   * bytes of escapes inside double quotes. */
+  plain_1024[1024] = '\0';
   char escaped[601];
   memset(escaped, 0x01, 600);
   escaped[600] = '\0';
-  /* A long key that needs quotes and holds a line break. */
   char multi[1400];
   memset(multi, 'b', sizeof(multi) - 1);
   multi[sizeof(multi) - 1] = '\0';
@@ -15994,13 +13280,11 @@ TEST(serialize, key_longer_than_an_implicit_key_goes_out_explicit) {
   REQUIRE_TRUE(quoted);
 }
 
-/* ========================================================================== */
-/*              cyaml_set OF AN UNSIGNED VALUE ABOVE LLONG_MAX                */
-/* ========================================================================== */
+// cyaml_set of an unsigned value above LLONG_MAX
 
-/* No long long holds an unsigned value above LLONG_MAX, so cyaml_set stores
- * the nearest double as a CYAML_FLOAT, the node a parse of the decimal
- * literal gives, and drops a core !!int tag that stops matching. */
+// No long long holds the value, so cyaml_set() stores the nearest double, as a
+// parse of the literal does, and drops a core !!int tag that stops
+// matching.
 TEST(set_value_types, unsigned_above_llong_max_becomes_a_float) {
   char *err = NULL;
   cyaml doc = cyaml_parse("n: !!int 1\nm: 2\n", &err);
@@ -16008,9 +13292,9 @@ TEST(set_value_types, unsigned_above_llong_max_becomes_a_float) {
   unsigned long long big = 18446744073709551615ULL;
   unsigned long long edge = (unsigned long long)LLONG_MAX;
   unsigned long long above = (unsigned long long)LLONG_MAX + 1ULL;
-  ccol_retval_t r1 = cyaml_set(doc, "n", big);
-  ccol_retval_t r2 = cyaml_set(doc, "m", edge);
-  ccol_retval_t r3 = cyaml_set(doc, "fresh", above);
+  ccol_retval r1 = cyaml_set(doc, "n", big);
+  ccol_retval r2 = cyaml_set(doc, "m", edge);
+  ccol_retval r3 = cyaml_set(doc, "fresh", above);
   cyaml n = cyaml_get(doc, "n");
   cyaml m = cyaml_get(doc, "m");
   cyaml fresh = cyaml_get(doc, "fresh");
@@ -16036,6 +13320,8 @@ TEST(set_value_types, unsigned_above_llong_max_becomes_a_float) {
   REQUIRE_TRUE(same_as_parse);
 }
 
+// The worker of the pool-key lock test: parses and destroys a small document
+// five times on a new thread. Sets *arg to 0 when a parse fails, else 1.
 static void *cyaml_pool_arm_worker(void *arg) {
   int *ok = (int *)arg;
   *ok = 1;
@@ -16050,32 +13336,26 @@ static void *cyaml_pool_arm_worker(void *arg) {
   return NULL;
 }
 
-/* A thread arms its node pool's key once and not every time its pool runs
- * empty. Each parse below drains the thread's pool and each destroy refills
- * it, so re-arming on every refill would take the pool key lock once per
- * parse. That lock is written on every acquisition, and on a thread that
- * parses in a loop it turns into a line every core writes once per parse.
- * Arming on every refill would make the count 5. */
+// A thread arms its pool key once, not on every refill of its pool. Re-arming
+// on every refill would take the shared lock once per parse.
 TEST(node_pool, a_thread_takes_the_pool_key_lock_once) {
-  unsigned long before = atomic_load(&_cyaml_pool_key_lock_count_for_tests);
+  unsigned long before = atomic_load(&cyaml__pool_key_lock_count_for_tests);
   int ok = 0;
   pthread_t th;
   int created = pthread_create(&th, NULL, cyaml_pool_arm_worker, &ok);
   if (created == 0) pthread_join(th, NULL);
-  unsigned long after = atomic_load(&_cyaml_pool_key_lock_count_for_tests);
+  unsigned long after = atomic_load(&cyaml__pool_key_lock_count_for_tests);
   REQUIRE_EQ(created, 0);
   REQUIRE_EQ(ok, 1);
   REQUIRE_EQ(after - before, 1ul);
 }
 
-/* ========================================================================== */
-/*                         SERIALIZER INTEROPERABILITY                        */
-/* ========================================================================== */
+// Serializer interoperability
 
-/* Serializes a one-element list and a one-member dictionary holding s, in
- * both styles, and tells whether every output holds s double-quoted (so no
- * plain form of it reaches a YAML 1.1 reader), holds none of the raw
- * line-break code points NEL, LS and PS, and parses back to exactly s. */
+// Serializes s as a list element and as a dictionary value in both styles and
+// tells whether every output holds s double-quoted, holds no raw NEL, LS or
+// PS, and parses back to exactly s. The interop tests run it on every string
+// that YAML 1.1 readers would misread.
 static bool _ser_quotes_and_round_trips(const char *s) {
   cyaml list = cyaml_create_list();
   cyaml dict = cyaml_create_dictionary();
@@ -16121,13 +13401,10 @@ static bool _ser_quotes_and_round_trips(const char *s) {
   return ok;
 }
 
-/* Each of these strings is a valid plain scalar in YAML 1.2, and PyYAML or
- * libyaml reads each of them differently, or refuses it, when it goes out
- * plain. NEL, LS and PS are line breaks in YAML 1.1, a tab ends a plain scalar
- * in both, '?' is an indicator inside a flow collection, and a lone "=" is the
- * YAML 1.1 "value" type that PyYAML refuses to construct. Without the matching
- * quoting rule clauses each of these strings goes out plain, and without the
- * \N, \L and \P escapes the raw code points reach the output. */
+// Each string is a valid plain scalar in YAML 1.2 that PyYAML or libyaml reads
+// differently or refuses: NEL, LS and PS are YAML 1.1 line breaks, a tab ends
+// a plain scalar, '?' is a flow indicator and a lone "=" is the YAML 1.1
+// "value" type.
 TEST(serialize_interop, strings_that_yaml11_readers_misread_are_quoted) {
   static const char *const cases[] = {
       "a\xE2\x80\xA8"
@@ -16158,8 +13435,6 @@ TEST(serialize_interop, strings_that_yaml11_readers_misread_are_quoted) {
 }
 
 TEST(serialize_interop, line_breaks_of_yaml11_use_their_escapes) {
-  /* The double-quoted writer writes NEL, LS and PS as \N, \L and \P, which
-   * every reader, 1.1 or 1.2, reads back as the same code point. */
   cyaml l = cyaml_create_list();
   cyaml_list_push(l,
                   cyaml_create_string("x\xC2\x85y\xE2\x80\xA8z\xE2\x80\xA9w"));
@@ -16170,8 +13445,8 @@ TEST(serialize_interop, line_breaks_of_yaml11_use_their_escapes) {
   REQUIRE_TRUE(ok);
 }
 
-/* Tells whether out holds a raw C1 control other than NEL, or a raw U+FFFE
- * or U+FFFF. */
+// Tells whether out holds a raw C1 control other than NEL, or a raw U+FFFE or
+// U+FFFF, which the interop tests forbid in serializer output.
 static bool _ser_has_raw_non_printable(const char *out) {
   for (const unsigned char *p = (const unsigned char *)out; *p; p++) {
     if (p[0] == 0xC2 && p[1] >= 0x80 && p[1] <= 0x9F && p[1] != 0x85)
@@ -16182,13 +13457,9 @@ static bool _ser_has_raw_non_printable(const char *out) {
   return false;
 }
 
-/* The C1 controls other than NEL, and U+FFFE and U+FFFF, are outside YAML
- * 1.2's c-printable set, and libyaml, PyYAML and go-yaml refuse a whole
- * document that holds one of them raw. Each such string goes out
- * double-quoted with the code point escaped, as a value and as a key, in
- * block and in flow style, and parses back to the same bytes. Take out the
- * matching clauses of the quoting rule and of the double-quoted writer, and
- * the raw bytes reach the output. */
+// libyaml, PyYAML and go-yaml refuse a document holding one of these raw, so
+// each goes out double-quoted with the code point escaped, as a value and as a
+// key, in both styles.
 TEST(serialize_interop, c1_controls_and_noncharacters_are_escaped) {
   static const char *const cases[] = {
       "Don\xC2\x92t",  "\xC2\x80",      "a\xC2\x9F",
@@ -16224,8 +13495,6 @@ TEST(serialize_interop, c1_controls_and_noncharacters_are_escaped) {
 }
 
 TEST(serialize_interop, c1_controls_and_noncharacters_use_their_escapes) {
-  /* A C1 control goes out as \xNN and a noncharacter as \uFFFE or \uFFFF,
-   * while U+00A0, which is printable, stays raw and plain. */
   cyaml l = cyaml_create_list();
   cyaml_list_push(l, cyaml_create_string("Don\xC2\x92t"));
   cyaml_list_push(l, cyaml_create_string("x\xEF\xBF\xBEy\xEF\xBF\xBF"));
@@ -16241,14 +13510,12 @@ TEST(serialize_interop, c1_controls_and_noncharacters_use_their_escapes) {
   REQUIRE_TRUE(ok);
 }
 
-/* A '#' is valid inside a verbatim tag in YAML 1.2, but libyaml and PyYAML
- * refuse a verbatim tag holding one literally. The serializer writes it as
- * %23, which decodes back to the same tag. With '#' in the literal set the
- * output would hold "app#frag". */
+// libyaml and PyYAML refuse a literal '#' in a verbatim tag, so the
+// serializer writes %23.
 TEST(serialize_interop, hash_in_verbatim_tag_is_percent_escaped) {
   cyaml s = cyaml_create_string("v");
-  ccol_retval_t rv = s ? cyaml_node_set_tag(s, "tag:example.com,2000:app#frag")
-                       : ccol_not_enough_memory;
+  ccol_retval rv = s ? cyaml_node_set_tag(s, "tag:example.com,2000:app#frag")
+                     : ccol_not_enough_memory;
   char *out = rv == ccol_success ? cyaml_serialize(s) : NULL;
   bool escaped =
       out && strstr(out, "!<tag:example.com,2000:app%23frag>") != NULL;
@@ -16264,8 +13531,6 @@ TEST(serialize_interop, hash_in_verbatim_tag_is_percent_escaped) {
 }
 
 TEST(serialize_interop, ordinary_strings_stay_plain) {
-  /* The quoting rule leaves alone strings that every reader takes as the
-   * same plain string. */
   cyaml l = cyaml_create_list();
   cyaml_list_push(l, cyaml_create_string("x=y"));
   cyaml_list_push(l, cyaml_create_string("=="));
@@ -16278,10 +13543,10 @@ TEST(serialize_interop, ordinary_strings_stay_plain) {
   REQUIRE_TRUE(ok);
 }
 
-/* ========================================================================== */
-/*                         STREAM SERIALIZATION                               */
-/* ========================================================================== */
+// Stream serialization
 
+// A stream of three Kubernetes manifests, which the stream serialization
+// tests parse, edit and write back.
 static const char _k8s_stream[] =
     "apiVersion: v1\n"
     "kind: Namespace\n"
@@ -16312,12 +13577,9 @@ static const char _k8s_stream[] =
     "      targetPort: 8080\n";
 
 TEST(serialize_stream, kubernetes_stream_round_trips_as_a_stream) {
-  /* Parse a stream of three manifests, edit one, write the list back as a
-   * stream and parse it again. The result is a stream of the same three
-   * documents, with one "---" line before each and the edit in place. */
   char *err = NULL;
   cyaml docs = cyaml_parse(_k8s_stream, &err);
-  ccol_retval_t set_rc =
+  ccol_retval set_rc =
       docs ? cyaml_set(docs, "#1.spec.replicas", 5) : ccol_invalid_args;
   char *stream = docs ? cyaml_serialize_stream(docs) : NULL;
   cyaml back = stream ? cyaml_parse(stream, NULL) : NULL;
@@ -16373,8 +13635,6 @@ TEST(serialize_stream, a_node_that_is_not_a_list_is_one_document) {
 }
 
 TEST(serialize_stream, scalar_and_tagged_documents_round_trip) {
-  /* Scalar roots, an empty root and a tagged root each stay one document,
-   * and the tag goes out in its verbatim form, which needs no directive. */
   const char *in =
       "--- plain\n"
       "--- 42\n"
@@ -16401,17 +13661,9 @@ TEST(serialize_stream, scalar_and_tagged_documents_round_trip) {
   REQUIRE_TRUE(tag_ok);
 }
 
-/* ========================================================================== */
-/*                         BYTE ORDER MARK INSIDE A DOCUMENT                  */
-/* ========================================================================== */
+// Byte order mark inside a document
 
 TEST(bom_inside_document, is_refused) {
-  /* YAML 1.2 section 5.2 says a byte order mark must not appear inside a
-   * document. Concatenating a file without a document start marker and a
-   * file that starts with a mark is one mapping to no reader, so the parse
-   * refuses it rather than read the mark as the first character of a key.
-   * Without the check the first input parses as one mapping whose second
-   * key is "\xEF\xBB\xBF" "b". */
   static const char *const inputs[] = {
       "a: 1\n\xEF\xBB\xBF"
       "b: 2\n",
@@ -16435,8 +13687,6 @@ TEST(bom_inside_document, is_refused) {
 }
 
 TEST(bom_inside_document, a_mark_before_a_document_start_is_a_prefix) {
-  /* The same concatenation with a "---" after the mark is two documents,
-   * and a mark at the very end of the input closes the stream. */
   cyaml two = cyaml_parse("a: 1\n\xEF\xBB\xBF---\nb: 2\n", NULL);
   cyaml cmt = cyaml_parse("a: 1\n\xEF\xBB\xBF# c\n---\nb: 2\n", NULL);
   cyaml tail = cyaml_parse("a: 1\n\xEF\xBB\xBF", NULL);
@@ -16456,9 +13706,6 @@ TEST(bom_inside_document, a_mark_before_a_document_start_is_a_prefix) {
 }
 
 TEST(bom_inside_document, repeated_marks_at_the_stream_start) {
-  /* The first document's prefix accepts the same sequence of marks and
-   * comment lines as a later document's prefix. A parser that skipped only
-   * one mark at the start would read the second one as content. */
   cyaml two = cyaml_parse(
       "\xEF\xBB\xBF\xEF\xBB\xBF"
       "a: 1\n",
@@ -16477,12 +13724,10 @@ TEST(bom_inside_document, repeated_marks_at_the_stream_start) {
   REQUIRE_TRUE(cmt_ok);
 }
 
-/* ========================================================================== */
-/*                  SPECULATIVE FLOW-COLLECTION KEY PARSE                     */
-/* ========================================================================== */
+// Speculative flow-collection key parse
 
-/* Parses y, serializes it in flow style, and tells whether the text is
- * exactly want. */
+// Tells whether the flow serialization of the parse of y is exactly want, a
+// compact way for the speculation and BOM tests to pin a whole tree.
 static bool _flow_text_is(const char *y, const char *want) {
   char *err = NULL;
   cyaml doc = cyaml_parse(y, &err);
@@ -16494,39 +13739,28 @@ static bool _flow_text_is(const char *y, const char *want) {
   return ok;
 }
 
-/* A flow collection with an anchor or a tag in front of it may be an implicit
- * key, so the parser reads it once as a possible key before reading it as a
- * value. An alias inside it resolves to the anchor defined BEFORE the alias,
- * whichever reading wins. If the possible-key reading left its anchors behind,
- * the alias in the value reading would resolve to the anchor the collection
- * defines after it, and each case would give [B, B] instead of [A, B]. */
+// A decorated flow collection is read once as a possible key before it is
+// read as a value. An alias inside it resolves to the anchor defined before
+// it either way; a key reading that left its anchors behind would give
+// [B, B] instead of [A, B].
 TEST(anchor_speculation,
      alias_in_a_decorated_flow_value_sees_only_earlier_anchors) {
-  /* A sequence entry with an anchor, and one with a tag. */
   REQUIRE_TRUE(_flow_text_is("- &x A\n- &k [*x, &x B]\n", "[A, [A, B]]"));
   REQUIRE_TRUE(_flow_text_is("- &x A\n- !!seq [*x, &x B]\n", "[A, [A, B]]"));
   REQUIRE_TRUE(_flow_text_is("- &x A\n- !!seq &k [*x, &x B]\n", "[A, [A, B]]"));
-  /* A value on its own line, as a flow mapping with a tag. */
   REQUIRE_TRUE(_flow_text_is("x: &x A\ny:\n  !!map {a: *x, b: &x B}\n",
                              "{x: A, \"y\": {a: A, b: B}}"));
   REQUIRE_TRUE(
       _flow_text_is("x: &x A\ny:\n  &k [*x, &x B]\n", "{x: A, \"y\": [A, B]}"));
-  /* A flow collection over two lines is never a key, and its possible-key
-   * reading runs to its end before the line check refuses it. */
   REQUIRE_TRUE(_flow_text_is("- &x A\n- &k [*x,\n    &x B]\n", "[A, [A, B]]"));
-  /* The anchor on the value itself resolves to the value. */
   REQUIRE_TRUE(
       _flow_text_is("- &x A\n- &k [*x, &x B]\n- *k\n", "[A, [A, B], [A, B]]"));
-  /* An anchor that the collection defines again keeps the later definition
-   * after the value. */
   REQUIRE_TRUE(
       _flow_text_is("- &x A\n- &k [&x B, C]\n- *x\n", "[A, [B, C], B]"));
 }
 
-/* When the flow collection IS a key, the anchors it defines stay, and the
- * later definition of a name wins after it. This pins the accept half of
- * the speculation, since a key reading that dropped its anchors would leave
- * *x at A. */
+// When the collection is a key, its anchors stay and a later definition of
+// the name wins after it.
 TEST(anchor_speculation, anchors_of_an_accepted_flow_key_stay) {
   REQUIRE_TRUE(_flow_text_is("- &x A\n- &k [*x, &x B]: v\n- *x\n",
                              "[A, {\"[A, B]\": v}, B]"));
@@ -16534,10 +13768,6 @@ TEST(anchor_speculation, anchors_of_an_accepted_flow_key_stay) {
                              "[A, {\"[C]\": v}, C]"));
 }
 
-/* An alias in front of the only anchor of its name is unknown, in a
- * decorated flow collection like anywhere else. The possible-key reading
- * reports it, and no reading of the collection lets the alias see the
- * anchor that follows it. */
 TEST(anchor_speculation, an_anchor_of_the_refused_reading_is_not_visible) {
   char *err = NULL;
   cyaml doc = cyaml_parse("- &k [*z, &z B]\n", &err);
@@ -16547,11 +13777,8 @@ TEST(anchor_speculation, an_anchor_of_the_refused_reading_is_not_visible) {
   REQUIRE_TRUE(unknown);
 }
 
-/* An unknown alias is reported at the byte offset of its '*', where the
- * alias token starts, and not at the byte after its name. The cases cover a
- * block value, a block value on a later line, an alias used as a key and a
- * flow sequence entry. Reporting the position after the name instead would
- * give "at position 13" for the first case. */
+// The error gives the offset of the alias's '*', not the byte after its
+// name.
 TEST(anchor_speculation, an_unknown_alias_is_reported_where_it_starts) {
   static const struct {
     const char *doc;
@@ -16575,11 +13802,8 @@ TEST(anchor_speculation, an_unknown_alias_is_reported_where_it_starts) {
   REQUIRE_EQ(wrong, (size_t)0);
 }
 
-/* A decorated flow collection's possible-key reading charges nothing that
- * its value reading pays again. A tagged flow list at the root costs exactly
- * the nodes of the same list without the tag, plus only the tag's bytes.
- * Without the budget rollback the tagged list would pay every node and byte
- * twice. */
+// A tagged flow list costs the nodes of the untagged list plus the tag's
+// bytes, so the refused key reading charges nothing twice.
 TEST(anchor_speculation, a_refused_key_reading_is_not_charged) {
   cyaml plain = cyaml_parse("[a, b, [c, d], {e: f}]\n", NULL);
   size_t plain_nodes = cyaml_test_last_parse_nodes_charged;
@@ -16595,24 +13819,26 @@ TEST(anchor_speculation, a_refused_key_reading_is_not_charged) {
   REQUIRE_LT(tagged_bytes, plain_bytes + 64);
 }
 
-/* ========================================================================== */
-/*                  NODE POOL ACROSS THREAD-EXIT DESTRUCTORS                  */
-/* ========================================================================== */
+// Node pool across thread-exit destructors
 
+// An application key whose destructor destroys a document after the pool of
+// the exiting thread has already drained.
 static pthread_key_t _late_doc_key;
 
+// The destructor of _late_doc_key: destroys the document stored there, after
+// the exiting thread's pool has already drained.
 static void _late_doc_dtor(void *p) {
   cyaml doc = (cyaml)p;
   cyaml_destroy(doc);
 }
 
+// The worker of the late-destructor test: stores a parsed document under
+// _late_doc_key so its destructor frees nodes after the pool drained. *arg is
+// set to 1 when that worked. The key gets a placeholder before the pool key is
+// armed, so the pool drains first on glibc (key order) and on OpenBSD (reverse
+// order of first value).
 static void *_late_doc_worker(void *arg) {
   int *ok = (int *)arg;
-  /* The pool needs to drain before the application destructor runs. glibc
-   * runs a thread's destructors in key order, and the pool key is the older
-   * one. OpenBSD runs them in the reverse of the order in which the thread's
-   * keys first got a value, so the application key gets a placeholder before
-   * anything arms the pool key, and a later value keeps that place. */
   static char placeholder;
   if (pthread_setspecific(_late_doc_key, &placeholder) != 0) return NULL;
   cyaml w = cyaml_create_null();
@@ -16626,18 +13852,15 @@ static void *_late_doc_worker(void *arg) {
   return NULL;
 }
 
-/* Another thread-specific key's destructor can free nodes after the
- * thread's pool has already drained at thread exit. The first such free
- * arms the pool key again, so the C library runs one more destructor round
- * that drains those nodes as well. The test counts the two arms, and make
- * memtest also reports the nodes as definitely lost when the second drain
- * doesn't run. A drain that left the thread marked as armed would arm once,
- * and the late destroy's nodes would leak. */
+// The first free after the pool drained at thread exit arms the pool key
+// again, so one more destructor round drains those nodes too. The test counts
+// the two arms; memtest reports the nodes as lost if the second drain doesn't
+// run.
 TEST(node_pool, nodes_freed_by_a_later_thread_destructor_are_drained) {
-  cyaml w = cyaml_create_null(); /* the pool key exists before ours */
+  cyaml w = cyaml_create_null();
   cyaml_destroy(w);
   int key_rc = pthread_key_create(&_late_doc_key, _late_doc_dtor);
-  unsigned long before = atomic_load(&_cyaml_pool_key_lock_count_for_tests);
+  unsigned long before = atomic_load(&cyaml__pool_key_lock_count_for_tests);
   int ok = 0;
   int created = -1;
   pthread_t th;
@@ -16646,20 +13869,20 @@ TEST(node_pool, nodes_freed_by_a_later_thread_destructor_are_drained) {
     if (created == 0) pthread_join(th, NULL);
     pthread_key_delete(_late_doc_key);
   }
-  unsigned long after = atomic_load(&_cyaml_pool_key_lock_count_for_tests);
+  unsigned long after = atomic_load(&cyaml__pool_key_lock_count_for_tests);
   REQUIRE_EQ(key_rc, 0);
   REQUIRE_EQ(created, 0);
   REQUIRE_EQ(ok, 1);
   REQUIRE_EQ(after - before, 2ul);
 }
 
-/* ========================================================================== */
-/*                     SIZE AND CHARGE OF SCALAR TEXT                         */
-/* ========================================================================== */
+// Size and charge of scalar text
 
-/* An allocator that tracks the bytes it holds through a size header in
- * front of each block. */
+// A tracking allocator for the scalar text tests, which compare the bytes a
+// document holds. These keep the number of bytes they hold in _held_bytes,
+// through a size header in front of each block.
 static size_t _held_bytes;
+// The size header in front of each block, aligned for any object.
 typedef union {
   size_t size;
   max_align_t align;
@@ -16693,13 +13916,15 @@ static void *_held_realloc(void *p, size_t sz) {
   _held_bytes = _held_bytes - old + sz;
   return n + 1;
 }
-static ccol_memmgmt_procs_t _held_mp = {.malloc = _held_malloc,
-                                        .calloc = _held_calloc,
-                                        .realloc = _held_realloc,
-                                        .free = _held_free};
+static ccol_memmgmt_procs _held_mp = {.malloc = _held_malloc,
+                                      .calloc = _held_calloc,
+                                      .realloc = _held_realloc,
+                                      .free = _held_free};
 
-/* Builds a flow list of n copies of item, parses it through _held_mp, and
- * gives the bytes the document holds and the bytes the parse charged. */
+// Parses a flow list of n copies of item through _held_mp and gives the bytes
+// the document holds and the bytes the parse charged, so the scalar text test
+// can compare styles. False when the parse fails or gives a list of another
+// length.
 static bool _scalar_list_cost(const char *item, size_t n, size_t *held,
                               size_t *charged) {
   size_t il = strlen(item);
@@ -16724,11 +13949,8 @@ static bool _scalar_list_cost(const char *item, size_t n, size_t *held,
   return ok;
 }
 
-/* The text of a quoted scalar and of a block scalar is kept at its own length
- * and charged to the byte budget, just like a plain scalar's text, so the same
- * list of the same strings holds and charges the same bytes in every style. A
- * node that kept its text's whole scanner buffer would hold about 250 bytes
- * more per quoted item and charge about 20 bytes less. */
+// Quoted and block scalar text is kept at its own length and charged like
+// plain text, so the same strings cost the same in every style.
 TEST(scalar_text, quoted_text_is_sized_and_charged_like_plain_text) {
   size_t n = 1000;
   size_t plain_held = 0, plain_charged = 0;
@@ -16745,13 +13967,13 @@ TEST(scalar_text, quoted_text_is_sized_and_charged_like_plain_text) {
   REQUIRE_EQ(sq_held, plain_held);
   REQUIRE_EQ(dq_charged, plain_charged);
   REQUIRE_EQ(sq_charged, plain_charged);
-  /* A tagged scalar also holds and charges its tag. */
   REQUIRE_LT(tag_held, plain_held + n * 32);
   REQUIRE_GT(tag_charged, plain_charged);
 }
 
-/* Builds a block list of n copies of item, parses it through _held_mp, and
- * gives the bytes the document holds. */
+// Parses a block list of n copies of item through _held_mp and gives the bytes
+// the document holds, for the block scalar size test. False when the parse
+// fails.
 static bool _block_list_held(const char *item, size_t n, size_t *held) {
   size_t il = strlen(item);
   char *d = malloc(n * il + 1);
@@ -16768,9 +13990,6 @@ static bool _block_list_held(const char *item, size_t n, size_t *held) {
   return ok;
 }
 
-/* A block scalar keeps its text at its own length as well. A literal or
- * folded scalar that kept its scanner buffer would hold about 250 bytes more
- * per item, and the counts would differ. */
 TEST(scalar_text, block_scalar_text_is_sized_to_its_length) {
   size_t n = 200;
   size_t plain = 0, literal = 0, folded = 0;
@@ -16782,18 +14001,12 @@ TEST(scalar_text, block_scalar_text_is_sized_to_its_length) {
   REQUIRE_EQ(folded, plain);
 }
 
-/* ========================================================================== */
-/*                    MERGE KEYS AND THE DOCUMENT LIMITS                      */
-/* ========================================================================== */
+// Merge keys and the document limits
 
-/* A merge expansion stopped by the ordinary document memory limit reports
- * that limit, the same as an alias expansion does. The document's last line
- * makes one alias copy and one merge copy of the same mapping, which cost
- * about the same. The test measures what the document costs without that
- * line and with it, and sets the byte floor three quarters of the way
- * between the two, so the alias copy fits and the merge copy is the step
- * the limit stops. If the budget flags weren't checked, the error would read
- * "out of memory expanding merge key". */
+// A merge stopped by the document memory limit names that limit, like an
+// alias does. The byte floor sits three quarters of the way between the cost
+// without and with the last line, so the alias copy fits and the merge copy
+// is what the limit stops.
 TEST(merge_keys, a_merge_stopped_by_the_document_limit_names_it) {
   char doc[4096];
   size_t len = (size_t)snprintf(
@@ -16838,10 +14051,8 @@ TEST(merge_keys, a_merge_stopped_by_the_document_limit_names_it) {
   REQUIRE_TRUE(named);
 }
 
-/* A "<<" key whose tag is the core merge tag is a merge key, in each
- * spelling of the tag and of the key and in each key form, while any other
- * tag keeps it an ordinary key. Treating every tagged "<<" as a literal key
- * would leave a "<<" member in each merge case. */
+// A "<<" key whose tag is the core merge tag is a merge key in every spelling
+// and key form, while any other tag keeps it an ordinary key.
 TEST(merge_keys, a_key_tagged_with_the_merge_tag_merges) {
   const char *src = "b: &b {x: 1}\n";
   static const char *const merges[] = {
@@ -16879,7 +14090,6 @@ TEST(merge_keys, a_key_tagged_with_the_merge_tag_merges) {
                 cyaml_int_val(cyaml_dictionary_get(c, "x")) == 1;
   cyaml_destroy(d);
   REQUIRE_TRUE(merged);
-  /* Any other tag, and the merge tag on another key, keep it a key. */
   static const char *const literal[] = {
       "c:\n  !!str <<: *b\n",
       "c:\n  !custom <<: *b\n",
@@ -16898,14 +14108,10 @@ TEST(merge_keys, a_key_tagged_with_the_merge_tag_merges) {
   }
 }
 
-/* ========================================================================== */
-/*                           VERBATIM TAG OUTPUT                              */
-/* ========================================================================== */
+// Verbatim tag output
 
-/* A verbatim tag goes out with every byte ns-uri-char doesn't allow
- * literally percent-escaped, so every YAML reader accepts it, and it parses
- * back to the same tag. Writing a space, a quote, a brace or a UTF-8 byte
- * literally would leave that byte in the output. */
+// Every byte that ns-uri-char doesn't allow is percent-escaped, so every YAML
+// reader accepts the tag and it parses back the same.
 TEST(serialize_tags, a_verbatim_tag_holds_only_uri_characters) {
   static const char *const tags[] = {
       "tag:x y<z>\"q\"{a}|b\\c^d`e",
@@ -16948,18 +14154,17 @@ TEST(serialize_tags, a_verbatim_tag_holds_only_uri_characters) {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/* The allocator procs struct of the caller                           */
-/* ------------------------------------------------------------------ */
+// The allocator procs struct of the caller
 
-/* The honest allocator of the tests below. It counts every call and the
- * blocks it handed out and hasn't taken back yet. */
+// The honest allocator of the procs-lifetime tests. These forward to the C
+// library, count every call in _pl_calls and keep the number of live blocks in
+// _pl_live.
 static atomic_long _pl_live;
 static atomic_long _pl_calls;
-/* The poison allocator, which the tests write over the caller's struct once
- * the tree exists. It forwards to the C library, so a call through it
- * corrupts nothing and only counts, and any count above zero means the
- * library read the caller's struct after the call that took it. */
+// The poison allocator, which a procs-lifetime test writes over the caller's
+// struct once the tree exists. These forward to the C library and count every
+// call in _pl_poison_calls; any call means the library read the caller's
+// struct after the call that took it.
 static atomic_long _pl_poison_calls;
 
 static void *_pl_malloc(size_t n) {
@@ -17001,19 +14206,15 @@ static void *_pl_poison_realloc(void *p, size_t n) {
   return realloc(p, n);
 }
 
-/* A tree built from a procs struct keeps using the allocator the struct
- * named when the call ran, even after the caller overwrote the struct. The
- * struct lives on the heap so the test is deterministic; a struct on the
- * stack of a helper that has returned is the same case, with undefined
- * behavior instead of the poison count. Were a node to keep the caller's
- * pointer, every later allocation of the tree would go through the poison
- * allocator. */
+// A tree keeps using the allocator the struct named when the call ran, even
+// after the caller overwrote the struct (a struct on the stack of a returned
+// helper is the same case).
 TEST(procs_lifetime, tree_does_not_read_the_procs_struct_of_the_caller_later) {
-  const ccol_memmgmt_procs_t honest = {_pl_malloc, _pl_free, _pl_calloc,
-                                       _pl_realloc};
-  const ccol_memmgmt_procs_t poison = {_pl_poison_malloc, _pl_poison_free,
-                                       _pl_poison_calloc, _pl_poison_realloc};
-  ccol_memmgmt_procs_t *mp = malloc(sizeof(*mp));
+  const ccol_memmgmt_procs honest = {_pl_malloc, _pl_free, _pl_calloc,
+                                     _pl_realloc};
+  const ccol_memmgmt_procs poison = {_pl_poison_malloc, _pl_poison_free,
+                                     _pl_poison_calloc, _pl_poison_realloc};
+  ccol_memmgmt_procs *mp = malloc(sizeof(*mp));
   REQUIRE_NE((void *)mp, NULL);
   *mp = honest;
   _pl_live = 0;
@@ -17027,8 +14228,8 @@ TEST(procs_lifetime, tree_does_not_read_the_procs_struct_of_the_caller_later) {
   long calls_at_overwrite = _pl_calls;
 
   bool built = root && leaf && list;
-  ccol_retval_t set_rv = ccol_invalid_args, push_rv = ccol_invalid_args,
-                dict_rv = ccol_invalid_args;
+  ccol_retval set_rv = ccol_invalid_args, push_rv = ccol_invalid_args,
+              dict_rv = ccol_invalid_args;
   char *text = NULL;
   cyaml copy = NULL;
   if (built) {
@@ -17042,7 +14243,7 @@ TEST(procs_lifetime, tree_does_not_read_the_procs_struct_of_the_caller_later) {
   }
   bool have_text = text != NULL;
   bool have_copy = copy != NULL;
-  if (text) cyaml_serialize_free_mp(text, (ccol_memmgmt_procs_t *)&honest);
+  if (text) cyaml_serialize_free_mp(text, (ccol_memmgmt_procs *)&honest);
   cyaml_destroy(copy);
   cyaml_destroy(leaf);
   cyaml_destroy(list);
@@ -17063,20 +14264,19 @@ TEST(procs_lifetime, tree_does_not_read_the_procs_struct_of_the_caller_later) {
   REQUIRE_EQ(live, 0L);
 }
 
-/* Two structs with the same four functions are the same allocator. So a tree
- * built from a struct that the caller has released can take a child built
- * from another struct with the same content, and every block still goes back
- * to the allocator that made it. */
+// Two structs with the same four functions are one allocator, so a child built
+// from one can join a tree built from the other after the first is
+// released.
 TEST(procs_lifetime, procs_structs_with_the_same_functions_are_one_allocator) {
-  ccol_memmgmt_procs_t first = {_pl_malloc, _pl_free, _pl_calloc, _pl_realloc};
-  ccol_memmgmt_procs_t second = first;
-  ccol_memmgmt_procs_t *a = NULL, *b = NULL;
-  ccol_retval_t ra = ccol_procs_intern(&first, &a);
-  ccol_retval_t rb = ccol_procs_intern(&second, &b);
-  ccol_memmgmt_procs_t *again = NULL;
-  ccol_retval_t rc = ccol_procs_intern(a, &again);
-  ccol_memmgmt_procs_t *none = (ccol_memmgmt_procs_t *)&first;
-  ccol_retval_t rn = ccol_procs_intern(NULL, &none);
+  ccol_memmgmt_procs first = {_pl_malloc, _pl_free, _pl_calloc, _pl_realloc};
+  ccol_memmgmt_procs second = first;
+  ccol_memmgmt_procs *a = NULL, *b = NULL;
+  ccol_retval ra = ccol_procs_intern(&first, &a);
+  ccol_retval rb = ccol_procs_intern(&second, &b);
+  ccol_memmgmt_procs *again = NULL;
+  ccol_retval rc = ccol_procs_intern(a, &again);
+  ccol_memmgmt_procs *none = (ccol_memmgmt_procs *)&first;
+  ccol_retval rn = ccol_procs_intern(NULL, &none);
   REQUIRE_EQ(ra, ccol_success);
   REQUIRE_EQ(rb, ccol_success);
   REQUIRE_EQ(rc, ccol_success);
@@ -17087,26 +14287,24 @@ TEST(procs_lifetime, procs_structs_with_the_same_functions_are_one_allocator) {
   REQUIRE_EQ((void *)none, NULL);
 }
 
-/* The intern table has a fixed number of slots. Once every slot is taken, a
- * factory function or a parse that needs a new set of functions fails
- * cleanly, while a set that already has a slot keeps working. */
+// Once every slot of the fixed intern table is taken, a call that needs a new
+// set of functions fails cleanly while a set with a slot keeps working.
 TEST(procs_lifetime, a_full_procs_table_fails_cleanly) {
-  ccol_memmgmt_procs_t known = {_pl_malloc, _pl_free, _pl_calloc, _pl_realloc};
-  ccol_memmgmt_procs_t *known_i = NULL;
-  ccol_retval_t rk = ccol_procs_intern(&known, &known_i);
-  size_t keep = _ccol_procs_intern_used_for_tests();
+  ccol_memmgmt_procs known = {_pl_malloc, _pl_free, _pl_calloc, _pl_realloc};
+  ccol_memmgmt_procs *known_i = NULL;
+  ccol_retval rk = ccol_procs_intern(&known, &known_i);
+  size_t keep = ccol__procs_intern_used_for_tests();
   size_t filled = 0;
   for (size_t i = keep; i < CCOL_PROCS_INTERN_CAPACITY; i++) {
-    /* Distinct contents that nothing ever calls. */
-    ccol_memmgmt_procs_t fake = {(ccol_malloc_t)(uintptr_t)(0x1000 + i * 16),
-                                 _pl_free, _pl_calloc, _pl_realloc};
-    ccol_memmgmt_procs_t *out = NULL;
+    ccol_memmgmt_procs fake = {(ccol_malloc)(uintptr_t)(0x1000 + i * 16),
+                               _pl_free, _pl_calloc, _pl_realloc};
+    ccol_memmgmt_procs *out = NULL;
     if (ccol_procs_intern(&fake, &out) == ccol_success) filled++;
   }
-  ccol_memmgmt_procs_t fresh = {_pl_poison_malloc, _pl_poison_free,
-                                _pl_poison_calloc, _pl_poison_realloc};
-  ccol_memmgmt_procs_t *fresh_i = (ccol_memmgmt_procs_t *)&known;
-  ccol_retval_t rf = ccol_procs_intern(&fresh, &fresh_i);
+  ccol_memmgmt_procs fresh = {_pl_poison_malloc, _pl_poison_free,
+                              _pl_poison_calloc, _pl_poison_realloc};
+  ccol_memmgmt_procs *fresh_i = (ccol_memmgmt_procs *)&known;
+  ccol_retval rf = ccol_procs_intern(&fresh, &fresh_i);
   _pl_poison_calls = 0;
   cyaml refused_node = cyaml_create_int_mp(7, &fresh);
   char *err = NULL;
@@ -17122,7 +14320,7 @@ TEST(procs_lifetime, a_full_procs_table_fails_cleanly) {
   long live = _pl_live;
   cyaml_destroy(refused_node);
   cyaml_destroy(refused_tree);
-  _ccol_procs_intern_truncate_for_tests(keep);
+  ccol__procs_intern_truncate_for_tests(keep);
 
   REQUIRE_EQ(rk, ccol_success);
   REQUIRE_EQ(filled, CCOL_PROCS_INTERN_CAPACITY - keep);
@@ -17136,14 +14334,12 @@ TEST(procs_lifetime, a_full_procs_table_fails_cleanly) {
   REQUIRE_EQ(live, 0L);
 }
 
-/* This suite compiles as C11, where the macro `true` is the int 1, so
- * cyaml_set()'s classifier stores it as the CYAML_INTEGER 1, as the header
- * documents, while (bool)true stores a CYAML_BOOL. tests_c23.c pins the C23
- * side, where `true` has the type bool. */
+// Under C11 `true` is the int 1, so cyaml_set() stores an integer, while
+// (bool)true stores a bool. tests_c23.c pins the C23 side.
 TEST(set_value_types, c11_true_is_an_int_and_a_cast_makes_a_bool) {
   cyaml doc = cyaml_parse("{\"i\": 0, \"b\": 0}", NULL);
-  ccol_retval_t ri = doc ? cyaml_set(doc, "i", true) : ccol_not_enough_memory;
-  ccol_retval_t rb =
+  ccol_retval ri = doc ? cyaml_set(doc, "i", true) : ccol_not_enough_memory;
+  ccol_retval rb =
       doc ? cyaml_set(doc, "b", (bool)true) : ccol_not_enough_memory;
   cyaml i = doc ? cyaml_get(doc, "i") : NULL;
   cyaml b = doc ? cyaml_get(doc, "b") : NULL;
@@ -17156,20 +14352,19 @@ TEST(set_value_types, c11_true_is_an_int_and_a_cast_makes_a_bool) {
   REQUIRE_TRUE(b_is_bool);
 }
 
-/* ========================================================================== */
-/*          STREAM CHARACTER SET: UTF-8 AND C-PRINTABLE (YAML 1.2 5.1)        */
-/* ========================================================================== */
+// Stream character set: UTF-8 and c-printable (YAML 1.2 5.1)
 
-/* True when every byte of s is printable ASCII. */
+// Tells whether every byte of s is printable ASCII, which every refusal of
+// the character set tests must keep its message to.
 static bool charset_msg_is_printable_ascii(const char *s) {
   for (; *s; s++)
     if ((unsigned char)*s < 0x20 || (unsigned char)*s > 0x7E) return false;
   return true;
 }
 
-/* Parses len bytes of doc. True when the parse is refused with a printable
- * ASCII message holding every non-NULL needle (up to three); the tree of an
- * unexpected success gets destroyed. */
+// Parses len bytes of doc and tells whether it is refused with a printable
+// ASCII message holding every needle that isn't NULL. The character set tests
+// use it for each bad byte sequence.
 static bool charset_refused(const char *doc, size_t len, const char *n1,
                             const char *n2, const char *n3) {
   char *err = NULL;
@@ -17185,7 +14380,8 @@ static bool charset_refused(const char *doc, size_t len, const char *n1,
   return ok;
 }
 
-/* True when the len bytes of doc parse. */
+// Tells whether the len bytes of doc parse, the accepting half of the
+// character set tests.
 static bool charset_accepted(const char *doc, size_t len) {
   char *err = NULL;
   cyaml root = cyaml_parse_n(doc, len, &err);
@@ -17195,10 +14391,11 @@ static bool charset_accepted(const char *doc, size_t len) {
   return ok;
 }
 
+// Evaluates to the length of the string literal lit without its terminating
+// NUL. The character set tests pass documents that hold NUL bytes, so they
+// can't take the length with strlen().
 #define CHARSET_LEN(lit) (sizeof(lit) - 1)
 
-/* Every ill-formed UTF-8 form gets refused, and the message names the kind
- * of defect and the offending bytes. */
 TEST(stream_charset, ill_formed_utf8_is_refused_with_the_defect_named) {
   static const struct {
     const char *doc;
@@ -17230,8 +14427,6 @@ TEST(stream_charset, ill_formed_utf8_is_refused_with_the_defect_named) {
                                  cases[i].what, cases[i].bytes));
 }
 
-/* Every character outside c-printable is refused raw: C0 controls other than
- * TAB, LF and CR, DEL, C1 controls other than NEL, and U+FFFE and U+FFFF. */
 TEST(stream_charset, characters_outside_c_printable_are_refused) {
   for (unsigned c = 0; c < 0x20; c++) {
     if (c == 0x09 || c == 0x0A || c == 0x0D) continue;
@@ -17260,21 +14455,19 @@ TEST(stream_charset, characters_outside_c_printable_are_refused) {
                                "line 1, column 5", NULL));
 }
 
-/* The c-printable characters at the edges of every range are accepted raw,
- * and so is every well-formed sequence length. */
 TEST(stream_charset, c_printable_edges_are_accepted) {
   static const char *const values[] = {
-      "x\ty",               /* TAB inside a plain scalar */
-      "x\xC2\x85y",         /* NEL */
-      "x\xC2\xA0y",         /* U+00A0, the first character after C1 */
-      "x\xC3\xA9y",         /* U+00E9 */
-      "x\xED\x9F\xBFy",     /* U+D7FF, before the surrogates */
-      "x\xEE\x80\x80y",     /* U+E000, after the surrogates */
-      "x\xEF\xBF\xBDy",     /* U+FFFD */
-      "x\xEF\xBB\xBFy",     /* U+FEFF inside a scalar */
-      "x\xF0\x90\x80\x80y", /* U+10000 */
-      "x\xF4\x8F\xBF\xBFy", /* U+10FFFF */
-      "x~y",                /* 0x7E, the last ASCII character before DEL */
+      "x\ty",
+      "x\xC2\x85y",
+      "x\xC2\xA0y",
+      "x\xC3\xA9y",
+      "x\xED\x9F\xBFy",
+      "x\xEE\x80\x80y",
+      "x\xEF\xBF\xBDy",
+      "x\xEF\xBB\xBFy",
+      "x\xF0\x90\x80\x80y",
+      "x\xF4\x8F\xBF\xBFy",
+      "x~y",
   };
   for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
     char doc[64];
@@ -17291,32 +14484,30 @@ TEST(stream_charset, c_printable_edges_are_accepted) {
   }
 }
 
-/* The rule covers every part of a stream. Each template holds one '@' where
- * the offending character goes, and each parses when the '@' becomes an
- * ordinary letter, which shows the refusal comes from the character and not
- * from the document's shape. */
+// Each template holds one '@' where the bad character goes, and parses when
+// the '@' is a letter, so a refusal comes from the character alone.
 TEST(stream_charset, every_context_of_the_stream_is_checked) {
   static const char *const templates[] = {
-      "key: va@lue\n",                            /* plain value */
-      "ke@y: value\n",                            /* plain key */
-      "\"ke@y\": value\n",                        /* double-quoted key */
-      "key: \"va@lue\"\n",                        /* double-quoted value */
-      "key: 'va@lue'\n",                          /* single-quoted value */
-      "key: value # comm@ent\n",                  /* comment after content */
-      "# comm@ent\nkey: value\n",                 /* comment line */
-      "key: !ta@g value\n",                       /* shorthand tag */
-      "key: !<tag:a@b> value\n",                  /* verbatim tag */
-      "key: &anc@hor value\nother: *anc@hor\n",   /* anchor and alias */
-      "key: |\n  li@teral\n",                     /* literal block scalar */
-      "key: >\n  fol@ded\n",                      /* folded block scalar */
-      "[a, b@c, d]\n",                            /* flow sequence */
-      "{a: b@c, d: e}\n",                         /* flow mapping */
-      "- a\n- b@c\n",                             /* block sequence */
-      "a: 1\n---\nb: c@d\n",                      /* second document */
-      "a: 1\n...\n# c@d\n---\nb: 2\n",            /* document prefix */
-      "%TAG !e! tag:ex@ample.com:\n--- !e!x 1\n", /* %TAG directive */
-      "%YAML 1.2 # c@d\n---\na: 1\n",             /* directive comment */
-      "key:  @ \n", /* whitespace between tokens */
+      "key: va@lue\n",
+      "ke@y: value\n",
+      "\"ke@y\": value\n",
+      "key: \"va@lue\"\n",
+      "key: 'va@lue'\n",
+      "key: value # comm@ent\n",
+      "# comm@ent\nkey: value\n",
+      "key: !ta@g value\n",
+      "key: !<tag:a@b> value\n",
+      "key: &anc@hor value\nother: *anc@hor\n",
+      "key: |\n  li@teral\n",
+      "key: >\n  fol@ded\n",
+      "[a, b@c, d]\n",
+      "{a: b@c, d: e}\n",
+      "- a\n- b@c\n",
+      "a: 1\n---\nb: c@d\n",
+      "a: 1\n...\n# c@d\n---\nb: 2\n",
+      "%TAG !e! tag:ex@ample.com:\n--- !e!x 1\n",
+      "%YAML 1.2 # c@d\n---\na: 1\n",
+      "key:  @ \n",
   };
   static const struct {
     const char *bytes;
@@ -17351,9 +14542,6 @@ TEST(stream_charset, every_context_of_the_stream_is_checked) {
   }
 }
 
-/* Lines and columns are counted from 1. LF, CR and CRLF each end one line,
- * the column counts characters and not bytes, and a byte order mark at the
- * start of the stream takes no column. */
 TEST(stream_charset, message_gives_line_and_column) {
   REQUIRE_TRUE(charset_refused("a: 1\nb: 2\nccc: x\x01\n", 17,
                                "line 3, column 7", NULL, NULL));
@@ -17361,8 +14549,6 @@ TEST(stream_charset, message_gives_line_and_column) {
                                "line 3, column 7", NULL, NULL));
   REQUIRE_TRUE(charset_refused("a: 1\rb: 2\rc: \x02\r", 15, "line 3, column 4",
                                NULL, NULL));
-  /* Two two-byte characters and one three-byte character before the bad
-   * byte count as three columns. */
   REQUIRE_TRUE(charset_refused("k: \xC3\xA9\xC3\xA9\xE2\x82\xAC\xFF\n", 15,
                                "line 1, column 7", "0xff", NULL));
   REQUIRE_TRUE(
@@ -17370,14 +14556,12 @@ TEST(stream_charset, message_gives_line_and_column) {
                       "a: \x01\n",
                       9, "line 1, column 4", NULL, NULL));
   REQUIRE_TRUE(charset_refused("\x01", 1, "line 1, column 1", NULL, NULL));
-  /* NEL isn't a line break in YAML 1.2, it takes one column. */
   REQUIRE_TRUE(charset_refused("a: \"\xC2\x85\x01\"\n", 9, "line 1, column 6",
                                NULL, NULL));
 }
 
-/* A long document is checked in blocks of sixteen bytes. The offending byte
- * is found at every offset inside a block and on both sides of the last
- * whole block, which the character walk finishes. */
+// The check reads sixteen-byte blocks, so the bad byte is put at every offset
+// of a block and on both sides of the last whole block.
 TEST(stream_charset, offending_byte_is_found_at_every_offset) {
   for (size_t len = 1; len <= 70; len++) {
     for (size_t at = 0; at < len; at++) {
@@ -17397,8 +14581,6 @@ TEST(stream_charset, offending_byte_is_found_at_every_offset) {
   }
 }
 
-/* cyaml_parse_n checks exactly len bytes, so a bad byte or a truncated
- * sequence at the very end is refused and bytes past len are never read. */
 TEST(stream_charset, parse_n_checks_up_to_the_last_byte_and_no_further) {
   static const char tail_nul[] = "a: 1\nb: 2\nc: 3\nd: 4\ne: x\0";
   REQUIRE_TRUE(charset_refused(tail_nul, CHARSET_LEN(tail_nul),
@@ -17408,24 +14590,20 @@ TEST(stream_charset, parse_n_checks_up_to_the_last_byte_and_no_further) {
   REQUIRE_TRUE(charset_refused(tail_cut, CHARSET_LEN(tail_cut),
                                "truncated by the end of the input",
                                "line 5, column 4", NULL));
-  /* The same truncated euro sign is complete one byte later, so a len that
-   * cuts it is refused and the full len is accepted. */
   static const char euro[] = "a: 1\nb: 2\nc: 3\nd: 4\ne: \xE2\x82\xAC";
   REQUIRE_TRUE(charset_refused(euro, CHARSET_LEN(euro) - 1,
                                "truncated by the end of the input", NULL,
                                NULL));
   REQUIRE_TRUE(charset_accepted(euro, CHARSET_LEN(euro)));
-  /* Bytes past len are not part of the input. */
   static const char past[] = "a: 1\nb: 2\nc: 3\nd: 4\ne: 5\x01\xFF";
   REQUIRE_TRUE(charset_accepted(past, CHARSET_LEN(past) - 2));
   REQUIRE_TRUE(
       charset_refused(past, CHARSET_LEN(past) - 1, "0x01", NULL, NULL));
 }
 
-/* An escape in a double-quoted scalar names a character with c-printable
- * text, so it's accepted even where the raw character is refused, and the
- * value holds the character. A tree holding such characters serializes them
- * as escapes and reads back as the same text. */
+// An escape names a character with c-printable text, so it is accepted where
+// the raw character is refused, and the tree serializes it as an escape
+// again.
 TEST(stream_charset, escaped_forms_of_refused_characters_are_accepted) {
   static const struct {
     const char *doc;
@@ -17459,9 +14637,6 @@ TEST(stream_charset, escaped_forms_of_refused_characters_are_accepted) {
   }
 }
 
-/* Percent-escapes in a tag name the bytes of UTF-8 text, so escapes that
- * decode to bytes that aren't UTF-8 are refused while well-formed ones get
- * decoded. */
 TEST(stream_charset, tag_percent_escapes_must_decode_to_utf8) {
   REQUIRE_TRUE(charset_refused("!<tag:a%C3> v", 13, "not well-formed UTF-8",
                                NULL, NULL));
@@ -17479,16 +14654,17 @@ TEST(stream_charset, tag_percent_escapes_must_decode_to_utf8) {
   REQUIRE_TRUE(ok);
 }
 
-/* ========================================================================== */
-/*            API STRINGS: WELL-FORMED UTF-8 IS REQUIRED                      */
-/* ========================================================================== */
+// API strings: well-formed UTF-8 is required
 
-/* Byte strings that are not UTF-8, one of each kind of defect. */
+// Byte strings that aren't UTF-8, one of each kind of defect, which the API
+// UTF-8 tests pass to every call that takes a string.
 static const char *const api_bad_utf8[] = {
     "a\x80",        "\xC3",         "x\xC3(",           "\xC0\xAF",
     "\xE0\x80\xAF", "\xED\xA0\x80", "\xF4\x90\x80\x80", "\xFF",
     "ok\xE2\x82",
 };
+// The number of entries of api_bad_utf8, the bound of the API UTF-8 tests'
+// loops.
 #define API_BAD_COUNT (sizeof(api_bad_utf8) / sizeof(api_bad_utf8[0]))
 
 TEST(api_utf8, create_string_refuses_ill_formed_utf8) {
@@ -17502,9 +14678,8 @@ TEST(api_utf8, create_string_refuses_ill_formed_utf8) {
   }
 }
 
-/* Every Unicode scalar value is accepted through the API, including the
- * characters a document may only hold as an escape. The serializer escapes
- * them, and the output reads back as the same text. */
+// Every Unicode scalar value is accepted through the API, including the ones a
+// document may only hold as an escape.
 TEST(api_utf8, characters_that_need_an_escape_are_accepted_and_round_trip) {
   static const char *const values[] = {
       "\x01\x02\x1F",         "a\177b",           "\xC2\x80\xC2\x9F",
@@ -17513,13 +14688,12 @@ TEST(api_utf8, characters_that_need_an_escape_are_accepted_and_round_trip) {
   };
   for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
     cyaml doc = cyaml_create_dictionary();
-    ccol_retval_t rk = doc ? cyaml_dictionary_set(
-                                 doc, values[i], cyaml_create_string(values[i]))
-                           : ccol_not_enough_memory;
-    ccol_retval_t rt =
-        doc ? cyaml_node_set_tag(cyaml_dictionary_get(doc, values[i]),
-                                 values[i])
-            : ccol_not_enough_memory;
+    ccol_retval rk = doc ? cyaml_dictionary_set(doc, values[i],
+                                                cyaml_create_string(values[i]))
+                         : ccol_not_enough_memory;
+    ccol_retval rt = doc ? cyaml_node_set_tag(
+                               cyaml_dictionary_get(doc, values[i]), values[i])
+                         : ccol_not_enough_memory;
     char *text = doc ? cyaml_serialize(doc) : NULL;
     char *err = NULL;
     cyaml back = text ? cyaml_parse(text, &err) : NULL;
@@ -17537,19 +14711,14 @@ TEST(api_utf8, characters_that_need_an_escape_are_accepted_and_round_trip) {
   }
 }
 
-/* cyaml_set refuses a string value that isn't UTF-8 and leaves the tree as
- * it was: an existing leaf keeps its value and type, a list element keeps
- * its value, and a missing key isn't created. */
 TEST(api_utf8, set_refuses_ill_formed_string_value_and_changes_nothing) {
   for (size_t i = 0; i < API_BAD_COUNT; i++) {
     cyaml doc = cyaml_parse("{a: old, n: 5, l: [x]}", NULL);
     const char *bad = api_bad_utf8[i];
-    ccol_retval_t r1 = doc ? cyaml_set(doc, "a", bad) : ccol_not_enough_memory;
-    ccol_retval_t r2 = doc ? cyaml_set(doc, "n", bad) : ccol_not_enough_memory;
-    ccol_retval_t r3 =
-        doc ? cyaml_set(doc, "new", bad) : ccol_not_enough_memory;
-    ccol_retval_t r4 =
-        doc ? cyaml_set(doc, "l.#0", bad) : ccol_not_enough_memory;
+    ccol_retval r1 = doc ? cyaml_set(doc, "a", bad) : ccol_not_enough_memory;
+    ccol_retval r2 = doc ? cyaml_set(doc, "n", bad) : ccol_not_enough_memory;
+    ccol_retval r3 = doc ? cyaml_set(doc, "new", bad) : ccol_not_enough_memory;
+    ccol_retval r4 = doc ? cyaml_set(doc, "l.#0", bad) : ccol_not_enough_memory;
     bool unchanged =
         doc && strcmp(cyaml_str_val(cyaml_get(doc, "a")), "old") == 0 &&
         cyaml_type(cyaml_get(doc, "n")) == CYAML_INTEGER &&
@@ -17565,14 +14734,13 @@ TEST(api_utf8, set_refuses_ill_formed_string_value_and_changes_nothing) {
   }
 }
 
-/* cyaml_set refuses a leaf key that is not UTF-8 and creates nothing. */
 TEST(api_utf8, set_refuses_ill_formed_leaf_key) {
   for (size_t i = 0; i < API_BAD_COUNT; i++) {
     cyaml doc = cyaml_parse("{a: {b: 1}}", NULL);
     char path[32];
     snprintf(path, sizeof(path), "a.%s", api_bad_utf8[i]);
-    ccol_retval_t r1 = doc ? cyaml_set(doc, path, 7) : ccol_not_enough_memory;
-    ccol_retval_t r2 =
+    ccol_retval r1 = doc ? cyaml_set(doc, path, 7) : ccol_not_enough_memory;
+    ccol_retval r2 =
         doc ? cyaml_set(doc, api_bad_utf8[i], "v") : ccol_not_enough_memory;
     bool unchanged = doc && cyaml_dictionary_size(doc) == 1 &&
                      cyaml_dictionary_size(cyaml_get(doc, "a")) == 1;
@@ -17583,23 +14751,18 @@ TEST(api_utf8, set_refuses_ill_formed_leaf_key) {
   }
 }
 
-/* cyaml_dictionary_set refuses a key that isn't UTF-8 with
- * ccol_invalid_args, which leaves the child with the caller, so it's not
- * attached and the caller still destroys it. */
 TEST(api_utf8, dictionary_set_refuses_ill_formed_key_and_leaves_child) {
   for (size_t i = 0; i < API_BAD_COUNT; i++) {
     cyaml map = cyaml_create_dictionary();
     cyaml child = cyaml_create_string("v");
-    ccol_retval_t r = (map && child)
-                          ? cyaml_dictionary_set(map, api_bad_utf8[i], child)
-                          : ccol_not_enough_memory;
-    /* The child is still unattached, so a valid key can take it. */
-    ccol_retval_t again = r == ccol_invalid_args
-                              ? cyaml_dictionary_set(map, "ok", child)
-                              : ccol_not_enough_memory;
+    ccol_retval r = (map && child)
+                        ? cyaml_dictionary_set(map, api_bad_utf8[i], child)
+                        : ccol_not_enough_memory;
+    ccol_retval again = r == ccol_invalid_args
+                            ? cyaml_dictionary_set(map, "ok", child)
+                            : ccol_not_enough_memory;
     bool placed = map && cyaml_dictionary_size(map) == 1 &&
                   cyaml_dictionary_get(map, "ok") == child;
-    /* A map that took the child owns it, otherwise the caller frees it. */
     if (r != ccol_success && again != ccol_success) cyaml_destroy(child);
     cyaml_destroy(map);
     REQUIRE_EQ(r, ccol_invalid_args);
@@ -17608,14 +14771,12 @@ TEST(api_utf8, dictionary_set_refuses_ill_formed_key_and_leaves_child) {
   }
 }
 
-/* cyaml_node_set_tag refuses a tag that isn't UTF-8 and keeps the node's
- * existing tag. */
 TEST(api_utf8, node_set_tag_refuses_ill_formed_tag_and_keeps_the_old_one) {
   for (size_t i = 0; i < API_BAD_COUNT; i++) {
     cyaml n = cyaml_create_string("v");
-    ccol_retval_t r0 =
+    ccol_retval r0 =
         n ? cyaml_node_set_tag(n, "!keep") : ccol_not_enough_memory;
-    ccol_retval_t r =
+    ccol_retval r =
         n ? cyaml_node_set_tag(n, api_bad_utf8[i]) : ccol_not_enough_memory;
     bool kept =
         n && cyaml_node_tag(n) && strcmp(cyaml_node_tag(n), "!keep") == 0;
@@ -17626,24 +14787,22 @@ TEST(api_utf8, node_set_tag_refuses_ill_formed_tag_and_keeps_the_old_one) {
   }
 }
 
-/* ------------------------------------------------------------------------ */
-/*  The canonical text of a collection key is built under its limit         */
-/* ------------------------------------------------------------------------ */
+// The canonical text of a collection key is built under its limit
 
-/* The builder may hold the limit (64 KiB) plus one byte of text and the
- * NUL, and the buffer grows by doubling from 256 bytes, so it never needs
- * more than 128 KiB. The figure is a literal on purpose, it must not move
- * with the library constant it checks. */
+// The largest canonical buffer the builder may need: the 64 KiB limit plus a
+// byte and the NUL, grown by doubling from 256 bytes. A literal, so it doesn't
+// move with the library constant. The canonical key tests require the peak
+// buffer to stay under it.
 #define CANON_PEAK_CEILING ((size_t)128 * 1024)
 
-/* Parses input, which has to be refused with the canonical key limit's
- * "exceeds" message, and reports the largest canonical buffer the parse
- * built. */
+// Parses input and tells whether it is refused with the canonical key limit's
+// message. Stores the largest canonical buffer the parse built in *peak, so
+// the tests can check that the builder stopped at the limit.
 static bool canon_refused(const char *input, size_t *peak) {
-  _cyaml_canonical_key_peak_bytes_for_tests = 0;
+  cyaml__canonical_key_peak_bytes_for_tests = 0;
   char *err = NULL;
   cyaml doc = cyaml_parse(input, &err);
-  *peak = _cyaml_canonical_key_peak_bytes_for_tests;
+  *peak = cyaml__canonical_key_peak_bytes_for_tests;
   bool refused = !doc && err &&
                  strstr(err, "canonical form of a non-scalar key") &&
                  strstr(err, "exceeds 65536 bytes");
@@ -17652,7 +14811,8 @@ static bool canon_refused(const char *input, size_t *peak) {
   return refused;
 }
 
-/* Builds "a: &a <anchored>\n? [*a, *a, ...]\n: v\n" with `aliases` aliases. */
+// Builds "a: &a <anchored>\n? [*a, *a, ...]\n: v\n" with aliases aliases, a
+// key whose canonical text grows with every alias. The caller frees it.
 static char *canon_alias_doc(const char *anchored, size_t aliases) {
   size_t cap = strlen(anchored) + aliases * 4 + 64;
   char *d = malloc(cap);
@@ -17664,7 +14824,8 @@ static char *canon_alias_doc(const char *anchored, size_t aliases) {
   return d;
 }
 
-/* Builds a run of `count` copies of `unit`, with prefix and suffix. */
+// Builds prefix, count copies of unit, and suffix on the heap, for the long
+// inputs of the canonical key tests. The caller frees it.
 static char *canon_repeat(const char *prefix, const char *unit, size_t count,
                           const char *suffix) {
   size_t ul = strlen(unit);
@@ -17677,10 +14838,9 @@ static char *canon_repeat(const char *prefix, const char *unit, size_t count,
   return s;
 }
 
-/* A key made of many aliases of one scalar whose canonical text is four
- * times its stored text. Rendered in full it's about 1 MiB, and the builder
- * has to stop at the limit. One that renders the whole key and checks the
- * length afterwards allocates 2 MiB here. */
+// The key renders to about 1 MiB in full (each alias's canonical text is four
+// times its stored text), so the builder must stop at the limit instead of
+// rendering everything and checking afterwards.
 TEST(canonical_key_cap, aliased_escaped_scalar_stops_at_the_limit) {
   char *scalar = canon_repeat("\"", "\\x01", 4096, "\"");
   char *doc = scalar ? canon_alias_doc(scalar, 64) : NULL;
@@ -17692,7 +14852,6 @@ TEST(canonical_key_cap, aliased_escaped_scalar_stops_at_the_limit) {
   REQUIRE_LE(peak, CANON_PEAK_CEILING);
 }
 
-/* The same through each alias's percent-escaped verbatim tag. */
 TEST(canonical_key_cap, aliased_long_tag_stops_at_the_limit) {
   char *tagged = canon_repeat("!<tag:x,", "%7B", 8192, "> v");
   char *doc = tagged ? canon_alias_doc(tagged, 16) : NULL;
@@ -17704,8 +14863,6 @@ TEST(canonical_key_cap, aliased_long_tag_stops_at_the_limit) {
   REQUIRE_LE(peak, CANON_PEAK_CEILING);
 }
 
-/* The same through a long dictionary key inside each alias, which the
- * builder writes in the explicit "? key" form. */
 TEST(canonical_key_cap, aliased_long_dictionary_key_stops_at_the_limit) {
   char *map = canon_repeat("{\"", "\\x02", 2048, "\": 1}");
   char *doc = map ? canon_alias_doc(map, 64) : NULL;
@@ -17717,9 +14874,6 @@ TEST(canonical_key_cap, aliased_long_dictionary_key_stops_at_the_limit) {
   REQUIRE_LE(peak, CANON_PEAK_CEILING);
 }
 
-/* A plain scalar of n bytes inside a list key has the canonical text
- * "[" + scalar + "]", n + 2 bytes. 65536 bytes are accepted with the text
- * intact, and one byte more is refused. */
 TEST(canonical_key_cap, limit_is_exact) {
   char *at = canon_repeat("? [", "a", 65534, "]\n: v\n");
   char *over = canon_repeat("? [", "a", 65535, "]\n: v\n");
@@ -17739,18 +14893,19 @@ TEST(canonical_key_cap, limit_is_exact) {
   REQUIRE_LE(peak, CANON_PEAK_CEILING);
 }
 
-/* ------------------------------------------------------------------------ */
-/*  Every parse error message is printable ASCII                            */
-/* ------------------------------------------------------------------------ */
+// Every parse error message is printable ASCII
 
+// Tells whether every byte of s is printable ASCII, which every parse error
+// message must be.
 static bool err_text_is_printable(const char *s) {
   for (; *s; s++)
     if ((unsigned char)*s < 0x20 || (unsigned char)*s > 0x7E) return false;
   return true;
 }
 
-/* Parses len bytes, which are expected to be refused, and checks that the
- * message is printable ASCII and holds `want` when want isn't NULL. */
+// Parses len bytes of input, which must be refused, and tells whether the
+// message is printable ASCII and holds want when want isn't NULL. The error
+// text tests run it for each quoting context.
 static bool err_text_check(const char *input, size_t len, const char *want) {
   char *err = NULL;
   cyaml doc = cyaml_parse_n(input, len, &err);
@@ -17766,11 +14921,13 @@ static bool err_text_check(const char *input, size_t len, const char *want) {
   return ok;
 }
 
+// Runs err_text_check() on the string literal lit, with the length taken from
+// the literal so the input may hold NUL bytes, and evaluates to its verdict.
+// want is the text the error message must hold, or NULL.
 #define ERR_TEXT_CHECK(lit, want) err_text_check((lit), sizeof(lit) - 1, (want))
 
-/* Every message that quotes input text spells a byte outside 0x20..0x7E as
- * <0xNN>. Otherwise the first case's decoded ESC and LF would reach the
- * message raw, and the second case would put half a UTF-8 sequence in it. */
+// A message that quotes input spells every byte outside 0x20..0x7E as <0xNN>,
+// so neither a decoded ESC nor half a UTF-8 sequence reaches it.
 TEST(error_text, quoted_input_is_printable_ascii) {
   REQUIRE_TRUE(ERR_TEXT_CHECK("x: !!bool \"\\e[31mRED\\nFAKE LOG LINE\"\n",
                               "'<0x1B>[31mRED<0x0A>FAKE LOG LINE' is not a "
@@ -17799,8 +14956,6 @@ TEST(error_text, quoted_input_is_printable_ascii) {
                               "unexpected ',' directly after anchor name"));
 }
 
-/* A long quoted text is cut at a whole byte, never inside a <0xNN>, and
- * ends with "...", so the message stays short. */
 TEST(error_text, long_quoted_input_is_cut_at_a_whole_byte) {
   char *esc = canon_repeat("x: !!int \"", "\\e", 300, "\"\n");
   char *plain = canon_repeat("x: !!int \"", "y", 300, "\"\n");
@@ -17826,8 +14981,6 @@ TEST(error_text, long_quoted_input_is_cut_at_a_whole_byte) {
   REQUIRE_LT(strlen(e2), (size_t)160);
 }
 
-/* Every byte value, in each place where the parser quotes the byte or the
- * text around it. A refusal before the parse names the byte as 0xNN too. */
 TEST(error_text, every_byte_in_every_quoting_context_is_printable) {
   static const char *const ctx[][2] = {{"\"\\u", "000\"\n"},
                                        {"\"\\U", "0000000\"\n"},
@@ -17857,8 +15010,6 @@ TEST(error_text, every_byte_in_every_quoting_context_is_printable) {
   REQUIRE_EQ(bad, (size_t)0);
 }
 
-/* The double-quoted writer escapes exactly the bytes that need it and
- * copies every other byte as it is. */
 TEST(serialize, double_quoted_escapes_every_special_byte_exactly) {
   static const char in[] =
       "a\x01\x02\x07\x08\t\n\x0b\x0c\r\x1b\x1f\"\\\x7f"
@@ -17882,19 +15033,18 @@ TEST(serialize, double_quoted_escapes_every_special_byte_exactly) {
   REQUIRE_TRUE(same);
 }
 
-/* ========================================================================== */
-/*        ONE NESTING LIMIT FOR PARSE, CLONE AND EVERY SERIALIZER            */
-/* ========================================================================== */
+// One nesting limit for parse, clone and every serializer
 
-/* The limit only counts nested containers. 500 of them are accepted with
- * anything inside the innermost one, a 501st is refused, and a scalar, a tag
- * and an anchor take no level. The number is stated here and not read back
- * from the library, because a test that pins a limit must not move with the
- * knob it tests. */
+// The limit counts nested containers only: 500 are accepted with anything
+// inside the innermost, a 501st is refused, and scalars, tags and anchors take
+// no level. The nesting tests build documents at and past the limit and look
+// for CYAML_TEST_DEPTH_ERR in the refusal. Both are literals so they don't
+// move with the library.
 #define CYAML_TEST_NESTING_LIMIT 500
 #define CYAML_TEST_DEPTH_ERR "maximum nesting depth (500) exceeded"
 
-/* Builds head + open * n + inner + close * n + tail on the heap. */
+// Builds head + open * n + inner + close * n + tail on the heap, the nested
+// documents of the nesting limit tests. The caller frees it.
 static char *cyaml_test_nest(const char *head, const char *open, size_t n,
                              const char *inner, const char *close,
                              const char *tail) {
@@ -17916,17 +15066,21 @@ static char *cyaml_test_nest(const char *head, const char *open, size_t n,
   return s;
 }
 
-/* What a parse of one document did, with every resource already released. */
+// What a parse of one document did, with every resource released: whether the
+// document could be built at all, whether it parsed, whether a refusal named
+// the nesting limit or an alias expansion, and whether every walk of an
+// accepted tree succeeded and reparsed.
 typedef struct {
-  bool built;    /* the document could be built at all */
-  bool parsed;   /* cyaml_parse() accepted it */
-  bool depth;    /* the refusal named the nesting limit */
-  bool alias;    /* the refusal named an alias expansion */
-  bool walks_ok; /* every walk of an accepted tree succeeded and reparsed */
+  bool built;
+  bool parsed;
+  bool depth;
+  bool alias;
+  bool walks_ok;
 } cyaml_nest_outcome_t;
 
-/* A tree the parser accepted must clone and serialize in all three forms,
- * and the block and flow text should parse back to an equal tree. */
+// Tells whether doc clones and serializes in all three forms, and whether the
+// clone and the block and flow text give a tree equal to doc. The nesting
+// tests require it for every tree the parser accepts at the limit.
 static bool cyaml_test_walks_agree(cyaml doc) {
   cyaml copy = cyaml_clone(doc);
   char *block = cyaml_serialize(doc);
@@ -17948,6 +15102,9 @@ static bool cyaml_test_walks_agree(cyaml doc) {
   return ok;
 }
 
+// Parses doc_text, frees it, and gives what the parse did, so the nesting
+// tests can judge a document in one call. A NULL doc_text (a build that ran
+// out of memory) gives an outcome with built false.
 static cyaml_nest_outcome_t cyaml_test_parse_outcome(char *doc_text) {
   cyaml_nest_outcome_t o = {doc_text != NULL, false, false, false, false};
   if (!doc_text) return o;
@@ -17963,25 +15120,21 @@ static cyaml_nest_outcome_t cyaml_test_parse_outcome(char *doc_text) {
   return o;
 }
 
-/* Accepted at the limit, with every walk agreeing on the tree. */
+// Tells whether o was accepted with every walk agreeing on the tree, the
+// verdict for a document at the limit.
 static bool cyaml_test_accepted(cyaml_nest_outcome_t o) {
   return o.built && o.parsed && o.walks_ok;
 }
 
-/* Refused one container past the limit, by the nesting guard. */
+// Tells whether o was refused by the nesting guard, the verdict for a document
+// one container past the limit.
 static bool cyaml_test_refused(cyaml_nest_outcome_t o) {
   return o.built && !o.parsed && o.depth;
 }
 
-/*
- * 500 nested flow collections are accepted whether the innermost one is
- * empty or holds a scalar, and a 501st collection is refused. The scalar
- * takes no level, so it never changes the verdict.
- *
- * If every node, a scalar included, took a level, the parse would refuse
- * "[" * 500 + "1" + "]" * 500 while the clone and the serializers accept that
- * tree when it's built through the API.
- */
+// If a scalar took a level, the parse would refuse 500 lists around a scalar
+// that the clone and the serializers accept when the tree comes from the
+// API.
 TEST(nesting_limit, flow_collections_count_and_a_scalar_inside_does_not) {
   const size_t n = CYAML_TEST_NESTING_LIMIT;
   bool empty_at = cyaml_test_accepted(
@@ -18004,8 +15157,9 @@ TEST(nesting_limit, flow_collections_count_and_a_scalar_inside_does_not) {
   REQUIRE_TRUE(dict_past);
 }
 
-/* Builds `levels` nested block mappings, each one column further in, whose
- * innermost key holds the scalar 1: "k:\n k:\n  ...k: 1\n". */
+// Builds levels nested block mappings, each one column further in, whose
+// innermost key holds the scalar 1, for the block nesting test. The caller
+// frees it.
 static char *cyaml_test_block_leaf_doc(size_t levels) {
   char *s = (char *)malloc(levels * (levels + 6) + 8);
   if (!s) return NULL;
@@ -18020,13 +15174,6 @@ static char *cyaml_test_block_leaf_doc(size_t levels) {
   return s;
 }
 
-/*
- * 500 nested block mappings whose innermost key holds a scalar are
- * accepted, and 501 are refused.
- *
- * Were the scalar value to take a level of its own, the parse would refuse
- * the 500 mappings.
- */
 TEST(nesting_limit, block_mappings_with_a_scalar_leaf) {
   const size_t n = CYAML_TEST_NESTING_LIMIT;
   bool at = cyaml_test_accepted(
@@ -18037,14 +15184,6 @@ TEST(nesting_limit, block_mappings_with_a_scalar_leaf) {
   REQUIRE_TRUE(past);
 }
 
-/*
- * A tag and an anchor on every collection take no level, so 500 tagged,
- * anchored or tagged and anchored collections are accepted with a tagged and
- * anchored scalar inside, and 501 are refused.
- *
- * The point is the count: if a node frame took a level and a property one
- * more, the parse would refuse a tagged chain at about 250 levels.
- */
 TEST(nesting_limit, tags_and_anchors_take_no_level) {
   const size_t n = CYAML_TEST_NESTING_LIMIT;
   static const char *opens[] = {"!t [", "&a [", "&a !t [", "!t &a {k: "};
@@ -18062,15 +15201,9 @@ TEST(nesting_limit, tags_and_anchors_take_no_level) {
   REQUIRE_TRUE(past_ok);
 }
 
-/*
- * A "key: value" pair inside a flow sequence is a one-entry mapping one
- * level below the sequence, with or without a value, so it takes a level
- * like any other container.
- *
- * Without the pair's level the parse would accept
- * "[" * 500 + "a: 1" + "]" * 500, a tree of 501 containers that cyaml_clone()
- * and every serializer then refuse.
- */
+// A "key: value" pair in a flow sequence is a one-entry mapping one level
+// below the sequence. Without that level the parse would accept a tree of 501
+// containers that every walk then refuses.
 TEST(nesting_limit, a_pair_inside_a_flow_sequence_takes_a_level) {
   const size_t n = CYAML_TEST_NESTING_LIMIT;
   bool shorthand_at = cyaml_test_accepted(cyaml_test_parse_outcome(
@@ -18099,9 +15232,10 @@ TEST(nesting_limit, a_pair_inside_a_flow_sequence_takes_a_level) {
   REQUIRE_TRUE(container_value_past);
 }
 
-/* Builds "a: &x" + anchored + "\nb: " + "[" * m + use + "]" * m, where the
- * anchored node nests n containers, n flow lists, or n flow mappings with a
- * scalar inside when as_map is true. use is "*x" or "{<<: *x}". */
+// Builds "a: &x" + anchored + "\nb: " + "[" * m + use + "]" * m, where the
+// anchored node nests n flow lists, or n flow mappings with a scalar inside
+// when as_map is true, and use is "*x" or "{<<: *x}". The alias and merge
+// nesting tests vary n and m around the limit. The caller frees it.
 static char *cyaml_test_alias_doc(size_t n, bool as_map, size_t m,
                                   const char *use) {
   char *anchored = as_map ? cyaml_test_nest("&x ", "{k: ", n, "1", "}", "")
@@ -18120,19 +15254,10 @@ static char *cyaml_test_alias_doc(size_t n, bool as_map, size_t m,
   return doc;
 }
 
-/*
- * An alias copies its anchored subtree below every container that encloses the
- * alias, so its expansion must fit in the levels left there. In these
- * documents the root mapping is one level, the m lists around the alias are m
- * more and the anchored subtree adds its own n, so the tree is 1 + m + n deep.
- *
- * Drop the check and the parse accepts the 501-level tree, and
- * cyaml_serialize(), cyaml_serialize_flow() and cyaml_clone() then return NULL
- * for a tree the parser built.
- */
+// An alias copies its subtree below every container around the alias, so the
+// tree is 1 + m + n deep and the expansion must fit in the levels left.
 TEST(nesting_limit, an_alias_expansion_must_fit_below_the_alias) {
   const size_t n = CYAML_TEST_NESTING_LIMIT;
-  /* 1 + 250 + 249 = 500 levels, and one more either way. */
   cyaml_nest_outcome_t at = cyaml_test_parse_outcome(
       cyaml_test_alias_doc(n / 2 - 1, false, n / 2, "*x"));
   cyaml_nest_outcome_t past_anchor =
@@ -18144,17 +15269,8 @@ TEST(nesting_limit, an_alias_expansion_must_fit_below_the_alias) {
   REQUIRE_TRUE(past_alias.built && !past_alias.parsed && past_alias.alias);
 }
 
-/*
- * A merge key's value is an alias like any other, and it counts where it
- * stands. Here the root mapping, the m lists and the mapping holding "<<"
- * are m + 2 levels and the merged mapping nests n more, so the merge is
- * accepted at m + 2 + n = 500 and refused one level deeper. The merged tree
- * is then one level shallower than that, because the members move up into
- * the mapping that held "<<".
- *
- * A parse without the check accepts the 400-into-300 merge, whose tree nests
- * 700 containers, and every walk of it then returns NULL.
- */
+// A merge value is an alias that counts where it stands: m + 2 levels around
+// it and n inside, accepted at 500 and refused one deeper.
 TEST(nesting_limit, a_merge_expansion_must_fit_below_the_merge_key) {
   cyaml_nest_outcome_t at = cyaml_test_parse_outcome(
       cyaml_test_alias_doc(200, true, 298, "{<<: *x}"));
@@ -18167,9 +15283,10 @@ TEST(nesting_limit, a_merge_expansion_must_fit_below_the_merge_key) {
   REQUIRE_TRUE(far_past.built && !far_past.parsed && far_past.alias);
 }
 
-/* Builds a chain of `levels` containers through the API, alternating list
- * and dictionary, each with the tag "!t" when tagged is true, whose
- * innermost container holds the integer 1. */
+// Builds levels containers through the API, alternating list and dictionary,
+// each tagged "!t" when tagged is true, with the integer 1 in the innermost
+// one. The nesting tests compare such trees with what the parser accepts.
+// NULL when memory runs out.
 static cyaml cyaml_test_api_chain_with_leaf(size_t levels, bool tagged) {
   cyaml root = cyaml_test_build_deep_chain(levels, NULL);
   if (!root) return NULL;
@@ -18189,9 +15306,9 @@ static cyaml cyaml_test_api_chain_with_leaf(size_t levels, bool tagged) {
     cyaml_destroy(root);
     return NULL;
   }
-  ccol_retval_t r = (cyaml_type(cur) == CYAML_LIST)
-                        ? cyaml_list_push(cur, leaf)
-                        : cyaml_dictionary_set(cur, "n", leaf);
+  ccol_retval r = (cyaml_type(cur) == CYAML_LIST)
+                      ? cyaml_list_push(cur, leaf)
+                      : cyaml_dictionary_set(cur, "n", leaf);
   if (r != ccol_success) {
     cyaml_destroy(root);
     return NULL;
@@ -18199,16 +15316,8 @@ static cyaml cyaml_test_api_chain_with_leaf(size_t levels, bool tagged) {
   return root;
 }
 
-/*
- * A tree the API builds with 500 containers and a scalar in the innermost
- * one, with or without a tag on every container, serializes in every form
- * into text that parses back to an equal tree, and it clones. One container
- * more makes every walk refuse it.
- *
- * Both halves can fail: if a tag or the scalar took a level in the parser,
- * the 500-level tree's text wouldn't parse back, and if the walks accepted
- * 501 containers the refusal assertion would fail.
- */
+// A 500-level API tree, tagged or not, serializes into text that parses back
+// and clones; one more container makes every walk refuse it.
 TEST(nesting_limit, an_api_tree_at_the_limit_serializes_into_text_that_parses) {
   const size_t n = CYAML_TEST_NESTING_LIMIT;
   bool at_ok = true, past_refused = true;
@@ -18234,18 +15343,9 @@ TEST(nesting_limit, an_api_tree_at_the_limit_serializes_into_text_that_parses) {
   REQUIRE_TRUE(past_refused);
 }
 
-/*
- * A stream of several documents parses into a list holding them, so each
- * document sits one container deeper and has 499 levels left. A single
- * document keeps all 500. cyaml_serialize_stream() counts the list the same
- * way, so a list it accepts writes a stream that parses back.
- *
- * Leave out the extra level and parsing a stream whose first or second
- * document nests 500 containers would give a list of 501 levels, which
- * cyaml_clone() and every serializer refuse, and without the level in
- * cyaml_serialize_stream() it would write a stream from a 501-level list that
- * the parse refuses.
- */
+// A stream parses into a list, so each document of a stream has 499 levels
+// left while a single document keeps 500. cyaml_serialize_stream() counts the
+// list the same way.
 TEST(nesting_limit, a_stream_of_several_documents_counts_its_list) {
   const size_t n = CYAML_TEST_NESTING_LIMIT;
   bool single_at = cyaml_test_accepted(
@@ -18259,8 +15359,6 @@ TEST(nesting_limit, a_stream_of_several_documents_counts_its_list) {
   bool second_full = cyaml_test_refused(cyaml_test_parse_outcome(
       cyaml_test_nest("--- 2\n--- ", "[", n, "1", "]", "\n")));
 
-  /* A list of two documents that each nest 499 containers writes a stream
-   * that parses back to an equal list, and one more level is refused. */
   cyaml list_at = cyaml_create_list();
   cyaml list_past = cyaml_create_list();
   bool built =
@@ -18292,8 +15390,9 @@ TEST(nesting_limit, a_stream_of_several_documents_counts_its_list) {
   REQUIRE_TRUE(stream_past_refused);
 }
 
-/* An allocator that refuses every request while get_refuse is set and counts
- * the requests it gets in the meantime. */
+// A refusing allocator for the test that a get by path allocates nothing.
+// These refuse every request while get_refuse is set and count the refused
+// requests in get_refused_calls.
 static atomic_bool get_refuse;
 static atomic_long get_refused_calls;
 static void *get_refuse_malloc(size_t n) {
@@ -18319,15 +15418,12 @@ static void *get_refuse_realloc(void *p, size_t n) {
   return realloc(p, n);
 }
 
-/* A lookup by path allocates nothing for an ordinary path, so a node that is
- * there is found even while the tree's allocator refuses every request, and
- * a NULL result always means the path names nothing.
- *
- * A lookup that copied the path with the tree's allocator would return NULL
- * here, and the allocator would see a call. */
+// A lookup by path allocates nothing for an ordinary path, so it finds a node
+// even while the allocator refuses everything, and NULL always means the path
+// names nothing.
 TEST(custom_alloc, a_get_by_path_allocates_nothing) {
-  ccol_memmgmt_procs_t mp = {get_refuse_malloc, get_refuse_free,
-                             get_refuse_calloc, get_refuse_realloc};
+  ccol_memmgmt_procs mp = {get_refuse_malloc, get_refuse_free,
+                           get_refuse_calloc, get_refuse_realloc};
   atomic_store(&get_refuse, false);
   cyaml doc = cyaml_parse_mp("a:\n  b: 1\n", NULL, &mp);
   atomic_store(&get_refused_calls, 0);
@@ -18340,26 +15436,19 @@ TEST(custom_alloc, a_get_by_path_allocates_nothing) {
   REQUIRE_EQ(calls, 0L);
 }
 
-/* A non-NULL void * value is a mistake by the caller, and cyaml_set()
- * refuses it and changes nothing, as cjson_set() does, while a NULL writes a
- * null.
- *
- * Without the check the call reports success and writes a null instead of
- * the pointer. */
+// A non-NULL void * is a caller mistake that cyaml_set() refuses and changes
+// nothing for, as cjson_set() does; a NULL writes a null.
 TEST(set_types, a_void_pointer_that_is_not_null_is_refused) {
   cyaml doc = cyaml_parse("k: 1\n", NULL);
   int target = 7;
   void *vp = &target;
   void *np = NULL;
-  ccol_retval_t refused =
-      doc ? cyaml_set(doc, "k", vp) : ccol_unexpected_failure;
+  ccol_retval refused = doc ? cyaml_set(doc, "k", vp) : ccol_unexpected_failure;
   cyaml k = doc ? cyaml_get(doc, "k") : NULL;
   long long kept =
       (k && cyaml_type(k) == CYAML_INTEGER) ? cyaml_int_val(k) : -1;
-  ccol_retval_t nulled =
-      doc ? cyaml_set(doc, "n", np) : ccol_unexpected_failure;
-  cyaml_node_type_t ntype =
-      doc ? cyaml_type(cyaml_get(doc, "n")) : CYAML_INTEGER;
+  ccol_retval nulled = doc ? cyaml_set(doc, "n", np) : ccol_unexpected_failure;
+  cyaml_node_type ntype = doc ? cyaml_type(cyaml_get(doc, "n")) : CYAML_INTEGER;
   cyaml_destroy(doc);
   REQUIRE_EQ(refused, ccol_invalid_args);
   REQUIRE_EQ(kept, 1LL);
@@ -18367,9 +15456,6 @@ TEST(set_types, a_void_pointer_that_is_not_null_is_refused) {
   REQUIRE_EQ((int)ntype, (int)CYAML_NULL);
 }
 
-/* A flow sequence takes an explicit pair that leaves out its key, just like a
- * flow mapping does, and the empty node after the '?' is the null key (YAML
- * 1.2 section 7.4.1). */
 TEST(flow_list, an_explicit_pair_may_leave_out_its_key) {
   char *err = NULL;
   cyaml a = cyaml_parse("[? ]", &err);
@@ -18393,12 +15479,9 @@ TEST(flow_list, an_explicit_pair_may_leave_out_its_key) {
   REQUIRE_TRUE(same_as_map);
 }
 
-/* An alias never carries a property, not even at the first entry of a nested
- * block mapping, where it can look like an alias key. "! *x : v" and
- * "&y *x : v" are refused there like everywhere else, while an anchor on its
- * own line before an alias key stays valid. Without the check in the same-line
- * descent of the '&' and '!' branches the first two documents parse to
- * {a: 1, b: {1: v}} and drop the property. */
+// "! *x : v" and "&y *x : v" at the first entry of a nested block mapping look
+// like an alias key, and they are refused like everywhere else. An anchor on
+// its own line before an alias key stays valid.
 TEST(aliases, an_alias_key_never_carries_a_property) {
   static const char *const refused[] = {
       "a: &x 1\nb:\n  ! *x : v\n",
@@ -18422,12 +15505,11 @@ TEST(aliases, an_alias_key_never_carries_a_property) {
   REQUIRE_TRUE(valid_ok);
 }
 
-/* ========================================================================== */
-/*              GRAMMAR, TAGS, DIRECTIVES, ANCHORS AND LIMITS                 */
-/* ========================================================================== */
+// Grammar, tags, directives, anchors and limits
 
-/* True when cyaml_parse() refuses doc with an error message holding needle.
- * Every resource is released before it returns. */
+// Tells whether cyaml_parse() refuses doc with an error message that holds
+// needle, the refusing half of the grammar tests. Releases everything before
+// it returns.
 static bool cyaml_test_refused_with(const char *doc, const char *needle) {
   char *err = NULL;
   cyaml d = cyaml_parse(doc, &err);
@@ -18436,8 +15518,9 @@ static bool cyaml_test_refused_with(const char *doc, const char *needle) {
   return refused;
 }
 
-/* True when the flow serialization of the document cyaml_parse() makes of doc
- * equals want. Every resource is released before it returns. */
+// Tells whether the flow serialization of the parse of doc equals want, the
+// accepting half of the grammar tests. Releases everything before it
+// returns.
 static bool cyaml_test_parses_to(const char *doc, const char *want) {
   char *err = NULL;
   cyaml d = cyaml_parse(doc, &err);
@@ -18448,11 +15531,9 @@ static bool cyaml_test_parses_to(const char *doc, const char *want) {
   return same;
 }
 
-/* YAML 1.2 section 7.3.3's ns-plain-first excludes every c-indicator, so a
- * block-context plain scalar never starts with ']', '}' or ',', as a value,
- * as a key or behind a property, while a flow context reads each of them as
- * structure. Without the check in the plain-scalar dispatch every refused
- * document parses, "]: x" as {"]": x}. */
+// ns-plain-first (YAML 1.2 section 7.3.3) excludes every c-indicator, so a
+// block plain scalar never starts with ']', '}' or ',', while a flow context
+// reads them as structure.
 TEST(plain_scalars, a_block_plain_scalar_never_starts_with_a_flow_indicator) {
   static const char *const refused[] = {
       "]: x\n",       "a: ]\n",    "- ]x\n",       ",a: x\n", "a: }\n",
@@ -18471,11 +15552,9 @@ TEST(plain_scalars, a_block_plain_scalar_never_starts_with_a_flow_indicator) {
   REQUIRE_TRUE(flow_ok);
 }
 
-/* YAML 1.2 section 7.3.3's ns-plain-safe(c) excludes every flow indicator
- * in a flow context, so a flow plain scalar ends at '[' and '{' just as at
- * ',', ']' and '}', and the collection frame refuses the opener as a missing
- * ','. In a block context both stay content. Without the stop in
- * scan_plain_scalar_line "[a{b]" would parse to ["a{b"]. */
+// In a flow context a plain scalar ends at '[' and '{' as well as at ',', ']'
+// and '}', so "[a{b]" is refused as a missing ','. In a block context they
+// stay content.
 TEST(plain_scalars, a_flow_plain_scalar_ends_at_every_flow_indicator) {
   static const char *const refused[] = {
       "[a{b]", "{a: b{c}", "k: [x[1, y]", "[a\n[b]]", "{a: b\n{c}}", "[a{]",
@@ -18490,10 +15569,8 @@ TEST(plain_scalars, a_flow_plain_scalar_ends_at_every_flow_indicator) {
   REQUIRE_TRUE(ok);
 }
 
-/* A %TAG prefix's percent escapes are decoded like those of a verbatim tag
- * and of a shorthand suffix, so the two spellings of one tag give one tag
- * string, and a malformed escape in a prefix is refused. Skip the decode and
- * the shorthand gives "tag:x%21,a". */
+// A %TAG prefix is percent-decoded like a verbatim tag and a shorthand suffix,
+// so both spellings give one tag string; a malformed escape is refused.
 TEST(tags, a_tag_prefix_is_percent_decoded_like_the_rest_of_the_tag) {
   char *err = NULL;
   cyaml a = cyaml_parse("%TAG !e! tag:x%21,\n---\n- !e!a b\n", &err);
@@ -18516,12 +15593,9 @@ TEST(tags, a_tag_prefix_is_percent_decoded_like_the_rest_of_the_tag) {
   REQUIRE_TRUE(bad_escape);
 }
 
-/* A verbatim tag's text is ns-uri-char and a shorthand tag's suffix is
- * ns-tag-char (YAML 1.2 sections 5.6 and 6.9.1), so any other byte is
- * refused while its percent escape is accepted. Every tag that
- * cyaml_node_set_tag() accepts serializes to text the parser reads back as
- * the same tag. Without tag_text_check() "!<a b> x" would parse with the
- * tag "a b". */
+// A verbatim tag is ns-uri-char and a shorthand suffix ns-tag-char, so any
+// other byte is refused while its percent escape is accepted, and every tag
+// the setter accepts round-trips.
 TEST(tags, a_tag_holds_only_uri_characters) {
   static const char *const refused[] = {
       "!<a b> x\n",   "!<a{b}> x\n",  "!<a\"b> x\n", "!<\xc3\xa9> x\n",
@@ -18557,9 +15631,6 @@ TEST(tags, a_tag_holds_only_uri_characters) {
   REQUIRE_EQ(round_trip_bad, 0);
 }
 
-/* YAML 1.2 section 6.8.1 refuses a document of another major version and
- * accepts a higher minor version, and a directive needs a name. Without
- * the checks "%YAML 2.0" and "%" would both parse. */
 TEST(directives, another_major_version_and_a_nameless_directive_are_refused) {
   bool refused =
       cyaml_test_refused_with("%YAML 2.0\n--- x\n",
@@ -18577,10 +15648,6 @@ TEST(directives, another_major_version_and_a_nameless_directive_are_refused) {
   REQUIRE_TRUE(accepted);
 }
 
-/* Inside a flow collection a comment ends the line after an anchor or a tag,
- * just like in a block context, and the value follows on a later line. If the
- * flow branches didn't call rest_of_line_is_blank(), each document would be
- * refused with "a comment must be preceded by whitespace". */
 TEST(flow_list, a_comment_may_follow_an_anchor_or_a_tag) {
   bool ok = cyaml_test_parses_to("[&a # c\n x, *a]", "[x, x]") &&
             cyaml_test_parses_to("[!!str # c\n 1]", "[\"1\"]") &&
@@ -18591,12 +15658,9 @@ TEST(flow_list, a_comment_may_follow_an_anchor_or_a_tag) {
   REQUIRE_TRUE(ok);
 }
 
-/* A collection that becomes a dictionary key counts its containers below the
- * mapping holding the key in every key form: an implicit block key, a key
- * behind an anchor or a tag, an alias key, a "key: value" pair in a flow
- * sequence and an explicit pair there, exactly as for an explicit block key
- * and a flow mapping key. Without parse_key_fits_below_mapping() each
- * refused document would parse. */
+// A collection that becomes a key counts its levels below the mapping that
+// holds it in every key form, as an explicit block key and a flow mapping key
+// do.
 TEST(deep_documents, a_key_collection_counts_below_its_mapping_in_every_form) {
   struct {
     const char *head;
@@ -18628,7 +15692,6 @@ TEST(deep_documents, a_key_collection_counts_below_its_mapping_in_every_form) {
       free(doc);
     }
   }
-  /* An alias key copies the anchored collection below the mapping as well. */
   int alias_wrong = 0;
   for (size_t inner = 498; inner <= 499; inner++) {
     char *anchored =
@@ -18643,10 +15706,8 @@ TEST(deep_documents, a_key_collection_counts_below_its_mapping_in_every_form) {
   REQUIRE_EQ(alias_wrong, 0);
 }
 
-/* A parse's frame stack never holds more than its bound of
- * 4 * (CYAML_MAX_NESTING_DEPTH + 1) frames, even for the document that needs
- * the most, 500 nested containers each behind an anchor and a tag. A stack
- * that doubled past the bound would reach 3072 frames on this document. */
+// The frame stack stays within 4 * (CYAML_MAX_NESTING_DEPTH + 1) frames even
+// for 500 containers each behind an anchor and a tag.
 TEST(deep_documents, the_frame_stack_never_grows_past_its_bound) {
   char *doc = cyaml_test_nest("", "&a !!seq [", 500, "x", "]", "\n");
   REQUIRE_NE((void *)doc, NULL);
@@ -18662,11 +15723,9 @@ TEST(deep_documents, the_frame_stack_never_grows_past_its_bound) {
   REQUIRE_LE(peak, (size_t)(4 * (500 + 1)));
 }
 
-/* An anchor copies nothing. An anchored node that no alias names costs the
- * same as that node without the anchor, however many anchors nest inside
- * it, while each alias still pays for its copy under the fixed alias
- * expansion limit, which the test lowers to 1000 nodes. An anchor that
- * copied its node at registration would refuse the first two documents. */
+// An anchored node that no alias names costs the same as the node without the
+// anchor, while each alias pays for its copy under the alias expansion limit,
+// lowered here to 1000 nodes.
 TEST(anchors, an_anchor_that_no_alias_names_copies_nothing) {
   size_t n = 3000;
   size_t cap = 64 + n * 3;
@@ -18682,7 +15741,6 @@ TEST(anchors, an_anchor_that_no_alias_names_copies_nothing) {
     off += i ? 2 : 1;
   }
   memcpy(doc + off, "]\n", 3);
-  /* The same list with four more anchored lists around it. */
   snprintf(nested, cap, "a: &p [&q [&r [&s %s]]]\n", doc + 6);
   nested[strlen(nested) - 1] = '\0';
   snprintf(aliased, cap + 16, "%sb: *x\n", doc);
@@ -18708,8 +15766,6 @@ TEST(anchors, an_anchor_that_no_alias_names_copies_nothing) {
   REQUIRE_TRUE(alias_refused);
 }
 
-/* An alias is a deep copy, so changing the copy leaves the anchored node
- * alone and changing the anchored node leaves the copy alone. */
 TEST(anchors, an_alias_and_its_anchor_change_independently) {
   char *err = NULL;
   cyaml d = cyaml_parse("src: &a {val: [1]}\ndst: *a\n", &err);
@@ -18729,13 +15785,10 @@ TEST(anchors, an_alias_and_its_anchor_change_independently) {
   REQUIRE_EQ(dst_first, 1LL);
 }
 
-/* The anchor table points at the anchored node itself, so a node the parse
- * drops from the tree has to stay alive for every later alias: the old value
- * of a repeated key, a merge key's value, an anchored key's node, an anchor
- * inside a key collection, and an anchor inside a collection that a key
- * speculation read and then read again as a value. Freeing those nodes
- * immediately, as a plain destroy does, makes each later alias read freed
- * memory, which valgrind reports in memtest. */
+// The anchor table points at the node itself, so a node the parse drops (the
+// old value of a repeated key, a merge value, a key node, an anchor inside a
+// key or a re-read speculation) must stay alive for later aliases. memtest
+// reports a read of freed memory otherwise.
 TEST(anchors, an_anchored_node_that_the_tree_drops_still_resolves) {
   static const struct {
     const char *doc, *want;
@@ -18761,16 +15814,12 @@ TEST(anchors, an_anchored_node_that_the_tree_drops_still_resolves) {
   REQUIRE_EQ(wrong, 0);
 }
 
-/* Block indentation deeper than one block of 128 spaces is written in full
- * and parses back to the same tree. */
 TEST(serialize, indentation_wider_than_one_block_round_trips) {
   char *doc = cyaml_test_nest("", "[", 100, "x", "]", "\n");
   REQUIRE_NE((void *)doc, NULL);
   char *err = NULL;
   cyaml d = cyaml_parse(doc, &err);
   char *text = d ? cyaml_serialize(d) : NULL;
-  /* The innermost list is 99 levels deep, so its line starts with 198
-   * spaces. */
   char want[256];
   want[0] = '\n';
   memset(want + 1, ' ', 198);
@@ -18790,12 +15839,9 @@ TEST(serialize, indentation_wider_than_one_block_round_trips) {
   REQUIRE_TRUE(same);
 }
 
-/* A path component that isn't well-formed UTF-8 makes the path malformed at
- * any position, like an empty component does, so cyaml_set() and
- * cyaml_delete() answer ccol_invalid_args for it whether or not the components
- * before it resolve, and cyaml_get() gives NULL. A well-formed absent
- * component stays ccol_key_not_found. Without the walk's UTF-8 check,
- * "\xff.k", "d.\xc3.k" and "missing.\xff.k" would give ccol_key_not_found. */
+// A component that isn't UTF-8 makes a path malformed at any position, like an
+// empty component: set and delete answer ccol_invalid_args and get gives NULL,
+// while a well-formed absent component stays ccol_key_not_found.
 TEST(paths, a_component_that_is_not_utf8_is_invalid_at_any_position) {
   char *err = NULL;
   cyaml doc = cyaml_parse("d: {k: 1}\nl: [1]\n", &err);

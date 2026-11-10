@@ -18,7 +18,7 @@ a container of any other type (a void * included) is a compile error.
 
 An empty container gives NULL and no error. A NULL container handle
 iterates as an empty container, so it gives NULL and no error as well. If
-an allocation fails, the macro calls _ccol_fatal_err().
+an allocation fails, the macro calls ccol__fatal_err().
 .fi
 .SH PARAMETERS
 .nf

@@ -1,6 +1,6 @@
 .TH CCIRCQ_SELECTABLE 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
 .SH NAME
-ccircq_selectable \- build a cselectable_t from a ccircq
+ccircq_selectable \- build a cselectable from a ccircq
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,7 +11,7 @@ ccircq_selectable(q, dir);
 .fi
 .SH DESCRIPTION
 .nf
-Builds a cselectable_t value (a tagged union, here of type
+Builds a cselectable value (a tagged union, here of type
 cselectable_type_ccircq) that wraps the given ccircq pointer
 with the given direction.
 
@@ -37,7 +37,7 @@ dir  cselect_read or cselect_write.
 .fi
 .SH RETURN VALUE
 .nf
-cselectable_t value (not a pointer).
+cselectable value (not a pointer).
 .fi
 .SH EXAMPLES
 .nf

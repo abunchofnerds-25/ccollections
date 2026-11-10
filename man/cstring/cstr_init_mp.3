@@ -14,18 +14,18 @@ cstr_init_mp(s, initial, mprocs);
 This macro initialises the cstr variable s through cstring_create_full(),
 with the content and the memory management procedures you give. You must
 declare s first. If the creation fails, the macro calls
-_ccol_fatal_err().
+ccol__fatal_err().
 .fi
 .SH PARAMETERS
 .nf
 s        cstr lvalue to initialise (you must declare it first); the macro
          assigns it once, after the string is created
 initial  Initial content (C string or NULL for empty string)
-mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)
+mprocs   Custom memory management procedures (ccol_memmgmt_procs *)
 .fi
 .SH NOTES
 .nf
-A failed allocation ends in _ccol_fatal_err()
+A failed allocation ends in ccol__fatal_err()
 .fi
 .SH "SEE ALSO"
 .BR cstr_init (3),

@@ -13,12 +13,12 @@ chttp.h holds the parts that the HTTP client and the HTTP server
 share.  chttpclient.h and chttpserver.h both include it, so you only
 include it yourself when your code needs these types without either
 module.  It gives:
-  - chttp_method_t, the HTTP methods, and chttp_method_str(3), which
+  - chttp_method, the HTTP methods, and chttp_method_str(3), which
     gives the uppercase name of a method;
   - the CHTTP_STATUS_* status codes (CHTTP_STATUS(3));
-  - chttp_tls_config_t, the TLS configuration of both modules, and
+  - chttp_tls_config, the TLS configuration of both modules, and
     CHTTP_TLS_DEFAULT(3);
-  - chttp_request_body_t, the body of a client request, with
+  - chttp_request_body, the body of a client request, with
     CHTTP_NO_BODY(3), CHTTP_BODY(3), CHTTP_JSON_BODY(3),
     CHTTP_TEXT_BODY(3) and CHTTP_FORM_BODY(3);
   - base64 helpers (chttp_base64_encode_mp(3),
@@ -27,7 +27,7 @@ module.  It gives:
 .fi
 .SS "Methods"
 .nf
-chttp_method_t names the seven methods GET, POST, PUT, DELETE, PATCH,
+chttp_method names the seven methods GET, POST, PUT, DELETE, PATCH,
 HEAD and OPTIONS, plus CHTTP_ANY. CHTTP_ANY is a wildcard for server
 routes and matches any of the seven. It is never the method of a real
 request, and chttp_request_create_mp(3) refuses it for a client
@@ -35,7 +35,7 @@ request.
 .fi
 .SS "TLS configuration"
 .nf
-A chttp_tls_config_t whose bytes are all zero is the strict
+A chttp_tls_config whose bytes are all zero is the strict
 configuration, and CHTTP_TLS_DEFAULT(3) is that same value with a
 name. Every field that weakens a check is named for what it gives up
 (insecure_skip_verify, insecure_skip_hostname_check,
@@ -55,7 +55,7 @@ the bundle, and that CRL must not be past its next update time.
 .fi
 .SS "Ownership"
 .nf
-A chttp_request_body_t does not own its bytes. chttp_request_create_mp(3)
+A chttp_request_body does not own its bytes. chttp_request_create_mp(3)
 copies them, so you can free the source as soon as that call returns.
 
 chttp_base64_encode_mp(3), chttp_base64_decode_mp(3) and

@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cvector.h>
 
-ccol_memmgmt_procs_t *cvector_get_mprocs(cvec v);
+ccol_memmgmt_procs *cvector_get_mprocs(cvec v);
 .fi
 .SH DESCRIPTION
 .nf
@@ -28,7 +28,7 @@ the mmgmt_procs argument of cvector_create_full() was NULL.
 .SH NOTES
 .nf
 A NULL return isn't an error. It means "use the library's defaults", and
-every routine of the library that takes a ccol_memmgmt_procs_t * accepts
+every routine of the library that takes a ccol_memmgmt_procs * accepts
 NULL with exactly that meaning.
 
 The structure belongs to the library and stays valid until the vector is

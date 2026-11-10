@@ -36,658 +36,303 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-/* Initialises cond so that every absolute deadline handed to
- * _ccol_cond_var_timedwait on it is measured against CLOCK_MONOTONIC, not the
- * default CLOCK_REALTIME. Returns 0 on success, or the first non-zero status
- * that the threading library reports.
- *
- * not_full is the one condition variable of a pool that a timed wait blocks
- * on, and make_abs_deadline computes its deadline on CLOCK_MONOTONIC as well,
- * so the two can't disagree about the clock. CLOCK_REALTIME can jump back at
- * any moment (an administrator, an NTP step, a virtual machine that resumes)
- * and a deadline on that clock then moves further into the future, so a timed
- * submit with a 100 ms budget would block for the whole backward step.
- * Nothing can step CLOCK_MONOTONIC. cthreadcomm.c sets up its own timed
- * condition variables the same way. */
-static int _cthrpool_init_monotonic_cond_var(_ccol_cond_var_t *cond) {
-  _ccol_cond_var_attr_t attr;
-  int rv = _ccol_cond_var_attr_init(attr);
+// Initializes cond so that its timed waits measure deadlines on
+// CLOCK_MONOTONIC. not_full is the one condition that a timed submit waits on,
+// and its deadline comes from CLOCK_MONOTONIC too; a step of CLOCK_REALTIME
+// would otherwise stretch the wait. Gives 0 or the first failing pthread
+// status.
+static int cthrpool_init_monotonic_cond_var(ccol__cond_var *cond) {
+  ccol__cond_var_attr attr;
+  int rv = ccol__cond_var_attr_init(attr);
   if (rv != 0) return rv;
-  rv = _ccol_cond_var_attr_setclock(attr, CLOCK_MONOTONIC);
-  if (rv == 0) rv = _ccol_cond_var_init_ca(*cond, attr);
-  _ccol_cond_var_attr_destroy(attr);
+  rv = ccol__cond_var_attr_setclock(attr, CLOCK_MONOTONIC);
+  if (rv == 0) rv = ccol__cond_var_init_ca(*cond, attr);
+  ccol__cond_var_attr_destroy(attr);
   return rv;
 }
 
-/* ========================================================================== */
-/*                         INTERNAL STRUCTURES                                */
-/* ========================================================================== */
-
-/* cthrpool is an opaque value handle: the top 32 bits are the slot index and
- * the bottom 32 bits are the generation (see the doc comment on the typedef in
- * include/cthreadpool.h). We resolve the handle through this table before we
- * touch the struct cthread_pool* behind it, and that's what lets
- * __cthrpool_destroy catch both kinds of double-destroy and report them with
- * _ccol_fatal_err instead of a use-after-free or a double-free. One kind is
- * concurrent, a destroy racing another destroy on the same still-live handle,
- * and the other is sequential, a stale handle from an earlier destroy that
- * completed. A slot is marked not-in-use the moment it's released, and its
- * generation goes up on every reuse, so a stale handle can never alias a
- * later, unrelated pool at the same slot index. The table mirrors
- * chttpcli_slot_table, chttpsvr_slot_table, ceventloop_slot_table and
- * clrucache_slot_table exactly; the copy of this comment in src/chttpclient.c
- * gives the design rationale.
- *
- * The table's lock is a read-write lock rather than a plain mutex. A submit,
- * a wait or any other call on a pool never takes it, because _cthrpool_resolve
- * pins the handle through the lock-free pin index of cpintable.h. Only
- * _cthrpool_handle_slot_acquire and __cthrpool_destroy take it, each once in a
- * pool's whole life, plus the fork handlers and the tests' white-box helpers.
- * It mirrors the identical reg_slot_rwlock of ceventloop and has the same
- * fork-safety subtlety: the doc comment of _cthrpool_atfork_prepare explains
- * the hazard of a write lock that tracks the thread ID and how we handle it. */
+// One slot of the handle table. A cthrpool is (slot index << 32) | generation;
+// the generation goes up on every reuse, so a stale handle never names a later
+// pool and cthrpool__destroy can report a double destroy. ptr is NULL while the
+// slot is free.
+//
+// torn_down is true from the moment a destroy clears in_use until the teardown
+// is about to make ptr->mu unsafe to touch (destroyed, or freed on the
+// foreign_since_fork path). The workers aren't joined yet in that window, so
+// the fork handlers must still lock ptr->mu. It's never true together with
+// in_use, and it's cleared under the table's write lock.
 typedef struct {
-  cthread_pool *ptr;   /* NULL when slot is free */
-  uint32_t generation; /* fresh on every acquire. It only rises for each slot
-                           index: it starts at 0 before the first use and
-                           becomes 1 on the first acquire */
+  cthread_pool *ptr;
+  uint32_t generation;
   bool in_use;
 #if CCOL_FORK_SAFETY_REQUIRED
-  /* True from the exact instant that __cthrpool_destroy clears in_use until
-   * _cthrpool_teardown_raw is about to make ptr->mu unsafe to touch, which it
-   * does by destroying ptr->mu (or, on the foreign_since_fork path, by freeing
-   * the struct that holds ptr->mu). The doc comment of _cthrpool_atfork_prepare
-   * describes the hang that this flag closes.
-   *
-   * in_use alone doesn't tell us that ptr->mu is both live and worth
-   * locking, because a pool's worker threads aren't gone at the instant in_use
-   * goes false. They are gone only once _cthrpool_shutdown_drain_internal has
-   * joined every one of them, and that step runs entirely AFTER in_use is
-   * cleared, so that a concurrent resolve or a second destroy gets rejected as
-   * early as possible. Without torn_down, a fork() inside that join window
-   * inherits ptr->mu locked by one of those very real, not yet joined worker
-   * threads, while in_use (already false) tells _cthrpool_atfork_prepare that
-   * there's nothing here worth protecting.
-   *
-   * torn_down is never true while in_use is true; the two are set at different
-   * points, never together. ptr is not NULL and is safe to dereference for as
-   * long as torn_down is true. torn_down is cleared under the write side of
-   * this same cthrpool_slot_table.rwlock, strictly before the struct that ptr
-   * points to becomes unsafe to touch. */
   bool torn_down;
 #endif
-} cthrpool_slot_t;
+} cthrpool_slot;
 
+// The handle table. Only create, destroy, the fork handlers and test helpers
+// take its rwlock; every other call resolves through the lock-free pin table.
+// slots only grows, so an index stays valid for good; free_indices is a LIFO of
+// released indices.
+//
+// lost_indices counts released slots whose index couldn't go back on the free
+// list (the push failed to allocate). An acquire that finds the list empty
+// scans for one of them. release_deferred is set when the exit destructor finds
+// a pool still live; the destroy that releases the last slot then frees the
+// table. Both fields are used only under the write lock.
 static struct {
-  _ccol_rw_lock_t rwlock;
-  _ccol_once_flag_t once;
-  cvec slots;        /* cvec of cthrpool_slot_t that grows only with push_back;
-                         once allocated, an index is permanent */
-  cvec free_indices; /* cvec of uint32_t. A LIFO free list, with O(1) reuse */
-  /* How many slot indices couldn't go back onto free_indices because that
-     push failed to allocate. Such a slot is fully released (ptr is NULL and
-     in_use is false) but nothing names it, so without this counter it would
-     stay unreachable for the rest of the process and every later create would
-     grow the table by one more slot. An acquire that finds free_indices empty
-     while this counter is above zero gets one slot back by scanning slots
-     instead. The scan is unambiguous because it runs only when the free list
-     is empty: a released slot is either on that list or lost, never both.
-     This field is read and written only under the write lock. */
+  ccol__rw_lock rwlock;
+  ccol__once_flag once;
+  cvec slots;
+  cvec free_indices;
   size_t lost_indices;
-  /* Set when the process-exit destructor finds a pool still live and leaves
-     this table alone; whichever destroy releases the last slot after that
-     does the release the destructor couldn't do. Without this flag a pool
-     that outlives this translation unit's destructor leaves the table and the
-     pin index allocated for the rest of the process, and a leak checker that
-     counts still-reachable memory as an error reports it. The library's lazily
-     created HTTP client owns such a pool, and its reaper runs from a
-     destructor that the linker places earlier. This field is read and written
-     only under the write lock. */
   bool release_deferred;
 } cthrpool_slot_table = {0};
 
 #if CCOL_FORK_SAFETY_REQUIRED
-/* Forward declarations. The bodies come further down, after struct
- * cthread_pool itself is declared, because they dereference the mu of a live
- * pool. _cthrpool_slot_table_init_globals below registers them; it is the first
- * thing in this file that runs once, lazily, when the module is first used.
- * src/cthreadcomm.c does the same, where ceventloop also declares first
- * and defines after the struct.
- *
- * With CCOL_FORK_SAFETY_REQUIRED at 0 the compiler drops this whole fork()
- * safety mechanism: these three handlers, their _ccol_at_fork() registration
- * below, the foreign_since_fork field of struct cthread_pool and every site
- * that reads it. See the doc comment of that macro in common.h. */
-static void _cthrpool_atfork_prepare(void);
-static void _cthrpool_atfork_release(void);
-static void _cthrpool_atfork_child_release(void);
+static void cthrpool_atfork_prepare(void);
+static void cthrpool_atfork_release(void);
+static void cthrpool_atfork_child_release(void);
 #endif
 
-static void _cthrpool_slot_table_init_globals(void) {
-  if (_ccol_rw_lock_init(cthrpool_slot_table.rwlock) != 0)
-    _ccol_fatal_err("cthrpool slot table: failed to initialize rwlock");
-  cthrpool_slot_table.slots = cvector_create(sizeof(cthrpool_slot_t), NULL);
+// Creates the handle table and registers the fork handlers; runs once on first
+// use. The handlers are defined below struct cthread_pool, because they lock
+// the mu of every live pool.
+static void cthrpool_slot_table_init_globals(void) {
+  if (ccol__rw_lock_init(cthrpool_slot_table.rwlock) != 0)
+    ccol__fatal_err("cthrpool slot table: failed to initialize rwlock");
+  cthrpool_slot_table.slots = cvector_create(sizeof(cthrpool_slot), NULL);
   if (!cthrpool_slot_table.slots)
-    _ccol_fatal_err("cthrpool slot table: failed to allocate slots vector");
+    ccol__fatal_err("cthrpool slot table: failed to allocate slots vector");
   cthrpool_slot_table.free_indices = cvector_create(sizeof(uint32_t), NULL);
   if (!cthrpool_slot_table.free_indices)
-    _ccol_fatal_err(
+    ccol__fatal_err(
         "cthrpool slot table: failed to allocate free-index vector");
 #if CCOL_FORK_SAFETY_REQUIRED
-  /* fork() copies only the thread that calls it. The doc comment of
-   * _cthrpool_atfork_prepare describes the hazard this closes for BOTH parent()
-   * and child(), a child inheriting a mutex that is still locked. The doc
-   * comment of _cthrpool_atfork_child_release describes a second hazard that
-   * only the child has, and that neither parent() nor a shared release
-   * function can handle: joining worker threads that exist only in the
-   * parent. */
-  _ccol_at_fork(_cthrpool_atfork_prepare, _cthrpool_atfork_release,
-                _cthrpool_atfork_child_release);
+  ccol__at_fork(cthrpool_atfork_prepare, cthrpool_atfork_release,
+                cthrpool_atfork_child_release);
 #endif
 }
 
-#if defined(_CCOL_ATFORK_AT_LOAD)
-/* See _CCOL_ATFORK_AT_LOAD in common.h. */
-__attribute__((constructor)) static void _cthrpool_atfork_at_load(void) {
-  _ccol_call_once(cthrpool_slot_table.once, _cthrpool_slot_table_init_globals);
+#if defined(CCOL__ATFORK_AT_LOAD)
+// Registers the fork handlers at load time, on systems where a lazy
+// registration from a thread is unsafe; see CCOL__ATFORK_AT_LOAD in
+// common.h.
+__attribute__((constructor)) static void cthrpool_atfork_at_load(void) {
+  ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
 }
 #endif
 
-/* Not static, and reachable from other .c files of the library on purpose
- * (chttpserver.c, for example). Such a file must make sure this module
- * registers its own _ccol_at_fork() triple BEFORE that file registers its
- * own. pthread_atfork runs the prepare handlers in LIFO order, so with that
- * ordering the CALLER's prepare handler runs FIRST at every later fork(),
- * before _cthrpool_atfork_prepare (this module's) can lock
- * cthrpool_slot_table.rwlock or the mu of any live pool.
- *
- * It isn't declared in cthreadpool.h (internal/catfork.h declares it) and
- * isn't part of the public API. It's a narrow escape hatch, kept on purpose,
- * for a caller that has read this exact ordering requirement and needs to
- * meet it. The call site in
- * chttpserver.c explains the reasoning and the lock-order inversion that
- * this ordering prevents; ThreadSanitizer reports that cycle whenever
- * nothing forces the ordering. A caller that never uses this function isn't
- * affected at all, because this module's lazy registration (guarded by
- * _ccol_call_once) then happens at the first cthrpool create, exactly as it
- * would without such a caller. */
-void _cthrpool_ensure_atfork_registered_before_caller(void) {
-  _ccol_call_once(cthrpool_slot_table.once, _cthrpool_slot_table_init_globals);
+// Makes this module register its fork handlers now. Other modules of the
+// library (chttpserver, for one) call it through internal/catfork.h before
+// their own registration: pthread_atfork runs prepare handlers in reverse
+// order, so their prepare handler then runs before ours, which avoids a lock
+// order inversion between the two.
+void cthrpool__ensure_atfork_registered_before_caller(void) {
+  ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
 }
 
-/*
- * One unit of work in the queue. A future task sets `future` and leaves
- * `on_complete` NULL, and a callback task does it the other way round.
- * `fn_future` shares a union with `fn`, so both pointers have the same width
- * and the call site needs no cast.
- */
+// One queued task. A callback task sets fn and on_complete, a future task sets
+// fn_future and future; fn and fn_future share a union so the call needs no
+// cast. next links the queue and the free list.
 typedef struct cthrpool_task {
   union {
-    void (*fn)(void *);         /* callback-style task */
-    void *(*fn_future)(void *); /* future-style task   */
+    void (*fn)(void *);
+    void *(*fn_future)(void *);
   };
   void *arg;
-  void (*on_complete)(void *, bool); /* NULL for future tasks */
-  cthrpool_future_t *future;         /* NULL for callback tasks */
+  void (*on_complete)(void *, bool);
+  cthrpool_future *future;
   struct cthrpool_task *next;
 } cthrpool_task;
 
-/*
- * A future is always allocated on the heap with plain malloc and freed with
- * plain free, so its lifetime doesn't depend on the pool's custom allocator
- * at all. A submit creates two references, one for the caller and one for the
- * queued task, and each cthrpool_future_get call in flight holds one more while
- * it runs. The struct is freed once the last reference goes.
- */
-struct cthrpool_future_t {
-  _ccol_mutex_t mu;
-  _ccol_cond_var_t cv;
+// A future, always allocated with plain malloc so its lifetime doesn't depend
+// on any pool allocator. A submit gives it two references (caller and task),
+// and every cthrpool_future_get in progress holds one more. The last reference
+// out frees it.
+struct cthrpool_future {
+  ccol__mutex mu;
+  ccol__cond_var cv;
   void *result;
   bool done;
   bool cancelled;
   int refcount;
 };
 
-/* The hot half of the slot table. It maps a handle to a pointer and holds the
- * pin that keeps a pool alive for the length of a call. It lives apart from
- * the table because a resolve runs on every public call and must not write
- * anything another thread reads, while slot recycling is cold and stays under
- * the rwlock. */
+// The hot half of the handle table: handle to pointer, plus the pin that keeps
+// a pool alive during a call. A resolve writes nothing that another thread
+// reads, so submits from many threads don't contend on it.
 static ccol_pintable cthrpool_pintable;
 
-/* One worker of a pool. See the threads field of struct cthread_pool. */
+// One worker thread. The worker sets exited as its last write to the pool.
 typedef struct cthrpool_worker_slot {
-  _ccol_thread_id_t id;
+  ccol__thread_id id;
   atomic_bool exited;
 } cthrpool_worker_slot;
 
+// The pool. The queue and the free list of task nodes are intrusive lists, and
+// mu guards everything here. queue_size, shutdown_drain and shutdown_immediate
+// are written under mu with relaxed __atomic stores, because the refusal hint
+// of a future try submit reads them without the lock.
+//
+// The free list keeps every node the recent traffic needed, up to
+// task_free_list_cap (max(num_threads * 4, CTHRPOOL_TASK_FREE_LIST_CEILING)),
+// so a deep queue doesn't cost an allocation per task. Its trim runs only at
+// idle points (task_free_list_ran_dry, idle_points_since_trim), never on the
+// submit or dequeue path, which would put another shared line in every critical
+// section. The teardown must free the nodes on it.
+//
+// shutdown_complete is set, and shutdown_cv broadcast, once the call that does
+// the shutdown has joined every worker; later shutdown calls wait for it.
+// foreign_since_fork is set only by the child fork handler, for every pool
+// inherited across fork(): its workers don't exist in this process, so nothing
+// may join them. shutdown_cv and the trim fields sit last, away from the lines
+// that the submit and dequeue paths read.
 struct cthread_pool {
-  /* Task queue (intrusive singly-linked list) */
   cthrpool_task *head;
   cthrpool_task *tail;
-  /* queue_size, shutdown_drain and shutdown_immediate are written under mu,
-   * always with a relaxed __atomic store, because the refusal hint of a future
-   * try submit (submit_future_refusal_hint) reads them without the lock. A
-   * reader that holds mu reads them plainly. queue_cap never changes once the
-   * pool is published. */
   size_t queue_size;
-  size_t queue_cap; /* 0 = unbounded */
+  size_t queue_cap;
 
-  /* Recycled cthrpool_task nodes. They form their own intrusive singly-linked
-   * list that reuses the `next` field of the same struct. The list saves one
-   * malloc and free round trip through m_procs per submission, and for a
-   * workload that submits lots of short-lived tasks that round trip is a real
-   * source of allocator pressure. mu protects this list, like every other data
-   * structure the pool owns.
-   *
-   * The list keeps every node that the pool's recent traffic needed, not a
-   * fixed handful. A producer running ahead of the workers builds a queue of
-   * many tasks and every one of them is a node. If the list kept only a few
-   * back, every further node would go through the allocator again, one malloc
-   * on the submit and one free on the completion for each task, for as long as
-   * the queue stays deep, and each of those frees is cross-thread. Since the
-   * nodes are kept, a burst of any depth costs no allocation at all once the
-   * pool has seen that depth.
-   *
-   * Two things bound what the list keeps. task_free_list_cap is a hard
-   * ceiling, max(num_threads * 4, CTHRPOOL_TASK_FREE_LIST_CEILING), set once at
-   * construction. And the list decays while the traffic doesn't need it: at
-   * every CTHRPOOL_TASK_FREE_LIST_TRIM_IDLE_POINTS-th point where the pool is
-   * idle, with no task queued and none running, it gives back half of what it
-   * holds above num_threads * 4, unless it ran empty since the previous such
-   * point (see task_free_list_ran_dry and _cthrpool_idle_unlock_and_trim). So
-   * the list holds what the recent traffic needed, never more than the ceiling,
-   * and never less than num_threads * 4 while it has that many.
-   *
-   * None of that bookkeeping runs on the ordinary path: a pop that leaves the
-   * list non-empty, a push and an enqueue touch none of its fields. Every
-   * submitter and every worker takes mu for each task, and a store inside
-   * those critical sections to a line they don't otherwise touch would bounce
-   * that line between cores on every task and make the critical section that
-   * all of them wait on longer.
-   *
-   * Nodes on this list are only recycled and never handed back to m_procs, so
-   * the pool's teardown must really free them with drain_task_free_list;
-   * just discarding them isn't enough. */
   cthrpool_task *task_free_list;
   size_t task_free_list_size;
   size_t task_free_list_cap;
 
-  /* Synchronisation */
-  _ccol_mutex_t mu;
-  _ccol_cond_var_t not_empty; /* a worker waits here when idle            */
-  _ccol_cond_var_t not_full;  /* a submitter waits here on a full queue   */
-  _ccol_cond_var_t idle_cv;   /* cthrpool_wait waits here                   */
+  ccol__mutex mu;
+  ccol__cond_var not_empty;
+  ccol__cond_var not_full;
+  ccol__cond_var idle_cv;
 
-  /* Live counters */
-  size_t active_count; /* tasks that the workers run now */
+  size_t active_count;
 
-  /* Shutdown state */
-  bool shutdown_drain;     /* the pool takes no new task. drain, then stop */
-  bool shutdown_immediate; /* stop after the current tasks. discard queue  */
-  bool shutdown_started;   /* one of the two shutdowns started             */
-  /* Whichever call does the real shutdown sets this, under mu, once it has
-   * joined every worker thread, and every other shutdown call on this pool
-   * waits on shutdown_cv until it's true. That's what makes the documented
-   * "blocks until ..." guarantee of cthrpool_shutdown_drain and
-   * cthrpool_shutdown_immediate hold for the second caller and every later one,
-   * not just the first. shutdown_started is set before a single worker is
-   * woken, and long before one is joined, so returning on shutdown_started
-   * alone would hand application code a pool whose workers are all still
-   * running. The flag sits in padding the three flags above already had, so
-   * it costs the struct nothing. */
+  bool shutdown_drain;
+  bool shutdown_immediate;
+  bool shutdown_started;
   bool shutdown_complete;
 
-  /* Worker threads. The worker sets exited itself, as its last write to the
-   * pool, so a joined worker is always marked. _cthrpool_is_self_call skips a
-   * marked slot because glibc gives the descriptor (and so the ID) of a joined
-   * thread to the next thread that starts. */
   cthrpool_worker_slot *threads;
   size_t num_threads;
 
-  ccol_memmgmt_procs_t *m_procs;
+  ccol_memmgmt_procs *m_procs;
 
-  /* The handle of this pool. An unpin uses it to find the slot holding its
-   * pin, so the caller doesn't have to carry one. It's written once, before
-   * the handle is published, and never again. */
   cthrpool self_handle;
 
 #if CCOL_FORK_SAFETY_REQUIRED
-  /* Only the CHILD-side fork handler of this process
-   * (_cthrpool_atfork_child_release) sets this to true, and it does that for
-   * every pool still marked in_use at the moment of the fork(). fork() copies
-   * only the calling thread, so as far as this process is concerned every
-   * worker thread of the pool is just inert copy-on-write memory, and no
-   * execution context for any of them ever existed here.
-   *
-   * Once the flag is true, _cthrpool_shutdown_drain_internal and
-   * _cthrpool_shutdown_immediate_internal must never call _ccol_thread_join on
-   * threads[i]. That's undefined behaviour, since this process never created
-   * the target thread and can never join it. In a process holding a live
-   * cthrpool with several workers (a ceventloop with
-   * num_reactor_threads > 1, for example), a fork() followed by a destroy or
-   * a shutdown of the inherited pool in the child SIGSEGVs inside
-   * __pthread_clockjoin_ex in glibc.
-   *
-   * The flag is never true for a pool that cthrpool_create_mp really created in
-   * this process. With CCOL_FORK_SAFETY_REQUIRED at 0 the compiler drops it
-   * (see the doc comment of that macro in common.h), and every site that
-   * reads the field then always takes the path it takes for false: a pool
-   * can't legitimately be "foreign" in a build that has no fork() machinery
-   * to mark it so. */
   _Atomic bool foreign_since_fork;
 #endif
 
-  /* Trim state of task_free_list (see the comment on that list); mu guards
-   * both fields. task_free_list_ran_dry is set when a pop takes the last node
-   * or finds none, which is the slow path of a submit anyway, and the idle
-   * point clears it. idle_points_since_trim counts idle points. Both sit after
-   * every field that the submit and dequeue paths read, since only those rare
-   * events touch them. */
   bool task_free_list_ran_dry;
   uint32_t idle_points_since_trim;
 
-  /* Broadcast under mu at the exact moment shutdown_complete goes true. It's
-   * declared last on purpose instead of next to the other condition
-   * variables: nothing on the submit or dequeue path reads it, and putting it
-   * among the others would push active_count and the queue bookkeeping, which
-   * those paths do read, onto other cache lines. */
-  _ccol_cond_var_t shutdown_cv;
+  ccol__cond_var shutdown_cv;
 };
 
-/* Every lock of a pool's mutex goes through this macro. A test build also
- * counts the locks each thread takes, so a test can assert how many critical
- * sections one call costs the calling thread; any other build compiles it to
- * the plain lock. */
+// cthrpool_lock_mu(p) locks the mu of pool p; every lock of a pool's mu goes
+// through it. A test build also counts the locks each thread takes in
+// cthrpool_mu_locks_taken, so a test can count the critical sections of one
+// call; elsewhere it's the plain lock.
 #ifdef RUNNING_UNIT_TESTS
-static __thread unsigned long _cthrpool_mu_locks_taken;
-#define _cthrpool_lock_mu(p) \
-  (_cthrpool_mu_locks_taken++, (void)_ccol_mutex_lock((p)->mu))
+static __thread unsigned long cthrpool_mu_locks_taken;
+#define cthrpool_lock_mu(p) \
+  (cthrpool_mu_locks_taken++, (void)ccol__mutex_lock((p)->mu))
 #else
-#define _cthrpool_lock_mu(p) _ccol_mutex_lock((p)->mu)
+#define cthrpool_lock_mu(p) ccol__mutex_lock((p)->mu)
 #endif
-
-/* ========================================================================== */
-/*                         FORK SAFETY (pthread_atfork)                       */
-/* ========================================================================== */
 
 #if CCOL_FORK_SAFETY_REQUIRED
-/* fork() copies only the thread that calls it, so a lock that some OTHER
- * thread holds at that instant reaches the child permanently locked, and the
- * child has no thread left that could ever unlock it. Two kinds of lock
- * matter here. One is cthrpool_slot_table.rwlock, process-wide, which every
- * cthrpool_create_mp and __cthrpool_destroy call takes. The other is the mu of
- * each pool that is still live, which every submit, dequeue, shutdown and
- * wait call takes, and so does a worker thread when it picks up or finishes
- * a task.
- *
- * So prepare() below takes both before fork() can go on, and fork() completes
- * only at a moment when no thread holds either of them; parent() and child()
- * then release them through the same function. Every PLAIN mutex in this
- * module, each pool's mu included, is of the default ("normal") pthread type,
- * which on Linux glibc does no owner or thread ID tracking, so a plain
- * pthread_mutex_unlock is well defined even when it's called by a thread
- * other than the one that locked it. For anything the forking thread didn't
- * hold itself, that other thread doesn't exist in the child at all.
- *
- * cthrpool_slot_table.rwlock is the one exception, because it's a read-write
- * lock (the doc comment of cthrpool_slot_t says why). prepare() takes its write
- * side on the thread that calls fork(), once every other holder has let it
- * go. A glibc rwlock unlock tells a writer unlock from a reader unlock by
- * comparing the writer thread ID it recorded with the caller's thread ID,
- * and fork() gives the child's one thread a new thread ID. In the child a
- * plain _ccol_rw_lock_unlock therefore returns 0 and releases nothing, and
- * every later cthrpool_create_mp or cthrpool_destroy there would block for
- * ever. That's why the in_child branch of _cthrpool_atfork_release_impl
- * reinitializes the rwlock instead of unlocking it, exactly as the atfork
- * handling of clog_slot_table.rwlock in clogger.c and of the two rwlocks of
- * ceventloop does.
- *
- * This mirrors the atfork handling of ceventloop in src/cthreadcomm.c
- * exactly, and the comment there gives the full account of the two hangs
- * that this shape of handler prevents. In the first a fresh create call
- * inherits its own process-wide slot-table mutex already locked, and in the
- * second an ordinary call on one object inherits the lock of a still-live
- * object already locked.
- *
- * This module keeps its own copy rather than relying on the one in
- * ceventloop. The dispatch_pool that ceventloop creates whenever a
- * caller sets num_reactor_threads > 1 is exactly such a pool, and
- * ceventloop has no way to reach this module's opaque cthrpool internals
- * from outside. The registration here covers every cthrpool this module ever
- * created, not just the ones of ceventloop, and so it covers every
- * caller of this module.
- *
- * prepare() walks every slot with in_use == true, which is exactly the
- * condition _cthrpool_resolve itself trusts as the only sign that slot->ptr is
- * safe to dereference for an ordinary resolve. It ALSO walks every slot with
- * torn_down == true. __cthrpool_destroy clears in_use, under the write side of
- * this same cthrpool_slot_table.rwlock, BEFORE it starts its own teardown, and
- * that teardown can be slow because it joins every worker thread and frees
- * the task queue. A pool's worker threads aren't gone the instant in_use goes
- * false but only once that join phase completes, and torn_down stays true for
- * exactly that window (see the field comment of cthrpool_slot_t). So a fork()
- * landing while a not yet joined worker holds ptr->mu is caught here, just
- * like the mu of an ordinary live pool. ptr is freed, and slot->ptr finally
- * cleared, well after in_use and torn_down have both gone false. By this
- * file's convention a pool past that point is off-limits for any purpose,
- * fork-related or not, so the mechanism opens no new gap there.
- *
- * The mechanism does NOT cover the mu of an individual cthrpool_future_t, on
- * purpose. cthrpool_slot_table reaches every pool, since it's the complete,
- * walkable registry of every live pool in this module. A future has no such
- * registry once it leaves the task queue: cthrpool_submit_future gives the
- * caller the only reference to a future that outlives the pool's task list.
- * To find "every live future" at fork time this module would need a new
- * global registry with a lock of its own, which is well outside the scope of
- * this mechanism. ceventloop leaves out its own per-entry dispatch_lock
- * for the same reason; its comment makes the same argument, that only a walk
- * of a structure this mechanism doesn't hold the right lock for could find
- * one.
- *
- * worker_thread_fn, future_deref, future_cancel, cthrpool_future_fulfill and
- * cthrpool_future_get each hold a future's mu for a short window, so a fork()
- * inside one of those windows is a real gap. It's a narrow one, and the
- * locking discipline of this module keeps the odds low: every future->mu
- * critical section is a handful of instructions, nothing holds it across a
- * callback, and the condition variable itself releases it for the one wait
- * that exists. We leave the gap open rather than quietly claim it's
- * covered. */
-static void _cthrpool_atfork_prepare(void) {
+// The fork prepare handler: takes the table's write lock and the mu of every
+// slot that is in_use or torn_down, so the fork happens while no other thread
+// holds any of them. fork() copies only the calling thread, so a lock another
+// thread holds at that moment would stay locked in the child for good. A
+// torn_down pool still has workers that can hold its mu. The default mutex type
+// tracks no owner, so the release handlers may unlock from any thread, but a
+// glibc rwlock checks the writer's thread ID, which differs in the child, so
+// the child reinitializes it. Futures aren't covered: they have no registry to
+// walk, and each of their critical sections is a few instructions long.
+static void cthrpool_atfork_prepare(void) {
 #ifdef RUNNING_UNIT_TESTS
-  _ccol_atfork_order_record(_ccol_atfork_module_cthreadpool);
+  ccol__atfork_order_record(ccol__atfork_module_cthreadpool);
 #endif
-  _ccol_rw_lock_wrlock(cthrpool_slot_table.rwlock);
+  ccol__rw_lock_wrlock(cthrpool_slot_table.rwlock);
 
-  /* A table released at unload holds no pool. */
   size_t n = cthrpool_slot_table.slots
                  ? cvector_elem_count(cthrpool_slot_table.slots)
                  : 0;
   for (size_t i = 0; i < n; i++) {
-    cthrpool_slot_t *slot =
-        (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, i);
+    cthrpool_slot *slot =
+        (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, i);
     if (!slot->in_use && !slot->torn_down) continue;
-    _ccol_mutex_lock(slot->ptr->mu);
+    ccol__mutex_lock(slot->ptr->mu);
   }
 }
 
-/* parent() and child() share this function. The doc comment of
- * _cthrpool_atfork_prepare explains why a plain unlock is correct for this
- * module's PLAIN mutexes in both branches, and why cthrpool_slot_table.rwlock
- * alone needs a reinitialize in the child, which the end of this function
- * does.
- *
- * Walking the same structure prepare() walked and releasing every lock the
- * same way is safe, because nothing can change the slot table or the state
- * of a live pool in between: this function still holds every lock such a
- * change would need.
- *
- * With is_child set it also marks every still-live pool foreign_since_fork
- * and drops every pin outstanding against it. The doc comment of
- * _cthrpool_atfork_child_release says why the child needs both steps, and the
- * comment on foreign_since_fork in struct cthread_pool describes the SIGSEGV
- * this closes. The parent needs neither, because the fork took nothing away
- * from it: each of its own threads, and each pin any of them held, is
- * exactly as it was right before the fork() call. */
-static void _cthrpool_atfork_release_impl(bool is_child) {
+// Releases every lock that cthrpool_atfork_prepare took; is_child says which
+// side of the fork runs it. In the child it also marks every in_use pool
+// foreign_since_fork (its workers don't exist here), resets its pins (a parent
+// thread that was inside a resolve can never unpin, and the destroy would wait
+// for ever) and reinitializes its condition variables and the table's rwlock.
+// A torn_down pool only needs its mu unlocked.
+static void cthrpool_atfork_release_impl(bool is_child) {
   size_t n = cthrpool_slot_table.slots
                  ? cvector_elem_count(cthrpool_slot_table.slots)
                  : 0;
   for (size_t i = 0; i < n; i++) {
-    cthrpool_slot_t *slot =
-        (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, i);
+    cthrpool_slot *slot =
+        (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, i);
     if (!slot->in_use && !slot->torn_down) continue;
     cthread_pool *pool = slot->ptr;
 
-    /* A torn_down slot is already not in_use, and its own destroy is already
-     * in progress in THIS process. Nothing can resolve it again since in_use
-     * is false, so unlike a pool that is really still live it has no way to
-     * reach the foreign_since_fork branch of _cthrpool_teardown_raw a second
-     * time in the child. The thread destroying it doesn't exist there (unless
-     * it's the thread that called fork()), and the pool's memory then just
-     * stays unreachable, harmlessly, for the rest of the child's life. All
-     * that's needed to close the hang this mechanism is about is an unlock of
-     * its mu, and the code below does that in both branches. */
     if (slot->in_use && is_child) {
       atomic_store(&pool->foreign_since_fork, true);
-      /* A parent-side thread that doesn't exist in this process can be in the
-       * middle of a resolve, inside a pinned _cthrpool_resolve call, at the
-       * instant of the fork(). From this process's point of view that pin
-       * then stays outstanding forever, because nothing here can ever run the
-       * matching _cthrpool_resolve_unpin that the vanished thread would make.
-       * The wait loop of _cthrpool_teardown_raw blocks until the pin count
-       * reaches 0 before it does anything else, so without a reset here the
-       * destroy in the child would hang forever. It's the same class of hang
-       * as an inherited locked mutex; see the doc comment of
-       * _cthrpool_atfork_prepare above.
-       *
-       * The reset is safe in the very common case where no thread in this
-       * process is already resolving this exact handle across this exact
-       * fork() call. One narrow case stays open, where the thread calling
-       * fork() has its OWN resolve in flight across its own fork() call. That
-       * is a limit of calling fork() while holding a pin, not a defect of this
-       * reset. */
       ccol_pintable_reset_for(&cthrpool_pintable, pool->self_handle);
 
-      /* A live pool's worker threads spend most of their lives blocked in
-       * _ccol_cond_var_wait(pool->not_empty, pool->mu) (see the main loop of
-       * worker_thread_fn), and unlike a plain _ccol_mutex_lock that call
-       * releases pool->mu while it waits. So the lock _cthrpool_atfork_prepare
-       * takes on pool->mu proves nothing about some OTHER thread the child
-       * doesn't have: at the exact instant of the fork() such a thread can be
-       * inside pthread_cond_wait's internal waiter bookkeeping. glibc's condvar
-       * keeps track of its registered waiters in state private to the condvar
-       * (an internal waiter reference count and generation or group counters,
-       * for example), and that state is completely independent of whatever
-       * external mutex the condvar is paired with.
-       *
-       * fork() copies the raw memory of that bookkeeping as it is while the
-       * thread that owned it is gone. A LATER _ccol_cond_var_signal or
-       * _broadcast on the same copied condvar in the child can then hang on
-       * that stale internal state, which nothing can ever resolve. The child
-       * ends up stuck inside pthread_cond_signal itself, not in pool->mu at
-       * all, and it gets there from the ordinary
-       * _ccol_cond_var_signal(pool->not_empty) call that every submit makes
-       * after putting a task in the queue.
-       *
-       * A plain "normal" pthread mutex does no owner tracking, so a bare
-       * unlock from a different thread clears it fully and correctly (see this
-       * function's header comment), but a condition variable has no such safe
-       * "just unlock" equivalent for internal waiter state that may be stale.
-       * So we REINITIALIZE every condvar of this pool, unconditionally, on the
-       * child's one surviving thread, before any application code in this
-       * process can reach them. The slot-table rwlock at the end of this
-       * function is reinitialized in the child for a different reason; see the
-       * comment there.
-       *
-       * This is safe because the handler runs single-threaded and
-       * synchronously, before fork() returns to application code, so nothing
-       * can touch these condvars concurrently yet. A freshly initialized
-       * condvar with zero real waiters is the right state for an inherited
-       * pool: its real worker threads are the only threads that could ever be
-       * genuine waiters, and all of them are gone in this process, whatever
-       * the fork() caught them doing. */
-      if (_ccol_cond_var_init(pool->not_empty) != 0)
-        _ccol_fatal_err("cthrpool atfork release: failed to reinit not_empty");
-      /* Same clock as the ordinary init, so a timed submit in the child keeps
-       * its CLOCK_MONOTONIC deadline. */
-      if (_cthrpool_init_monotonic_cond_var(&pool->not_full) != 0)
-        _ccol_fatal_err("cthrpool atfork release: failed to reinit not_full");
-      if (_ccol_cond_var_init(pool->idle_cv) != 0)
-        _ccol_fatal_err("cthrpool atfork release: failed to reinit idle_cv");
-      /* Same reasoning as for the three condvars above, and the same class of
-       * waiter needs it: a thread blocked in cthrpool_shutdown_drain or
-       * cthrpool_shutdown_immediate, waiting out a shutdown that another thread
-       * runs, sits on this condvar. */
-      if (_ccol_cond_var_init(pool->shutdown_cv) != 0)
-        _ccol_fatal_err(
+      if (ccol__cond_var_init(pool->not_empty) != 0)
+        ccol__fatal_err("cthrpool atfork release: failed to reinit not_empty");
+      if (cthrpool_init_monotonic_cond_var(&pool->not_full) != 0)
+        ccol__fatal_err("cthrpool atfork release: failed to reinit not_full");
+      if (ccol__cond_var_init(pool->idle_cv) != 0)
+        ccol__fatal_err("cthrpool atfork release: failed to reinit idle_cv");
+      if (ccol__cond_var_init(pool->shutdown_cv) != 0)
+        ccol__fatal_err(
             "cthrpool atfork release: failed to reinit shutdown_cv");
     }
 
-    _ccol_mutex_unlock(pool->mu);
+    ccol__mutex_unlock(pool->mu);
   }
 
-  /* prepare() above took the write side of cthrpool_slot_table.rwlock on this
-   * same thread, the one calling fork(). In the parent a plain
-   * _ccol_rw_lock_unlock from here releases it.
-   *
-   * In the child it doesn't. A glibc rwlock unlock tells a writer unlock from
-   * a reader unlock by comparing the writer thread ID it recorded with the
-   * caller's, and fork() gives the child's one thread a new thread ID, so a
-   * plain unlock returns 0, releases nothing, and every later
-   * cthrpool_create_mp or cthrpool_destroy in this child would block for ever.
-   * The child reinitializes the rwlock instead, as _clog_atfork_release in
-   * clogger.c and _cthreadcomm_atfork_release_impl in ceventloop do.
-   * That's safe because the child has exactly one thread at this point, so
-   * nothing can be waiting on the rwlock. */
   if (is_child) {
-    if (_ccol_rw_lock_reinit_in_child(cthrpool_slot_table.rwlock) != 0)
-      _ccol_fatal_err(
+    if (ccol__rw_lock_reinit_in_child(cthrpool_slot_table.rwlock) != 0)
+      ccol__fatal_err(
           "cthrpool atfork release: failed to reinit slot table rwlock");
   } else {
-    _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+    ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
   }
 }
 
-static void _cthrpool_atfork_release(void) {
-  _cthrpool_atfork_release_impl(false);
+// The parent's fork handler: releases what cthrpool_atfork_prepare took.
+static void cthrpool_atfork_release(void) {
+  cthrpool_atfork_release_impl(false);
 }
 
-/* The child-side counterpart of _cthrpool_atfork_release. It releases the same
- * locks (see the comment of _cthrpool_atfork_release_impl), and on top of that
- * it marks the worker threads of every inherited pool as gone for good as far
- * as this process is concerned. It must run before any application code in
- * this process can reach the shutdown or destroy path of one of these pools,
- * and it does, because pthread_atfork's child handler runs synchronously as
- * part of fork() returning, strictly before fork()'s return value reaches
- * the code that called it. */
-static void _cthrpool_atfork_child_release(void) {
-  _cthrpool_atfork_release_impl(true);
+// The child's fork handler: releases what cthrpool_atfork_prepare took and
+// marks the inherited pools. It runs before fork() returns in the child, so
+// before any code there can reach the shutdown or destroy of an inherited
+// pool.
+static void cthrpool_atfork_child_release(void) {
+  cthrpool_atfork_release_impl(true);
 }
-#endif /* CCOL_FORK_SAFETY_REQUIRED */
+#endif
 
-/* Defined with the process-exit teardown below. They're declared here
-   because the final locked section of __cthrpool_destroy does the release that
-   the destructor deferred. */
-static bool _cthrpool_any_slot_live_locked(void);
-static void _cthrpool_release_slot_table_locked(void);
-static void _cthrpool_release_slot_table_if_deferred_locked(void);
+static bool cthrpool_any_slot_live_locked(void);
+static void cthrpool_release_slot_table_locked(void);
+static void cthrpool_release_slot_table_if_deferred_locked(void);
 
-/* ========================================================================== */
-/*                    CTHRPOOL HANDLE RESOLVE / UNPIN */
-/* ========================================================================== */
-
-/* Waits out every in-flight caller that resolved this pool before its slot
- * was retired. It polls instead of sleeping on a condition variable because
- * the unpin side sends no wakeup on purpose: the whole point of the unpin is
- * to touch nothing but the pin. The wait has no bound by design, since giving
- * up would mean freeing memory a live resolver still points at. */
-static void _cthrpool_wait_for_pins(cthread_pool *pool) {
-  /* A pool whose handle was never published has no slot to wait on, and it
-   * must not guess one. Without this check a teardown reached from a failed
-   * construction derives an index from a zeroed handle, or from a slot that
-   * is already back on the free list, and then waits out the pins of whatever
-   * unrelated pool holds that slot. */
+// Waits until every caller that resolved pool before its slot was retired has
+// unpinned, so the teardown never frees memory a caller still uses. It polls
+// with a growing sleep because an unpin sends no wakeup, and it has no bound,
+// since giving up would free memory in use. A pool whose handle was never
+// published (failed create) has no slot to wait on.
+static void cthrpool_wait_for_pins(cthread_pool *pool) {
   if (pool->self_handle == 0) return;
   uint32_t idx = (uint32_t)(pool->self_handle >> 32);
   long delay_ns = 1000;
@@ -698,50 +343,37 @@ static void _cthrpool_wait_for_pins(cthread_pool *pool) {
   }
 }
 
-/* Resolves h and pins the result against a concurrent destroy. Returns NULL
- * if h is 0 or garbage, or if it names a slot that is free now or has been
- * reused (the generation is wrong then). On success the caller MUST call
- * _cthrpool_resolve_unpin(result) exactly once, as soon as it's done with the
- * resolved cthread_pool*. */
-static cthread_pool *_cthrpool_resolve(cthrpool h) {
-  /* No lock and no shared write. Every public entry point of this module goes
-   * through here, so a write here to memory another thread reads would be
-   * paid by every submit, from every submitting thread. */
+// Resolves h to its pool and pins it, so a concurrent destroy waits until the
+// caller is done with it. Every public call on a pool starts here. Gives NULL
+// for 0, garbage, a free slot or a reused one. On success the caller must call
+// cthrpool_resolve_unpin() exactly once. It takes no lock and makes no shared
+// write, since every submit runs it.
+static cthread_pool *cthrpool_resolve(cthrpool h) {
   return (cthread_pool *)ccol_pintable_pin(&cthrpool_pintable, h);
 }
 
-static void _cthrpool_resolve_unpin(cthread_pool *raw) {
-  /* Releases the pin and touches nothing else. Locking raw->mu here would
-   * make every call take this pool's lock once more right after releasing
-   * it, and that's what turns concurrent submitters into a convoy. There's no
-   * wakeup to deliver either, since __cthrpool_destroy polls the pin count
-   * instead of sleeping on a condition variable that waits for this function.
-   *
-   * Reading raw->self_handle before the release is safe because the pin is
-   * still held then. After the release the pool can be freed at any instant,
-   * so nothing may touch raw after this call. */
+// Drops the pin that cthrpool_resolve took, when a public call is done with the
+// pool. It touches nothing else: the pool can be freed right after, so nothing
+// may read raw once the pin is gone.
+static void cthrpool_resolve_unpin(cthread_pool *raw) {
   ccol_pintable_unpin(&cthrpool_pintable, raw->self_handle);
 }
 
 #ifdef RUNNING_UNIT_TESTS
-/* Test-only. Makes the next free-list push behave exactly like an allocation
- * failure, then disarms itself. Without it, the lost-index recovery below
- * would need a real out-of-memory at one particular cvector_push_back call,
- * which an ordinary test run can't produce. */
+// Test only: the next free list push fails like an allocation.
 static _Atomic bool g_cthrpool_fail_next_free_index_push = false;
 
-void _cthrpool_force_next_free_index_push_failure_for_tests(void) {
+// Arms g_cthrpool_fail_next_free_index_push, so a test reaches the
+// recovery of a lost slot index.
+void cthrpool__force_next_free_index_push_failure_for_tests(void) {
   atomic_store(&g_cthrpool_fail_next_free_index_push, true);
 }
 #endif
 
-/* Gives idx back for reuse. The caller holds the write lock.
- *
- * A failed push gets recorded, not swallowed. The slot it names is already
- * fully released, so silently dropping the index would strand that slot for
- * the life of the process and make every later create grow the table again.
- * See cthrpool_slot_table.lost_indices. */
-static void _cthrpool_free_index_release_locked(uint32_t idx) {
+// Puts idx back on the free list for the next create to reuse; the destroy and
+// a failed acquire call it with the write lock held. A failed push is counted
+// in lost_indices instead of stranding the slot for good.
+static void cthrpool_free_index_release_locked(uint32_t idx) {
 #ifdef RUNNING_UNIT_TESTS
   if (atomic_exchange(&g_cthrpool_fail_next_free_index_push, false)) {
     cthrpool_slot_table.lost_indices++;
@@ -752,24 +384,17 @@ static void _cthrpool_free_index_release_locked(uint32_t idx) {
     cthrpool_slot_table.lost_indices++;
 }
 
-/* Gets back one slot index that a failed free-list push stranded (see
- * cthrpool_slot_table.lost_indices), by scanning for a slot that is released
- * but that nothing names. The caller holds the write lock and has already
- * found free_indices empty, and that's what makes "ptr is NULL and in_use is
- * false" mean lost rather than just free: a slot released successfully is on
- * that list, and a slot whose destroy is still running keeps a non-NULL ptr
- * until the very end of that destroy.
- *
- * It's out of line and runs only when the counter is above zero, so an
- * ordinary acquire pays one comparison for it. If the scan finds nothing it
- * sets the counter to zero, so a counter that somehow outlives its slot
- * can't make every later acquire scan the table. */
-static __attribute__((noinline)) bool _cthrpool_reclaim_lost_index_locked(
+// Finds a released slot that no free list entry names (ptr NULL and not in_use)
+// and puts its index in *out_idx, so a slot lost to a failed push gets reused
+// instead of the table growing. The acquire calls it with the write lock held
+// after finding the free list empty, which makes that state mean lost rather
+// than free. A scan that finds nothing clears lost_indices.
+static __attribute__((noinline)) bool cthrpool_reclaim_lost_index_locked(
     uint32_t *out_idx) {
   size_t slot_count = cvector_elem_count(cthrpool_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
-    cthrpool_slot_t *slot =
-        (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, i);
+    cthrpool_slot *slot =
+        (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, i);
     if (slot->ptr == NULL && !slot->in_use) {
       *out_idx = (uint32_t)i;
       cthrpool_slot_table.lost_indices--;
@@ -780,224 +405,141 @@ static __attribute__((noinline)) bool _cthrpool_reclaim_lost_index_locked(
   return false;
 }
 
-/* Allocates a fresh slot for pool, or reuses a freed one, and returns the
- * handle, or 0 when there isn't enough memory. It runs once, from
- * cthrpool_create_mp, after the object is otherwise fully built, and at that
- * point every worker thread is already running. */
-static cthrpool _cthrpool_handle_slot_acquire(cthread_pool *pool) {
-  _ccol_call_once(cthrpool_slot_table.once, _cthrpool_slot_table_init_globals);
-  _ccol_rw_lock_wrlock(cthrpool_slot_table.rwlock);
-  /* The table was released at unload, so no handle can be published any
-   * more and the creation that asked fails cleanly. */
+// Gives pool a slot (a free one, a lost one or a new one), publishes it in the
+// pin table and gives the handle; it's the last step of cthrpool_create_mp.
+// Gives 0 when the table was released at unload, is full or can't grow.
+// Generation 0 is skipped because handle 0 is CTHRPOOL_NULL. self_handle is
+// written before the publish so a resolver finds it. A failed publish puts the
+// slot back with both flags clear. Takes the write lock.
+static cthrpool cthrpool_handle_slot_acquire(cthread_pool *pool) {
+  ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
+  ccol__rw_lock_wrlock(cthrpool_slot_table.rwlock);
   if (!cthrpool_slot_table.slots) {
-    _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+    ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
     return 0;
   }
   uint32_t idx;
-  cthrpool_slot_t *slot;
+  cthrpool_slot *slot;
   if (cvector_elem_count(cthrpool_slot_table.free_indices) > 0) {
     cvector_pop_back(cthrpool_slot_table.free_indices, &idx);
-    slot = (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, idx);
+    slot = (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
   } else if (cthrpool_slot_table.lost_indices > 0 &&
-             _cthrpool_reclaim_lost_index_locked(&idx)) {
-    slot = (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, idx);
+             cthrpool_reclaim_lost_index_locked(&idx)) {
+    slot = (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
   } else {
-    /* A slot whose index is past what the pin table holds can never be
-     * published, so we refuse it here instead of claiming it and rolling
-     * back. A rollback would put an index that no later publish can use onto
-     * the free list that every acquire pops from. It's reported as an
-     * ordinary failure, which is how a caller already treats a table
-     * that can't grow. */
     if (cvector_elem_count(cthrpool_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
-      _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+      ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
       return 0;
     }
-    cthrpool_slot_t fresh = {0};
+    cthrpool_slot fresh = {0};
     if (cvector_push_back(cthrpool_slot_table.slots, &fresh) != ccol_success) {
-      _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
-      return 0; /* an ordinary, non-fatal out-of-memory failure */
+      ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
+      return 0;
     }
     idx = (uint32_t)cvector_elem_count(cthrpool_slot_table.slots) - 1;
-    slot = (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, idx);
+    slot = (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
   }
   slot->generation++;
-  /* Skip the one generation value that collides with the reserved "invalid
-   * handle" sentinel, 0, which comes after about 2^32 reuses of this exact
-   * slot index. The identical guard in chttpcli_handle_slot_acquire explains
-   * why. */
   if (slot->generation == 0) slot->generation++;
   cthrpool h = ((cthrpool)idx << 32) | (cthrpool)slot->generation;
 
-  /* Written before the handle is published, so a resolver that finds this
-   * pool also finds the handle its own unpin needs. */
   pool->self_handle = h;
 
-  /* A publish can allocate. If it fails, no call could resolve the handle,
-   * so the slot goes back on the free list instead. */
   if (!ccol_pintable_publish(&cthrpool_pintable, idx, slot->generation, pool)) {
-    /* Cleared because the slot goes back on the free list, and a handle left
-     * behind would point this pool's teardown at a slot that belongs to
-     * somebody else. */
     pool->self_handle = 0;
-    /* The slot goes back on the free list in the same shape as a slot a
-     * destroy retires, not just unused. _cthrpool_atfork_prepare's walk handles
-     * any slot with either flag set and dereferences its ptr, so a slot going
-     * back on the free list must leave both flags clear. */
     slot->ptr = NULL;
 #if CCOL_FORK_SAFETY_REQUIRED
     slot->torn_down = false;
 #endif
-    _cthrpool_free_index_release_locked(idx);
-    _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+    cthrpool_free_index_release_locked(idx);
+    ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
     return 0;
   }
 
   slot->ptr = pool;
   slot->in_use = true;
 #if CCOL_FORK_SAFETY_REQUIRED
-  slot->torn_down = false; /* it's always false already when a slot is
-                               reused (see the field comment of
-                               cthrpool_slot_t), and the reset here is a
-                               standing defence so we don't rely on that
-                               invariant alone */
+  slot->torn_down = false;
 #endif
-  _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+  ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
   return h;
 }
 
-/* ========================================================================== */
-/*                    WORKER SELF-CALL DETECTION                              */
-/* ========================================================================== */
-
-/* A process-wide thread-local key that records which cthread_pool, if any,
- * the calling thread is a worker of. worker_thread_fn sets it once at its own
- * entry, and nothing assigns or clears it again for the rest of that thread's
- * life. A cthrpool worker thread belongs to exactly one pool for its whole
- * life, since a cthrpool always creates and owns its own OS threads and never
- * shares them across pools, so one "which pool am I" value is enough and
- * there's no per-job set-and-clear to manage here. The analogous
- * ceventloop_job_key_bundle of ceventloop does need one in
- * cthreadcomm.c, because a dispatch_pool worker there serves many jobs from
- * many different registrations over its life.
- *
- * The key catches a task, or a task's on_complete callback, that calls
- * cthrpool_wait, _shutdown_drain, _shutdown_immediate or __cthrpool_destroy on
- * the very pool it runs on. worker_thread_fn gets `pool` as a bare pointer,
- * captured once when the thread starts, and that pointer has nothing to do
- * with the resolve and pin mechanism every public entry point goes through,
- * so the pin count says nothing about "a worker of this pool still uses it".
- *
- * Normally one thing alone keeps a worker's continued use of `pool` safe
- * across a shutdown: the _ccol_thread_join loop of
- * _cthrpool_shutdown_drain_internal and _cthrpool_shutdown_immediate_internal,
- * which blocks until every worker really finishes and returns from
- * worker_thread_fn, before any teardown goes on. A self-call silently breaks
- * that. pthread_join on the calling thread's own ID returns EDEADLK at once
- * instead of blocking (POSIX leaves the case undefined, and glibc's
- * pthread_join(3) documents this detection and rejection). Nothing here
- * checks what _ccol_thread_join returns, so the join loop believes every
- * worker has exited while the calling worker is still deep in its own call
- * stack, about to return to worker_thread_fn and keep touching `pool`.
- *
- * For __cthrpool_destroy that's a real, deterministic use-after-free: after
- * the task returns, task_free, _ccol_mutex_lock, the decrement of
- * pool->active_count and _ccol_cond_var_broadcast all run against the pool
- * the destroy already freed. A pool with one worker whose only task calls
- * cthrpool_destroy on its own pool hits it every single time.
- *
- * live tells whether the key exists. Creating the key can fail (in a process
- * that already hit PTHREAD_KEYS_MAX, for example), and key then holds no key
- * of this module: it can name a key some other component owns, and a value
- * set on it would reach that component's destructor. So a pool refuses to be
- * created while live is false, because its workers could neither set the key
- * nor be told apart from any other thread. live goes back to false, and the
- * key is deleted, when the module unloads with no pool left, so repeated
- * dlopen() and dlclose() cycles don't use up the process's keys. */
+// The thread-specific key that tells a worker which pool it serves. Each worker
+// sets it once at start and never again, because a worker belongs to one pool
+// for its whole life. It lets a task that waits on, shuts down or destroys its
+// own pool be recognised: the join of the shutdown would otherwise get EDEADLK
+// on the calling worker and carry on, and a destroy would free the pool under
+// that worker. live tells whether the key was created.
 static struct {
-  _ccol_thread_ls_key_t key;
-  _ccol_once_flag_t once;
+  ccol__thread_ls_key key;
+  ccol__once_flag once;
   atomic_bool live;
-} cthrpool_worker_key_bundle = {.once = _CCOL_ONCE_INIT};
+} cthrpool_worker_key_bundle = {.once = CCOL__ONCE_INIT};
 
-static void _cthrpool_init_worker_key(void) {
-  if (_ccol_thread_ls_key_create(cthrpool_worker_key_bundle.key, NULL) == 0)
+// Creates the worker key and sets live on success; the once of
+// cthrpool_worker_key_bundle runs it on first need.
+static void cthrpool_init_worker_key(void) {
+  if (ccol__thread_ls_key_create(cthrpool_worker_key_bundle.key, NULL) == 0)
     atomic_store(&cthrpool_worker_key_bundle.live, true);
 }
 
-/* True when the worker key exists. Every other use of the key comes from a
- * pool that exists, and a pool exists only after this said true. */
-static bool _cthrpool_worker_key_available(void) {
-  _ccol_call_once(cthrpool_worker_key_bundle.once, _cthrpool_init_worker_key);
+// Tells whether the worker key exists, creating it on the first call, so a
+// create can refuse a pool whose workers couldn't mark themselves. Every other
+// use of the key comes from a pool, and a pool exists only after this said
+// true.
+static bool cthrpool_worker_key_available(void) {
+  ccol__call_once(cthrpool_worker_key_bundle.once, cthrpool_init_worker_key);
   return atomic_load(&cthrpool_worker_key_bundle.live);
 }
 
-/* One frame of the stack of pools whose discarded tasks the calling thread is
- * completing right now. _cthrpool_discard_tasks pushes a frame, living on its
- * own C stack, around its loop and pops it afterwards. It's a stack and not
- * a single pool because an on_complete callback there can shut down another
- * pool, whose discards then run nested inside the outer ones, and the thread
- * counts as a worker of every pool on the stack. */
-typedef struct _cthrpool_discard_frame {
+// One pool whose discarded tasks the calling thread is completing. The frames
+// live on the stack of cthrpool_discard_tasks; they form a stack because an
+// on_complete callback there can shut down a second pool, whose discards then
+// run nested.
+typedef struct cthrpool_discard_frame {
   cthread_pool *pool;
-  struct _cthrpool_discard_frame *prev;
-} _cthrpool_discard_frame;
+  struct cthrpool_discard_frame *prev;
+} cthrpool_discard_frame;
 
-static __thread _cthrpool_discard_frame *_cthrpool_discarding_top = NULL;
+// The innermost discard frame of the calling thread, or NULL.
+static __thread cthrpool_discard_frame *cthrpool_discarding_top = NULL;
 
-/* True when the calling thread is one of pool's worker threads, meaning the
- * call comes, directly or through other calls, from inside a task running on
- * pool or from that task's on_complete callback. False in every other
- * case. */
-static bool _cthrpool_is_self_call(cthread_pool *pool) {
-  /* A thread running the on_complete callbacks of pool's discarded tasks
-   * counts as a worker of pool while it does that; see
-   * _cthrpool_discard_tasks. */
-  for (const _cthrpool_discard_frame *f = _cthrpool_discarding_top; f;
+// Tells whether the calling thread is a worker of pool, so a wait, shutdown,
+// destroy or full-queue submit can refuse to wait for itself. That covers the
+// pool's tasks and on_complete callbacks and the ran == false callbacks that
+// this thread runs for pool (cthrpool_discarding_top). A thread with another
+// pool's mark isn't one. A worker whose pthread_setspecific failed has no mark,
+// so a thread without one is compared with the worker IDs, which are written
+// before the handle is published. Exited workers are skipped, because glibc
+// gives a joined thread's ID to the next thread that starts, and an inherited
+// pool has no workers here. Every caller is a cold path.
+static bool cthrpool_is_self_call(cthread_pool *pool) {
+  for (const cthrpool_discard_frame *f = cthrpool_discarding_top; f;
        f = f->prev)
     if (f->pool == pool) return true;
-  _ccol_call_once(cthrpool_worker_key_bundle.once, _cthrpool_init_worker_key);
-  void *mark = _ccol_thread_ls_get(cthrpool_worker_key_bundle.key);
+  ccol__call_once(cthrpool_worker_key_bundle.once, cthrpool_init_worker_key);
+  void *mark = ccol__thread_ls_get(cthrpool_worker_key_bundle.key);
   if (mark == (void *)pool) return true;
-  /* A worker of another pool carries that pool's mark. */
   if (mark != NULL) return false;
-  /* No mark at all. That's every thread that isn't a worker, and also a
-   * worker of this pool whose pthread_setspecific failed: glibc allocates the
-   * storage for a key index of 32 or above lazily per thread, so that call
-   * can fail with ENOMEM. Such a worker must still be recognised, or a task
-   * that waits on, shuts down or destroys its own pool deadlocks or frees the
-   * pool under itself. The workers' IDs are written before the pool's handle
-   * is published and never change after that, so we can read them here with
-   * no lock. Every caller of this function is a cold path (a full queue, a
-   * wait, a shutdown or a destroy), so a scan over the workers costs nothing
-   * that matters. */
-  /* A slot whose worker has exited is skipped. glibc caches a joined
-   * thread's stack and descriptor and gives both to the next thread that
-   * starts, so a thread the application starts after a shutdown often
-   * carries the ID of a joined worker. A worker marks its slot as its last
-   * write to the pool, before it can be joined, so a joined worker's ID never
-   * matches here. A pool inherited across fork() has no workers in this
-   * process, and the children of that process reuse the descriptors of the
-   * parent's threads the same way. */
 #if CCOL_FORK_SAFETY_REQUIRED
   if (atomic_load(&pool->foreign_since_fork)) return false;
 #endif
-  _ccol_thread_id_t me = _ccol_get_thread_id();
+  ccol__thread_id me = ccol__get_thread_id();
   for (size_t i = 0; i < pool->num_threads; i++) {
-    if (_ccol_thread_id_equal(pool->threads[i].id, me) &&
+    if (ccol__thread_id_equal(pool->threads[i].id, me) &&
         !atomic_load_explicit(&pool->threads[i].exited, memory_order_acquire))
       return true;
   }
   return false;
 }
 
-/* ========================================================================== */
-/*                         INTERNAL HELPERS                                   */
-/* ========================================================================== */
-
+// Frees the pool struct and the procs copy it owns, through the copy's own free
+// function; the last step of a teardown or a failed create.
 static void pool_free_self(cthread_pool *pool) {
-  ccol_memmgmt_procs_t *mp = pool->m_procs;
+  ccol_memmgmt_procs *mp = pool->m_procs;
   if (mp) {
-    ccol_free_t free_fn = mp->free;
+    ccol_free free_fn = mp->free;
     free_fn(pool);
     free_fn(mp);
   } else {
@@ -1005,28 +547,25 @@ static void pool_free_self(cthread_pool *pool) {
   }
 }
 
-/* Ceiling on the task free list of a pool with few workers, in nodes. A
- * node is a cthrpool_task of five pointer-sized fields, so a pool keeps at most
- * 1.25 MiB of them on LP64 (before allocator overhead), and only after
- * traffic that really had that many tasks in flight at once. That covers the
- * queue depth a producer running ahead of one worker reaches in a burst of
- * about a hundred thousand submissions. */
+// The cap on the task free list of a pool with few workers, in nodes (at most
+// 1.25 MiB on LP64, and only after that many tasks were in flight at once).
 #define CTHRPOOL_TASK_FREE_LIST_CEILING ((size_t)32768)
 
-/* How many idle points a trim of the task free list waits for. A pool whose
- * workers keep up with its producer goes idle between almost every pair of
- * tasks, and trimming at each of them would give back nodes that the next
- * burst allocates again. See _cthrpool_idle_unlock_and_trim. */
+// How many idle points a trim waits for. A pool that keeps up with its producer
+// goes idle between most tasks, and trimming each time would free nodes that
+// the next burst allocates again.
 #define CTHRPOOL_TASK_FREE_LIST_TRIM_IDLE_POINTS ((uint32_t)256)
 
+// CTHRPOOL_TRIM_WINDOW() evaluates to the number of idle points between trims.
+// A test build reads it from g_cthrpool_trim_window, so a test can shorten it
+// through cthrpool__set_task_free_list_window_for_tests.
 #ifdef RUNNING_UNIT_TESTS
-/* Test-only. The number of idle points a trim waits for, so a test can get
- * to a trim with a few tasks. It defaults to the value the library ships
- * with. See _cthrpool_set_task_free_list_window_for_tests. */
 static _Atomic uint32_t g_cthrpool_trim_window =
     CTHRPOOL_TASK_FREE_LIST_TRIM_IDLE_POINTS;
 #define CTHRPOOL_TRIM_WINDOW() atomic_load(&g_cthrpool_trim_window)
-void _cthrpool_set_task_free_list_window_for_tests(uint32_t idle_points) {
+// Sets g_cthrpool_trim_window, so a test reaches a trim with a few tasks; 0
+// restores the shipped value.
+void cthrpool__set_task_free_list_window_for_tests(uint32_t idle_points) {
   atomic_store(
       &g_cthrpool_trim_window,
       idle_points ? idle_points : CTHRPOOL_TASK_FREE_LIST_TRIM_IDLE_POINTS);
@@ -1035,20 +574,16 @@ void _cthrpool_set_task_free_list_window_for_tests(uint32_t idle_points) {
 #define CTHRPOOL_TRIM_WINDOW() CTHRPOOL_TASK_FREE_LIST_TRIM_IDLE_POINTS
 #endif
 
-/* Trims the task free list at every CTHRPOOL_TASK_FREE_LIST_TRIM_IDLE_POINTS-th
- * idle point. It gives half of what the list holds above num_threads * 4 back
- * to the pool's allocator, unless the list ran empty since the previous trim,
- * which means the traffic needed all of it. So a list nothing needs halves at
- * every trim, and a list the traffic keeps using stays whole. The caller
- * holds pool->mu and calls this at the idle point, where no task is queued
- * or running. The nodes are unlinked under the lock and freed after the
- * unlock, because a custom free function may be slow, and the function
- * unlocks pool->mu itself on every path. It's kept out of line so a worker's
- * completion path keeps its shape. */
-static __attribute__((noinline)) void _cthrpool_idle_unlock_and_trim(
+// Trims the task free list at an idle point and unlocks pool->mu, which the
+// caller holds (nothing is queued or running). At every trim window it gives
+// half of what the list holds above num_threads * 4 back to the allocator,
+// unless the list ran dry since the last trim. Nodes are unlinked under the
+// lock and freed after it, since a custom free function may be slow. Out of
+// line so the worker's completion path keeps its shape.
+static __attribute__((noinline)) void cthrpool_idle_unlock_and_trim(
     cthread_pool *pool) {
   if (++pool->idle_points_since_trim < CTHRPOOL_TRIM_WINDOW()) {
-    _ccol_mutex_unlock(pool->mu);
+    ccol__mutex_unlock(pool->mu);
     return;
   }
   pool->idle_points_since_trim = 0;
@@ -1067,29 +602,19 @@ static __attribute__((noinline)) void _cthrpool_idle_unlock_and_trim(
     last->next = NULL;
     pool->task_free_list_size -= to_free;
   }
-  _ccol_mutex_unlock(pool->mu);
+  ccol__mutex_unlock(pool->mu);
   while (freed) {
     cthrpool_task *next = freed->next;
-    _ccol_mem_free(pool->m_procs, freed);
+    ccol__mem_free(pool->m_procs, freed);
     freed = next;
   }
 }
 
-/*
- * Recycles task into the pool's free list if there's still room under
- * task_free_list_cap. The caller must already hold pool->mu. Returns true
- * when the task was recycled, and then the caller has nothing more to do, and
- * false when the caller still has to really free task through the pool's
- * allocator. It may do that only AFTER unlocking pool->mu: a custom free
- * function from the caller can be as slow as it likes, so it must never run
- * while other threads may be blocked on this same lock.
- *
- * It's separate from task_free for one reason, which is that the hot
- * completion path of worker_thread_fn can fold this push into the same
- * critical section as the active_count decrement right after it. For the
- * pool "this task is done" is one indivisible event, and two lock and unlock
- * round trips on pool->mu would pay for that one event twice.
- */
+// Pushes a finished task's node onto the free list while it's under its cap, so
+// the next submit doesn't allocate. The caller holds pool->mu. Gives false when
+// the caller must free task itself, which it does only after unlocking.
+// Separate from task_free so the worker can fold this into the critical section
+// of its active_count decrement.
 static bool task_release_locked(cthread_pool *pool, cthrpool_task *task) {
   bool recycled = pool->task_free_list_size < pool->task_free_list_cap;
   if (recycled) {
@@ -1100,44 +625,32 @@ static bool task_release_locked(cthread_pool *pool, cthrpool_task *task) {
   return recycled;
 }
 
-/*
- * Releases a task struct. While there's still room under task_free_list_cap
- * it recycles the struct into the pool's free list, and otherwise it really
- * frees it through the pool's allocator.
- */
+// Recycles a task node onto the free list, or frees it when the list is full;
+// the discard path uses it for nodes no worker ran. Takes pool->mu.
 static void task_free(cthread_pool *pool, cthrpool_task *task) {
-  _cthrpool_lock_mu(pool);
+  cthrpool_lock_mu(pool);
   bool recycled = task_release_locked(pool, task);
-  _ccol_mutex_unlock(pool->mu);
+  ccol__mutex_unlock(pool->mu);
 
-  if (!recycled) _ccol_mem_free(pool->m_procs, task);
+  if (!recycled) ccol__mem_free(pool->m_procs, task);
 }
 
-/*
- * Really frees, through the pool's allocator, every node the pool's task free
- * list holds. task_free differs in that it may just recycle a node into that
- * same list instead of freeing it.
- *
- * The pool's teardown calls this once no further submit or task_free
- * call for this pool can happen, that is, when every worker is joined and
- * every pinned resolve is released; the thread and memory cleanup of
- * _cthrpool_teardown_raw already depends on the same precondition. Without this
- * call a node that was only recycled, and never handed back to m_procs,
- * leaks. There's no lock here, since by the time this runs nothing else can
- * touch this pool's task_free_list.
- */
+// Frees every node on the free list, so a teardown leaks none of the recycled
+// nodes. It's called once no submit and no worker can touch the pool any more,
+// so it takes no lock.
 static void drain_task_free_list(cthread_pool *pool) {
   cthrpool_task *t = pool->task_free_list;
   pool->task_free_list = NULL;
   pool->task_free_list_size = 0;
   while (t) {
     cthrpool_task *next = t->next;
-    _ccol_mem_free(pool->m_procs, t);
+    ccol__mem_free(pool->m_procs, t);
     t = next;
   }
 }
 
-/* Appends a task to the queue. The caller must hold pool->mu. */
+// Appends task to the queue for the workers to take; the caller holds
+// pool->mu.
 static void enqueue(cthread_pool *pool, cthrpool_task *task) {
   task->next = NULL;
   if (pool->tail) {
@@ -1149,8 +662,8 @@ static void enqueue(cthread_pool *pool, cthrpool_task *task) {
   __atomic_store_n(&pool->queue_size, pool->queue_size + 1, __ATOMIC_RELAXED);
 }
 
-/* Takes the head task off the queue. The caller must hold pool->mu, and the
- * queue must not be empty. */
+// Takes the head of a non-empty queue for a worker to run; the caller holds
+// pool->mu.
 static cthrpool_task *dequeue(cthread_pool *pool) {
   cthrpool_task *task = pool->head;
   pool->head = task->next;
@@ -1159,133 +672,125 @@ static cthrpool_task *dequeue(cthread_pool *pool) {
   return task;
 }
 
+// Test hooks that force a future allocation, a primitive init or a worker's
+// thread create to fail. cthrpool_armed_fault holds the armed step, and
+// cthrpool_worker_create_fault one more than the index of the failing worker
+// (0 when nothing is armed).
 #ifdef RUNNING_UNIT_TESTS
-/* When set, the next future allocation of a submit fails the way a failed
- * calloc would; with the system allocator a test has no other way to reach
- * that path. The counter holds how many futures exist right now. */
-atomic_bool _cthrpool_fail_next_future_alloc_for_tests;
-atomic_long _cthrpool_live_futures_for_tests;
+atomic_bool cthrpool__fail_next_future_alloc_for_tests;
+atomic_long cthrpool__live_futures_for_tests;
 
-/* The step that _cthrpool_arm_fault_for_tests armed, or _CTHRPOOL_FAULT_NONE,
- * and one more than the index of the worker whose thread creation fails, or 0.
- */
-static atomic_int _cthrpool_armed_fault;
-static atomic_size_t _cthrpool_worker_create_fault;
+static atomic_int cthrpool_armed_fault;
+static atomic_size_t cthrpool_worker_create_fault;
 
-void _cthrpool_arm_fault_for_tests(_cthrpool_fault_t step) {
-  atomic_store(&_cthrpool_armed_fault, (int)step);
+// Arms cthrpool_armed_fault, so a test reaches the error path of one
+// creation step.
+void cthrpool__arm_fault_for_tests(cthrpool__fault step) {
+  atomic_store(&cthrpool_armed_fault, (int)step);
 }
 
-void _cthrpool_fail_worker_create_at_for_tests(size_t index) {
-  atomic_store(&_cthrpool_worker_create_fault, index + 1);
+// Arms cthrpool_worker_create_fault, so a test reaches a failed worker start;
+// SIZE_MAX wraps it to 0, which disarms.
+void cthrpool__fail_worker_create_at_for_tests(size_t index) {
+  atomic_store(&cthrpool_worker_create_fault, index + 1);
 }
 
-/* True once for the armed step, on the first thread that reaches it. */
-static bool _cthrpool_fault_fires(_cthrpool_fault_t step) {
+// Tells whether the armed fault is step, and disarms it if so, so the forced
+// failure hits exactly one thread once.
+static bool cthrpool_fault_fires(cthrpool__fault step) {
   int expected = (int)step;
-  return atomic_compare_exchange_strong(&_cthrpool_armed_fault, &expected,
-                                        (int)_CTHRPOOL_FAULT_NONE);
+  return atomic_compare_exchange_strong(&cthrpool_armed_fault, &expected,
+                                        (int)CTHRPOOL__FAULT_NONE);
 }
 
-static bool _cthrpool_worker_create_fault_fires(size_t index) {
+// Tells whether the armed worker index is index, and disarms it if so.
+static bool cthrpool_worker_create_fault_fires(size_t index) {
   size_t expected = index + 1;
-  return atomic_compare_exchange_strong(&_cthrpool_worker_create_fault,
+  return atomic_compare_exchange_strong(&cthrpool_worker_create_fault,
                                         &expected, 0);
 }
 
-#define _CTHRPOOL_FAULT(step) _cthrpool_fault_fires(step)
-#define _CTHRPOOL_WORKER_CREATE_FAULT(index) \
-  _cthrpool_worker_create_fault_fires(index)
+// CTHRPOOL_FAULT(step) and CTHRPOOL_WORKER_CREATE_FAULT(index) evaluate to true
+// when a test armed a forced failure of that creation step or worker start, so
+// the error paths can be tested. Without the test hooks they are constant
+// false.
+#define CTHRPOOL_FAULT(step) cthrpool_fault_fires(step)
+#define CTHRPOOL_WORKER_CREATE_FAULT(index) \
+  cthrpool_worker_create_fault_fires(index)
 #else
-/* A build without the test hooks never takes a failure that no call made. */
-#define _CTHRPOOL_FAULT(step) false
-#define _CTHRPOOL_WORKER_CREATE_FAULT(index) false
+#define CTHRPOOL_FAULT(step) false
+#define CTHRPOOL_WORKER_CREATE_FAULT(index) false
 #endif
 
+// Allocated future blocks, partly built ones included.
 #ifdef RUNNING_UNIT_TESTS
-/* How many future blocks are allocated right now, counted from the calloc
- * to the free, partly built ones included. */
-atomic_long _cthrpool_future_blocks_for_tests;
+atomic_long cthrpool__future_blocks_for_tests;
 #endif
 
-/* Every future block comes from here and goes back through
- * future_block_free, so that a test build can count the blocks. */
-static inline cthrpool_future_t *future_block_alloc(void) {
-  if (_CTHRPOOL_FAULT(_CTHRPOOL_FAULT_FUTURE_ALLOC)) return NULL;
-  cthrpool_future_t *f =
-      (cthrpool_future_t *)calloc(1, sizeof(cthrpool_future_t));
+// Allocates a zeroed future block, or gives NULL (also when a test fault
+// fires). Every block goes back through future_block_free(), so a test build
+// can count them.
+static inline cthrpool_future *future_block_alloc(void) {
+  if (CTHRPOOL_FAULT(CTHRPOOL__FAULT_FUTURE_ALLOC)) return NULL;
+  cthrpool_future *f = (cthrpool_future *)calloc(1, sizeof(cthrpool_future));
 #ifdef RUNNING_UNIT_TESTS
   if (f)
-    atomic_fetch_add_explicit(&_cthrpool_future_blocks_for_tests, 1,
+    atomic_fetch_add_explicit(&cthrpool__future_blocks_for_tests, 1,
                               memory_order_relaxed);
 #endif
   return f;
 }
 
-static inline void future_block_free(cthrpool_future_t *f) {
+// Frees a future block and counts it in a test build; the partner of
+// future_block_alloc().
+static inline void future_block_free(cthrpool_future *f) {
 #ifdef RUNNING_UNIT_TESTS
-  atomic_fetch_sub_explicit(&_cthrpool_future_blocks_for_tests, 1,
+  atomic_fetch_sub_explicit(&cthrpool__future_blocks_for_tests, 1,
                             memory_order_relaxed);
 #endif
   free(f);
 }
 
-/*
- * Destroys and frees f once the caller has seen f's refcount reach 0. The
- * caller decrements that count under f->mu and unlocks f->mu before calling
- * this. It's the shared tail of every "drop a reference, free on the last
- * release" site in this file: future_deref, future_cancel, the worker's
- * inline future completion in worker_thread_fn, cthrpool_future_fulfill, and
- * cthrpool_future_get releasing its own waiter reference, each of which would
- * otherwise repeat the same three lines. Any of those threads can be the one
- * that sees zero, so this function doesn't care which reference the caller
- * held.
- */
-static void future_destroy_if_unreferenced(cthrpool_future_t *f,
-                                           int remaining) {
+// Frees f when remaining is 0. It's the shared tail of every site that drops a
+// future reference: each decrements the count under f->mu, unlocks, and then
+// calls this, and whichever thread sees 0 frees it.
+static void future_destroy_if_unreferenced(cthrpool_future *f, int remaining) {
   if (remaining == 0) {
 #ifdef RUNNING_UNIT_TESTS
-    atomic_fetch_sub_explicit(&_cthrpool_live_futures_for_tests, 1,
+    atomic_fetch_sub_explicit(&cthrpool__live_futures_for_tests, 1,
                               memory_order_relaxed);
 #endif
-    _ccol_mutex_destroy(f->mu);
-    _ccol_cond_var_destroy(f->cv);
+    ccol__mutex_destroy(f->mu);
+    ccol__cond_var_destroy(f->cv);
     future_block_free(f);
   }
 }
 
-/*
- * Decrements a future's refcount and frees the future when the count gets to
- * 0. The caller must NOT hold future->mu, because this function locks and
- * unlocks it.
- */
-static void future_deref(cthrpool_future_t *f) {
-  _ccol_mutex_lock(f->mu);
+// Drops one reference of f and frees it on the last one; cthrpool_future_free
+// uses it. Locks f->mu itself, so the caller must not hold it.
+static void future_deref(cthrpool_future *f) {
+  ccol__mutex_lock(f->mu);
   int remaining = --f->refcount;
-  _ccol_mutex_unlock(f->mu);
+  ccol__mutex_unlock(f->mu);
   future_destroy_if_unreferenced(f, remaining);
 }
 
-/*
- * Cancels a future: marks it done and cancelled, broadcasts to every waiting
- * cthrpool_future_get caller, and then gives up the task's reference.
- */
-static void future_cancel(cthrpool_future_t *f) {
-  _ccol_mutex_lock(f->mu);
+// Marks f done and cancelled, wakes every waiter and drops the task's
+// reference. A shutdown uses it for the futures of discarded tasks.
+static void future_cancel(cthrpool_future *f) {
+  ccol__mutex_lock(f->mu);
   f->cancelled = true;
   f->done = true;
-  _ccol_cond_var_broadcast(f->cv);
+  ccol__cond_var_broadcast(f->cv);
   int remaining = --f->refcount;
-  _ccol_mutex_unlock(f->mu);
+  ccol__mutex_unlock(f->mu);
   future_destroy_if_unreferenced(f, remaining);
 }
 
-/*
- * Takes the whole task list off the queue in one step. The caller must hold
- * pool->mu, and may cancel and free the returned list only after
- * unlocking pool->mu, because future_cancel locks future->mu and future->mu
- * must never nest under pool->mu.
- */
+// Takes the whole queue in one step, so an immediate shutdown or the teardown
+// of an inherited pool can discard it; the caller holds pool->mu. The list must
+// be discarded only after the unlock, because future->mu never nests under
+// pool->mu.
 static cthrpool_task *steal_queue(cthread_pool *pool) {
   cthrpool_task *list = pool->head;
   pool->head = NULL;
@@ -1294,31 +799,17 @@ static cthrpool_task *steal_queue(cthread_pool *pool) {
   return list;
 }
 
-/*
- * Completes and frees every task of list, a list that steal_queue took off
- * the queue before any worker ran it. A future task gets its future
- * cancelled and a callback task gets on_complete called with ran == false,
- * so every task a submit accepted gets exactly one on_complete call, with
- * true from the worker that ran it or with false from here. The caller must
- * not hold pool->mu, since future_cancel locks future->mu (which must never
- * nest under pool->mu) and an on_complete callback can call back into this
- * module.
- *
- * While the callbacks run, the calling thread counts as a worker of pool for
- * _cthrpool_is_self_call. So a callback that calls cthrpool_wait,
- * cthrpool_shutdown_drain or cthrpool_shutdown_immediate on pool gets the
- * documented no-op instead of waiting on the shutdown that this very thread
- * hasn't finished yet, and one that calls cthrpool_destroy on pool gets the
- * documented fatal error instead of waiting on its own pin.
- *
- * recycle picks how a node is freed: through task_free, which may keep it on
- * a live pool's free list, or straight back to m_procs for a pool that
- * nothing can submit to again.
- */
-static void _cthrpool_discard_tasks(cthread_pool *pool, cthrpool_task *list,
-                                    bool recycle) {
-  _cthrpool_discard_frame frame = {pool, _cthrpool_discarding_top};
-  _cthrpool_discarding_top = &frame;
+// Completes every task of a stolen list that no worker ran, so every accepted
+// task still gets exactly one completion: futures are cancelled and callback
+// tasks get on_complete(arg, false). The caller doesn't hold pool->mu. While
+// the callbacks run, a frame on cthrpool_discarding_top makes this thread a
+// worker of pool, so a wait or shutdown of pool from a callback is a no-op and
+// a destroy is fatal. recycle says whether nodes may go back on the free list
+// or straight to m_procs (a pool nobody can submit to).
+static void cthrpool_discard_tasks(cthread_pool *pool, cthrpool_task *list,
+                                   bool recycle) {
+  cthrpool_discard_frame frame = {pool, cthrpool_discarding_top};
+  cthrpool_discarding_top = &frame;
   for (cthrpool_task *t = list; t;) {
     cthrpool_task *next = t->next;
     if (t->future)
@@ -1328,102 +819,76 @@ static void _cthrpool_discard_tasks(cthread_pool *pool, cthrpool_task *list,
     if (recycle)
       task_free(pool, t);
     else
-      _ccol_mem_free(pool->m_procs, t);
+      ccol__mem_free(pool->m_procs, t);
     t = next;
   }
-  _cthrpool_discarding_top = frame.prev;
+  cthrpool_discarding_top = frame.prev;
 }
 
-/*
- * Computes the absolute deadline of a timed submit, the current
- * CLOCK_MONOTONIC time plus timeout_us microseconds. Returns false if
- * clock_gettime fails. not_full, the condition variable the deadline is used
- * with, measures on the same clock; see _cthrpool_init_monotonic_cond_var.
- *
- * The sum saturates. A timeout that reaches past the largest time_t, such as
- * UINT64_MAX, gives the latest representable time, instead of a tv_sec that
- * wrapped into the past and would make the submit time out at once.
- */
+// Computes the CLOCK_MONOTONIC deadline of a timed submit, timeout_us from now.
+// It saturates instead of wrapping into the past. False when clock_gettime
+// fails.
 static bool make_abs_deadline(uint64_t timeout_us, struct timespec *abs_out) {
   return ccol_deadline_after_us(timeout_us, abs_out);
 }
 
-/* ========================================================================== */
-/*                         WORKER THREAD                                      */
-/* ========================================================================== */
-
+// Test hooks: skip the worker mark, count running workers, and delay a worker's
+// exit.
 #ifdef RUNNING_UNIT_TESTS
-/* While true, a starting worker skips setting its thread-local mark, as if
- * pthread_setspecific had failed. A test sets it only around the creation of
- * the pool it looks at. */
-atomic_bool _cthrpool_skip_worker_mark_for_tests;
+atomic_bool cthrpool__skip_worker_mark_for_tests;
 
-/* How many worker threads of any pool are running right now, counted from
- * the successful thread create to the worker's last statement, and a pause,
- * in microseconds, that a worker makes before its last statement. */
-atomic_long _cthrpool_running_workers_for_tests;
-atomic_uint _cthrpool_worker_exit_delay_us_for_tests;
-#endif /* RUNNING_UNIT_TESTS */
+atomic_long cthrpool__running_workers_for_tests;
+atomic_uint cthrpool__worker_exit_delay_us_for_tests;
+#endif
 
+// The body of one worker of pool (arg). It sets its key mark first (a failure
+// is tolerated, since cthrpool_is_self_call falls back to the worker IDs), then
+// takes tasks under pool->mu until an immediate shutdown, or a drain with an
+// empty queue. A taken task signals not_full on a bounded queue. The node
+// release goes in the same critical section as the active_count decrement, and
+// the last task of an idle pool broadcasts idle_cv and may trim the free list.
+// Marking its slot exited is the worker's last write to the pool.
 static void *worker_thread_fn(void *arg) {
   cthread_pool *pool = (cthread_pool *)arg;
 
-  /* This is published once, before this thread can run any task, so nothing
-   * this thread runs can call back into this module before this point. The
-   * comment of cthrpool_worker_key_bundle above says why nothing must set or
-   * clear it again for the rest of this thread's life. */
-  _ccol_call_once(cthrpool_worker_key_bundle.once, _cthrpool_init_worker_key);
-  /* A failure here is tolerated, since _cthrpool_is_self_call then recognises
-   * this thread from the pool's worker IDs instead. A key deleted at unload
-   * is never set, because by then its index can belong to another component;
-   * the pool this worker serves is then refused a slot and torn down. */
+  ccol__call_once(cthrpool_worker_key_bundle.once, cthrpool_init_worker_key);
 #ifdef RUNNING_UNIT_TESTS
-  if (!atomic_load(&_cthrpool_skip_worker_mark_for_tests))
-#endif /* RUNNING_UNIT_TESTS */
+  if (!atomic_load(&cthrpool__skip_worker_mark_for_tests))
+#endif
     if (atomic_load(&cthrpool_worker_key_bundle.live))
-      (void)_ccol_thread_ls_set(cthrpool_worker_key_bundle.key, (void *)pool);
+      (void)ccol__thread_ls_set(cthrpool_worker_key_bundle.key, (void *)pool);
 
   for (;;) {
-    _cthrpool_lock_mu(pool);
+    cthrpool_lock_mu(pool);
 
-    /*
-     * Wait until there's work to do or a shutdown condition holds. The
-     * wakeup conditions are:
-     *   - a task went into the queue (queue_size > 0)
-     *   - shutdown_immediate is set
-     *   - shutdown_drain is set AND the queue is now empty (all work done)
-     */
     while (pool->queue_size == 0 && !pool->shutdown_immediate &&
            !pool->shutdown_drain) {
-      _ccol_cond_var_wait(pool->not_empty, pool->mu);
+      ccol__cond_var_wait(pool->not_empty, pool->mu);
     }
 
-    /* A drain shutdown with an empty queue, so this worker's job is done. */
     if (pool->shutdown_immediate ||
         (pool->shutdown_drain && pool->queue_size == 0)) {
-      _ccol_mutex_unlock(pool->mu);
+      ccol__mutex_unlock(pool->mu);
       break;
     }
 
     cthrpool_task *task = dequeue(pool);
     pool->active_count++;
 
-    /* A slot is free now, so wake a blocked submitter (bounded queue only). */
     if (pool->queue_cap > 0) {
-      _ccol_cond_var_signal(pool->not_full);
+      ccol__cond_var_signal(pool->not_full);
     }
 
-    _ccol_mutex_unlock(pool->mu);
+    ccol__mutex_unlock(pool->mu);
 
-    /* Run the task. */
     if (task->future) {
       void *result = task->fn_future(task->arg);
-      _ccol_mutex_lock(task->future->mu);
+      ccol__mutex_lock(task->future->mu);
       task->future->result = result;
       task->future->done = true;
-      _ccol_cond_var_broadcast(task->future->cv);
+      ccol__cond_var_broadcast(task->future->cv);
       int remaining = --task->future->refcount;
-      _ccol_mutex_unlock(task->future->mu);
+      ccol__mutex_unlock(task->future->mu);
       future_destroy_if_unreferenced(task->future, remaining);
     } else {
       task->fn(task->arg);
@@ -1432,85 +897,70 @@ static void *worker_thread_fn(void *arg) {
       }
     }
 
-    /* The task's free-list release goes into the same critical section as
-     * the active_count decrement just below, since two separate lock and
-     * unlock round trips on pool->mu would pay twice for one "this task is
-     * done" event; see the doc comment of task_release_locked. The
-     * _ccol_mem_free call itself, which may be a slow function the caller
-     * gave us, happens after the unlock. */
-    _cthrpool_lock_mu(pool);
+    cthrpool_lock_mu(pool);
     bool recycled = task_release_locked(pool, task);
     pool->active_count--;
     if (pool->active_count == 0 && pool->queue_size == 0) {
-      _ccol_cond_var_broadcast(pool->idle_cv);
-      _cthrpool_idle_unlock_and_trim(pool);
+      ccol__cond_var_broadcast(pool->idle_cv);
+      cthrpool_idle_unlock_and_trim(pool);
     } else {
-      _ccol_mutex_unlock(pool->mu);
+      ccol__mutex_unlock(pool->mu);
     }
-    if (!recycled) _ccol_mem_free(pool->m_procs, task);
+    if (!recycled) ccol__mem_free(pool->m_procs, task);
   }
 
-  /* See the threads field of struct cthread_pool. Reading the IDs here is
-   * safe: the creator wrote them before publishing the handle, and the
-   * shutdown that ends this loop reached this thread through pool->mu. */
-  _ccol_thread_id_t me = _ccol_get_thread_id();
+  ccol__thread_id me = ccol__get_thread_id();
   for (size_t i = 0; i < pool->num_threads; i++) {
-    if (_ccol_thread_id_equal(pool->threads[i].id, me)) {
+    if (ccol__thread_id_equal(pool->threads[i].id, me)) {
       atomic_store_explicit(&pool->threads[i].exited, true,
                             memory_order_release);
       break;
     }
   }
 #ifdef RUNNING_UNIT_TESTS
-  unsigned delay_us = atomic_load(&_cthrpool_worker_exit_delay_us_for_tests);
+  unsigned delay_us = atomic_load(&cthrpool__worker_exit_delay_us_for_tests);
   if (delay_us) {
     struct timespec ts = {(time_t)(delay_us / 1000000u),
                           (long)(delay_us % 1000000u) * 1000L};
     nanosleep(&ts, NULL);
   }
-  atomic_fetch_sub(&_cthrpool_running_workers_for_tests, 1);
-#endif /* RUNNING_UNIT_TESTS */
+  atomic_fetch_sub(&cthrpool__running_workers_for_tests, 1);
+#endif
   return NULL;
 }
 
-/* A sentinel `idx` for _cthrpool_teardown_raw that means the pool was never
- * registered in cthrpool_slot_table at all. cthrpool_create_mp's rollback path
- * uses it after a slot acquire fails. There's no slot to read then, so
- * torn_down bookkeeping is neither possible nor needed, and since no caller
- * ever saw that handle a concurrent fork() can't race it through this
- * module's slot-table atfork mechanism. */
+// The idx that cthrpool_teardown_raw gets for a pool that never got a slot (the
+// rollback of a failed create). No caller ever saw its handle, so there is no
+// torn_down state to keep.
 #define CTHRPOOL_TEARDOWN_NO_SLOT ((uint32_t)-1)
 
-/* A forward declaration. cthrpool_create_mp's rollback path after a failed
- * slot acquire needs the shared teardown helper, which is defined later in
- * this file, right after the split between the internal and public
- * shutdown_drain and shutdown_immediate functions it depends on. */
-static void _cthrpool_teardown_raw(cthread_pool *pool, uint32_t idx);
+static void cthrpool_teardown_raw(cthread_pool *pool, uint32_t idx);
 
-/* ========================================================================== */
-/*                         CREATION                                           */
-/* ========================================================================== */
-
+// Creates a pool of num_threads workers with the given queue capacity (0 for
+// unbounded) and allocator, and gives its handle, or CTHRPOOL_NULL with
+// *err_str set. It builds the pool, starts every worker and only then takes a
+// slot, so an acquire failure has no published handle to worry about; that
+// rollback must stop the running workers, which cthrpool_teardown_raw does. A
+// failed thread create shuts down and joins the workers that did start. Needs
+// the worker key (cthrpool_worker_key_bundle).
 cthrpool cthrpool_create_mp(size_t num_threads, size_t queue_capacity,
-                            ccol_memmgmt_procs_t *mprocs, char **err_str) {
+                            ccol_memmgmt_procs *mprocs, char **err_str) {
   if (num_threads == 0) {
-    if (err_str) *err_str = _CCOL_ERR_STR("num_threads must be >= 1");
+    if (err_str) *err_str = CCOL__ERR_STR("num_threads must be >= 1");
     return CTHRPOOL_NULL;
   }
-  /* ccol_invalid_size is the error value of a size and never a capacity. A
-   * caller who wants an unbounded queue passes 0. */
   if (queue_capacity == ccol_invalid_size) {
     if (err_str)
-      *err_str = _CCOL_ERR_STR(
+      *err_str = CCOL__ERR_STR(
           "queue_capacity is ccol_invalid_size; pass 0 for an unbounded queue");
     return CTHRPOOL_NULL;
   }
 
-  if (!_ccol_verify_memmgmt_procs(mprocs, err_str)) return CTHRPOOL_NULL;
+  if (!ccol__verify_memmgmt_procs(mprocs, err_str)) return CTHRPOOL_NULL;
 
-  if (!_cthrpool_worker_key_available()) {
+  if (!cthrpool_worker_key_available()) {
     if (err_str)
-      *err_str = _CCOL_ERR_STR(
+      *err_str = CCOL__ERR_STR(
           "the thread-local worker key is not available: it could not be "
           "created, or the library already released it at unload");
     return CTHRPOOL_NULL;
@@ -1520,15 +970,15 @@ cthrpool cthrpool_create_mp(size_t num_threads, size_t queue_capacity,
       (cthread_pool *)(mprocs ? mprocs->calloc(1, sizeof(*pool))
                               : calloc(1, sizeof(*pool)));
   if (!pool) {
-    if (err_str) *err_str = _CCOL_ERR_STR("failed to allocate pool struct");
+    if (err_str) *err_str = CCOL__ERR_STR("failed to allocate pool struct");
     return CTHRPOOL_NULL;
   }
 
   if (mprocs) {
-    pool->m_procs = (ccol_memmgmt_procs_t *)mprocs->malloc(sizeof(*mprocs));
+    pool->m_procs = (ccol_memmgmt_procs *)mprocs->malloc(sizeof(*mprocs));
     if (!pool->m_procs) {
       mprocs->free(pool);
-      if (err_str) *err_str = _CCOL_ERR_STR("failed to allocate m_procs copy");
+      if (err_str) *err_str = CCOL__ERR_STR("failed to allocate m_procs copy");
       return CTHRPOOL_NULL;
     }
     memcpy(pool->m_procs, mprocs, sizeof(*mprocs));
@@ -1536,43 +986,43 @@ cthrpool cthrpool_create_mp(size_t num_threads, size_t queue_capacity,
 
   pool->queue_cap = queue_capacity;
 
-  if (_CTHRPOOL_FAULT(_CTHRPOOL_FAULT_POOL_MUTEX) ||
-      _ccol_mutex_init(pool->mu) != 0) {
-    if (err_str) *err_str = _CCOL_ERR_STR("mutex init failed");
+  if (CTHRPOOL_FAULT(CTHRPOOL__FAULT_POOL_MUTEX) ||
+      ccol__mutex_init(pool->mu) != 0) {
+    if (err_str) *err_str = CCOL__ERR_STR("mutex init failed");
     pool_free_self(pool);
     return CTHRPOOL_NULL;
   }
-  if (_CTHRPOOL_FAULT(_CTHRPOOL_FAULT_POOL_NOT_EMPTY) ||
-      _ccol_cond_var_init(pool->not_empty) != 0) {
-    if (err_str) *err_str = _CCOL_ERR_STR("cond_var init failed");
-    _ccol_mutex_destroy(pool->mu);
+  if (CTHRPOOL_FAULT(CTHRPOOL__FAULT_POOL_NOT_EMPTY) ||
+      ccol__cond_var_init(pool->not_empty) != 0) {
+    if (err_str) *err_str = CCOL__ERR_STR("cond_var init failed");
+    ccol__mutex_destroy(pool->mu);
     pool_free_self(pool);
     return CTHRPOOL_NULL;
   }
-  if (_CTHRPOOL_FAULT(_CTHRPOOL_FAULT_POOL_NOT_FULL) ||
-      _cthrpool_init_monotonic_cond_var(&pool->not_full) != 0) {
-    if (err_str) *err_str = _CCOL_ERR_STR("cond_var init failed");
-    _ccol_mutex_destroy(pool->mu);
-    _ccol_cond_var_destroy(pool->not_empty);
+  if (CTHRPOOL_FAULT(CTHRPOOL__FAULT_POOL_NOT_FULL) ||
+      cthrpool_init_monotonic_cond_var(&pool->not_full) != 0) {
+    if (err_str) *err_str = CCOL__ERR_STR("cond_var init failed");
+    ccol__mutex_destroy(pool->mu);
+    ccol__cond_var_destroy(pool->not_empty);
     pool_free_self(pool);
     return CTHRPOOL_NULL;
   }
-  if (_CTHRPOOL_FAULT(_CTHRPOOL_FAULT_POOL_IDLE_CV) ||
-      _ccol_cond_var_init(pool->idle_cv) != 0) {
-    if (err_str) *err_str = _CCOL_ERR_STR("cond_var init failed");
-    _ccol_mutex_destroy(pool->mu);
-    _ccol_cond_var_destroy(pool->not_empty);
-    _ccol_cond_var_destroy(pool->not_full);
+  if (CTHRPOOL_FAULT(CTHRPOOL__FAULT_POOL_IDLE_CV) ||
+      ccol__cond_var_init(pool->idle_cv) != 0) {
+    if (err_str) *err_str = CCOL__ERR_STR("cond_var init failed");
+    ccol__mutex_destroy(pool->mu);
+    ccol__cond_var_destroy(pool->not_empty);
+    ccol__cond_var_destroy(pool->not_full);
     pool_free_self(pool);
     return CTHRPOOL_NULL;
   }
-  if (_CTHRPOOL_FAULT(_CTHRPOOL_FAULT_POOL_SHUTDOWN_CV) ||
-      _ccol_cond_var_init(pool->shutdown_cv) != 0) {
-    if (err_str) *err_str = _CCOL_ERR_STR("cond_var init failed");
-    _ccol_mutex_destroy(pool->mu);
-    _ccol_cond_var_destroy(pool->not_empty);
-    _ccol_cond_var_destroy(pool->not_full);
-    _ccol_cond_var_destroy(pool->idle_cv);
+  if (CTHRPOOL_FAULT(CTHRPOOL__FAULT_POOL_SHUTDOWN_CV) ||
+      ccol__cond_var_init(pool->shutdown_cv) != 0) {
+    if (err_str) *err_str = CCOL__ERR_STR("cond_var init failed");
+    ccol__mutex_destroy(pool->mu);
+    ccol__cond_var_destroy(pool->not_empty);
+    ccol__cond_var_destroy(pool->not_full);
+    ccol__cond_var_destroy(pool->idle_cv);
     pool_free_self(pool);
     return CTHRPOOL_NULL;
   }
@@ -1581,111 +1031,84 @@ cthrpool cthrpool_create_mp(size_t num_threads, size_t queue_capacity,
   atomic_init(&pool->foreign_since_fork, false);
 #endif
 
-  pool->threads = (cthrpool_worker_slot *)_ccol_mem_calloc(
+  pool->threads = (cthrpool_worker_slot *)ccol__mem_calloc(
       pool->m_procs, num_threads, sizeof(cthrpool_worker_slot));
   if (!pool->threads) {
-    if (err_str) *err_str = _CCOL_ERR_STR("failed to allocate threads array");
-    _ccol_mutex_destroy(pool->mu);
-    _ccol_cond_var_destroy(pool->not_empty);
-    _ccol_cond_var_destroy(pool->not_full);
-    _ccol_cond_var_destroy(pool->idle_cv);
-    _ccol_cond_var_destroy(pool->shutdown_cv);
+    if (err_str) *err_str = CCOL__ERR_STR("failed to allocate threads array");
+    ccol__mutex_destroy(pool->mu);
+    ccol__cond_var_destroy(pool->not_empty);
+    ccol__cond_var_destroy(pool->not_full);
+    ccol__cond_var_destroy(pool->idle_cv);
+    ccol__cond_var_destroy(pool->shutdown_cv);
     pool_free_self(pool);
     return CTHRPOOL_NULL;
   }
 
   pool->num_threads = num_threads;
-  /* The field comment of task_free_list_cap in struct cthread_pool explains
-   * this multiplier. */
   pool->task_free_list_cap = num_threads * 4 > CTHRPOOL_TASK_FREE_LIST_CEILING
                                  ? num_threads * 4
                                  : CTHRPOOL_TASK_FREE_LIST_CEILING;
 
   for (size_t i = 0; i < num_threads; i++) {
-    if (_CTHRPOOL_WORKER_CREATE_FAULT(i) ||
-        _ccol_thread_create(pool->threads[i].id, worker_thread_fn, pool) != 0) {
-      /* Shut down the threads that did start, then clean up. */
-      _cthrpool_lock_mu(pool);
+    if (CTHRPOOL_WORKER_CREATE_FAULT(i) ||
+        ccol__thread_create(pool->threads[i].id, worker_thread_fn, pool) != 0) {
+      cthrpool_lock_mu(pool);
       __atomic_store_n(&pool->shutdown_drain, true, __ATOMIC_RELAXED);
       pool->shutdown_started = true;
-      _ccol_cond_var_broadcast(pool->not_empty);
-      _ccol_mutex_unlock(pool->mu);
+      ccol__cond_var_broadcast(pool->not_empty);
+      ccol__mutex_unlock(pool->mu);
       for (size_t j = 0; j < i; j++) {
-        _ccol_thread_join(pool->threads[j].id);
+        ccol__thread_join(pool->threads[j].id);
       }
-      if (err_str) *err_str = _CCOL_ERR_STR("pthread_create failed");
-      _ccol_mem_free(pool->m_procs, pool->threads);
-      _ccol_mutex_destroy(pool->mu);
-      _ccol_cond_var_destroy(pool->not_empty);
-      _ccol_cond_var_destroy(pool->not_full);
-      _ccol_cond_var_destroy(pool->idle_cv);
-      _ccol_cond_var_destroy(pool->shutdown_cv);
+      if (err_str) *err_str = CCOL__ERR_STR("pthread_create failed");
+      ccol__mem_free(pool->m_procs, pool->threads);
+      ccol__mutex_destroy(pool->mu);
+      ccol__cond_var_destroy(pool->not_empty);
+      ccol__cond_var_destroy(pool->not_full);
+      ccol__cond_var_destroy(pool->idle_cv);
+      ccol__cond_var_destroy(pool->shutdown_cv);
       pool_free_self(pool);
       return CTHRPOOL_NULL;
     }
 #ifdef RUNNING_UNIT_TESTS
-    /* Counted by the creator, so a worker that hasn't run yet is counted
-     * too; it can't reach its last statement before the pool shuts down. */
-    atomic_fetch_add(&_cthrpool_running_workers_for_tests, 1);
-#endif /* RUNNING_UNIT_TESTS */
+    atomic_fetch_add(&cthrpool__running_workers_for_tests, 1);
+#endif
   }
 
-  /* The slot acquire is the LAST step, once every worker thread is running
-   * and the pool is otherwise fully built. So an out-of-memory failure here
-   * is safe to unwind on its own, with no worry about a double destroy or
-   * about visibility, because no caller ever saw the handle. Unlike the
-   * failure paths above, every worker thread may already be running here, so
-   * the rollback must really stop them, freeing memory isn't enough.
-   * _cthrpool_teardown_raw does exactly that (a drain shutdown, a join of every
-   * thread, then the frees), and we reuse the same sequence __cthrpool_destroy
-   * uses rather than a hand-written variant that could drift away from it. */
-  cthrpool h = _cthrpool_handle_slot_acquire(pool);
+  cthrpool h = cthrpool_handle_slot_acquire(pool);
   if (h == 0) {
     if (err_str)
-      *err_str = _CCOL_ERR_STR("failed to allocate cthrpool handle slot");
-    _cthrpool_teardown_raw(pool, CTHRPOOL_TEARDOWN_NO_SLOT);
+      *err_str = CCOL__ERR_STR("failed to allocate cthrpool handle slot");
+    cthrpool_teardown_raw(pool, CTHRPOOL_TEARDOWN_NO_SLOT);
     return CTHRPOOL_NULL;
   }
 
   return h;
 }
 
-/* ========================================================================== */
-/*                         INTERNAL SUBMIT HELPER                             */
-/* ========================================================================== */
-
-/*
- * The common path of all three submit variants. `block` says how to wait for
- * a free slot: block until one is free, don't wait at all, or wait until a
- * deadline. `abs_deadline` is read only when block == 2.
- *
- *   block == 0: try (return ccol_container_full at once)
- *   block == 1: block and wait
- *   block == 2: wait until the deadline
- */
-/* The shutdown check and the wait for room that every submit makes. The
- * caller holds pool->mu. On ccol_success the lock is still held and the queue
- * has room; on any other result the lock has been released. */
+// Test hooks: make the next timed wait for room report ETIMEDOUT after a real
+// wake, and record what the last timed wait of each thread did.
 #ifdef RUNNING_UNIT_TESTS
-/* When set, the next timed wait for room ignores its deadline, waits for a
- * real wake and then reports ETIMEDOUT, which is what a timed wait returns
- * when it consumed a signal just as its deadline passed. The second flag
- * tells the test that the waiter is inside the wait. */
-atomic_bool _cthrpool_timeout_after_wake_for_tests;
-atomic_bool _cthrpool_timeout_after_wake_waiting_for_tests;
+atomic_bool cthrpool__timeout_after_wake_for_tests;
+atomic_bool cthrpool__timeout_after_wake_waiting_for_tests;
 
-/* What the last timed wait for room of this thread did. See
- * _cthrpool_timed_wait_record_for_tests. */
-static __thread _cthrpool_timed_wait_record_t _cthrpool_timed_wait_record;
+static __thread cthrpool__timed_wait_record cthrpool_timed_wait_record;
 #endif
 
-/* Always inlined, since each submit instantiates it with a constant block
- * and an out-of-line copy would add a call to the timed plain submit. */
-static inline __attribute__((always_inline)) ccol_retval_t
+// Checks for a shutdown and waits for room in the queue, for every submit. The
+// caller holds pool->mu; on ccol_success it's still held and the queue has
+// room, on any other result it's released. block is 0 for try, 1 to wait and 2
+// to wait until abs_deadline. A waiting submit from one of pool's own workers
+// gives ccol_container_full instead of waiting, since only the workers can free
+// a slot and all of them could end up waiting here. After a failed timed wait
+// the queue state decides, not the return code: the wait may have consumed a
+// dequeue's signal as its deadline passed. Always inlined, since each submit
+// passes a constant block.
+static inline __attribute__((always_inline)) ccol_retval
 submit_wait_for_room_locked(cthread_pool *pool, int block,
                             const struct timespec *abs_deadline) {
   if (pool->shutdown_drain || pool->shutdown_immediate) {
-    _ccol_mutex_unlock(pool->mu);
+    ccol__mutex_unlock(pool->mu);
     return ccol_not_permitted;
   }
 
@@ -1693,74 +1116,44 @@ submit_wait_for_room_locked(cthread_pool *pool, int block,
     while (pool->queue_size >= pool->queue_cap && !pool->shutdown_drain &&
            !pool->shutdown_immediate) {
       if (block == 0) {
-        /* try_submit: return at once */
-        _ccol_mutex_unlock(pool->mu);
+        ccol__mutex_unlock(pool->mu);
         return ccol_container_full;
-      } else if (_cthrpool_is_self_call(pool)) {
-        /*
-         * A waiting submit, blocking or timed, that comes from a worker of
-         * this very pool must not park on not_full. It comes from a task (or
-         * that task's on_complete callback) sending work back into the pool
-         * it runs on. Only this pool's workers can ever free a slot and this
-         * call runs on one of them, so waiting here takes that worker out of
-         * the set that could satisfy the wait. With every worker in that
-         * state at once and the queue at capacity, no thread in the process
-         * can make progress again: the pool is deadlocked for good, along
-         * with every external submitter blocked on the same queue. A timed
-         * wait ends only at its deadline, which for UINT64_MAX is never.
-         *
-         * So we report a full queue to such a caller instead, exactly as
-         * cthrpool_try_submit does, and recovery is up to the caller (retry
-         * later, hand the work to another pool, or use an unbounded queue).
-         * An error the caller can act on is much better than a pool that
-         * never moves again.
-         * The check sits inside the full-queue wait loop, so a submit that
-         * finds room pays nothing for it and an external submitter waits
-         * exactly as before.
-         */
-        _ccol_mutex_unlock(pool->mu);
+      } else if (cthrpool_is_self_call(pool)) {
+        ccol__mutex_unlock(pool->mu);
         return ccol_container_full;
       } else if (block == 1) {
-        _ccol_cond_var_wait(pool->not_full, pool->mu);
+        ccol__cond_var_wait(pool->not_full, pool->mu);
       } else {
-        /* timed_submit */
         int rc;
 #ifdef RUNNING_UNIT_TESTS
-        if (!_cthrpool_timed_wait_record.waited) {
-          _cthrpool_timed_wait_record.waited = true;
-          _cthrpool_timed_wait_record.deadline = *abs_deadline;
+        if (!cthrpool_timed_wait_record.waited) {
+          cthrpool_timed_wait_record.waited = true;
+          cthrpool_timed_wait_record.deadline = *abs_deadline;
           clock_gettime(CLOCK_MONOTONIC,
-                        &_cthrpool_timed_wait_record.wait_started);
+                        &cthrpool_timed_wait_record.wait_started);
         }
-        if (atomic_exchange(&_cthrpool_timeout_after_wake_for_tests, false)) {
-          atomic_store(&_cthrpool_timeout_after_wake_waiting_for_tests, true);
-          _ccol_cond_var_wait(pool->not_full, pool->mu);
+        if (atomic_exchange(&cthrpool__timeout_after_wake_for_tests, false)) {
+          atomic_store(&cthrpool__timeout_after_wake_waiting_for_tests, true);
+          ccol__cond_var_wait(pool->not_full, pool->mu);
           rc = ETIMEDOUT;
         } else
 #endif
           rc =
-              _ccol_cond_var_timedwait(pool->not_full, pool->mu, *abs_deadline);
-        /* A failed wait may still have consumed a dequeue's signal (POSIX
-         * lets a timed wait that returns ETIMEDOUT do that), so the state
-         * decides and not the return code: a free slot or a shutdown is
-         * handled as after a wake. Reporting the failure next to a free slot
-         * would leave a blocking submitter asleep beside it, with no further
-         * dequeue to signal it. */
+              ccol__cond_var_timedwait(pool->not_full, pool->mu, *abs_deadline);
         if (rc != 0 && pool->queue_size >= pool->queue_cap &&
             !pool->shutdown_drain && !pool->shutdown_immediate) {
 #ifdef RUNNING_UNIT_TESTS
-          _cthrpool_timed_wait_record.timed_out = rc == ETIMEDOUT;
+          cthrpool_timed_wait_record.timed_out = rc == ETIMEDOUT;
           clock_gettime(CLOCK_MONOTONIC,
-                        &_cthrpool_timed_wait_record.wait_ended);
+                        &cthrpool_timed_wait_record.wait_ended);
 #endif
-          _ccol_mutex_unlock(pool->mu);
+          ccol__mutex_unlock(pool->mu);
           return rc == ETIMEDOUT ? ccol_timed_out : ccol_unexpected_failure;
         }
       }
     }
-    /* Check the shutdown state again after waking up. */
     if (pool->shutdown_drain || pool->shutdown_immediate) {
-      _ccol_mutex_unlock(pool->mu);
+      ccol__mutex_unlock(pool->mu);
       return ccol_not_permitted;
     }
   }
@@ -1768,39 +1161,27 @@ submit_wait_for_room_locked(cthread_pool *pool, int block,
   return ccol_success;
 }
 
-/* A submit that takes its task node from the free list in the same pool->mu
- * critical section as the enqueue, so it locks the pool once instead of
- * twice. In a busy pool every worker contends for pool->mu on each dequeue,
- * so every round trip a submit saves is one handoff of that line it doesn't
- * have to wait for. When the free list is empty the node is allocated
- * outside the lock, through the pool's allocator, and the checks run again,
- * because meanwhile the queue may have filled or the pool may have started
- * shutting down.
- *
- * The not_empty signal goes out on every enqueue. Skipping it when no
- * worker seems to wait looks cheaper, but a burst then wakes fewer workers
- * and the queue drains on fewer threads, which costs far more than the
- * signals it saves.
- *
- * A callback task passes fn and on_complete with a NULL future, and a future
- * task passes fn_future and its future, which the caller allocated before
- * the call so nothing allocates inside the critical section. Every caller
- * passes the two NULL arguments as constants, so the callback-task
- * instantiation holds none of the future-task code and the other way round.
- * block follows submit_generic's convention: 0 is try, 1 blocks and 2 is
- * timed. */
-static inline __attribute__((always_inline)) ccol_retval_t
+// Takes a node from the free list and enqueues the task in one pool->mu
+// critical section. When the list is empty it allocates outside the lock and
+// runs the checks again. A submitter that leaves after an allocation failure
+// passes the not_full signal on, since it may have used up the one meant for
+// another waiter. not_empty is signalled on every enqueue: skipping it when no
+// worker seems to wait makes a burst drain on fewer threads. A callback task
+// passes fn and on_complete, a future task fn_future and future (allocated by
+// the caller); the NULLs are constants, so each instantiation holds only its
+// own code.
+static inline __attribute__((always_inline)) ccol_retval
 submit_pop_and_enqueue_body(cthread_pool *pool, void (*fn)(void *),
                             void *(*fn_future)(void *), void *arg,
                             void (*on_complete)(void *, bool),
-                            cthrpool_future_t *future, int block,
+                            cthrpool_future *future, int block,
                             const struct timespec *abs_deadline) {
   cthrpool_task *spare = NULL;
-  _cthrpool_lock_mu(pool);
+  cthrpool_lock_mu(pool);
   for (;;) {
-    ccol_retval_t r = submit_wait_for_room_locked(pool, block, abs_deadline);
+    ccol_retval r = submit_wait_for_room_locked(pool, block, abs_deadline);
     if (r != ccol_success) {
-      if (spare) _ccol_mem_free(pool->m_procs, spare);
+      if (spare) ccol__mem_free(pool->m_procs, spare);
       return r;
     }
     cthrpool_task *task = pool->task_free_list;
@@ -1813,20 +1194,16 @@ submit_pop_and_enqueue_body(cthread_pool *pool, void (*fn)(void *),
       spare = NULL;
     }
     if (!task) {
-      _ccol_mutex_unlock(pool->mu);
-      spare = (cthrpool_task *)_ccol_mem_calloc(pool->m_procs, 1,
+      ccol__mutex_unlock(pool->mu);
+      spare = (cthrpool_task *)ccol__mem_calloc(pool->m_procs, 1,
                                                 sizeof(cthrpool_task));
       if (!spare) {
-        /* This submitter may have used up the one not_full signal a dequeue
-         * sent, and it's leaving without taking the room, so it passes the
-         * signal on; otherwise another submitter waiting for room could stay
-         * asleep next to a free slot. */
-        _cthrpool_lock_mu(pool);
-        _ccol_cond_var_signal(pool->not_full);
-        _ccol_mutex_unlock(pool->mu);
+        cthrpool_lock_mu(pool);
+        ccol__cond_var_signal(pool->not_full);
+        ccol__mutex_unlock(pool->mu);
         return ccol_not_enough_memory;
       }
-      _cthrpool_lock_mu(pool);
+      cthrpool_lock_mu(pool);
       continue;
     }
     memset(task, 0, sizeof(*task));
@@ -1840,19 +1217,16 @@ submit_pop_and_enqueue_body(cthread_pool *pool, void (*fn)(void *),
       task->on_complete = on_complete;
     }
     enqueue(pool, task);
-    _ccol_cond_var_signal(pool->not_empty);
-    _ccol_mutex_unlock(pool->mu);
-    if (spare) _ccol_mem_free(pool->m_procs, spare);
+    ccol__cond_var_signal(pool->not_empty);
+    ccol__mutex_unlock(pool->mu);
+    if (spare) ccol__mem_free(pool->m_procs, spare);
     return ccol_success;
   }
 }
 
-/* Every callback-task submit, try, blocking or timed. It's always inlined so
- * the plain submit paths end up whole inside cthrpool_submit,
- * cthrpool_try_submit and cthrpool_timed_submit: a second instantiation of the
- * shared body makes the inliner keep this one out of line, which adds a call
- * and a frame to every plain submit. */
-static inline __attribute__((always_inline)) ccol_retval_t
+// Queues a callback task. Always inlined so each plain submit holds the whole
+// path with no extra call.
+static inline __attribute__((always_inline)) ccol_retval
 submit_pop_and_enqueue(cthread_pool *pool, void (*fn)(void *), void *arg,
                        void (*on_complete)(void *, bool), int block,
                        const struct timespec *abs_deadline) {
@@ -1860,44 +1234,25 @@ submit_pop_and_enqueue(cthread_pool *pool, void (*fn)(void *), void *arg,
                                      block, abs_deadline);
 }
 
-/* Every future-task submit, try, blocking or timed. future must not be NULL.
- * On any return other than ccol_success the queue doesn't hold it and the
- * caller still owns both of its references. */
-static ccol_retval_t submit_future_pop_and_enqueue(
+// Queues a future task. future must not be NULL; on failure the queue doesn't
+// hold it and the caller keeps both its references.
+static ccol_retval submit_future_pop_and_enqueue(
     cthread_pool *pool, void *(*fn_future)(void *), void *arg,
-    cthrpool_future_t *future, int block, const struct timespec *abs_deadline) {
+    cthrpool_future *future, int block, const struct timespec *abs_deadline) {
   return submit_pop_and_enqueue_body(pool, NULL, fn_future, arg, NULL, future,
                                      block, abs_deadline);
 }
 
-/* ========================================================================== */
-/*                         TASK SUBMISSION                                    */
-/* ========================================================================== */
-
-/*
- * The shared body of cthrpool_submit, cthrpool_try_submit and
- * cthrpool_timed_submit, which differ only in the block and timeout_us pair
- * they pass. Without it each of them would repeat the whole sequence around
- * the submit: resolve, validate, submit and unpin.
- *
- * block follows submit_pop_and_enqueue_body's convention: 0 is try, 1 blocks
- * and 2 is timed. timeout_us is the caller's relative timeout in
- * microseconds for block == 2 and isn't read otherwise. The absolute deadline
- * is computed here, with make_abs_deadline, at the point in the validation
- * order that cthrpool_timed_submit's contract fixes: after pool is resolved and
- * fn validated, and before a task node is taken. Every kind of submit takes
- * the pool's lock once when the free list holds a node, and a try refused
- * for a full queue or a shutdown allocates nothing. It's always inlined, so
- * each public submit has its own copy with block folded to a constant
- * instead of calling a shared one.
- */
-static inline __attribute__((always_inline)) ccol_retval_t submit_generic(
+// Queues a callback task for the three plain submits: resolves pool, checks fn,
+// computes the deadline for block == 2 (after those checks and before any node
+// is taken), submits and unpins.
+static inline __attribute__((always_inline)) ccol_retval submit_generic(
     cthrpool pool, void (*fn)(void *), void *arg,
     void (*on_complete)(void *, bool), int block, uint64_t timeout_us) {
-  cthread_pool *raw = _cthrpool_resolve(pool);
+  cthread_pool *raw = cthrpool_resolve(pool);
   if (!raw) return ccol_invalid_args;
   if (!fn) {
-    _cthrpool_resolve_unpin(raw);
+    cthrpool_resolve_unpin(raw);
     return ccol_invalid_args;
   }
 
@@ -1905,100 +1260,88 @@ static inline __attribute__((always_inline)) ccol_retval_t submit_generic(
   const struct timespec *abs_deadline = NULL;
   if (block == 2) {
     if (!make_abs_deadline(timeout_us, &deadline)) {
-      _cthrpool_resolve_unpin(raw);
+      cthrpool_resolve_unpin(raw);
       return ccol_unexpected_failure;
     }
     abs_deadline = &deadline;
   }
-  ccol_retval_t r =
+  ccol_retval r =
       submit_pop_and_enqueue(raw, fn, arg, on_complete, block, abs_deadline);
-  _cthrpool_resolve_unpin(raw);
+  cthrpool_resolve_unpin(raw);
   return r;
 }
 
-ccol_retval_t cthrpool_submit(cthrpool pool, void (*fn)(void *), void *arg,
-                              void (*on_complete)(void *, bool)) {
+// Queues fn(arg) with on_complete, waiting for room on a full bounded queue;
+// the public blocking submit.
+ccol_retval cthrpool_submit(cthrpool pool, void (*fn)(void *), void *arg,
+                            void (*on_complete)(void *, bool)) {
   return submit_generic(pool, fn, arg, on_complete, 1, 0);
 }
 
-ccol_retval_t cthrpool_try_submit(cthrpool pool, void (*fn)(void *), void *arg,
-                                  void (*on_complete)(void *, bool)) {
+// Queues fn(arg) with on_complete, or gives ccol_container_full at once on a
+// full bounded queue; the public submit that never blocks.
+ccol_retval cthrpool_try_submit(cthrpool pool, void (*fn)(void *), void *arg,
+                                void (*on_complete)(void *, bool)) {
   return submit_generic(pool, fn, arg, on_complete, 0, 0);
 }
 
-ccol_retval_t cthrpool_timed_submit(cthrpool pool, void (*fn)(void *),
-                                    void *arg,
-                                    void (*on_complete)(void *, bool),
-                                    uint64_t timeout_us) {
-  /* A timeout_us of 0 behaves like try_submit, and we delegate before
-   * resolving pool at all. Resolving here only to unpin at once and then
-   * delegate would cost two resolve and unpin pairs, while this path pays for
-   * exactly one. Either way it's the resolve inside cthrpool_try_submit that
-   * validates pool and fn, so the caller sees the same result for every
-   * input, valid or not. */
+// Queues fn(arg) with on_complete, waiting at most timeout_us for room; the
+// public timed submit. A timeout of 0 goes to cthrpool_try_submit() before any
+// resolve, so that path pays for one resolve only.
+ccol_retval cthrpool_timed_submit(cthrpool pool, void (*fn)(void *), void *arg,
+                                  void (*on_complete)(void *, bool),
+                                  uint64_t timeout_us) {
   if (timeout_us == 0) return cthrpool_try_submit(pool, fn, arg, on_complete);
   return submit_generic(pool, fn, arg, on_complete, 2, timeout_us);
 }
 
-/* ========================================================================== */
-/*                         FUTURES                                            */
-/* ========================================================================== */
-
-/*
- * Allocates a submit's future with a refcount of 2, one reference for the
- * caller and one for the queued task. A submit calls it before taking the
- * pool's lock, so the submit's critical section allocates nothing for the
- * future.
- */
-static cthrpool_future_t *submit_future_alloc(void) {
+// Allocates a submit's future with a refcount of 2 (caller and task), or gives
+// NULL. A submit calls it before taking the pool lock, so the critical section
+// allocates nothing.
+static cthrpool_future *submit_future_alloc(void) {
 #ifdef RUNNING_UNIT_TESTS
-  if (atomic_exchange(&_cthrpool_fail_next_future_alloc_for_tests, false))
+  if (atomic_exchange(&cthrpool__fail_next_future_alloc_for_tests, false))
     return NULL;
 #endif
-  cthrpool_future_t *f = future_block_alloc();
+  cthrpool_future *f = future_block_alloc();
   if (!f) return NULL;
-  if (_CTHRPOOL_FAULT(_CTHRPOOL_FAULT_FUTURE_MUTEX) ||
-      _ccol_mutex_init(f->mu) != 0) {
+  if (CTHRPOOL_FAULT(CTHRPOOL__FAULT_FUTURE_MUTEX) ||
+      ccol__mutex_init(f->mu) != 0) {
     future_block_free(f);
     return NULL;
   }
-  if (_CTHRPOOL_FAULT(_CTHRPOOL_FAULT_FUTURE_CV) ||
-      _ccol_cond_var_init(f->cv) != 0) {
-    _ccol_mutex_destroy(f->mu);
+  if (CTHRPOOL_FAULT(CTHRPOOL__FAULT_FUTURE_CV) ||
+      ccol__cond_var_init(f->cv) != 0) {
+    ccol__mutex_destroy(f->mu);
     future_block_free(f);
     return NULL;
   }
   f->refcount = 2;
 #ifdef RUNNING_UNIT_TESTS
-  atomic_fetch_add_explicit(&_cthrpool_live_futures_for_tests, 1,
+  atomic_fetch_add_explicit(&cthrpool__live_futures_for_tests, 1,
                             memory_order_relaxed);
 #endif
   return f;
 }
 
-/* Frees a future that submit_future_alloc made and no queue ever held. */
-static void submit_future_discard(cthrpool_future_t *f) {
+// Frees a future that no queue ever held, when its submit failed after
+// allocating it.
+static void submit_future_discard(cthrpool_future *f) {
 #ifdef RUNNING_UNIT_TESTS
-  atomic_fetch_sub_explicit(&_cthrpool_live_futures_for_tests, 1,
+  atomic_fetch_sub_explicit(&cthrpool__live_futures_for_tests, 1,
                             memory_order_relaxed);
 #endif
-  _ccol_mutex_destroy(f->mu);
-  _ccol_cond_var_destroy(f->cv);
+  ccol__mutex_destroy(f->mu);
+  ccol__cond_var_destroy(f->cv);
   future_block_free(f);
 }
 
-/*
- * The answer a future try submit gets from the pool's state, read without
- * the lock: ccol_not_permitted once a shutdown has started,
- * ccol_container_full while a bounded queue is at capacity, and ccol_success
- * otherwise. A try the hint refuses returns at once, so a refusal neither
- * allocates a future nor takes the lock. ccol_success is only a hint, and
- * the submit's critical section checks the same state again under the lock
- * and decides. The loads are relaxed, and each one sees at least every store
- * that happens before the call, so a refusal never reports a state that the
- * caller has already seen end.
- */
-static ccol_retval_t submit_future_refusal_hint(cthread_pool *pool) {
+// Predicts what a future try submit would get, from the pool state read without
+// the lock: ccol_not_permitted after a shutdown started, ccol_container_full
+// while a bounded queue is full, else ccol_success. A refused try then neither
+// allocates nor locks. ccol_success is only a hint; the critical section checks
+// again under the lock.
+static ccol_retval submit_future_refusal_hint(cthread_pool *pool) {
   if (__atomic_load_n(&pool->shutdown_drain, __ATOMIC_RELAXED) ||
       __atomic_load_n(&pool->shutdown_immediate, __ATOMIC_RELAXED))
     return ccol_not_permitted;
@@ -2008,33 +1351,20 @@ static ccol_retval_t submit_future_refusal_hint(cthread_pool *pool) {
   return ccol_success;
 }
 
-/*
- * The shared body of cthrpool_submit_future, cthrpool_try_submit_future and
- * cthrpool_timed_submit_future. It's factored like submit_generic above and
- * uses the same block and timeout_us convention. On the success path it
- * takes the pool's lock once: the future is allocated before that critical
- * section, and inside it the task node is popped from the free list and
- * enqueued, as in the blocking and timed plain submits.
- *
- * The very first thing it does, unconditionally and before it even resolves
- * pool, is set *out to NULL. Every caller below already makes sure out itself
- * isn't NULL: cthrpool_try_submit_future and cthrpool_timed_submit_future check
- * out and return ccol_invalid_args without calling this function when it's
- * NULL, and cthrpool_submit_future always passes the address of its own local.
- * That one assignment is what makes *out reliably NULL on every failure path
- * here, which matches each public function's documented contract without
- * repeating the guarantee at every return site.
- */
-static ccol_retval_t submit_future_generic(cthrpool pool, void *(*fn)(void *),
-                                           void *arg, int block,
-                                           uint64_t timeout_us,
-                                           cthrpool_future_t **out) {
+// Queues a future task for the three future submits (block as in
+// submit_generic) and puts the future in *out. It sets *out to NULL first, so
+// every failure path leaves it NULL; every caller has already checked that out
+// isn't NULL. A try asks the refusal hint before it allocates the future.
+static ccol_retval submit_future_generic(cthrpool pool, void *(*fn)(void *),
+                                         void *arg, int block,
+                                         uint64_t timeout_us,
+                                         cthrpool_future **out) {
   *out = NULL;
 
-  cthread_pool *raw = _cthrpool_resolve(pool);
+  cthread_pool *raw = cthrpool_resolve(pool);
   if (!raw) return ccol_invalid_args;
   if (!fn) {
-    _cthrpool_resolve_unpin(raw);
+    cthrpool_resolve_unpin(raw);
     return ccol_invalid_args;
   }
 
@@ -2042,975 +1372,662 @@ static ccol_retval_t submit_future_generic(cthrpool pool, void *(*fn)(void *),
   const struct timespec *abs_deadline = NULL;
   if (block == 2) {
     if (!make_abs_deadline(timeout_us, &deadline)) {
-      _cthrpool_resolve_unpin(raw);
+      cthrpool_resolve_unpin(raw);
       return ccol_unexpected_failure;
     }
     abs_deadline = &deadline;
   } else if (block == 0) {
-    ccol_retval_t hint = submit_future_refusal_hint(raw);
+    ccol_retval hint = submit_future_refusal_hint(raw);
     if (hint != ccol_success) {
-      _cthrpool_resolve_unpin(raw);
+      cthrpool_resolve_unpin(raw);
       return hint;
     }
   }
 
-  cthrpool_future_t *f = submit_future_alloc();
+  cthrpool_future *f = submit_future_alloc();
   if (!f) {
-    _cthrpool_resolve_unpin(raw);
+    cthrpool_resolve_unpin(raw);
     return ccol_not_enough_memory;
   }
 
-  ccol_retval_t r =
+  ccol_retval r =
       submit_future_pop_and_enqueue(raw, fn, arg, f, block, abs_deadline);
   if (r != ccol_success)
     submit_future_discard(f);
   else
     *out = f;
-  _cthrpool_resolve_unpin(raw);
+  cthrpool_resolve_unpin(raw);
   return r;
 }
 
-cthrpool_future_t *cthrpool_submit_future(cthrpool pool, void *(*fn)(void *),
-                                          void *arg, ccol_retval_t *rv_out) {
-  cthrpool_future_t *f;
-  ccol_retval_t r = submit_future_generic(pool, fn, arg, 1, 0, &f);
+// Queues fn(arg) and gives its future, waiting for room on a full bounded
+// queue; the public blocking future submit. NULL on failure, with the code in
+// *rv_out when rv_out isn't NULL.
+cthrpool_future *cthrpool_submit_future(cthrpool pool, void *(*fn)(void *),
+                                        void *arg, ccol_retval *rv_out) {
+  cthrpool_future *f;
+  ccol_retval r = submit_future_generic(pool, fn, arg, 1, 0, &f);
   if (rv_out) *rv_out = r;
   return f;
 }
 
-ccol_retval_t cthrpool_try_submit_future(cthrpool pool, void *(*fn)(void *),
-                                         void *arg, cthrpool_future_t **out) {
+// Queues fn(arg) and puts its future in *out, or fails at once on a full
+// bounded queue; the public future submit that never blocks.
+ccol_retval cthrpool_try_submit_future(cthrpool pool, void *(*fn)(void *),
+                                       void *arg, cthrpool_future **out) {
   if (!out) return ccol_invalid_args;
   return submit_future_generic(pool, fn, arg, 0, 0, out);
 }
 
-ccol_retval_t cthrpool_timed_submit_future(cthrpool pool, void *(*fn)(void *),
-                                           void *arg, uint64_t timeout_us,
-                                           cthrpool_future_t **out) {
+// Queues fn(arg) and puts its future in *out, waiting at most timeout_us for
+// room; the public timed future submit. A timeout of 0 is a try.
+ccol_retval cthrpool_timed_submit_future(cthrpool pool, void *(*fn)(void *),
+                                         void *arg, uint64_t timeout_us,
+                                         cthrpool_future **out) {
   if (!out) return ccol_invalid_args;
-  /* A timeout_us of 0 behaves like try_submit_future. The identical
-   * delegation comment in cthrpool_timed_submit above explains why calling
-   * submit_future_generic directly here keeps the behaviour, instead of
-   * resolving first and then delegating to cthrpool_try_submit_future. */
   if (timeout_us == 0) return submit_future_generic(pool, fn, arg, 0, 0, out);
   return submit_future_generic(pool, fn, arg, 2, timeout_us, out);
 }
 
-void *cthrpool_future_get(cthrpool_future_t *f) {
+// Blocks until f is done and gives its result (NULL when cancelled), so the
+// caller can collect what the task computed. Each waiter holds its own
+// reference for the whole call, taken and dropped under f->mu. Without it the
+// other references can go while the thread waits (the completion broadcast
+// wakes every waiter at once) and the future would be freed under it.
+void *cthrpool_future_get(cthrpool_future *f) {
   if (!f) return NULL;
-  _ccol_mutex_lock(f->mu);
-  /*
-   * A waiter holds its own reference for the whole call, taken under f->mu
-   * before the first wait and given up under the same mutex on the way out.
-   * Without it this call would block inside a struct it has no claim on. All
-   * the other references (the queued task's and the caller's) can go while
-   * this thread sits in _ccol_cond_var_wait, and the release that brings the
-   * count to zero then destroys f->mu and f->cv and frees f under this
-   * thread.
-   *
-   * The completion broadcast makes that likely, not just possible. One
-   * broadcast wakes every waiter at once and each of them locks f->mu
-   * again to leave the wait, so whichever thread gets out first can drop the
-   * last other reference while the rest are still inside the mutex.
-   *
-   * With the reference the count can't reach zero while a waiter is still
-   * here, and the last thread out of the future destroys it exactly once,
-   * waiter or reference owner, whatever order they finish in. The increment
-   * and decrement are plain int operations on a mutex this call holds
-   * anyway, so an uncontended get pays two arithmetic operations and one
-   * branch the CPU already predicts.
-   */
+  ccol__mutex_lock(f->mu);
   f->refcount++;
   while (!f->done) {
-    _ccol_cond_var_wait(f->cv, f->mu);
+    ccol__cond_var_wait(f->cv, f->mu);
   }
   void *result = f->result;
   int remaining = --f->refcount;
-  _ccol_mutex_unlock(f->mu);
+  ccol__mutex_unlock(f->mu);
   future_destroy_if_unreferenced(f, remaining);
   return result;
 }
 
-bool cthrpool_future_done(cthrpool_future_t *f) {
+// Tells whether f is done (finished or cancelled), read under f->mu, for a
+// caller that polls instead of blocking.
+bool cthrpool_future_done(cthrpool_future *f) {
   if (!f) return false;
-  _ccol_mutex_lock(f->mu);
+  ccol__mutex_lock(f->mu);
   bool done = f->done;
-  _ccol_mutex_unlock(f->mu);
+  ccol__mutex_unlock(f->mu);
   return done;
 }
 
-bool cthrpool_future_cancelled(cthrpool_future_t *f) {
+// Tells whether f was cancelled, read under f->mu, so a caller can tell a
+// cancelled task from one that returned NULL.
+bool cthrpool_future_cancelled(cthrpool_future *f) {
   if (!f) return false;
-  _ccol_mutex_lock(f->mu);
+  ccol__mutex_lock(f->mu);
   bool cancelled = f->cancelled;
-  _ccol_mutex_unlock(f->mu);
+  ccol__mutex_unlock(f->mu);
   return cancelled;
 }
 
-void cthrpool_future_free(cthrpool_future_t *f) {
+// Drops the caller's reference of f, which is how a caller releases a future;
+// the last reference frees it.
+void cthrpool_future_free(cthrpool_future *f) {
   if (!f) return;
   future_deref(f);
 }
 
-cthrpool_future_t *cthrpool_future_create_detached(char **err_str) {
-  cthrpool_future_t *f = future_block_alloc();
+// Creates a future with no pool behind it, for a producer that isn't a
+// cthrpool worker. It starts with two references, one for the caller and one
+// for the producer. Gives NULL with *err_str set on failure.
+cthrpool_future *cthrpool_future_create_detached(char **err_str) {
+  cthrpool_future *f = future_block_alloc();
   if (!f) {
-    if (err_str) *err_str = _CCOL_ERR_STR("failed to allocate future");
+    if (err_str) *err_str = CCOL__ERR_STR("failed to allocate future");
     return NULL;
   }
-  if (_CTHRPOOL_FAULT(_CTHRPOOL_FAULT_FUTURE_MUTEX) ||
-      _ccol_mutex_init(f->mu) != 0) {
+  if (CTHRPOOL_FAULT(CTHRPOOL__FAULT_FUTURE_MUTEX) ||
+      ccol__mutex_init(f->mu) != 0) {
     future_block_free(f);
-    if (err_str) *err_str = _CCOL_ERR_STR("future mutex init failed");
+    if (err_str) *err_str = CCOL__ERR_STR("future mutex init failed");
     return NULL;
   }
-  if (_CTHRPOOL_FAULT(_CTHRPOOL_FAULT_FUTURE_CV) ||
-      _ccol_cond_var_init(f->cv) != 0) {
-    _ccol_mutex_destroy(f->mu);
+  if (CTHRPOOL_FAULT(CTHRPOOL__FAULT_FUTURE_CV) ||
+      ccol__cond_var_init(f->cv) != 0) {
+    ccol__mutex_destroy(f->mu);
     future_block_free(f);
-    if (err_str) *err_str = _CCOL_ERR_STR("future cond_var init failed");
+    if (err_str) *err_str = CCOL__ERR_STR("future cond_var init failed");
     return NULL;
   }
-  f->refcount = 2; /* one reference for the caller and one for the producer */
+  f->refcount = 2;
 #ifdef RUNNING_UNIT_TESTS
-  atomic_fetch_add_explicit(&_cthrpool_live_futures_for_tests, 1,
+  atomic_fetch_add_explicit(&cthrpool__live_futures_for_tests, 1,
                             memory_order_relaxed);
 #endif
   return f;
 }
 
-ccol_retval_t cthrpool_future_fulfill(cthrpool_future_t *f, void *result) {
+// Stores result in a detached future, wakes every waiter and drops the
+// producer's reference; it's how an outside producer completes such a future.
+// ccol_not_permitted when f is already done.
+ccol_retval cthrpool_future_fulfill(cthrpool_future *f, void *result) {
   if (!f) return ccol_invalid_args;
-  _ccol_mutex_lock(f->mu);
+  ccol__mutex_lock(f->mu);
   if (f->done) {
-    _ccol_mutex_unlock(f->mu);
+    ccol__mutex_unlock(f->mu);
     return ccol_not_permitted;
   }
   f->result = result;
   f->done = true;
-  _ccol_cond_var_broadcast(f->cv);
+  ccol__cond_var_broadcast(f->cv);
   int remaining = --f->refcount;
-  _ccol_mutex_unlock(f->mu);
+  ccol__mutex_unlock(f->mu);
   future_destroy_if_unreferenced(f, remaining);
   return ccol_success;
 }
 
-/* ========================================================================== */
-/*                         POOL MANAGEMENT                                    */
-/* ========================================================================== */
-
+// Blocks until pool has nothing queued and nothing running, so a caller can
+// wait for a batch without shutting down; it waits on idle_cv under mu. A
+// self-call returns at once, since the calling task counts as active until it
+// returns. A pool inherited across fork() counts as idle, because no thread
+// here can ever finish its work.
 void cthrpool_wait(cthrpool pool) {
-  cthread_pool *raw = _cthrpool_resolve(pool);
+  cthread_pool *raw = cthrpool_resolve(pool);
   if (!raw) return;
-  /* A self-call; see the comment of cthrpool_worker_key_bundle above. A task
-   * calling cthrpool_wait on the very pool it runs on would deadlock against
-   * itself, since the pool counts that task in active_count until it
-   * returns. So we treat such a pool as idle, the same way the code a few
-   * lines below treats a foreign pool (one inherited across a fork) as idle,
-   * and for the same reason: nothing could ever satisfy a wait here. */
-  if (_cthrpool_is_self_call(raw)) {
-    _cthrpool_resolve_unpin(raw);
+  if (cthrpool_is_self_call(raw)) {
+    cthrpool_resolve_unpin(raw);
     return;
   }
-  _cthrpool_lock_mu(raw);
-  /* A foreign pool is one this process inherited across a fork; see the
-   * field comment of foreign_since_fork in struct cthread_pool. Its
-   * active_count and queue_size can never legitimately reach zero through
-   * anything this process does, because every worker thread that could work
-   * through the rest of the queue or finish a task in flight exists only in
-   * the parent, which is gone. Nothing here ever decrements active_count,
-   * drains queue_size or broadcasts idle_cv again, so waiting on that
-   * condition would hang forever. We treat a foreign pool as idle instead,
-   * just as _cthrpool_shutdown_drain_internal and
-   * _cthrpool_shutdown_immediate_internal skip joining a foreign pool's worker
-   * threads, which don't exist either. */
+  cthrpool_lock_mu(raw);
 #if CCOL_FORK_SAFETY_REQUIRED
   if (!atomic_load(&raw->foreign_since_fork)) {
     while (raw->active_count > 0 || raw->queue_size > 0) {
-      _ccol_cond_var_wait(raw->idle_cv, raw->mu);
+      ccol__cond_var_wait(raw->idle_cv, raw->mu);
     }
   }
 #else
   while (raw->active_count > 0 || raw->queue_size > 0) {
-    _ccol_cond_var_wait(raw->idle_cv, raw->mu);
+    ccol__cond_var_wait(raw->idle_cv, raw->mu);
   }
 #endif
-  _ccol_mutex_unlock(raw->mu);
-  _cthrpool_resolve_unpin(raw);
+  ccol__mutex_unlock(raw->mu);
+  cthrpool_resolve_unpin(raw);
 }
 
-/* Publishes that every worker of this pool has been joined, and then
- * releases every other shutdown call waiting for that. Whichever of the two
- * shutdown bodies below did the real shutdown calls this as its very last
- * step. A pool that never gets to either of them publishes nothing; a
- * construction rollback that joins its own partly started workers inline is
- * such a pool, and since no caller ever saw its handle nothing can be
- * waiting. */
-static void _cthrpool_mark_shutdown_complete(cthread_pool *pool) {
-  _cthrpool_lock_mu(pool);
+// Sets shutdown_complete and wakes every shutdown call waiting for it, so a
+// second shutdown call returns only once no worker is alive. The call that did
+// the shutdown runs it last, after joining every worker.
+static void cthrpool_mark_shutdown_complete(cthread_pool *pool) {
+  cthrpool_lock_mu(pool);
   pool->shutdown_complete = true;
-  _ccol_cond_var_broadcast(pool->shutdown_cv);
-  _ccol_mutex_unlock(pool->mu);
+  ccol__cond_var_broadcast(pool->shutdown_cv);
+  ccol__mutex_unlock(pool->mu);
 }
 
-/* The internal shutdown_drain body, taking a raw pointer. Two places share
- * it: the public cthrpool_shutdown_drain wrapper below, and
- * _cthrpool_teardown_raw, which both __cthrpool_destroy and
- * cthrpool_create_mp's rollback (after a failed slot acquire) use. It's the
- * same pattern as _chttpsvr_stop_internal behind chttpsvr_stop. */
-static void _cthrpool_shutdown_drain_internal(cthread_pool *pool) {
-  _cthrpool_lock_mu(pool);
+// Runs a drain shutdown of pool and returns once every worker is joined; shared
+// by cthrpool_shutdown_drain and cthrpool_teardown_raw. When another call
+// already owns the shutdown it waits for shutdown_complete, because
+// shutdown_started is set long before the workers are joined; the owner is
+// never this thread, so that can't deadlock. Otherwise it sets the drain flag,
+// wakes idle workers and blocked submitters, and joins every worker, except for
+// a pool inherited across fork(), whose threads this process can't join.
+static void cthrpool_shutdown_drain_internal(cthread_pool *pool) {
+  cthrpool_lock_mu(pool);
   if (pool->shutdown_started) {
-    /* Another call already owns this pool's shutdown, so we wait it out
-     * instead of returning. shutdown_started is set before a single worker is
-     * woken, and long before one is joined, so returning here would hand the
-     * caller a pool whose workers are all still running and whose queued
-     * tasks haven't run. For every caller but the first that would break this
-     * function's documented guarantee, that it blocks until every queued and
-     * every active task completes.
-     *
-     * The owner sets shutdown_complete and broadcasts below, after its own
-     * join loop, and the owner is never this thread: the public wrapper
-     * rejects a self-call before it gets here, and _cthrpool_teardown_raw's
-     * caller is never a worker of this pool. So this wait can't deadlock
-     * against the join it is waiting for. */
     while (!pool->shutdown_complete) {
-      _ccol_cond_var_wait(pool->shutdown_cv, pool->mu);
+      ccol__cond_var_wait(pool->shutdown_cv, pool->mu);
     }
-    _ccol_mutex_unlock(pool->mu);
+    ccol__mutex_unlock(pool->mu);
     return;
   }
   __atomic_store_n(&pool->shutdown_drain, true, __ATOMIC_RELAXED);
   pool->shutdown_started = true;
-  /* Wake the workers blocked on an empty queue so they can read
-   * shutdown_drain. */
-  _ccol_cond_var_broadcast(pool->not_empty);
-  /* Wake the submitters blocked on a full queue so they get
-   * ccol_not_permitted. */
-  _ccol_cond_var_broadcast(pool->not_full);
-  _ccol_mutex_unlock(pool->mu);
+  ccol__cond_var_broadcast(pool->not_empty);
+  ccol__cond_var_broadcast(pool->not_full);
+  ccol__mutex_unlock(pool->mu);
 
-  /* foreign_since_fork; see the field comment in struct cthread_pool. This
-   * process inherited pool across a fork() call, so it never created any of
-   * the threads in threads[] and can never join one of them, and trying to
-   * SIGSEGVs inside __pthread_clockjoin_ex in glibc. So we treat every worker
-   * as already joined. _cthrpool_teardown_raw still frees pool->threads safely
-   * later whatever this flag says, because that array is plain data. */
 #if CCOL_FORK_SAFETY_REQUIRED
   if (!atomic_load(&pool->foreign_since_fork)) {
     for (size_t i = 0; i < pool->num_threads; i++) {
-      _ccol_thread_join(pool->threads[i].id);
+      ccol__thread_join(pool->threads[i].id);
     }
   }
 #else
   for (size_t i = 0; i < pool->num_threads; i++) {
-    _ccol_thread_join(pool->threads[i].id);
+    ccol__thread_join(pool->threads[i].id);
   }
 #endif
 
-  _cthrpool_mark_shutdown_complete(pool);
+  cthrpool_mark_shutdown_complete(pool);
 }
 
+// Runs every queued task, then stops and joins the workers; the public graceful
+// shutdown. A self-call is a full no-op and leaves every flag alone: the worker
+// can't join itself, and a shutdown_started set here would stop a later
+// shutdown from outside from ever joining that worker.
 void cthrpool_shutdown_drain(cthrpool pool) {
-  cthread_pool *raw = _cthrpool_resolve(pool);
+  cthread_pool *raw = cthrpool_resolve(pool);
   if (!raw) return;
-  /* A self-call; see the comment of cthrpool_worker_key_bundle above. We treat
-   * it as a complete no-op, leaving shutdown_drain and shutdown_started alone
-   * on purpose and going no further.
-   *
-   * Going on would still join every OTHER worker, which is safe in itself,
-   * but it could never join the calling thread: _ccol_thread_join on the
-   * calling thread's own ID returns EDEADLK at once instead of blocking, and
-   * nothing checks that return value. A shutdown_started set here would then
-   * keep every LATER, legitimate external shutdown_drain, shutdown_immediate
-   * or destroy call from retrying that join, because both internal helpers
-   * below turn into a no-op at once when shutdown_started is already true,
-   * and the OS resources of that one worker thread would leak for the rest of
-   * the process.
-   *
-   * Since every flag stays untouched, a later, correct call from outside
-   * still does a real and complete shutdown. By then this worker has long
-   * gone back to its idle wait and is an ordinary worker that can be joined
-   * again. */
-  if (_cthrpool_is_self_call(raw)) {
-    _cthrpool_resolve_unpin(raw);
+  if (cthrpool_is_self_call(raw)) {
+    cthrpool_resolve_unpin(raw);
     return;
   }
-  _cthrpool_shutdown_drain_internal(raw);
-  _cthrpool_resolve_unpin(raw);
+  cthrpool_shutdown_drain_internal(raw);
+  cthrpool_resolve_unpin(raw);
 }
 
-/* The internal shutdown_immediate body, taking a raw pointer. The comment of
- * _cthrpool_shutdown_drain_internal above explains why the split exists. */
-static void _cthrpool_shutdown_immediate_internal(cthread_pool *pool) {
-  _cthrpool_lock_mu(pool);
+// Runs an immediate shutdown of pool and returns once every worker is joined.
+// It steals the queue and completes the discarded tasks with mu unlocked, wakes
+// workers and submitters, broadcasts idle_cv when nothing is active (no task is
+// left to do it), and joins the workers. When a drain owns the shutdown it
+// escalates it the same way and then waits for shutdown_complete instead.
+static void cthrpool_shutdown_immediate_internal(cthread_pool *pool) {
+  cthrpool_lock_mu(pool);
   if (pool->shutdown_started) {
-    /* A shutdown is already under way, and two things still need to happen
-     * here; skipping either one breaks this function's documented contract
-     * for every caller but the first.
-     *
-     * The first is the escalation. If the shutdown already running is a
-     * DRAIN, the queued tasks it is about to run are exactly what this call
-     * promises to discard, and their futures are exactly what it promises to
-     * cancel. Setting shutdown_immediate and stealing the queue here is what
-     * makes "immediate wins over drain" true. Without it, asking for an
-     * immediate shutdown while a drain is in flight silently gets you drain
-     * behaviour, with nothing discarded and no future cancelled.
-     *
-     * The second is the block. shutdown_started is set before a single worker
-     * is woken, and long before one is joined, so returning on that flag
-     * alone would hand the caller a pool whose workers are all still running,
-     * against the documented promise to block until every worker thread
-     * exits. */
     if (!pool->shutdown_immediate) {
       __atomic_store_n(&pool->shutdown_immediate, true, __ATOMIC_RELAXED);
       cthrpool_task *escalated = steal_queue(pool);
-      /* The discarded tasks are completed with pool->mu unlocked (see
-       * _cthrpool_discard_tasks), the same way as on the owning path below. */
-      _ccol_mutex_unlock(pool->mu);
-      _cthrpool_discard_tasks(pool, escalated, true);
-      _cthrpool_lock_mu(pool);
-      _ccol_cond_var_broadcast(pool->not_empty);
-      _ccol_cond_var_broadcast(pool->not_full);
-      /* The queue is gone by now. If active_count is already zero, nobody
-       * else is left to broadcast idle_cv for a cthrpool_wait caller. */
+      ccol__mutex_unlock(pool->mu);
+      cthrpool_discard_tasks(pool, escalated, true);
+      cthrpool_lock_mu(pool);
+      ccol__cond_var_broadcast(pool->not_empty);
+      ccol__cond_var_broadcast(pool->not_full);
       if (pool->active_count == 0) {
-        _ccol_cond_var_broadcast(pool->idle_cv);
+        ccol__cond_var_broadcast(pool->idle_cv);
       }
     }
     while (!pool->shutdown_complete) {
-      _ccol_cond_var_wait(pool->shutdown_cv, pool->mu);
+      ccol__cond_var_wait(pool->shutdown_cv, pool->mu);
     }
-    _ccol_mutex_unlock(pool->mu);
+    ccol__mutex_unlock(pool->mu);
     return;
   }
   __atomic_store_n(&pool->shutdown_immediate, true, __ATOMIC_RELAXED);
   pool->shutdown_started = true;
 
   cthrpool_task *discarded = steal_queue(pool);
-  /* Complete the discarded tasks with pool->mu unlocked; see
-   * _cthrpool_discard_tasks. */
-  _ccol_mutex_unlock(pool->mu);
-  _cthrpool_discard_tasks(pool, discarded, true);
-  _cthrpool_lock_mu(pool);
+  ccol__mutex_unlock(pool->mu);
+  cthrpool_discard_tasks(pool, discarded, true);
+  cthrpool_lock_mu(pool);
 
-  /* Wake the workers blocked on not_empty so they see shutdown_immediate. */
-  _ccol_cond_var_broadcast(pool->not_empty);
-  /* Wake the submitters blocked on not_full. */
-  _ccol_cond_var_broadcast(pool->not_full);
-  /* Wake the cthrpool_wait callers when no active task is left. The queue is
-   * gone and active_count is already zero, so no task will ever broadcast
-   * idle_cv and we have to do it here. */
+  ccol__cond_var_broadcast(pool->not_empty);
+  ccol__cond_var_broadcast(pool->not_full);
   if (pool->active_count == 0) {
-    _ccol_cond_var_broadcast(pool->idle_cv);
+    ccol__cond_var_broadcast(pool->idle_cv);
   }
-  _ccol_mutex_unlock(pool->mu);
+  ccol__mutex_unlock(pool->mu);
 
-  /* Same guard and comment as in _cthrpool_shutdown_drain_internal. */
 #if CCOL_FORK_SAFETY_REQUIRED
   if (!atomic_load(&pool->foreign_since_fork)) {
     for (size_t i = 0; i < pool->num_threads; i++) {
-      _ccol_thread_join(pool->threads[i].id);
+      ccol__thread_join(pool->threads[i].id);
     }
   }
 #else
   for (size_t i = 0; i < pool->num_threads; i++) {
-    _ccol_thread_join(pool->threads[i].id);
+    ccol__thread_join(pool->threads[i].id);
   }
 #endif
 
-  _cthrpool_mark_shutdown_complete(pool);
+  cthrpool_mark_shutdown_complete(pool);
 }
 
+// Discards the queue and stops the workers after their current task; the public
+// fast shutdown. A self-call is a no-op, as in cthrpool_shutdown_drain.
 void cthrpool_shutdown_immediate(cthrpool pool) {
-  cthread_pool *raw = _cthrpool_resolve(pool);
+  cthread_pool *raw = cthrpool_resolve(pool);
   if (!raw) return;
-  /* A self-call. The identical guard and comment in cthrpool_shutdown_drain
-   * above apply here unchanged, and it keeps a worker thread from going
-   * unjoined and leaking for good. */
-  if (_cthrpool_is_self_call(raw)) {
-    _cthrpool_resolve_unpin(raw);
+  if (cthrpool_is_self_call(raw)) {
+    cthrpool_resolve_unpin(raw);
     return;
   }
-  _cthrpool_shutdown_immediate_internal(raw);
-  _cthrpool_resolve_unpin(raw);
+  cthrpool_shutdown_immediate_internal(raw);
+  cthrpool_resolve_unpin(raw);
 }
 
+// Gives the number of queued tasks, read under mu, for monitoring; 0 for a bad
+// handle.
 size_t cthrpool_pending_count(cthrpool pool) {
-  cthread_pool *raw = _cthrpool_resolve(pool);
+  cthread_pool *raw = cthrpool_resolve(pool);
   if (!raw) return 0;
-  _cthrpool_lock_mu(raw);
+  cthrpool_lock_mu(raw);
   size_t n = raw->queue_size;
-  _ccol_mutex_unlock(raw->mu);
-  _cthrpool_resolve_unpin(raw);
+  ccol__mutex_unlock(raw->mu);
+  cthrpool_resolve_unpin(raw);
   return n;
 }
 
+// Gives the number of running tasks, read under mu, for monitoring; 0 for a bad
+// handle.
 size_t cthrpool_active_count(cthrpool pool) {
-  cthread_pool *raw = _cthrpool_resolve(pool);
+  cthread_pool *raw = cthrpool_resolve(pool);
   if (!raw) return 0;
-  _cthrpool_lock_mu(raw);
+  cthrpool_lock_mu(raw);
   size_t n = raw->active_count;
-  _ccol_mutex_unlock(raw->mu);
-  _cthrpool_resolve_unpin(raw);
+  ccol__mutex_unlock(raw->mu);
+  cthrpool_resolve_unpin(raw);
   return n;
 }
 
-/* ========================================================================== */
-/*                         DESTRUCTION                                        */
-/* ========================================================================== */
-
-/* Shared by __cthrpool_destroy and cthrpool_create_mp's rollback after a failed
- * slot acquire. The forward declaration sits above cthrpool_create_mp.
- *
- * The waits here come in the OPPOSITE order from the teardown helpers of
- * ceventloop and ccache, on purpose. Only a not_full broadcast
- * releases a submit blocked on a full bounded queue, and in the worst case
- * every worker thread is itself stuck, so only the shutdown's broadcast can
- * release a submitter that is blocked and pinned. Running a drain shutdown
- * BEFORE the wait on the pin count makes sure that broadcast has happened,
- * so the wait below always completes; in the other order it could deadlock
- * against a submitter this same function never wakes. On cthrpool_create_mp's
- * rollback path no caller ever saw a handle, so there's no slot to wait on
- * and the wait phase returns at once.
- *
- * The non-foreign path below always calls _cthrpool_shutdown_drain_internal,
- * without peeking at pool->shutdown_started first. Such a peek could only
- * happen with pool->mu unlocked, while a pinned cthrpool_shutdown_drain or
- * cthrpool_shutdown_immediate in flight writes the same field under its lock,
- * so the peek would race that write. _cthrpool_shutdown_drain_internal is
- * idempotent under its own lock anyway (it becomes a no-op the moment it
- * sees shutdown_started already true), so always calling it costs nothing
- * extra in the ordinary case and needs no unsynchronized read at all. */
 #if CCOL_FORK_SAFETY_REQUIRED
-/* Clears slots[idx].torn_down; see the field comment of cthrpool_slot_t. It's a
- * no-op when idx is CTHRPOOL_TEARDOWN_NO_SLOT, meaning the pool was never
- * registered in the slot table. Every caller must run it strictly before
- * pool->mu becomes unsafe for _cthrpool_atfork_prepare to dereference, which
- * is when pool->mu is destroyed or, on the foreign_since_fork path, when the
- * struct holding it is freed. */
-static void _cthrpool_teardown_clear_torn_down(uint32_t idx) {
+// Clears torn_down of slot idx under the write lock, so the fork handler stops
+// locking the pool's mu just before the teardown makes it unsafe to touch.
+// No-op for CTHRPOOL_TEARDOWN_NO_SLOT.
+static void cthrpool_teardown_clear_torn_down(uint32_t idx) {
   if (idx == CTHRPOOL_TEARDOWN_NO_SLOT) return;
-  _ccol_rw_lock_wrlock(cthrpool_slot_table.rwlock);
-  cthrpool_slot_t *slot =
-      (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, idx);
+  ccol__rw_lock_wrlock(cthrpool_slot_table.rwlock);
+  cthrpool_slot *slot =
+      (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
   slot->torn_down = false;
-  _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+  ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
 }
 #endif
 
-static void _cthrpool_teardown_raw(cthread_pool *pool, uint32_t idx) {
+// Stops pool and frees it; idx is its slot, or CTHRPOOL_TEARDOWN_NO_SLOT.
+// Shared by cthrpool__destroy and the rollback of a failed create. It runs a
+// drain shutdown before it waits for pins, because only the shutdown's
+// broadcast releases a pinned submitter blocked on a full queue; then it frees
+// the free list, the thread array and the primitives, and clears torn_down
+// before mu goes. The drain is idempotent under its own lock, so it's always
+// called.
+//
+// A pool inherited across fork() is handled apart: its primitives may be in use
+// by parent threads that don't exist here (destroying a condition variable
+// would hang on its waiter count), so only this process's private memory is
+// freed. The pin wait still runs, for resolves by other threads of this
+// process.
+static void cthrpool_teardown_raw(cthread_pool *pool, uint32_t idx) {
 #if !CCOL_FORK_SAFETY_REQUIRED
-  (void)idx; /* idx only matters for the torn_down slot bookkeeping below,
-                which the compiler drops along with the rest of this
-                module's atfork machinery when the builder turns fork
-                safety off. */
+  (void)idx;
 #endif
 #if CCOL_FORK_SAFETY_REQUIRED
   if (atomic_load(&pool->foreign_since_fork)) {
-    /* This process inherited `pool` across a fork() call; see the field
-     * comment of foreign_since_fork. At the instant of the fork() a really
-     * live PARENT-side thread may be blocked on, or otherwise using, each of
-     * the pool's synchronization primitives: mu, not_empty, not_full and
-     * idle_cv. DESTROYING one of them here is undefined behaviour at best, and
-     * for _ccol_cond_var_destroy it HANGS FOREVER: glibc's
-     * pthread_cond_destroy waits for an internal waiter reference count,
-     * __wrefs, that only a parent-side worker still blocked on this exact
-     * condvar in the parent could decrement, and no such thread exists here.
-     * That hang is a separate failure from the SIGSEGV of joining a foreign
-     * thread, which the guards in _cthrpool_shutdown_drain_internal and
-     * _cthrpool_shutdown_immediate_internal above prevent.
-     *
-     * None of that OS-level state is ours to release in this process. Its
-     * real owner is the PARENT, which tears it down normally, in its own time,
-     * when it destroys its own copy of pool. This process frees only its own
-     * private copy-on-write bookkeeping memory and leaves every
-     * synchronization primitive alone. From this process's point of view that
-     * memory is leaked on purpose, while the parent owns and releases the real
-     * primitives.
-     *
-     * Locking and unlocking pool->mu, unlike destroying it, is safe here.
-     * _cthrpool_atfork_prepare locks the mu of every live pool before fork()
-     * can go on, and _cthrpool_atfork_release_impl unlocks each one again
-     * before fork() returns to application code; that function also runs in the
-     * child, through _cthrpool_atfork_child_release. By the time any code in
-     * this process can get here, pool->mu is already clean and unlocked,
-     * whoever held it in the parent at the instant of the fork().
-     *
-     * Two of the steps below are needed for real reasons, not just to match
-     * the non-foreign path. (1) The pin wait, which comes before the lock and
-     * holds no lock itself, is as necessary here as there. A resolve from
-     * another thread in THIS process, a concurrent cthrpool_pending_count or
-     * cthrpool_submit racing this exact destroy for example, is an ordinary
-     * in-process race that the pin mechanism exists for, and it has nothing
-     * to do with the fork. Skipping the pin wait would reopen, for this one
-     * code path, the exact resolve-then-use-after-free race that the
-     * generation-tagged slot table closes. (2) The lock is needed because
-     * steal_queue changes the task list. Any task still sitting in pool->head
-     * or pool->tail at this instant is ordinary private copy-on-write heap
-     * memory that this process CAN safely free, since unlike the OS-level
-     * thread, mutex and condvar state above no worker thread owns it. So we
-     * discard such a task the same way cthrpool_shutdown_immediate discards a
-     * live pool's queue, and future_cancel wakes anyone in this process
-     * blocked in cthrpool_future_get on one of these tasks; without that, such
-     * a caller would hang forever waiting for a worker that never exists here.
-     * A PARENT-side worker, gone in this process, may already have taken a
-     * task off the queue and been running it at the instant of the fork().
-     * That task has no reachable pointer left in this process at all, because
-     * it lived only on the stack of that worker, which doesn't exist, so
-     * nothing here can recover it. That is a limit of forking with work in
-     * flight, not something this mechanism can close. */
-    _cthrpool_wait_for_pins(pool);
-    _cthrpool_lock_mu(pool);
+    cthrpool_wait_for_pins(pool);
+    cthrpool_lock_mu(pool);
     cthrpool_task *discarded = steal_queue(pool);
-    _ccol_mutex_unlock(pool->mu);
-    /* Each discarded task is freed directly with _ccol_mem_free rather than
-     * through task_free. By now the pin count is already 0 and this handle's
-     * slot is already marked not-in-use (see the ordering inside
-     * __cthrpool_destroy), so no submit for this pool can ever happen again in
-     * this process. Recycling these nodes into task_free_list would only pay
-     * task_free's lock and unlock round trip on every discarded task, because
-     * the unconditional drain_task_free_list call a few lines below undoes
-     * the recycling and nothing could ever observe it. */
-    _cthrpool_discard_tasks(pool, discarded, false);
-    /* This frees whatever this pool's task_free_list already held from
-     * BEFORE the fork, the nodes recycled during ordinary operation before
-     * the fork. The loop above deliberately goes around that list instead of
-     * feeding it. */
+    ccol__mutex_unlock(pool->mu);
+    cthrpool_discard_tasks(pool, discarded, false);
     drain_task_free_list(pool);
 
-    _ccol_mem_free(pool->m_procs, pool->threads);
-    _cthrpool_teardown_clear_torn_down(idx);
+    ccol__mem_free(pool->m_procs, pool->threads);
+    cthrpool_teardown_clear_torn_down(idx);
     pool_free_self(pool);
     return;
   }
-#endif /* CCOL_FORK_SAFETY_REQUIRED */
+#endif
 
-  _cthrpool_shutdown_drain_internal(pool);
+  cthrpool_shutdown_drain_internal(pool);
 
-  _cthrpool_wait_for_pins(pool);
+  cthrpool_wait_for_pins(pool);
 
-  /* Every worker is joined and no pin is outstanding, so no further submit
-   * or task_free call for this pool can happen from here on. This really
-   * frees, rather than discards, whatever task_free recycled into
-   * task_free_list over the pool's life. Without it those nodes leak,
-   * because nothing ever hands them back to m_procs. */
   drain_task_free_list(pool);
 
-  _ccol_mem_free(pool->m_procs, pool->threads);
+  ccol__mem_free(pool->m_procs, pool->threads);
 
 #if CCOL_FORK_SAFETY_REQUIRED
-  _cthrpool_teardown_clear_torn_down(idx);
+  cthrpool_teardown_clear_torn_down(idx);
 #endif
-  _ccol_mutex_destroy(pool->mu);
-  _ccol_cond_var_destroy(pool->not_empty);
-  _ccol_cond_var_destroy(pool->not_full);
-  _ccol_cond_var_destroy(pool->idle_cv);
-  _ccol_cond_var_destroy(pool->shutdown_cv);
+  ccol__mutex_destroy(pool->mu);
+  ccol__cond_var_destroy(pool->not_empty);
+  ccol__cond_var_destroy(pool->not_full);
+  ccol__cond_var_destroy(pool->idle_cv);
+  ccol__cond_var_destroy(pool->shutdown_cv);
 
   pool_free_self(pool);
 }
 
-void __cthrpool_destroy(cthrpool pool) {
+// Destroys the pool behind a live handle and releases its slot; CTHRPOOL_NULL
+// is a no-op. It looks the handle up and retires it in one write lock section,
+// so a second destroy (concurrent or later) fails the lookup and ends in
+// ccol__fatal_err, and so does a self-call. torn_down keeps the fork handler
+// locking the pool's mu until the teardown clears it. The slot is released
+// last, fetched again by index because a concurrent acquire can move the slots
+// vector, and its generation is raised so the old handle never matches again.
+// The destroy that frees the last slot also does a release that the exit
+// destructor deferred.
+void cthrpool__destroy(cthrpool pool) {
   if (!pool) return;
 
-  /* Resolve pool through the slot table and mark the slot not-in-use in the
-   * same critical section as the lookup. That's what makes a second destroy
-   * of the same handle value, concurrent or a later sequential one, see a
-   * resolve failure; without it such a call races this call's teardown. The
-   * file-level comment of the slot table and the comment of _cthrpool_resolve
-   * describe the design. A stale or already-destroyed handle that gets
-   * here is exactly the misuse the slot table is there to catch, and it's
-   * fatal instead of a silent use-after-free or double-free. */
-  _ccol_call_once(cthrpool_slot_table.once, _cthrpool_slot_table_init_globals);
+  ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
   uint32_t idx = (uint32_t)(pool >> 32);
   uint32_t gen = (uint32_t)(pool & 0xFFFFFFFFu);
-  _ccol_rw_lock_wrlock(cthrpool_slot_table.rwlock);
-  cthrpool_slot_t *slot = NULL;
+  ccol__rw_lock_wrlock(cthrpool_slot_table.rwlock);
+  cthrpool_slot *slot = NULL;
   cthread_pool *raw = NULL;
-  /* A released table holds no live pool, so every handle is stale then. */
   if (cthrpool_slot_table.slots &&
       idx < cvector_elem_count(cthrpool_slot_table.slots)) {
-    cthrpool_slot_t *s =
-        (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, idx);
+    cthrpool_slot *s =
+        (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
     if (s->in_use && s->generation == gen) {
       slot = s;
       raw = s->ptr;
     }
   }
   if (!raw) {
-    _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
-    _ccol_fatal_err(
+    ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
+    ccol__fatal_err(
         "cthrpool_destroy: handle is stale or already destroyed "
         "(double-destroy / use-after-destroy of a cthrpool handle)");
   }
-  /* A self-call; see the comment of cthrpool_worker_key_bundle above. Unlike
-   * cthrpool_wait, cthrpool_shutdown_drain and cthrpool_shutdown_immediate
-   * there's no safe no-op here. Destroying pool from inside one of its own
-   * workers, while that worker is still running, frees pool->mu and the pool
-   * struct while the worker is on its way back through worker_thread_fn, where
-   * it calls task_free and then locks, decrements, broadcasts and unlocks
-   * against the object the destroy just freed. That's a real, deterministic
-   * use-after-free, not a rare race.
-   *
-   * __cthrpool_destroy has no ccol_retval_t to report it through, since its
-   * documented contract is a live handle in, or a _ccol_fatal_err on misuse.
-   * So we treat a self-call exactly like the stale-handle case right above,
-   * with a loud, immediate _ccol_fatal_err() instead of quietly skipping and
-   * running into undefined behaviour. It's the same as the self-destroy guard
-   * of __ceventloop_destroy in cthreadcomm.c. */
-  if (_cthrpool_is_self_call(raw)) {
-    _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
-    _ccol_fatal_err(
+  if (cthrpool_is_self_call(raw)) {
+    ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
+    ccol__fatal_err(
         "cthrpool_destroy: called from within a task (or its on_complete "
         "callback) running on this very pool's own worker thread; "
         "destroying it here would free the pool out from under that "
         "still-executing worker");
   }
-  slot->in_use = false; /* from this instant ALL later resolves of this handle
-                            are blocked, a second, concurrent destroy attempt
-                            included */
-  /* The same step, under the same lock. From here on no new pin is granted,
-   * and that's what lets the count reach zero and stay there. */
+  slot->in_use = false;
   ccol_pintable_retire(&cthrpool_pintable, idx);
 #if CCOL_FORK_SAFETY_REQUIRED
-  /* See the torn_down field comment of cthrpool_slot_t. raw's worker threads
-   * aren't gone yet; from here on they are only unreachable through this
-   * handle. So _cthrpool_atfork_prepare needs to keep locking raw->mu across a
-   * fork() until _cthrpool_teardown_raw clears this flag, right before raw->mu
-   * becomes unsafe to touch. */
   slot->torn_down = true;
 #endif
-  _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+  ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
 
-  _cthrpool_teardown_raw(raw, idx);
+  cthrpool_teardown_raw(raw, idx);
 
-  /* Release the slot last, only once raw has been fully torn down and freed.
-   * This is the step whose generation bump and push of the index back onto
-   * the free list make the handle reusable, and no earlier step does that.
-   * Fetch the slot again by idx instead of reusing `slot`: a concurrent
-   * cthrpool_create_mp can run _cthrpool_handle_slot_acquire in between, and
-   * its cvector_push_back can move the backing array of slots, which
-   * invalidates any pointer into that array taken before this second lock. idx
-   * itself is stable. */
-  _ccol_rw_lock_wrlock(cthrpool_slot_table.rwlock);
-  cthrpool_slot_t *slot2 =
-      (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, idx);
+  ccol__rw_lock_wrlock(cthrpool_slot_table.rwlock);
+  cthrpool_slot *slot2 =
+      (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
   slot2->ptr = NULL;
-  slot2->generation++; /* moves this slot's generation past whatever value
-      the handle of the pool we just freed carried, so that stale handle can
-      never match the generation of a LATER acquire of this same index */
-  _cthrpool_free_index_release_locked(idx);
-  /* The process-exit destructor has already run and found this pool live.
-     The release it couldn't do belongs to whoever frees the last slot, and
-     that may be this call. */
-  _cthrpool_release_slot_table_if_deferred_locked();
-  _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+  slot2->generation++;
+  cthrpool_free_index_release_locked(idx);
+  cthrpool_release_slot_table_if_deferred_locked();
+  ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
 }
 
 #ifdef RUNNING_UNIT_TESTS
-/* Resolves h to the cthread_pool* behind it WITHOUT a pin, as a bare
- * slot-table lookup that doesn't touch the pin index at all. That's safe for
- * tests, because the test code calling it runs synchronously and
- * single-threaded, with no concurrent destroy to race. Unlike _cthrpool_resolve
- * there's no matching _unpin call for a test to remember, and it's easy to
- * forget one: a forgotten unpin leaves a pin outstanding against that pool
- * forever and hangs every later cthrpool_destroy on it. It returns NULL under
- * exactly the same conditions as _cthrpool_resolve. */
-cthread_pool *_cthrpool_resolve_for_tests(cthrpool h) {
-  _ccol_call_once(cthrpool_slot_table.once, _cthrpool_slot_table_init_globals);
+// Gives the pool behind h for the test accessors, looked up under the read lock
+// with no pin, so there's no unpin to forget.
+cthread_pool *cthrpool__resolve_for_tests(cthrpool h) {
+  ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  _ccol_rw_lock_rdlock(cthrpool_slot_table.rwlock);
+  ccol__rw_lock_rdlock(cthrpool_slot_table.rwlock);
   cthread_pool *raw = NULL;
   if (idx < cvector_elem_count(cthrpool_slot_table.slots)) {
-    cthrpool_slot_t *slot =
-        (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, idx);
+    cthrpool_slot *slot =
+        (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+  ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
   return raw;
 }
 
-/* The indices sitting on the free list right now. Read it together with
- * _cthrpool_slot_table_capacity_for_tests() below. A rollback that loses a
- * slot shows up as a table that grew, but only while the free list was
- * empty, so a test that measures the growth alone passes or fails depending
- * on how many handles earlier tests held at once. Taken together the two
- * numbers describe the table without that dependence. */
-size_t _cthrpool_free_index_count_for_tests(void) {
-  _ccol_call_once(cthrpool_slot_table.once, _cthrpool_slot_table_init_globals);
-  _ccol_rw_lock_rdlock(cthrpool_slot_table.rwlock);
+// Gives the number of indices on the free list, so a test can see that no slot
+// is lost.
+size_t cthrpool__free_index_count_for_tests(void) {
+  ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
+  ccol__rw_lock_rdlock(cthrpool_slot_table.rwlock);
   size_t n = cvector_elem_count(cthrpool_slot_table.free_indices);
-  _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+  ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
   return n;
 }
 
-/* Reads pool's shutdown bookkeeping, so a test can wait until one particular
- * shutdown call has taken ownership before starting a second call that must
- * arrive second. It takes a cthread_pool* the test already resolved, like the
- * other test-only accessors in this file. */
-void _cthrpool_shutdown_state_for_tests(struct cthread_pool *pool,
+// Copies pool's shutdown flags out, read under mu, so a test can order two
+// shutdown calls.
+void cthrpool__shutdown_state_for_tests(struct cthread_pool *pool,
                                         bool *started, bool *immediate,
                                         bool *complete) {
-  _cthrpool_lock_mu(pool);
+  cthrpool_lock_mu(pool);
   if (started) *started = pool->shutdown_started;
   if (immediate) *immediate = pool->shutdown_immediate;
   if (complete) *complete = pool->shutdown_complete;
-  _ccol_mutex_unlock(pool->mu);
+  ccol__mutex_unlock(pool->mu);
 }
 
-/* Answers the self-call check for pool on the calling thread, the same check
- * a wait, a shutdown or a destroy of pool consults. A test reads it from
- * inside an on_complete callback before making a call that would block for
- * ever if the answer were wrong. */
-bool _cthrpool_is_self_call_for_tests(struct cthread_pool *pool) {
-  return _cthrpool_is_self_call(pool);
+// Answers cthrpool_is_self_call() for pool on the calling thread, so a test can
+// check it from a callback.
+bool cthrpool__is_self_call_for_tests(struct cthread_pool *pool) {
+  return cthrpool_is_self_call(pool);
 }
 
-/* Reads how many slots the cthrpool handle table holds right now: the slots
- * the table grew, plus the slots that were freed but not reused yet. It lets
- * a test assert that a loop of creates and destroys reuses freed slots;
- * without the reuse the table would grow without bound. */
-size_t _cthrpool_slot_table_capacity_for_tests(void) {
-  _ccol_call_once(cthrpool_slot_table.once, _cthrpool_slot_table_init_globals);
-  _ccol_rw_lock_rdlock(cthrpool_slot_table.rwlock);
+// Gives the number of slots in the table, free ones included, so a test can see
+// that slots are reused.
+size_t cthrpool__slot_table_capacity_for_tests(void) {
+  ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
+  ccol__rw_lock_rdlock(cthrpool_slot_table.rwlock);
   size_t n = cvector_elem_count(cthrpool_slot_table.slots);
-  _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+  ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
   return n;
 }
 
-/* Reads the current size of pool's task-node free list, so a test can check
- * the recycling (the pops of the submit paths, task_free and
- * drain_task_free_list) directly. Without this accessor a test could only
- * infer what the recycling does from a custom allocator's call counts. It
- * takes the cthread_pool* that _cthrpool_resolve_for_tests returns, not a
- * cthrpool handle, following the convention of the test-only accessors here,
- * which build on that one resolve step instead of repeating it. */
-size_t _cthrpool_task_free_list_size_for_tests(cthread_pool *pool) {
-  _cthrpool_lock_mu(pool);
+// Gives the free list size, read under mu, so a test can check the recycling.
+size_t cthrpool__task_free_list_size_for_tests(cthread_pool *pool) {
+  cthrpool_lock_mu(pool);
   size_t n = pool->task_free_list_size;
-  _ccol_mutex_unlock(pool->mu);
+  ccol__mutex_unlock(pool->mu);
   return n;
 }
 
-/* Reads the cap of pool's task-node free list, which construction sets to
- * max(num_threads * 4, CTHRPOOL_TASK_FREE_LIST_CEILING) (see the field comment
- * in struct cthread_pool). So a test can assert the bound against the pool
- * it really built, without writing that formula a second time. */
-size_t _cthrpool_task_free_list_cap_for_tests(cthread_pool *pool) {
-  _cthrpool_lock_mu(pool);
+// Gives the free list cap, read under mu, so a test can check the bound.
+size_t cthrpool__task_free_list_cap_for_tests(cthread_pool *pool) {
+  cthrpool_lock_mu(pool);
   size_t n = pool->task_free_list_cap;
-  _ccol_mutex_unlock(pool->mu);
+  ccol__mutex_unlock(pool->mu);
   return n;
 }
 
-/* Reads how many pins are outstanding against pool's slot. The count lives
- * in the pin index, not in the pool, and is read here with no lock held, so
- * a test can see that a concurrent resolve and pin really happened without
- * any assumption about timing. The alternative would be to assume a fixed
- * sleep was long enough, but a really slow or loaded machine can starve that
- * thread past any fixed bound, which silently reopens the exact
- * resolve-then-use race such a test closes. */
-size_t _cthrpool_pending_resolve_count_for_tests(cthread_pool *pool) {
+// Gives the number of pins on pool's slot, read with no lock, so a test can see
+// a concurrent resolve.
+size_t cthrpool__pending_resolve_count_for_tests(cthread_pool *pool) {
   return ccol_pintable_pins_for(&cthrpool_pintable, pool->self_handle);
 }
 
-/* Waits on pool's not_full until the absolute deadline abs, measured on
- * whatever clock not_full was initialised with, and returns the wait's
- * status. A test passes a CLOCK_MONOTONIC deadline and times the call, so it
- * can tell the condition variable's clock from how it behaves. */
-int _cthrpool_timedwait_not_full_for_tests(cthread_pool *pool,
+// Waits on not_full until abs, ignoring wakes, and gives the final status, so a
+// test can tell which clock not_full uses.
+int cthrpool__timedwait_not_full_for_tests(cthread_pool *pool,
                                            const struct timespec *abs) {
-  _cthrpool_lock_mu(pool);
+  cthrpool_lock_mu(pool);
   int rc = 0;
   do {
-    rc = _ccol_cond_var_timedwait(pool->not_full, pool->mu, *abs);
+    rc = ccol__cond_var_timedwait(pool->not_full, pool->mu, *abs);
   } while (rc == 0);
-  _ccol_mutex_unlock(pool->mu);
+  ccol__mutex_unlock(pool->mu);
   return rc;
 }
 
-/* Reads how many times the calling thread has locked any pool's mutex since
- * the thread started. A test reads it before and after one call, and the
- * difference is the number of critical sections the call took on the
- * calling thread, which no worker or other thread can disturb. */
-unsigned long _cthrpool_mu_locks_for_tests(void) {
-  return _cthrpool_mu_locks_taken;
+// Gives the calling thread's count of pool locks, so a test can count the
+// critical sections of one call.
+unsigned long cthrpool__mu_locks_for_tests(void) {
+  return cthrpool_mu_locks_taken;
 }
 
-_cthrpool_timed_wait_record_t _cthrpool_timed_wait_record_for_tests(void) {
-  _cthrpool_timed_wait_record_t r = _cthrpool_timed_wait_record;
-  memset(&_cthrpool_timed_wait_record, 0, sizeof(_cthrpool_timed_wait_record));
+// Gives the calling thread's timed wait record and clears it, so a test can
+// check what a timed submit waited for.
+cthrpool__timed_wait_record cthrpool__timed_wait_record_for_tests(void) {
+  cthrpool__timed_wait_record r = cthrpool_timed_wait_record;
+  memset(&cthrpool_timed_wait_record, 0, sizeof(cthrpool_timed_wait_record));
   return r;
 }
 
-/* Reads a future's current reference count, under that future's mutex, so a
- * test can wait until a concurrent cthrpool_future_get has really taken its own
- * waiter reference, without any assumption about timing. The alternative is
- * to assume a fixed delay was long enough for that thread to get there; such
- * a test lets the future's task complete while a waiter is still on its way
- * in, which uses a pointer whose last reference is already gone, and no
- * reference count can make that safe.
- */
-int _cthrpool_future_refcount_for_tests(cthrpool_future_t *f) {
+// Gives f's refcount, read under its mutex, so a test can wait until a waiter
+// holds its reference; -1 for NULL.
+int cthrpool__future_refcount_for_tests(cthrpool_future *f) {
   if (!f) return -1;
-  _ccol_mutex_lock(f->mu);
+  ccol__mutex_lock(f->mu);
   int refcount = f->refcount;
-  _ccol_mutex_unlock(f->mu);
+  ccol__mutex_unlock(f->mu);
   return refcount;
 }
 
-/* Test-only. Locks and unlocks the write side of cthrpool_slot_table's rwlock
- * directly, going around every public API function. It mirrors the
- * _ceventloop_test_wrlock_reg_slot_for_tests and _wrunlock pair of
- * ceventloop in src/cthreadcomm.c, whose doc comment gives the
- * rationale and describes the AB-BA deadlock a hook of this shape must not
- * introduce.
- *
- * With it a test can hold the write side locked for a window of any length
- * it controls exactly, from a thread OTHER than the one calling fork().
- * prepare() then waits for the window to end before taking the write side
- * itself, and the child goes through the reinitialize path in the in_child
- * branch of _cthrpool_atfork_release_impl.
- *
- * Unlike the ceventloop pair, this one has no "resolve" step on
- * purpose, because there's no per-instance handle to resolve here, only the
- * process-wide slot table. So this function returns void and the matching
- * unlock takes no argument. Nothing like ceventloop's AB-BA hazard
- * applies, since neither call touches anything else a concurrent fork() could
- * contend for. */
+// Takes the write side of the table lock, so a test can hold it while another
+// thread forks.
 void cthrpool_test_wrlock_slot_table_for_tests(void) {
-  _ccol_call_once(cthrpool_slot_table.once, _cthrpool_slot_table_init_globals);
-  _ccol_rw_lock_wrlock(cthrpool_slot_table.rwlock);
+  ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
+  ccol__rw_lock_wrlock(cthrpool_slot_table.rwlock);
 }
 
+// Releases the write side of the table lock that the test took.
 void cthrpool_test_wrunlock_slot_table_for_tests(void) {
-  _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+  ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
 }
 #endif
 
-/* Answers whether any slot still names a pool. The caller holds the write
- * lock.
- *
- * The scan reads slot->ptr, not slot->in_use. A destroy clears in_use as its
- * first step, so a second destroy or a new resolve gets rejected as early as
- * possible, and the rest of the teardown comes after that: it joins the
- * threads, drains the pins and does the final locked release of the index. A
- * scan that trusted in_use alone would free this table under a destroy still
- * in that window, and the last step of that destroy would then index the
- * freed table. ptr is written only once a slot is fully acquired and cleared
- * only in that final locked step, so it's set for exactly as long as the
- * table must not be released, and it depends on no build-time switch. */
-static bool _cthrpool_any_slot_live_locked(void) {
+// Tells whether any slot names a pool, so the table is never freed while a pool
+// or its destroy may still use it; the caller holds the write lock. It reads
+// ptr, not in_use: a destroy clears in_use first but still uses the table until
+// its last step, and ptr stays set until then.
+static bool cthrpool_any_slot_live_locked(void) {
   size_t slot_count = cvector_elem_count(cthrpool_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
-    cthrpool_slot_t *slot =
-        (cthrpool_slot_t *)cvector_at(cthrpool_slot_table.slots, i);
+    cthrpool_slot *slot =
+        (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, i);
     if (slot->ptr != NULL) return true;
   }
   return false;
 }
 
-/* The check and the release both sit behind one out-of-line call, so the
- * destroy path that makes that call keeps the code shape it would have
- * without any of this. Cold code in a hot object file isn't free: inlined,
- * the same handful of instructions measurably slows an unrelated container's
- * push path, because it shifts what the linker lays out around that path,
- * even though the instruction count doesn't change. */
+// Frees the table when the exit destructor deferred that and no slot is live
+// any more; the caller holds the write lock. Out of line so the destroy path
+// keeps its shape.
 static __attribute__((noinline)) void
-_cthrpool_release_slot_table_if_deferred_locked(void) {
+cthrpool_release_slot_table_if_deferred_locked(void) {
   if (cthrpool_slot_table.release_deferred &&
-      !_cthrpool_any_slot_live_locked()) {
-    _cthrpool_release_slot_table_locked();
+      !cthrpool_any_slot_live_locked()) {
+    cthrpool_release_slot_table_locked();
   }
 }
 
-/* Releases the table's bookkeeping and the pin index. The caller holds the
- * write lock and has already established that no slot is live.
- *
- * The pin index's slot storage is never released while the process runs, on
- * purpose, because a resolve indexes it with no lock held, so a leak checker
- * that counts still-reachable memory as an error reports that storage at
- * exit unless this function releases it. Each vector is set to NULL as it
- * goes, and that's what makes a later call answer "already released" instead
- * of indexing into a freed vector. The rwlock isn't destroyed, because this
- * can run from an ordinary destroy that still holds that lock.
- *
- * The release also retires the worker key, on either path: the destructor
- * when no pool was left, or the destroy of the last pool when the destructor
- * had to defer. No pool is left, so no worker of this module runs and nothing
- * reads the key again. A thread that outlives a dlclose() then never meets a
- * key of this module, and the next load of the library creates a fresh one.
- * A pool some code creates after this point is refused, because its creation
- * finds live false or its slot acquire finds the released table, and a
- * worker sets the key only while live is true. */
-static void _cthrpool_release_slot_table_locked(void) {
+// Frees the table vectors and the pin table and deletes the worker key; the
+// caller holds the write lock and found no live slot. Each vector becomes NULL,
+// so a later call sees the release. The rwlock isn't destroyed, since the
+// caller holds it. Any create after this is refused.
+static void cthrpool_release_slot_table_locked(void) {
   cvector_destroy(cthrpool_slot_table.slots);
   cvector_destroy(cthrpool_slot_table.free_indices);
   ccol_pintable_dispose(&cthrpool_pintable);
   cthrpool_slot_table.release_deferred = false;
   if (atomic_exchange(&cthrpool_worker_key_bundle.live, false))
-    _ccol_thread_ls_key_delete(cthrpool_worker_key_bundle.key);
+    ccol__thread_ls_key_delete(cthrpool_worker_key_bundle.key);
 }
 
-/* Frees the slot table's bookkeeping arrays at process exit, so the leak-kind
- * report of make memtest doesn't flag them as still reachable. It mirrors the
- * _cleanup_*_slot_table function of ceventloop and of ccache
- * exactly; the reasoning is in the comments there, including why this is
- * sound only when the application itself destroyed every cthrpool it created
- * before the process exits. This test suite meets that precondition for a
- * clean make memtest.
- *
- * The _ccol_call_once here is mandatory. An __attribute__((destructor))
- * function runs for the whole shared object whatever parts of it the process
- * used, and a process can link this library and never create a single
- * cthrpool. Without the _ccol_call_once such a process would lock a mutex here
- * that pthread_mutex_init never initialized. */
-__attribute__((destructor)) static void _cleanup_cthrpool_slot_table(void) {
-  _ccol_call_once(cthrpool_slot_table.once, _cthrpool_slot_table_init_globals);
-  /* Nothing to do and nothing safe to touch. Each vector is set to NULL as
-     it's destroyed, so a second run of this function stops here instead of
-     indexing into a freed vector. */
+// Frees the table at process exit or unload so a leak checker doesn't report
+// it, or sets release_deferred when a pool is still live, so the destroy that
+// frees the last slot does it (destructor order across files isn't ours to
+// choose). The call_once is needed because a process may never have created a
+// pool. The static rwlock is never destroyed.
+__attribute__((destructor)) static void cleanup_cthrpool_slot_table(void) {
+  ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
   if (!cthrpool_slot_table.slots) return;
-  _ccol_rw_lock_wrlock(cthrpool_slot_table.rwlock);
-  /* This only runs when nothing is left that could still resolve a handle.
-   * The order of one translation unit's destructor against another's isn't
-   * ours to decide, and without this check a later destructor still holding
-   * a live handle would find the table and the pin index freed under it.
-   * When a slot is still live the destructor defers the release to whichever
-   * destroy frees the last slot, and nothing skips it, so an application that
-   * does destroy its pools leaves nothing behind whatever order the
-   * destructors run in. */
-  if (_cthrpool_any_slot_live_locked()) {
+  ccol__rw_lock_wrlock(cthrpool_slot_table.rwlock);
+  if (cthrpool_any_slot_live_locked()) {
     cthrpool_slot_table.release_deferred = true;
-    _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
+    ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
     return;
   }
-  _cthrpool_release_slot_table_locked();
-  _ccol_rw_lock_unlock(cthrpool_slot_table.rwlock);
-  /* We don't destroy the rwlock itself, on purpose. It has static storage
-     duration, so it holds nothing a leak checker reports. The destructor also
-     can't own the rwlock's lifetime: the deferred branch above returns with
-     the table still live, and the later release runs while holding this very
-     lock, so there's no path on which every user is provably done with it. A
-     destroy here would leave the other branch's entry points with a read
-     lock on a destroyed object, and a stale-handle call that is documented to
-     fail cleanly through _ccol_fatal_err would turn into undefined behaviour.
-     The order of destructors across translation units isn't ours to decide
-     either. */
+  cthrpool_release_slot_table_locked();
+  ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
 }
 
 #ifdef RUNNING_UNIT_TESTS
-/* Runs the slot table's process-exit cleanup right now. A test calls it in a
- * forked child, with a pool still live, to reach the deferred release. */
-void _cthrpool_run_exit_cleanup_for_tests(void) {
-  _cleanup_cthrpool_slot_table();
+// Runs the exit destructor now, so a test can reach the deferred release.
+void cthrpool__run_exit_cleanup_for_tests(void) {
+  cleanup_cthrpool_slot_table();
 }
 
-/* True while the worker key exists. */
-bool _cthrpool_worker_key_live_for_tests(void) {
+// Tells whether the worker key exists, so a test can see the release delete
+// it.
+bool cthrpool__worker_key_live_for_tests(void) {
   return atomic_load(&cthrpool_worker_key_bundle.live);
 }
-#endif /* RUNNING_UNIT_TESTS */
+#endif

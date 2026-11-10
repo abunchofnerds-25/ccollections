@@ -33,8 +33,8 @@ helpers. You usually meet it through the client first, and the server side,
 int main(int argc, char **argv) {
     const char *url = argc > 1 ? argv[1] : "http://127.0.0.1:8080/hello";
 
-    chttpcli_response_t *resp = NULL;
-    ccol_retval_t rc = chttp_get(url, &resp);
+    chttpcli_response *resp = NULL;
+    ccol_retval rc = chttp_get(url, &resp);
     if (rc != ccol_success) {
         fprintf(stderr, "GET %s failed: %s\n", url, ccol_retval_to_str(rc));
         return 1;
@@ -58,7 +58,7 @@ cc -std=gnu11 first.c -o first $(pkg-config --cflags --libs ccollections)
 ```
 
 `#include <ccollections/chttpclient.h>` brings in `chttp.h` as well. Every
-request returns a `ccol_retval_t` where `ccol_success` is 0, and
+request returns a `ccol_retval` where `ccol_success` is 0, and
 `ccol_retval_to_str()` turns any code into a readable name.
 
 `chttp_get()` runs on a process-wide *default client*, which the library
@@ -72,7 +72,7 @@ library itself links OpenSSL. A static link needs
 
 ## Read a response
 
-A `chttpcli_response_t` has four fields that you read directly:
+A `chttpcli_response` has four fields that you read directly:
 
 | Field | Contents |
 |---|---|
@@ -146,7 +146,7 @@ int main(int argc, char **argv) {
     chttpcli_set_max_response_body_size(cli, 1 << 20); /* 1 MiB */
 
     const char *json = "{\"name\":\"widget\",\"qty\":3}";
-    chttp_request_t *req = chttp_request_create(
+    chttp_request *req = chttp_request_create(
         CHTTP_POST, url, &CHTTP_JSON_BODY(json, strlen(json)), NULL);
     if (!req) {
         chttpcli_destroy(cli);
@@ -160,8 +160,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    chttpcli_response_t *resp = NULL;
-    ccol_retval_t rc = chttpcli_do(cli, req, &resp);
+    chttpcli_response *resp = NULL;
+    ccol_retval rc = chttpcli_do(cli, req, &resp);
     chttp_request_free(req);
 
     if (rc == ccol_success) {
@@ -233,7 +233,7 @@ The process-wide client can run your requests as well, through
 chmap_construct(headers, char *, char *);
 chmap_insert(headers, "X-Api-Version", "2");
 
-chttpcli_response_t *resp = NULL;
+chttpcli_response *resp = NULL;
 chttp_run_query(CHTTP_POST, url, &CHTTP_TEXT_BODY("ping", 4), headers, &resp);
 chmap_destroy(headers);          /* the call only borrowed the map */
 chttpcli_resp_free(resp);
@@ -304,9 +304,9 @@ int main(int argc, char **argv) {
     chttpcli_construct(cli);
     chttpcli_set_connect_timeout(cli, 5000000);   /* 5 s */
 
-    chttp_request_t *req = chttp_request_create(CHTTP_GET, argv[1], NULL, NULL);
+    chttp_request *req = chttp_request_create(CHTTP_GET, argv[1], NULL, NULL);
     int status = 0;
-    ccol_retval_t rc = req ? chttpcli_do_streaming(cli, req, write_chunk,
+    ccol_retval rc = req ? chttpcli_do_streaming(cli, req, write_chunk,
                                                    &sink, &status)
                            : ccol_not_enough_memory;
     chttp_request_free(req);
@@ -354,7 +354,7 @@ req->prevent_tls_downgrade_on_redirect = true;  /* a downgrade: ccol_http_invali
 
 By default the client verifies the server's certificate chain against the
 system CA store and checks that the certificate names the host you asked
-for. You change that by passing a `chttp_tls_config_t` to
+for. You change that by passing a `chttp_tls_config` to
 `chttpcli_set_tls()`.
 
 The system CA store is OpenSSL's default CA file: the file named by the
@@ -374,11 +374,11 @@ verification on, and every field that weakens security says so in its name
 
 ```c
 /* Trust a private CA, not the system store. The client verifies fully. */
-chttp_tls_config_t tls = {.ca_bundle_path = "/etc/myapp/ca.pem"};
+chttp_tls_config tls = {.ca_bundle_path = "/etc/myapp/ca.pem"};
 chttpcli_set_tls(cli, &tls);
 
 /* Send a client certificate (mutual TLS); set both paths together. */
-chttp_tls_config_t mtls = {
+chttp_tls_config mtls = {
     .ca_bundle_path = "/etc/myapp/ca.pem",
     .cert_path      = "/etc/myapp/client.pem",
     .key_path       = "/etc/myapp/client.key",
@@ -388,14 +388,14 @@ chttpcli_set_tls(cli, &mtls);
 /* Keep the chain check but skip the host name check. This suits a server
    that you reach by an IP address that its certificate does not
    contain. */
-chttp_tls_config_t by_ip = {
+chttp_tls_config by_ip = {
     .ca_bundle_path = "/etc/myapp/ca.pem",
     .insecure_skip_hostname_check = true,
 };
 chttpcli_set_tls(cli, &by_ip);
 
 /* Accept any certificate; use this only for temporary test servers. */
-chttp_tls_config_t insecure = {.insecure_skip_verify = true};
+chttp_tls_config insecure = {.insecure_skip_verify = true};
 chttpcli_set_tls(cli, &insecure);
 
 chttpcli_set_tls(cli, NULL);   /* back to the defaults */
@@ -450,7 +450,7 @@ typedef struct {
     const char   *url;
     int           status;
     double        ms;
-    ccol_retval_t rc;
+    ccol_retval rc;
 } check_t;
 
 static double now_ms(void) {
@@ -462,8 +462,8 @@ static double now_ms(void) {
 static void *check(void *arg) {
     check_t *c = arg;
     double t0 = now_ms();
-    chttp_request_t *req = chttp_request_create(CHTTP_HEAD, c->url, NULL, NULL);
-    chttpcli_response_t *resp = NULL;
+    chttp_request *req = chttp_request_create(CHTTP_HEAD, c->url, NULL, NULL);
+    chttpcli_response *resp = NULL;
     c->rc = req ? chttpcli_do(c->cli, req, &resp) : ccol_not_enough_memory;
     c->status = resp ? resp->status_code : 0;
     c->ms = now_ms() - t0;
@@ -530,7 +530,7 @@ request.
 ### Start now, get the result later (Tier 2)
 
 `chttpcli_do_async()` lets one thread start many requests, do something
-else and collect the answers later. Each call returns a `cthrpool_future_t`
+else and collect the answers later. Each call returns a `cthrpool_future`
 straight away, and `chttpcli_async_result_get()` waits on it.
 
 ```c
@@ -547,11 +547,11 @@ int main(int argc, char **argv) {
     chttpcli_construct(cli);
     chttpcli_set_request_timeout(cli, 5000000);   /* 5 s for each request */
 
-    cthrpool_future_t *futures[N] = {0};
+    cthrpool_future *futures[N] = {0};
     for (int i = 0; i < N; i++) {
         char url[256];
         snprintf(url, sizeof(url), "%s%s", base, paths[i]);
-        chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
+        chttp_request *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
         if (!req)
             continue;
         futures[i] = chttpcli_do_async(cli, req);   /* returns immediately */
@@ -565,7 +565,7 @@ int main(int argc, char **argv) {
             printf("%-12s not submitted\n", paths[i]);
             continue;
         }
-        chttpcli_async_result_t *r = chttpcli_async_result_get(futures[i]);
+        chttpcli_async_result *r = chttpcli_async_result_get(futures[i]);
         if (r && r->rv == ccol_success) {
             printf("%-12s %d %zu bytes\n", paths[i], r->resp->status_code,
                    r->resp->body_len);
@@ -615,14 +615,14 @@ and parses it.
 
 /* Send one request and parse the JSON answer. Return the parsed document
    (NULL on any failure) and store the HTTP status in *status. */
-static cjson call_api(chttpcli cli, chttp_method_t method, const char *url,
+static cjson call_api(chttpcli cli, chttp_method method, const char *url,
                       const char *auth, const char *json_body, int *status) {
     *status = 0;   /* 0 means "no HTTP answer" */
-    chttp_request_body_t body = CHTTP_NO_BODY;
+    chttp_request_body body = CHTTP_NO_BODY;
     if (json_body)
         body = CHTTP_JSON_BODY(json_body, strlen(json_body));
 
-    chttp_request_t *req = chttp_request_create(method, url, &body, NULL);
+    chttp_request *req = chttp_request_create(method, url, &body, NULL);
     if (!req)
         return NULL;
     if (chttp_request_set_header(req, "Authorization", auth) != ccol_success ||
@@ -632,8 +632,8 @@ static cjson call_api(chttpcli cli, chttp_method_t method, const char *url,
         return NULL;
     }
 
-    chttpcli_response_t *resp = NULL;
-    ccol_retval_t rc = chttpcli_do(cli, req, &resp);
+    chttpcli_response *resp = NULL;
+    ccol_retval rc = chttpcli_do(cli, req, &resp);
     chttp_request_free(req);
     if (rc != ccol_success) {
         fprintf(stderr, "%s %s: %s\n", chttp_method_str(method), url,
@@ -737,7 +737,7 @@ sends only the headers first and sends the body once the server answers
 second (a fragment):
 
 ```c
-chttp_request_t *req = chttp_request_create(CHTTP_PUT, url,
+chttp_request *req = chttp_request_create(CHTTP_PUT, url,
     &CHTTP_BODY(data, len, "application/octet-stream"), NULL);
 if (req) {
     req->expect_continue = true;
@@ -814,8 +814,8 @@ See [chttpclient(7)](https://abunchofnerds-25.github.io/ccollections/man/chttpcl
 `resp->body` is `NULL` for an empty body. And only POST, PUT and PATCH send
 a body, so a body you give to a GET isn't sent.
 
-A client is thread-safe, but a single `chttp_request_t` or
-`chttpcli_response_t` isn't a shared object, so never modify one from two
+A client is thread-safe, but a single `chttp_request` or
+`chttpcli_response` isn't a shared object, so never modify one from two
 threads at once.
 
 The streaming callbacks of Tiers 2 and 3 run on the engine, so keep them

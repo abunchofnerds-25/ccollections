@@ -7,19 +7,19 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpclient.h>
 
-ccol_retval_t chttp_run_query(chttp_method_t method, const char *url,
-                              const chttp_request_body_t *body,
+ccol_retval chttp_run_query(chttp_method method, const char *url,
+                              const chttp_request_body *body,
                               chmap headers,
-                              chttpcli_response_t **resp_out);
+                              chttpcli_response **resp_out);
 .fi
 .SH DESCRIPTION
 .nf
-This is a convenience wrapper that builds a chttp_request_t
+This is a convenience wrapper that builds a chttp_request
 internally, attaches headers to it without taking ownership, calls
 chttp_do and then frees the request it built. Of the convenience
 functions for the default client, this is the only one that takes a
 header set of your choice in a single call. With chttp_get, chttp_post
-and the others you have to build a chttp_request_t yourself, with
+and the others you have to build a chttp_request yourself, with
 chttp_request_create followed by one chttp_request_set_header call per
 header.
 

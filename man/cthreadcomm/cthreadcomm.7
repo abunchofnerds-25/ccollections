@@ -25,12 +25,12 @@ queue or a file descriptor is ready. It is made of five parts:
 .fi
 .SS Messages and ownership
 .nf
-Every queue carries values of type cmessage_t:
+Every queue carries values of type cmessage:
 
-  typedef struct cmessage_t {
+  typedef struct cmessage {
       void   *data;
       size_t  size;
-  } cmessage_t;
+  } cmessage;
 
 The library copies no payload.  A send that succeeds hands the
 ownership of data to the queue and sets the data field of the sender

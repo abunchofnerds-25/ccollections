@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clogger.h>
 
-ccol_retval_t clog_set_level(clog logger, clog_level_t level);
+ccol_retval clog_set_level(clog logger, clog_level level);
 .fi
 .SH DESCRIPTION
 .nf
@@ -20,13 +20,13 @@ effect at once and every thread that shares the logger sees it.
 logger  Logger handle.
 level   New minimum level (CLOG_TRACE through CLOG_OFF).
         CLOG_OFF suppresses all output except CLOG_FATAL.
-        A value that clog_level_t does not name, such as -3 or
+        A value that clog_level does not name, such as -3 or
         12, is refused and the level stays as it is.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success       The minimum level is set.
-ccol_invalid_args  clog_level_t does not name level.  The level stays
+ccol_invalid_args  clog_level does not name level.  The level stays
                    as it is.
 .fi
 .SH NOTES

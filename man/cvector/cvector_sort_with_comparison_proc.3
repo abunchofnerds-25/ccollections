@@ -34,14 +34,14 @@ The sort is the stable, in-place mergesort of csort, which moves the
 elements inside the backing array directly with no call per element
 access. It takes O(n log n) time and O(n) space. Asserts if v is NULL.
 
-A NULL comparison_proc makes it call _ccol_fatal_err(). The comparison
+A NULL comparison_proc makes it call ccol__fatal_err(). The comparison
 procedure comes from the caller's own expression, whose value in general
 isn't known before the program runs, so this is a run-time check. The
 element-type check of cvec_sort is a compile-time _Static_assert
 instead, and a cvec_sort call never gets to this diagnostic.
 
 If the internal temporary buffer of the sort can't be allocated, the
-macro calls _ccol_fatal_err(), as every other type-inferred macro in
+macro calls ccol__fatal_err(), as every other type-inferred macro in
 cvector.h that changes a vector does (cvec_push, cvec_reserve,
 cvec_append_array and the others). The vector is then left completely
 unsorted.

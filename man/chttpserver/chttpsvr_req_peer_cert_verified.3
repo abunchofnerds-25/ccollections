@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttpserver.h>
 
-bool chttpsvr_req_peer_cert_verified(const chttpsvr_req_t *req);
+bool chttpsvr_req_peer_cert_verified(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
@@ -21,7 +21,7 @@ a NULL req.
 
 In the default configuration a server with a ca_bundle_path accepts
 no client that lacks such a certificate, so there every request
-reports true.  With client_cert_optional set in chttp_tls_config_t a
+reports true.  With client_cert_optional set in chttp_tls_config a
 client that presents nothing is accepted too, and a handler or a
 middleware uses this function to tell that client apart from a
 verified one.  In both modes a client whose certificate fails to

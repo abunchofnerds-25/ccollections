@@ -7,8 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/cthreadcomm.h>
 
-ceventloop_reg ceventloop_add(ceventloop loop, cselectable_t sel,
-                       ceventloop_handlers_t handlers, void *arg,
+ceventloop_reg ceventloop_add(ceventloop loop, cselectable sel,
+                       ceventloop_handlers handlers, void *arg,
                        char **err_str);
 .fi
 .SH DESCRIPTION
@@ -95,7 +95,7 @@ while it waits.
 on_readable, on_writable and on_error share one prototype:
 
     void fn(ceventloop loop, ceventloop_reg reg,
-            cselectable_t *sel, void *arg);
+            cselectable *sel, void *arg);
 
 loop is the loop that owns the registration, sel is its selectable and
 arg is the arg of this call. reg is the handle of the registration
@@ -310,17 +310,17 @@ thread.
 .fi
 .SH EXAMPLES
 .nf
-void on_msg(ceventloop loop, ceventloop_reg reg, cselectable_t *sel,
+void on_msg(ceventloop loop, ceventloop_reg reg, cselectable *sel,
             void *arg) {
     (void)loop; (void)reg; (void)arg;
-    cmessage_t msg;
+    cmessage msg;
     if (ccircq_try_recv(sel->cq, &msg) != ccol_success) return;
     printf("job: %.*s\en", (int)msg.size, (char *)msg.data);
     free(msg.data);
 }
 
 ccircq *jobs = ccircq_create(64, NULL);
-ceventloop_handlers_t handlers = { .on_readable = on_msg };
+ceventloop_handlers handlers = { .on_readable = on_msg };
 ceventloop_reg reg = ceventloop_add(
     loop, ccircq_selectable(jobs, cselect_read),
                                handlers, NULL, NULL);

@@ -22,21 +22,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Every socket the library creates is non-blocking, closed on exec and never
- * raises SIGPIPE.
- *
- * Linux and the BSDs take SOCK_NONBLOCK and SOCK_CLOEXEC at creation, have
- * accept4() for an accepted socket and MSG_NOSIGNAL on each send. macOS has
- * none of them, so there we set the flags with fcntl() right after the socket
- * exists and put SO_NOSIGPIPE on the socket, which makes CCOL_MSG_NOSIGNAL 0.
- * _CCOL_EMULATE_DARWIN_SOCK picks the macOS form on other systems too, and
- * that's how the Linux and FreeBSD test suites run it (Linux has no
- * SO_NOSIGPIPE, so it keeps MSG_NOSIGNAL). When the flags need a second call,
- * both calls run inside the close-on-exec gate of common.h, so a fork() from
- * another thread can't hand a child the socket before it is closed on exec.
- * A new socket anywhere in the library should come from these helpers as
- * well: a socket() call with the Linux flags doesn't build on macOS, and one
- * without them loses these properties everywhere. */
+// Every socket the library creates is non-blocking, closed on exec and never
+// raises SIGPIPE. Linux and the BSDs take SOCK_NONBLOCK and SOCK_CLOEXEC at
+// creation, have accept4() and MSG_NOSIGNAL. macOS has none of them, so there
+// we set the flags with fcntl() right after the socket exists and put
+// SO_NOSIGPIPE on it, which makes CCOL_MSG_NOSIGNAL 0.
+// CCOL__EMULATE_DARWIN_SOCK picks the macOS form on other systems too, which is
+// how the Linux and FreeBSD suites test it (Linux has no SO_NOSIGPIPE, so it
+// keeps MSG_NOSIGNAL). When the flags need a second call, both calls run inside
+// the close-on-exec gate of common.h, so a fork() from another thread can't
+// hand a child the socket before it's closed on exec. Every new socket of the
+// library should come from here: a socket() call with the Linux flags doesn't
+// build on macOS, and one without them loses these properties everywhere.
 
 #ifndef CCOL_INTERNAL_CSOCK_H
 #define CCOL_INTERNAL_CSOCK_H
@@ -46,34 +43,41 @@ SOFTWARE.
 #include <fcntl.h>
 #include <poll.h>
 #include <stddef.h>
+// C23 has bool, true and false as keywords.
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-#include <stdbool.h> /* C23 has bool, true and false as keywords */
+#include <stdbool.h>
 #endif
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-#if defined(__APPLE__) && !defined(_CCOL_EMULATE_DARWIN_SOCK)
-#define _CCOL_EMULATE_DARWIN_SOCK 1
+// macOS lacks the Linux socket flags, so it always takes the emulated path.
+#if defined(__APPLE__) && !defined(CCOL__EMULATE_DARWIN_SOCK)
+#define CCOL__EMULATE_DARWIN_SOCK 1
 #endif
 
-#if defined(_CCOL_EMULATE_DARWIN_SOCK) && defined(SO_NOSIGPIPE)
+// CCOL_MSG_NOSIGNAL is the flag every send of the library passes so a gone
+// peer raises no SIGPIPE. It's 0 where SO_NOSIGPIPE on the socket does the job,
+// and CCOL__SOCK_NOSIGPIPE says so.
+#if defined(CCOL__EMULATE_DARWIN_SOCK) && defined(SO_NOSIGPIPE)
 #define CCOL_MSG_NOSIGNAL 0
-#define _CCOL_SOCK_NOSIGPIPE 1
+#define CCOL__SOCK_NOSIGPIPE 1
 #else
 #define CCOL_MSG_NOSIGNAL MSG_NOSIGNAL
 #endif
 
-#if defined(_CCOL_EMULATE_DARWIN_SOCK)
-/* Makes a new socket closed on exec, free of SIGPIPE and, when nonblock is
- * true, non-blocking. If any step fails it closes fd and gives -1. */
-static inline int _ccol_sock_setup(int fd, bool nonblock) {
+#if defined(CCOL__EMULATE_DARWIN_SOCK)
+// Makes a new socket closed on exec, free of SIGPIPE and, when nonblock is
+// true, non-blocking, with fcntl() and setsockopt(); the emulated helpers below
+// call it on each socket they create. If any step fails it closes fd and gives
+// -1, else it gives fd.
+static inline int ccol__sock_setup(int fd, bool nonblock) {
   if (fd < 0) return -1;
   int fl = fcntl(fd, F_GETFD);
   int st = nonblock ? fcntl(fd, F_GETFL) : 0;
   bool ok = fl >= 0 && fcntl(fd, F_SETFD, fl | FD_CLOEXEC) == 0 && st >= 0 &&
             (!nonblock || fcntl(fd, F_SETFL, st | O_NONBLOCK) == 0);
-#if defined(_CCOL_SOCK_NOSIGPIPE)
+#if defined(CCOL__SOCK_NOSIGPIPE)
   int one = 1;
   ok = ok && setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) == 0;
 #endif
@@ -85,12 +89,11 @@ static inline int _ccol_sock_setup(int fd, bool nonblock) {
 }
 #endif
 
-/* Makes a socket we didn't create free of SIGPIPE on systems where that is a
- * property of the socket (SO_NOSIGPIPE) instead of each send. Gives 0, or -1
- * if the option can't be set, and does nothing where CCOL_MSG_NOSIGNAL does
- * the job. */
+// Makes a socket we didn't create free of SIGPIPE where that's a property of
+// the socket (SO_NOSIGPIPE). Gives 0, or -1 when the option can't be set. Where
+// CCOL_MSG_NOSIGNAL does the job it does nothing.
 static inline int ccol_sock_nosigpipe(int fd) {
-#if defined(_CCOL_SOCK_NOSIGPIPE)
+#if defined(CCOL__SOCK_NOSIGPIPE)
   int one = 1;
   return setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) == 0 ? 0
                                                                           : -1;
@@ -100,88 +103,89 @@ static inline int ccol_sock_nosigpipe(int fd) {
 #endif
 }
 
-#if defined(_CCOL_EMULATE_DARWIN_SOCK)
-/* Leaves the close-on-exec gate and gives fd back, keeping the errno that the
- * steps inside the gate left. */
-static inline int _ccol_sock_gate_leave(int fd) {
+#if defined(CCOL__EMULATE_DARWIN_SOCK)
+// Leaves the close-on-exec gate and gives fd back, keeping the errno that the
+// steps inside the gate left; every emulated helper ends with it.
+static inline int ccol__sock_gate_leave(int fd) {
   int saved = errno;
-  _ccol_cloexec_gate_leave();
+  ccol__cloexec_gate_leave();
   errno = saved;
   return fd;
 }
 #endif
 
-/* socket(2) for a non-blocking socket that is closed on exec. */
+// socket(2) for a non-blocking socket that is closed on exec; every socket the
+// library creates comes from here. Gives the fd or -1 with errno set.
 static inline int ccol_socket_nb(int domain, int type, int protocol) {
-#if defined(_CCOL_EMULATE_DARWIN_SOCK)
-  _ccol_cloexec_gate_enter();
-  return _ccol_sock_gate_leave(
-      _ccol_sock_setup(socket(domain, type, protocol), true));
+#if defined(CCOL__EMULATE_DARWIN_SOCK)
+  ccol__cloexec_gate_enter();
+  return ccol__sock_gate_leave(
+      ccol__sock_setup(socket(domain, type, protocol), true));
 #else
   return socket(domain, type | SOCK_NONBLOCK | SOCK_CLOEXEC, protocol);
 #endif
 }
 
-/* accept(2) for a non-blocking socket that is closed on exec. It's a macro so
- * that a file which never accepts doesn't need a declaration of accept4(),
- * and glibc declares that one only under _GNU_SOURCE. */
-#if defined(_CCOL_EMULATE_DARWIN_SOCK)
-static inline int _ccol_accept_nb_gated(int fd, struct sockaddr *addr,
+#if defined(CCOL__EMULATE_DARWIN_SOCK)
+// accept(2) for a non-blocking socket that is closed on exec, for the servers
+// of the library. ccol_accept_nb is a macro that evaluates to the new fd or -1,
+// so that a file which never accepts doesn't need a declaration of accept4(),
+// which glibc gives only under _GNU_SOURCE.
+static inline int ccol__accept_nb_gated(int fd, struct sockaddr *addr,
                                         socklen_t *addrlen) {
-  _ccol_cloexec_gate_enter();
-  return _ccol_sock_gate_leave(
-      _ccol_sock_setup(accept(fd, addr, addrlen), true));
+  ccol__cloexec_gate_enter();
+  return ccol__sock_gate_leave(
+      ccol__sock_setup(accept(fd, addr, addrlen), true));
 }
 #define ccol_accept_nb(fd, addr, addrlen) \
-  _ccol_accept_nb_gated((fd), (addr), (addrlen))
+  ccol__accept_nb_gated((fd), (addr), (addrlen))
 #else
 #define ccol_accept_nb(fd, addr, addrlen) \
   accept4((fd), (addr), (addrlen), SOCK_NONBLOCK | SOCK_CLOEXEC)
 #endif
 
-/* socketpair(2) for two non-blocking sockets that are closed on exec. */
+// socketpair(2) for two non-blocking sockets that are closed on exec, filling
+// sv. Gives 0, or -1 with errno set and no socket left open.
 static inline int ccol_socketpair_nb(int domain, int type, int protocol,
                                      int sv[2]) {
-#if defined(_CCOL_EMULATE_DARWIN_SOCK)
-  _ccol_cloexec_gate_enter();
+#if defined(CCOL__EMULATE_DARWIN_SOCK)
+  ccol__cloexec_gate_enter();
   if (socketpair(domain, type, protocol, sv) != 0)
-    return _ccol_sock_gate_leave(-1);
-  if (_ccol_sock_setup(sv[0], true) < 0) {
+    return ccol__sock_gate_leave(-1);
+  if (ccol__sock_setup(sv[0], true) < 0) {
     close(sv[1]);
-    return _ccol_sock_gate_leave(-1);
+    return ccol__sock_gate_leave(-1);
   }
-  if (_ccol_sock_setup(sv[1], true) < 0) {
+  if (ccol__sock_setup(sv[1], true) < 0) {
     close(sv[0]);
-    return _ccol_sock_gate_leave(-1);
+    return ccol__sock_gate_leave(-1);
   }
-  return _ccol_sock_gate_leave(0);
+  return ccol__sock_gate_leave(0);
 #else
   return socketpair(domain, type | SOCK_NONBLOCK | SOCK_CLOEXEC, protocol, sv);
 #endif
 }
 
-/* A send that never blocks, whatever mode the descriptor is in.
- *
- * Linux and FreeBSD honour MSG_DONTWAIT on send(2), but macOS honours it only
- * on recv(2). Its send path looks at the socket's non-blocking mode and
- * nothing else, so a send to a blocking socket with too little room waits
- * for the rest of the bytes, and that's why ccol_send_room() limits the send
- * there. When poll(2) reports POLLOUT on a stream socket there is room for at
- * least SO_SNDLOWAT bytes, so sending that many doesn't wait. A macOS
- * datagram socket never queues data in its send buffer, which means a whole
- * datagram goes out at once (or fails with ENOBUFS) and is never cut. */
-#if defined(_CCOL_EMULATE_DARWIN_SOCK)
+#if defined(CCOL__EMULATE_DARWIN_SOCK)
+// The flag for a send that must not block. Linux and FreeBSD honour
+// MSG_DONTWAIT on send(2); macOS honours it only on recv(2), so its send to a
+// blocking socket with too little room waits for the rest. There the flag is 0
+// and ccol_send_room() limits the send instead.
 #define CCOL_MSG_DONTWAIT 0
 #else
 #define CCOL_MSG_DONTWAIT MSG_DONTWAIT
 #endif
 
-/* How many of the len bytes one send(2) or sendmsg(2) with CCOL_MSG_DONTWAIT
- * can hand to fd without waiting. That's len where the flag does the job or
- * fd is non-blocking, and 0 when a blocking stream socket has no room right
- * now, in which case the caller reports EAGAIN as the send itself would. */
-#if defined(_CCOL_EMULATE_DARWIN_SOCK)
-static inline size_t _ccol_send_room_blocking(int fd, size_t len) {
+#if defined(CCOL__EMULATE_DARWIN_SOCK)
+// How many of len bytes one send(2) can hand to a blocking fd without waiting.
+// After POLLOUT a stream socket has room for at least SO_SNDLOWAT bytes, so we
+// give that many, or 0 when there's no room (the caller reports EAGAIN). Any
+// other socket type gets len: a macOS datagram socket never queues in its send
+// buffer, so a datagram goes out whole or fails with ENOBUFS. An error or a
+// hang-up also gives len, so the send itself reports it. Linux has no real
+// SO_SNDLOWAT and its POLLOUT means a quarter of the buffer is free, so the
+// emulation uses 2048 there, the macOS default.
+static inline size_t ccol__send_room_blocking(int fd, size_t len) {
   int type = 0;
   socklen_t tl = sizeof(type);
   if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl) != 0 ||
@@ -192,14 +196,10 @@ static inline size_t _ccol_send_room_blocking(int fd, size_t len) {
   do {
     pr = poll(&pfd, 1, 0);
   } while (pr < 0 && errno == EINTR);
-  if (pr < 0) return len; /* the send reports the error of fd */
-  if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))
-    return len; /* the send fails at once */
+  if (pr < 0) return len;
+  if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) return len;
   if (!(pfd.revents & POLLOUT)) return 0;
 #if defined(__linux__)
-  /* Linux has no real SO_SNDLOWAT (it always reads 1) and its POLLOUT on a
-   * stream socket means at least a quarter of the send buffer is free, so the
-   * emulation uses 2048 bytes there, which is the macOS default. */
   int lowat = 2048;
 #else
   int lowat = 0;
@@ -209,22 +209,29 @@ static inline size_t _ccol_send_room_blocking(int fd, size_t len) {
 #endif
   return len < (size_t)lowat ? len : (size_t)lowat;
 }
+
+// Gives how many of the len bytes a send with CCOL_MSG_DONTWAIT can hand to fd
+// without waiting, for ccol_send_nb() and the callers that use sendmsg(): len
+// where the flag does the job or fd is non-blocking, otherwise what
+// ccol__send_room_blocking() finds.
 static inline size_t ccol_send_room(int fd, size_t len) {
   int st = fcntl(fd, F_GETFL);
   if (st < 0 || (st & O_NONBLOCK)) return len;
-  return _ccol_send_room_blocking(fd, len);
+  return ccol__send_room_blocking(fd, len);
 }
 #else
+// Without the emulation MSG_DONTWAIT does the job, so a send may hand over all
+// len bytes.
 static inline size_t ccol_send_room(int fd, size_t len) {
   (void)fd;
   return len;
 }
 #endif
 
-/* send(2) of at most len bytes that never blocks. When the socket has no
- * room right now it gives -1 with errno set to EAGAIN, otherwise whatever
- * send(2) gives. A short count can happen on every system, like with any
- * send(2) on a stream socket. */
+// send(2) of at most len bytes that never blocks, for the HTTP stream writes
+// and the logger's bounded writes. With no room right now it gives -1 and errno
+// EAGAIN, otherwise what send(2) gives. A short count can happen on every
+// system, as with any send on a stream socket.
 static inline ssize_t ccol_send_nb(int fd, const void *buf, size_t len,
                                    int flags) {
   size_t room = ccol_send_room(fd, len);
@@ -235,4 +242,4 @@ static inline ssize_t ccol_send_nb(int fd, const void *buf, size_t len,
   return send(fd, buf, room, flags | CCOL_MSG_DONTWAIT);
 }
 
-#endif /* CCOL_INTERNAL_CSOCK_H */
+#endif

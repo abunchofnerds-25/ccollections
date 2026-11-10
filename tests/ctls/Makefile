@@ -14,7 +14,7 @@ LFLAGS = -lssl -lcrypto -lpthread $(CCOL_PLATFORM_LIBS)
 
 # A separate ThreadSanitizer build, kept out of the default -Werror build;
 # tests/cthreadcomm/Makefile uses the same build_tsan and test_tsan pattern.
-# This suite drives one shared ctls_ctx_t from several handshake threads while
+# This suite drives one shared ctls_ctx from several handshake threads while
 # another thread keeps changing the context's configuration, and every change
 # rebuilds and frees all the SSL_CTX objects that the context owns. This build
 # checks the ordering between the last read of a connection through a shared

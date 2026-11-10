@@ -21,7 +21,7 @@ chttpcli_do_async_streaming, chttpcli_do_pooled or
 chttpcli_do_pooled_streaming for as long as the shared reactor
 engine is working on it. An idle connection in the pool does not
 count. The macro is safe even if nobody has waited yet on a
-cthrpool_future_t from chttpcli_do_async or
+cthrpool_future from chttpcli_do_async or
 chttpcli_do_async_streaming.
 
 cli must be a live handle, or CHTTPCLI_NULL, which is a silent

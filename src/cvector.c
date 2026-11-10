@@ -30,98 +30,85 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-const size_t _ccol_cvector_minimum_capacity = 4;
-const size_t _ccol_cvector_scaling_factor = 2;
+// The smallest capacity a vector ever has, and the factor it grows and shrinks
+// by. They're global so the white-box tests can read them.
+const size_t ccol__cvector_minimum_capacity = 4;
+const size_t ccol__cvector_scaling_factor = 2;
 
-/* The load-factor divisor that cvector_pop_back uses to decide when to
- * shrink: the capacity halves once elem_count drops below capacity /
- * shrink_threshold_divisor, i.e. below 1/4 full. We keep it as its own
- * constant on purpose instead of reusing _ccol_cvector_minimum_capacity,
- * even though both are 4. _ccol_cvector_minimum_capacity is the floor of the
- * capacity and this one is the "how empty is too empty" ratio, and those two
- * have nothing to do with each other. If they shared one value, tuning
- * _ccol_cvector_minimum_capacity for its own reasons would quietly change
- * the shrink ratio too.
- */
+// A pop shrinks the buffer once less than 1/4 of the capacity is in use. It's a
+// constant of its own, separate from the minimum capacity, so tuning one never
+// changes the other.
 static const size_t shrink_threshold_divisor = 4;
 
+// The vector itself. m_procs is NULL for the default allocator, an interned
+// procs pointer, or a pointer to the copy that sits right after this struct in
+// the same block.
 struct cvector {
   size_t elem_size;
   size_t elem_count;
   size_t capacity;
-  ccol_memmgmt_procs_t *m_procs;
+  ccol_memmgmt_procs *m_procs;
   void *data_ptr;
 };
 
-/* A copy of the caller's procs sits right after the struct in the same
- * block, so it doesn't need an allocation of its own. */
-_Static_assert(sizeof(struct cvector) % _Alignof(ccol_memmgmt_procs_t) == 0,
+// The procs copy after the struct must be aligned for its type.
+_Static_assert(sizeof(struct cvector) % _Alignof(ccol_memmgmt_procs) == 0,
                "the procs copy after struct cvector must be aligned");
 
-/* Frees all the heap memory of the vector, which is the data buffer and the
- * block of the container struct. With a custom allocator m_procs points
- * either at an interned procs struct or at the copy in the tail of that
- * block, so the free function pointer is read before the block is freed. */
-void __cvector_destroy(cvec v) {
+// Frees the data buffer and the vector's own block, so cvector_destroy() and
+// the scope cleanup have one place that releases a vector. A NULL v does
+// nothing. The free function is read before the block goes away, because
+// m_procs can point into that block.
+void cvector__destroy(cvec v) {
   if (v) {
     if (v->data_ptr) {
-      _ccol_mem_free(v->m_procs, v->data_ptr);
+      ccol__mem_free(v->m_procs, v->data_ptr);
     }
 
     if (v->m_procs) {
-      ccol_free_t free_func = v->m_procs->free;
+      ccol_free free_func = v->m_procs->free;
       free_func(v);
     } else {
-      _ccol_default_mem_free(v);
+      ccol__default_mem_free(v);
     }
   }
 }
 
-/* Guards cvector_create_full against arguments that make no sense. An
- * elem_size of zero breaks every byte offset calculation, so we reject it
- * immediately instead of letting a bad state spread quietly. A very large
- * elem_size is rejected for the same reason: it makes
- * _ccol_cvector_minimum_capacity * elem_size overflow size_t, and that
- * product is the size of the very first allocation of the backing buffer.
- * Every later path that grows the capacity (scale_the_cvector_size_up and
- * cvector_reserve) already guards its own byte size multiplication against
- * an overflow, so the first allocation can't be the one place that quietly
- * wraps to a too small buffer while v->elem_size holds the real, huge
- * value. */
+// Checks the arguments of cvector_create_full before anything is allocated, so
+// a bad argument never leaves a half-built vector. It gives false, with *err
+// set, for an elem_size of zero, an elem_size whose first 4-element buffer
+// would overflow size_t, or a procs struct with a NULL function.
 static bool verify_cvector_create_inputs(size_t elem_size,
-                                         ccol_memmgmt_procs_t *mmgt_procs,
+                                         ccol_memmgmt_procs *mmgt_procs,
                                          char **err) {
   if (elem_size == 0) {
     if (err) {
-      *err = _CCOL_ERR_STR("elem_size is zero");
+      *err = CCOL__ERR_STR("elem_size is zero");
     }
     return false;
   }
 
-  if (elem_size > SIZE_MAX / _ccol_cvector_minimum_capacity) {
+  if (elem_size > SIZE_MAX / ccol__cvector_minimum_capacity) {
     if (err) {
-      *err = _CCOL_ERR_STR(
+      *err = CCOL__ERR_STR(
           "elem_size too large: initial capacity allocation would overflow");
     }
     return false;
   }
 
-  if (!_ccol_verify_memmgmt_procs(mmgt_procs, err)) {
+  if (!ccol__verify_memmgmt_procs(mmgt_procs, err)) {
     return false;
   }
 
   return true;
 }
 
-/* Allocates and initializes a new vector with the element size and the
- * optional custom allocator that the caller gives. The first backing buffer
- * holds _ccol_cvector_minimum_capacity elements. An interned procs pointer
- * is kept as it is, since the interned copy lives for the whole process, and
- * any other procs struct is copied into the tail of the vector's own block.
- * When any allocation fails the partly built vector is torn down, NULL comes
- * back, and a static error string goes into *err if the caller gave an err.
- */
-cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
+// Creates an empty vector with room for 4 elements of elem_size bytes; it's
+// the one constructor that every create path goes through. It gives NULL,
+// with *err set, when an argument is bad or an allocation fails. An interned
+// procs pointer is kept as it is; any other procs struct is copied into the
+// tail of the vector's block, so a vector costs two allocations.
+cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs *mmgt_procs,
                          char **err) {
   if (!verify_cvector_create_inputs(elem_size, mmgt_procs, err)) {
     return NULL;
@@ -129,29 +116,29 @@ cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
 
   bool copy_procs = mmgt_procs && !ccol_procs_is_interned(mmgt_procs);
   cvec v;
-  v = _ccol_mem_calloc(
+  v = ccol__mem_calloc(
       mmgt_procs, 1,
-      sizeof(cvector) + (copy_procs ? sizeof(ccol_memmgmt_procs_t) : 0));
+      sizeof(cvector) + (copy_procs ? sizeof(ccol_memmgmt_procs) : 0));
   if (!v) {
     if (err) {
-      *err = _CCOL_ERR_STR("failed to allocate vector container");
+      *err = CCOL__ERR_STR("failed to allocate vector container");
     }
     return NULL;
   }
 
   if (copy_procs) {
-    v->m_procs = (ccol_memmgmt_procs_t *)(v + 1);
-    memcpy(v->m_procs, mmgt_procs, sizeof(ccol_memmgmt_procs_t));
+    v->m_procs = (ccol_memmgmt_procs *)(v + 1);
+    memcpy(v->m_procs, mmgt_procs, sizeof(ccol_memmgmt_procs));
   } else {
     v->m_procs = mmgt_procs;
   }
 
   v->data_ptr =
-      _ccol_mem_alloc(mmgt_procs, _ccol_cvector_minimum_capacity * elem_size);
+      ccol__mem_alloc(mmgt_procs, ccol__cvector_minimum_capacity * elem_size);
   if (!v->data_ptr) {
-    __cvector_destroy(v);
+    cvector__destroy(v);
     if (err) {
-      *err = _CCOL_ERR_STR("failed to allocate data container");
+      *err = CCOL__ERR_STR("failed to allocate data container");
     }
     return NULL;
   }
@@ -160,100 +147,85 @@ cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
     *err = NULL;
   }
 
-  v->capacity = _ccol_cvector_minimum_capacity;
+  v->capacity = ccol__cvector_minimum_capacity;
   v->elem_count = 0;
   v->elem_size = elem_size;
 
   return v;
 }
 
-/* Gives the custom allocator struct that the vector stores, or NULL when it
- * uses the default malloc and free path. */
-ccol_memmgmt_procs_t *cvector_get_mprocs(cvec v) {
+// Gives the vector's allocator (NULL for the default one), so a caller can
+// allocate related memory the same way. Asserts on a NULL v.
+ccol_memmgmt_procs *cvector_get_mprocs(cvec v) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   return v->m_procs;
 }
 
-/* Doubles the capacity of the backing buffer. ccol_container_full comes back
- * when the vector is already at the architectural ceiling for growth, which
- * is ccol_max_elem_count or the largest byte size this elem_size can
- * address; that's a structural limit and not a passing allocation failure.
- * ccol_not_enough_memory comes back only when the realloc itself fails, and
- * the caller needs to keep the two apart: cvector_push_back, our only caller,
- * passes the difference on to its own caller instead of reporting
- * ccol_not_enough_memory for both. When the reallocation fails the original
- * pointer is put back, so the vector stays usable. */
-static ccol_retval_t scale_the_cvector_size_up(cvec v) {
+// Doubles the capacity of the buffer, which keeps push_back amortized O(1).
+// It gives ccol_container_full when the element count or the byte size would
+// overflow, and ccol_not_enough_memory when realloc fails, so push_back can
+// report the two apart. On failure the old buffer stays.
+static ccol_retval scale_the_cvector_size_up(cvec v) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
-  if (v->capacity > (ccol_max_elem_count / _ccol_cvector_scaling_factor)) {
-    return ccol_container_full;  // elem_count would overflow
+  if (v->capacity > (ccol_max_elem_count / ccol__cvector_scaling_factor)) {
+    return ccol_container_full;
   }
 
-  size_t new_capacity = _ccol_cvector_scaling_factor * v->capacity;
+  size_t new_capacity = ccol__cvector_scaling_factor * v->capacity;
   if (new_capacity > SIZE_MAX / v->elem_size) {
-    return ccol_container_full;  // the byte size would overflow
+    return ccol_container_full;
   }
 
   void *orig = v->data_ptr;
   v->data_ptr =
-      _ccol_mem_realloc(v->m_procs, v->data_ptr, new_capacity * v->elem_size);
+      ccol__mem_realloc(v->m_procs, v->data_ptr, new_capacity * v->elem_size);
   if (!v->data_ptr) {
     v->data_ptr = orig;
     return ccol_not_enough_memory;
   }
 
-  v->capacity *= _ccol_cvector_scaling_factor;
+  v->capacity *= ccol__cvector_scaling_factor;
   return ccol_success;
 }
 
-/* Halves the capacity of the backing buffer, but never below
- * _ccol_cvector_minimum_capacity. If the reallocation fails we quietly put
- * the original pointer back, because a shrink is only a best effort and a
- * failed one doesn't damage any of the existing data. */
+// Halves the capacity of the buffer, never below the minimum, so a vector that
+// shrank gives memory back. A failed realloc is ignored, since the old buffer
+// holds the data just as well.
 static void scale_the_cvector_size_down(cvec v) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
-  if (v->capacity == _ccol_cvector_minimum_capacity) {
+  if (v->capacity == ccol__cvector_minimum_capacity) {
     return;
   }
 
   void *orig = v->data_ptr;
-  v->data_ptr = _ccol_mem_realloc(
+  v->data_ptr = ccol__mem_realloc(
       v->m_procs, v->data_ptr,
-      (v->capacity / _ccol_cvector_scaling_factor) * v->elem_size);
+      (v->capacity / ccol__cvector_scaling_factor) * v->elem_size);
   if (!v->data_ptr) {
     v->data_ptr = orig;
     return;
   }
 
-  v->capacity /= _ccol_cvector_scaling_factor;
+  v->capacity /= ccol__cvector_scaling_factor;
 }
 
-/* Appends a copy of *new_elem at the end of the vector, and grows the backing
- * buffer by _ccol_cvector_scaling_factor when the capacity is full. It gives
- * ccol_not_enough_memory when the reallocation for that growth fails, and
- * ccol_container_full when the vector is already at the architectural
- * ceiling for growth (see scale_the_cvector_size_up).
- *
- * new_elem may point into v's own backing buffer, for example a pointer from
- * cvector_at(v, i) or from cvector_data_ptr(v), and cvector_append_array
- * gives the same guarantee. When the vector has to grow,
- * scale_the_cvector_size_up can realloc the buffer to a new address, and
- * without care new_elem would be dangling by the time we read it. So an
- * aliasing new_elem is turned into a byte offset before the growth and its
- * address is computed again from the new v->data_ptr afterwards, which means
- * new_elem is never dereferenced across the possible move. */
-ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
+// Copies *new_elem to the end of the vector, growing the buffer when it's
+// full; it's the raw append that cvec_push uses. It gives ccol_success or the
+// error of the growth. new_elem may point into v's own buffer, so before a
+// growth that can move the buffer we turn it into an offset and rebuild the
+// pointer afterwards.
+ccol_retval cvector_push_back(cvec v, const void *new_elem) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   if (!new_elem) {
@@ -264,7 +236,7 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
     return ccol_container_full;
   }
 
-  ccol_retval_t result = ccol_success;
+  ccol_retval result = ccol_success;
 
   if (v->elem_count < v->capacity) {
     memcpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
@@ -279,11 +251,9 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
                                  ? (size_t)((const char *)new_elem - buf_start)
                                  : 0;
 
-    ccol_retval_t grow_result = scale_the_cvector_size_up(v);
+    ccol_retval grow_result = scale_the_cvector_size_up(v);
     if (grow_result == ccol_success) {
       if (new_elem_aliases_self) {
-        // v->data_ptr can move, so work out new_elem again from the new
-        // buffer.
         new_elem = (const char *)v->data_ptr + new_elem_offset;
       }
       memcpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
@@ -297,21 +267,20 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
   return result;
 }
 
-/* Removes the last element and copies it into *target_elem. The buffer
- * shrinks once the element count drops below capacity /
- * shrink_threshold_divisor, so the vector doesn't sit on too much memory.
- * On an empty vector it gives ccol_container_empty and leaves *target_elem
- * alone. */
-ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
+// Removes the last element and copies it to *target_elem; it's the raw pop
+// that cvec_pop uses. The buffer shrinks once the vector is less than 1/4
+// full. An empty vector gives ccol_container_empty and leaves *target_elem
+// alone.
+ccol_retval cvector_pop_back(cvec v, void *target_elem) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   if (!target_elem) {
     return ccol_invalid_args;
   }
 
-  ccol_retval_t result = ccol_container_empty;
+  ccol_retval result = ccol_container_empty;
 
   if (v->elem_count > 0) {
     result = ccol_success;
@@ -329,72 +298,56 @@ ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
   return result;
 }
 
-/* Allocates backing storage in advance for at least new_capacity_count
- * elements. The requested count is rounded up to the nearest power of two,
- * with a minimum of _ccol_cvector_minimum_capacity, so a later push_back
- * hits a capacity boundary the caller can predict. When the capacity is
- * already enough for the request nothing happens. */
+// Grows the buffer to hold at least new_capacity_count elements, rounded up to
+// a power of two (at least the minimum), so a caller who knows the final size
+// avoids repeated reallocations. It never shrinks, and gives false on an
+// overflow or a failed realloc, with the vector unchanged.
 bool cvector_reserve(cvec v, size_t new_capacity_count) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   size_t refined_new_capacity_count =
-      _ccol_find_nearest_gte_power_of_two(new_capacity_count);
-  if (refined_new_capacity_count < _ccol_cvector_minimum_capacity) {
-    refined_new_capacity_count = _ccol_cvector_minimum_capacity;
+      ccol__find_nearest_gte_power_of_two(new_capacity_count);
+  if (refined_new_capacity_count < ccol__cvector_minimum_capacity) {
+    refined_new_capacity_count = ccol__cvector_minimum_capacity;
   }
 
   if (refined_new_capacity_count > ccol_max_elem_count) {
-    // That's too much, so reject it.
     return false;
   }
 
   if (refined_new_capacity_count > SIZE_MAX / v->elem_size) {
-    return false;  // The byte size would overflow
+    return false;
   }
 
   if (refined_new_capacity_count <= v->capacity) {
-    // The vector already has the capacity the caller asks for
     return true;
   }
 
-  // The vector needs more capacity
   void *orig = v->data_ptr;
-  v->data_ptr = _ccol_mem_realloc(v->m_procs, v->data_ptr,
+  v->data_ptr = ccol__mem_realloc(v->m_procs, v->data_ptr,
                                   refined_new_capacity_count * v->elem_size);
   if (!v->data_ptr) {
-    // The reallocation failed, put the original pointer back.
     v->data_ptr = orig;
     return false;
   }
 
-  // The reallocation worked.
   v->capacity = refined_new_capacity_count;
   return true;
 }
 
-/* Copies n bytes from src into the tail slot of the vector, at
- * v->data_ptr + v->elem_count * v->elem_size, without touching
- * v->elem_count itself. arr_ptr may point anywhere inside v's backing
- * buffer, including reserved capacity past v->elem_count that holds no live
- * element yet, so with a big enough elem_count from the caller the source
- * and the destination ranges can overlap. memcpy isn't safe for an overlap,
- * so we use memmove when the two ranges really overlap and keep memcpy for
- * the far more common case with no alias. Paying for memmove on every append
- * just to cover a rare alias isn't worth it. */
 #ifdef RUNNING_UNIT_TESTS
-/* Counts the cvector_copy_into_tail calls that take the memmove branch (the
- * one that is safe for an overlap), so a white-box test can assert that the
- * code really goes through that branch. Looking at the output of the copy
- * alone isn't enough for the test: memcpy's behaviour isn't portable, and it
- * can leave a given overlapping range without any visible corruption even
- * when the safe branch is skipped, so seeing "the data come out right"
- * proves nothing about which path ran. The counter isn't part of the public
- * API. */
+// Counts the memmove branch of cvector_copy_into_tail, so a white-box test can
+// see that an overlapping copy really took the safe path. The copied data alone
+// can't tell, since memcpy may happen to work on an overlap.
 size_t cvector_overlap_copy_count_for_tests = 0;
 #endif
 
+// Copies n bytes from src to the slot after the last element; elem_count isn't
+// changed. It exists because an aliasing source can overlap the destination:
+// we use memmove when the ranges overlap and memcpy otherwise. In test builds
+// the memmove branch bumps cvector_overlap_copy_count_for_tests.
 static void cvector_copy_into_tail(cvec v, const void *src, size_t n) {
   char *dst = (char *)v->data_ptr + v->elem_count * v->elem_size;
   const char *s = (const char *)src;
@@ -409,28 +362,15 @@ static void cvector_copy_into_tail(cvec v, const void *src, size_t n) {
   }
 }
 
-/* Appends elem_count elements from arr_ptr to the vector in one go, and
- * reserves more capacity when it has to. The overflow check on the total
- * element count catches both a size_t wrap-around and a count above
- * ccol_max_elem_count.
- *
- * arr_ptr may point into v's own backing buffer, for example a pointer from
- * cvector_data_ptr(v) or from cvector_at(v, i). Growing the vector can need
- * a realloc inside cvector_reserve, which can move the backing buffer to a
- * new address, and without care arr_ptr would be dangling by the time we
- * read it. So an aliasing arr_ptr is turned into a byte offset before the
- * reservation and its address is computed again from the new v->data_ptr
- * afterwards, and arr_ptr is never dereferenced across the possible move.
- * The comment on cvector_copy_into_tail describes the other hazard, two
- * overlapping ranges, which this function guards against as well.
- *
- * An aliasing source range is also bounded by the reserved extent of the
- * buffer, and we give false when such a range runs past it. Without that
- * bound an offset near the top of the reserved region plus a large
- * elem_count would read off the end of the allocation. */
+// Appends elem_count elements from arr_ptr with at most one reallocation, which
+// is cheaper than a push per element. It gives false on an overflow or a failed
+// reservation. arr_ptr may point into v's own buffer: such a source must stay
+// inside the reserved capacity (past it is a heap over-read), and it's turned
+// into an offset before cvector_reserve so the realloc can't leave it
+// dangling.
 bool cvector_append_array(cvec v, const void *arr_ptr, size_t elem_count) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   if (elem_count == 0) {
@@ -443,15 +383,9 @@ bool cvector_append_array(cvec v, const void *arr_ptr, size_t elem_count) {
 
   size_t new_elem_count = v->elem_count + elem_count;
   if (new_elem_count < v->elem_count || new_elem_count > ccol_max_elem_count) {
-    // Either new_elem_count wrapped, or it is greater than
-    // ccol_max_elem_count
     return false;
   }
 
-  // Does arr_ptr point into this vector's backing buffer? Two different
-  // things depend on that: a source range that aliases the buffer gets the
-  // reserved extent of that buffer as its bound (right below), and an
-  // aliasing arr_ptr must also survive a realloc further down.
   const char *buf_start = (const char *)v->data_ptr;
   const char *buf_end = buf_start + v->capacity * v->elem_size;
   bool arr_ptr_aliases_self =
@@ -459,64 +393,42 @@ bool cvector_append_array(cvec v, const void *arr_ptr, size_t elem_count) {
   size_t arr_ptr_offset =
       arr_ptr_aliases_self ? (size_t)((const char *)arr_ptr - buf_start) : 0;
 
-  // An aliasing source range may run past v->elem_count into reserved
-  // capacity that holds no live element yet, but it must not run past the
-  // reservation itself: the bytes after buf_end belong to no allocation of
-  // ours, so reading them is a heap over-read. Only the aliasing case can be
-  // bounded at all, because a source array of the caller has no extent we
-  // can see, as with every C array a caller passes as a bare pointer.
   if (arr_ptr_aliases_self &&
       elem_count > (size_t)(buf_end - (const char *)arr_ptr) / v->elem_size) {
     return false;
   }
 
   if (new_elem_count <= v->capacity) {
-    // The vector has enough space already
     cvector_copy_into_tail(v, arr_ptr, elem_count * v->elem_size);
     v->elem_count += elem_count;
     return true;
   }
 
-  // The capacity isn't enough, so try to reserve more. The realloc inside
-  // cvector_reserve can move the buffer, which is why the code below works
-  // out an aliasing arr_ptr again from the byte offset above instead of
-  // dereferencing arr_ptr across the move.
   if (!cvector_reserve(v, new_elem_count)) {
     return false;
   }
 
   if (arr_ptr_aliases_self) {
-    // v->data_ptr can move, so work out arr_ptr again from the new buffer.
     arr_ptr = (const char *)v->data_ptr + arr_ptr_offset;
   }
 
-  // By this point the vector has enough space
   cvector_copy_into_tail(v, arr_ptr, elem_count * v->elem_size);
   v->elem_count += elem_count;
   return true;
 }
 
-/* Appends all the elements of v_from to v_to through cvector_append_array.
- * Both vectors must have the same elem_size. Two different values are a
- * fatal assertion, since they point to a programming error at the call
- * site. */
+// Appends every element of v_from to v_to, so joining two vectors needs no
+// loop. Asserts when either is NULL or the element sizes differ. Appending a
+// vector to itself reserves the room first, so the copy never reallocates
+// while it reads from the same buffer.
 bool cvector_append_cvector(cvec v_to, cvec v_from) {
   if (!v_to || !v_from || v_to->elem_size != v_from->elem_size) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   if (v_to == v_from) {
-    /* Reserve up front so cvector_append_array never reallocates in the
-     * middle of the copy, otherwise realloc could free the source buffer
-     * while arr_ptr still points into it. */
     size_t count = v_from->elem_count;
     size_t new_count = v_to->elem_count + count;
-    /* The same overflow check that cvector_append_array makes. Without it a
-     * size_t wrap-around here would let this addition report less capacity
-     * than the call really needs. No real program gets here, since
-     * elem_count would already have to be at ccol_max_elem_count (a huge
-     * vector), but the later check inside cvector_append_array shouldn't be
-     * the only thing between this call and a wrong reservation. */
     if (new_count < v_to->elem_count || new_count > ccol_max_elem_count) {
       return false;
     }
@@ -528,23 +440,21 @@ bool cvector_append_cvector(cvec v_to, cvec v_from) {
   return cvector_append_array(v_to, v_from->data_ptr, v_from->elem_count);
 }
 
-/* Gives a raw pointer to the first element of the contiguous backing
- * buffer. Don't keep this pointer across a push_back or an append call,
- * because those can realloc the buffer to another address. */
+// Gives the start of the element buffer, for code that wants a plain C array.
+// Asserts on a NULL v.
 void *cvector_data_ptr(cvec v) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   return v->data_ptr;
 }
 
-/* Gives a pointer to the element at the given index, or NULL when the index
- * is out of range. The empty vector guard (elem_count > 0) makes sure the
- * index is never compared against an uninitialized elem_count of zero. */
+// Gives the address of element index, or NULL when it's out of range, so a
+// caller can read or change an element in place. Asserts on a NULL v.
 void *cvector_at(cvec v, size_t index) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   if (v->elem_count > 0 && index < v->elem_count) {
@@ -554,57 +464,55 @@ void *cvector_at(cvec v, size_t index) {
   return NULL;
 }
 
-/* Gives the number of live elements in the vector. */
+// Gives the number of elements; the struct is opaque, so this is the only way
+// to read it. Asserts on a NULL v.
 size_t cvector_elem_count(cvec v) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   return v->elem_count;
 }
 
-/* Removes all the elements and then tries to shrink the backing buffer to
- * _ccol_cvector_minimum_capacity to give memory back. The element count
- * goes to zero whether the reallocation works or not, and the reallocation
- * is skipped altogether when the capacity is already
- * _ccol_cvector_minimum_capacity, since such a shrink would do nothing;
- * scale_the_cvector_size_down has the same early return. */
+// Empties the vector and shrinks the buffer to the minimum capacity, so a
+// vector can be reused without a new create. When that realloc fails the
+// capacity stays as it is, and the count is zero anyway.
 void cvector_reset(cvec v) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
-  if (v->capacity != _ccol_cvector_minimum_capacity) {
+  if (v->capacity != ccol__cvector_minimum_capacity) {
     void *orig = v->data_ptr;
-    v->data_ptr = _ccol_mem_realloc(
-        v->m_procs, v->data_ptr, _ccol_cvector_minimum_capacity * v->elem_size);
+    v->data_ptr = ccol__mem_realloc(
+        v->m_procs, v->data_ptr, ccol__cvector_minimum_capacity * v->elem_size);
     if (!v->data_ptr) {
-      // The capacity stays as it is when the reallocation fails.
       v->data_ptr = orig;
     } else {
-      v->capacity = _ccol_cvector_minimum_capacity;
+      v->capacity = ccol__cvector_minimum_capacity;
     }
   }
   v->elem_count = 0;
 }
 
-/* The sort behind cvec_sort() and cvector_sort_with_comparison_proc(). The
- * elements are contiguous, so the sort addresses them straight from
- * data_ptr and makes no call per element access. */
-bool _cvector_sort(cvec v, ccol_comparison_proc_t comparison_proc) {
+// Sorts the elements in place with csort's stable mergesort; the two sort
+// macros need a function that sees the buffer, which the opaque struct hides
+// from them. The temporary buffer comes from v's allocator. It gives false,
+// with v unchanged, when that allocation fails.
+bool cvector__sort(cvec v, ccol_comparison_proc comparison_proc) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
-  return _csort_merge_sort_contiguous(v->data_ptr, v->elem_count, v->elem_size,
+  return csort__merge_sort_contiguous(v->data_ptr, v->elem_count, v->elem_size,
                                       comparison_proc, v->m_procs);
 }
 
-/* A linear scan for the first element equal to *elem. With a NULL cmp the
- * comparison falls back to memcmp over elem_size bytes. Gives the zero-based
- * index of the first match, or ccol_invalid_size when nothing matches. */
-size_t cvector_find(cvec v, const void *elem, ccol_comparison_proc_t cmp) {
+// Gives the index of the first element equal to *elem, or ccol_invalid_size,
+// so a caller can search without writing the loop. A NULL cmp means memcmp
+// over elem_size bytes.
+size_t cvector_find(cvec v, const void *elem, ccol_comparison_proc cmp) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   if (!elem) {
@@ -623,40 +531,40 @@ size_t cvector_find(cvec v, const void *elem, ccol_comparison_proc_t cmp) {
   return ccol_invalid_size;
 }
 
-/* The internal iterator, which the public header does NOT expose. The
- * cmap_iterator base field MUST be first, so a cmap_iterator * pointing at
- * that field is also a valid cvec_iter_impl_t *. */
+// The vector's iterator. base must be the first member, so a cmap_iterator *
+// is also a cvec_iter_impl *. key_pair points at index and val_pair at the
+// current element.
 typedef struct {
-  cmap_iterator base;         /* public face: key_pair, val_pair, fn ptrs */
-  cmap_pair key_pair_storage; /* index storage; base.key_pair points here */
-  cmap_pair
-      val_pair_storage; /* element ptr storage; base.val_pair points here */
-  size_t index;         /* key_pair_storage.ptr points to this field */
-  cvec vec;             /* back-reference, to move on */
-  /* The free function of the allocator that made this iterator, or NULL for
-   * the default one. The iterator keeps its own copy because the scope-exit
-   * cleanup of ccol_iter_declare can free an iterator that a loop left early
-   * after the caller already destroyed the vector, and the procs struct the
-   * vector owns along with it. So freeing the iterator must never read the
-   * vector. */
-  ccol_free_t free_fn;
-} cvec_iter_impl_t;
+  cmap_iterator base;
+  cmap_pair key_pair_storage;
+  cmap_pair val_pair_storage;
+  size_t index;
+  cvec vec;
+  // The allocator's free function (NULL for the default). The iterator keeps
+  // its own copy because a scope-exit cleanup can free it after the vector, and
+  // the vector's procs, are gone.
+  ccol_free free_fn;
+} cvec_iter_impl;
 
+// Frees an iterator with the free function it saved. It never goes through
+// the vector, because the scope cleanup can run after the vector is gone.
 static void cvec_iter_impl_free(cmap_iterator *it) {
-  cvec_iter_impl_t *impl = (cvec_iter_impl_t *)it;
-  ccol_free_t free_fn = impl->free_fn;
+  cvec_iter_impl *impl = (cvec_iter_impl *)it;
+  ccol_free free_fn = impl->free_fn;
   if (free_fn) {
     free_fn(impl);
   } else {
-    _ccol_default_mem_free(impl);
+    ccol__default_mem_free(impl);
   }
 }
 
+// Moves the iterator to the next element, or frees it and gives NULL after the
+// last one; it's the next function that ccol_iter_next() calls.
 static cmap_iterator *cvec_cmap_iter_next(cmap_iterator *it) {
   if (!it) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
-  cvec_iter_impl_t *impl = (cvec_iter_impl_t *)it;
+  cvec_iter_impl *impl = (cvec_iter_impl *)it;
   size_t next_index = impl->index + 1;
   if (next_index >= impl->vec->elem_count) {
     cvec_iter_impl_free(it);
@@ -668,6 +576,10 @@ static cmap_iterator *cvec_cmap_iter_next(cmap_iterator *it) {
   return it;
 }
 
+// Creates an iterator at the first element, so a vector works with the common
+// ccol_begin() API. It's allocated with v's allocator. It gives NULL for a
+// NULL or empty vector (with *err NULL) and for a failed allocation (with
+// *err set).
 cmap_iterator *cvector_begin_iter(cvec v, char **err) {
   if (err) {
     *err = NULL;
@@ -678,11 +590,11 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err) {
   if (v->elem_count == 0) {
     return NULL;
   }
-  cvec_iter_impl_t *impl =
-      _ccol_mem_calloc(v->m_procs, 1, sizeof(cvec_iter_impl_t));
+  cvec_iter_impl *impl =
+      ccol__mem_calloc(v->m_procs, 1, sizeof(cvec_iter_impl));
   if (!impl) {
     if (err) {
-      *err = _CCOL_ERR_STR("Failed to allocate iterator");
+      *err = CCOL__ERR_STR("Failed to allocate iterator");
     }
     return NULL;
   }
@@ -695,19 +607,18 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err) {
   impl->val_pair_storage.size = v->elem_size;
   impl->base.key_pair = &impl->key_pair_storage;
   impl->base.val_pair = &impl->val_pair_storage;
-  impl->base._next_fn = cvec_cmap_iter_next;
-  impl->base._free_fn = cvec_iter_impl_free;
-  impl->base._direct_ptr = true;
+  impl->base.ccol__next_fn = cvec_cmap_iter_next;
+  impl->base.ccol__free_fn = cvec_iter_impl_free;
+  impl->base.ccol__direct_ptr = true;
   return &impl->base;
 }
 
 #ifdef RUNNING_UNIT_TESTS
-/* Gives the internal capacity of the backing buffer to a white-box unit
- * test that checks the growth and shrink thresholds. It isn't part of the
- * public API. */
+// Test hook: gives the capacity of the buffer, so the tests can check the
+// growth and shrink thresholds that the public API doesn't show.
 size_t cvector_get_capacity(cvec v) {
   if (!v) {
-    _ccol_assert(false);
+    ccol__assert(false);
   }
 
   return v->capacity;

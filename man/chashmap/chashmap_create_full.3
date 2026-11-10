@@ -7,8 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chashmap.h>
 
-typedef unsigned long (*ccol_hashing_proc_t)(const void *ptr, size_t size);
-typedef bool (*ccol_key_equality_proc_t)(const void *first,
+typedef unsigned long (*ccol_hashing_proc)(const void *ptr, size_t size);
+typedef bool (*ccol_key_equality_proc)(const void *first,
                                          size_t first_size,
                                          const void *second,
                                          size_t second_size);
@@ -16,9 +16,9 @@ typedef bool (*ccol_key_equality_proc_t)(const void *first,
 chmap chashmap_create_full(size_t initial_bucket_array_size,
                            ccol_data_type key_type,
                            ccol_data_type val_type,
-                           ccol_memmgmt_procs_t *mmgmt_procs,
-                           ccol_hashing_proc_t custom_hashing_proc,
-                           ccol_key_equality_proc_t custom_key_equality_proc,
+                           ccol_memmgmt_procs *mmgmt_procs,
+                           ccol_hashing_proc custom_hashing_proc,
+                           ccol_key_equality_proc custom_key_equality_proc,
                            char **err);
 .fi
 .SH DESCRIPTION
@@ -200,7 +200,7 @@ keys cannot share.
 .PP
 A custom hash doesn't have to spread its own entropy. The map takes a
 bucket or slot index from the high bits of a hash, and a value that comes
-from a ccol_hashing_proc_t first goes through the finalizer of the map's
+from a ccol_hashing_proc first goes through the finalizer of the map's
 current mode. So a hash can be an identity, a counter or a value already
 reduced modulo a small number, and it still distributes well.
 .nf

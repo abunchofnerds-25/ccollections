@@ -15,7 +15,7 @@ const char *cjson_str_val(cjson node);
 .SH DESCRIPTION
 .nf
 Each function returns the value that node holds.  It calls
-_ccol_fatal_err() when node is NULL, and also when node is not of the
+ccol__fatal_err() when node is NULL, and also when node is not of the
 type that the function reads: CJSON_BOOL for cjson_bool_val(),
 CJSON_INTEGER for cjson_int_val(), CJSON_FLOAT for cjson_double_val()
 and CJSON_STRING for cjson_str_val().

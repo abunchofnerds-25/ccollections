@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/chttp.h>
 
-void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp,
+void *chttp_base64_decode_mp(ccol_memmgmt_procs *mp,
                              const char *b64_input, size_t *out_len);
 .fi
 .SH DESCRIPTION

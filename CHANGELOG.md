@@ -9,6 +9,68 @@ Entries are grouped by the kind of change in this order: `Added`, `Changed`,
 that changes the Application Binary Interface (ABI) names the ABI version it
 needed.
 
+## 2.0.0 - Unreleased
+
+This release changes the binary interface, so the SONAME is
+`libccollections.so.2` (ABI version 2). A program built against `1.0.0`
+has to be rebuilt, and code that names one of the library's types or
+`CHTTPSVR_BOUND_ADDRESS_MAX` needs the new names listed under Changed. The
+documented functions, macros and enumerators keep their names and their
+behavior.
+
+### Added
+
+- `CCOL_VERSION_MAJOR`, `CCOL_VERSION_MINOR`, `CCOL_VERSION_PATCH`,
+  `CCOL_VERSION_NUMBER` and `CCOL_VERSION_STRING` in `common.h` give the
+  release of the headers, and `ccol_version()` and `ccol_version_string()`
+  the release of the library a program runs with. The build reads its
+  version from those macros.
+- `make check_reserved_identifiers`, which `make check_namespace` also runs,
+  fails when a header or a source of the library spells a name that ISO C
+  reserves for the implementation, defines a name ending in `_t` or `_MAX`,
+  or spells a macro that the compiler predefines.
+- `make check_symbol_binding` checks the version node and the binding of
+  the library's own calls on the built shared library, and fails when a
+  library that it depends on exports one of its names or when a preloaded
+  impostor catches any call.
+
+### Changed
+
+- No name of the library begins with an underscore any more, in the
+  installed headers, the internal headers or the sources. ISO C reserves
+  those names for the compiler and the C library, and a program that
+  declares one has undefined behavior. An internal name that an installed
+  header has to declare now has a double underscore after its prefix:
+  `__cvector_destroy` is `cvector__destroy`, `___cvector_destroy` is
+  `cvector__destroy_cleanup`, `_ccol_fatal_err` is `ccol__fatal_err`,
+  `_CCOL_ERR_STR` is `CCOL__ERR_STR`, and the same for every other module.
+  Every exported internal symbol has a new name, which is why the ABI
+  version changes.
+- The private members of the public structs follow the same rule. The
+  private fields of `cjson_dictionary_iter_t` and `cyaml_dictionary_iter_t`
+  begin with `cjson__` and `cyaml__`, those of `cmap_iterator` and the HTTP
+  types with `ccol__`. Sizes, alignments and offsets are the same as in
+  `1.0.0`.
+- No type or limit of the library ends in `_t` or `_MAX`, which POSIX
+  reserves for the system's headers. A type is its plain prefixed name and
+  its struct or enum tag has the same name: `ccol_retval_t` is `ccol_retval`,
+  `ccol_memmgmt_procs_t` is `ccol_memmgmt_procs`, `chttpsvr_req_t` is
+  `chttpsvr_req`, `cselectable_t` is `cselectable`, and a callback type ends
+  in `_fn` (`chttpsvr_handler_fn_t` is `chttpsvr_handler_fn`).
+  `CHTTPSVR_BOUND_ADDRESS_MAX` is `CHTTPSVR_BOUND_ADDRESS_SIZE`, and the
+  type parameters of the `chmap_*` and `cbmap_*` macros are named `KeyT` and
+  `ValT`, as those of `ccache_*` are.
+- Five macros inside the sources that matched names C11 7.31 reserves for
+  `<errno.h>` have new names.
+- Every exported symbol carries the version node `CCOL_2`, and the library
+  is linked with `-Bsymbolic-functions` and `--exclude-libs,ALL` on ELF
+  systems, so it exports no helper of the compiler's runtime. A program's
+  reference to a symbol of the library therefore binds, on glibc and
+  FreeBSD, only to this library and never to a function of the same name in
+  another versioned library. The library's calls to its own exported
+  functions are bound inside the library, so a library loaded ahead of it,
+  with `LD_PRELOAD` or by link order, can't take one over on any system.
+
 ## 1.0.0 - Released on 2026 Oct 03
 
 This is the first release with a stable, supported interface. There is no

@@ -2,13 +2,18 @@
 
 ## Supported versions
 
-We fix security problems in the current `2.x` release line, and the fix
-only goes into the newest `2.x` patch release. As soon as a newer patch
-release exists, the older one gets no extended support.
+We fix security problems in the `1.x` release line, whose latest release
+is `1.0.0`, and the fix only goes into the newest `1.x` patch release. As
+soon as a newer patch release exists, the older one gets no extended
+support.
 
-The SONAME of the shared library is `libccollections.so.2`, so every `2.x`
-release drops in for any earlier one and you never have to relink your
-application to apply a security update.
+The SONAME of the `1.x` shared library is `libccollections.so.1`, so every
+`1.x` release drops in for any earlier one and you never have to relink
+your application to apply a security update.
+
+The `main` branch holds `2.0.0`, which is in development and not released
+yet. Once `2.0.0` is released, security fixes go into the `2.x` line
+instead, under the same rules and with the SONAME `libccollections.so.2`.
 
 ## Reporting a vulnerability
 

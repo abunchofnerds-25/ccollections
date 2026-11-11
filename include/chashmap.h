@@ -730,7 +730,9 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
             (__typeof__(*hm_name##__ccol_val_type_var) *)(ccol__chmap_vp.ptr); \
       }                                                                        \
     }                                                                          \
-    ccol__chmap_value_ptr_result(hm_name, ccol__chmap_val);                    \
+    (__typeof__(ccol__chmap_value_ptr_result(                                  \
+        hm_name,                                                               \
+        (__typeof__(*hm_name##__ccol_val_type_var) *)0)))(ccol__chmap_val);    \
   })
 
 // Evaluate to the entry count of the map, and empty it (see chashmap_reset());

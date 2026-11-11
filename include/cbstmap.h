@@ -557,7 +557,8 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
 // because the lookup fills it on every path and it's read only after a success.
 // For a string value the result points at the accessor's ptr field; the cast
 // through uintptr_t drops the library's const without a -Wcast-qual warning in
-// the caller's build, and ccol__cbmap_value_ptr_result() adds const back.
+// the caller's build, and the cast to the type of
+// ccol__cbmap_value_ptr_result() adds const back.
 #define ccol__cbmap_get_ptr_impl(                                              \
     hm_name, key, ccol__cbmap_key_tmp, ccol__cbmap_val, ccol__cbmap_kp,        \
     ccol__cbmap_vp, ccol__cbmap_acc, ccol__cbmap_r)                            \
@@ -595,7 +596,9 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
             (__typeof__(*hm_name##__ccol_val_type_var) *)(ccol__cbmap_vp.ptr); \
       }                                                                        \
     }                                                                          \
-    ccol__cbmap_value_ptr_result(hm_name, ccol__cbmap_val);                    \
+    (__typeof__(ccol__cbmap_value_ptr_result(                                  \
+        hm_name,                                                               \
+        (__typeof__(*hm_name##__ccol_val_type_var) *)0)))(ccol__cbmap_val);    \
   })
 
 // cbmap_size() evaluates to the number of entries and cbmap_reset() empties the

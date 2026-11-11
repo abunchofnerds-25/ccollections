@@ -3,10 +3,12 @@
 #
 # CCOL_SITE_URL in the environment overrides the public address of the site
 # (a fork publishes under its own account). It must end with a slash.
+import functools
 import html
 import json
 import os
 import re
+import subprocess
 
 SITE_URL = os.environ.get("CCOL_SITE_URL",
                           "https://abunchofnerds-25.github.io/ccollections/")
@@ -19,8 +21,6 @@ SITE_NAME = "C Collections"
 # header mark, the browser icon and the picture a shared link shows.
 LOGO = "assets/logo.png"
 LOGO_SIZE = 176
-SITE_TAGLINE = ("Type-inferred containers, strings, memory pools, thread-safe "
-                "queues, a thread pool, a logger, JSON, YAML and HTTP for C11.")
 
 # Shared links in the header of every page: label, path from the site root,
 # or an absolute address.
@@ -96,18 +96,60 @@ def highlight_c(src):
     return "".join(out)
 
 
-# Reads the release version from include/common.h, the one place where it's
-# written, so the footer always names the version the site was built from.
+# Gives the newest release tag of the repository as a (major, minor, patch)
+# tuple, or None when git can't answer or no tag names a release. Only tags of
+# the form vX.Y.Z count, so a pre-release tag such as v1.0.0-rc never does.
+# The Coverage workflow fetches the whole history, tags included.
+@functools.lru_cache(maxsize=None)
+def latest_release_tag():
+    try:
+        out = subprocess.run(["git", "tag", "--list", "v*"],
+                             capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    tags = [tuple(int(x) for x in m.groups())
+            for m in (re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", t.strip())
+                      for t in out.splitlines()) if m]
+    return max(tags) if tags else None
+
+
+# Reads the version from include/common.h, the one place where it's written,
+# so every page names the version the site was built from. The version gets
+# " (dev)" after it unless it is the newest release tag, because the site of
+# main between two releases documents a version nobody can download yet.
 def library_version():
     parts = {}
     with open(os.path.join("include", "common.h"), encoding="ascii") as f:
         for line in f:
             m = re.match(r"#define CCOL_VERSION_(MAJOR|MINOR|PATCH) (\d+)", line)
             if m:
-                parts[m.group(1)] = m.group(2)
+                parts[m.group(1)] = int(m.group(2))
     if len(parts) != 3:
         raise SystemExit("site_layout: no version macros in include/common.h")
-    return "%s.%s.%s" % (parts["MAJOR"], parts["MINOR"], parts["PATCH"])
+    version = (parts["MAJOR"], parts["MINOR"], parts["PATCH"])
+    text = "%d.%d.%d" % version
+    return text if latest_release_tag() == version else text + DEV_SUFFIX
+
+
+DEV_SUFFIX = " (dev)"
+
+
+# Gives the notice that a site built from an unreleased version shows under
+# the header of every page, so nobody takes the pages for a release they can
+# download. version is the text library_version() gave; the result is HTML,
+# empty for a released version.
+def dev_notice(version):
+    if not version.endswith(DEV_SUFFIX):
+        return ""
+    text = ("These pages document C Collections %s, which is in development "
+            "and not released yet." % esc(version[:-len(DEV_SUFFIX)]))
+    latest = latest_release_tag()
+    if latest:
+        tag = "v%d.%d.%d" % latest
+        text += (' The latest release is <a href="%s/tree/%s">%s</a>.'
+                 % (esc(REPO_URL), tag, tag[1:]))
+    return ('<div class="devnote" role="note"><div class="bar"><p>%s</p>'
+            '</div></div>' % text)
 
 
 # Gives the relative path from a page `depth` directories below the site root
@@ -211,5 +253,5 @@ def page(path, depth, title, description, body, crumbs=None, ld=None,
 
     cls = ' class="%s"' % body_class if body_class else ""
     return "\n".join(head) + (
-        "\n<body%s>\n%s\n<main>\n%s%s\n</main>\n%s\n</body>\n</html>\n"
-        % (cls, header, crumb_html, body, footer))
+        "\n<body%s>\n%s%s\n<main>\n%s%s\n</main>\n%s\n</body>\n</html>\n"
+        % (cls, header, dev_notice(version), crumb_html, body, footer))

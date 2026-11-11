@@ -9,7 +9,7 @@ Entries are grouped by the kind of change in this order: `Added`, `Changed`,
 that changes the Application Binary Interface (ABI) names the ABI version it
 needed.
 
-## 2.0.0 - Unreleased
+## 2.0.0 - Unreleased (Under active development)
 
 This release changes the binary interface, so the SONAME is
 `libccollections.so.2` (ABI version 2). A program built against `1.0.0`

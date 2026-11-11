@@ -1369,24 +1369,24 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
 // because Clang's -Wuninitialized treats the operand of
 // __builtin_classify_type() as evaluated, and data can be a companion type
 // variable that is uninitialized on purpose. data is never evaluated.
-#define ccol_determine_ccol_data_type(data)                               \
-  ({                                                                      \
-    ccol_data_type ccol__dcdt_r = ccol_other_types;                       \
-    if (ccol__is_char_array((data))) {                                    \
-      ccol__dcdt_r = ccol_string;                                         \
-    } else if (ccol__is_char_ptr((data))) {                               \
-      ccol__dcdt_r = ccol_string;                                         \
-    } else {                                                              \
-      __typeof__(data) ccol__dcdt_type_probe = {0};                       \
-      if (__builtin_classify_type(ccol__dcdt_type_probe) == 5 &&          \
-          sizeof(ccol__dcdt_type_probe) == sizeof(uintptr_t)) {           \
-        ccol__dcdt_r = ccol_pointer;                                      \
-      } else {                                                            \
-        ccol__dcdt_r =                                                    \
-            ccol__determine_non_special_data_type(ccol__dcdt_type_probe); \
-      }                                                                   \
-    }                                                                     \
-    ccol__dcdt_r;                                                         \
+#define ccol_determine_ccol_data_type(data)                                 \
+  ({                                                                        \
+    ccol_data_type ccol__dcdt_r = ccol_other_types;                         \
+    if (ccol__is_char_array((data))) {                                      \
+      ccol__dcdt_r = ccol_string;                                           \
+    } else if (ccol__is_char_ptr((data))) {                                 \
+      ccol__dcdt_r = ccol_string;                                           \
+    } else {                                                                \
+      __typeof__(data) ccol__dcdt_type_probe __attribute__((unused)) = {0}; \
+      if (__builtin_classify_type(ccol__dcdt_type_probe) == 5 &&            \
+          sizeof(ccol__dcdt_type_probe) == sizeof(uintptr_t)) {             \
+        ccol__dcdt_r = ccol_pointer;                                        \
+      } else {                                                              \
+        ccol__dcdt_r =                                                      \
+            ccol__determine_non_special_data_type(ccol__dcdt_type_probe);   \
+      }                                                                     \
+    }                                                                       \
+    ccol__dcdt_r;                                                           \
   })
 
 // Internal: evaluates to a constant 1 when lvalue has a character-pointer type,

@@ -198,7 +198,7 @@ and a guide with complete examples.</p>
        "guides": "\n".join(guides), "coverage": coverage,
        "coverage_button": coverage_button}
 
-    desc = ("C Collections is a C11 library with type-inferred vectors, hash "
+    desc = ("C Collections is a GNU C11 library with type-inferred vectors, hash "
             "maps, ordered maps, strings, memory pools, thread-safe queues, "
             "a thread pool, a logger, JSON, YAML and an HTTP client and "
             "server.")
@@ -213,7 +213,7 @@ and a guide with complete examples.</p>
          "runtimePlatform": ["Linux", "FreeBSD", "OpenBSD", "macOS"]},
     ]
     return L.page("", 0, "C Collections: type-inferred containers and more "
-                  "for C11", desc, body, ld=ld, version=version)
+                  "for GNU C11", desc, body, ld=ld, version=version)
 
 
 def not_found_page(version):

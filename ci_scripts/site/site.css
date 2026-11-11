@@ -128,6 +128,15 @@ header.top {
 header.top .bar {
   height: 3.5rem;
 }
+.devnote {
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--rule);
+  font-size: 0.875rem;
+}
+.devnote p {
+  margin: 0;
+  padding: 0.5rem 0;
+}
 .brand {
   display: flex;
   align-items: center;

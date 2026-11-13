@@ -284,7 +284,7 @@ daemon accepts in one datagram.
 
 ## Logging to a file, with rotation
 
-`clog_create_from_file` opens (or creates) a file and appends to it. Give it
+`clog_create_from_file_path` opens (or creates) a file and appends to it. Give it
 a `clog_rotation_cfg` to rotate the file, or `NULL` for a plain file that
 only grows:
 
@@ -297,7 +297,7 @@ clog_rotation_cfg cfg = {                          /* fragment */
     .max_rotated_files     = 7,                     /* keep one week */
     .compress_rotated      = true,                  /* gzip old files */
 };
-clog lg = clog_create_from_file("/var/log/myapp/app.log", CLOG_INFO, &cfg,
+clog lg = clog_create_from_file_path("/var/log/myapp/app.log", CLOG_INFO, &cfg,
                                 NULL);
 ```
 
@@ -345,7 +345,7 @@ matters to you, keep `flush_buffer_size` small compared to
 The rotation example below shows all of this on a real directory.
 
 **One file, one logger.** If two parts of your program call
-`clog_create_from_file` on the same rotating file, the second call joins the
+`clog_create_from_file_path` on the same rotating file, the second call joins the
 first logger the way `clog_derive` does, so the two never both rename the
 file. The second call fails with `CLOG_NULL` if its rotation, async or
 allocator settings differ from the first one. Open a rotating file under one
@@ -353,7 +353,7 @@ name only (a symbolic link to it counts as a second file), and never let two
 processes rotate the same file, because each would rename and delete files
 that the other one is writing. In a prefork server, give every worker its
 own file. The details are in
-[clog_create_from_file_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_create_from_file_mp.3.html).
+[clog_create_from_file_path_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_create_from_file_path_mp.3.html).
 
 ## Async logging
 
@@ -374,7 +374,7 @@ clog_async_cfg acfg = {                     /* fragment */
     .flush_buffer_size = 64 * 1024,           /* write at 64 KiB buffered */
     .flush_interval_us = 200000,              /* ... or every 200 ms */
 };
-clog lg = clog_create_from_file("app.log", CLOG_INFO, NULL, &acfg);
+clog lg = clog_create_from_file_path("app.log", CLOG_INFO, NULL, &acfg);
 ```
 
 `queue_size` sets the backpressure. Zero means an unbounded queue that never
@@ -473,7 +473,7 @@ describes both policies.
 
 ## Custom allocators and fork
 
-`clog_create_from_fd_mp` and `clog_create_from_file_mp` take a
+`clog_create_from_fd_mp` and `clog_create_from_file_path_mp` take a
 `ccol_memmgmt_procs` as their last argument, and the logger then allocates
 through your functions. Set all four function pointers. Derived loggers use
 the same allocator. Two allocations belong to the library and go through
@@ -556,7 +556,7 @@ int main(void) {
         .rotation_interval_us  = 86400000000ULL,     /* one day */
         .max_rotated_files     = 14,
     };
-    g_log = clog_create_from_file(path, CLOG_INFO, &rot, NULL);
+    g_log = clog_create_from_file_path(path, CLOG_INFO, &rot, NULL);
     if (g_log == CLOG_NULL) {
         remove_dir(dir);
         return 1;
@@ -739,7 +739,7 @@ int main(void) {
         .max_rotated_files     = 3,      /* keep three old generations */
         .compress_rotated      = true,   /* gzip each rotated file */
     };
-    clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+    clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
     if (lg == CLOG_NULL) {
         rmdir(dir);
         return 1;
@@ -851,7 +851,7 @@ before a step that might go badly wrong.
 Values outside an enum are refused. `clog_set_level`, `clog_set_format` and
 `clog_set_facility` return `ccol_invalid_args` for a value that their enum
 doesn't name (a level of `-3`, a format of `9`, a facility of `99`) and keep
-the current setting, and `clog_create_from_file` and `clog_create_from_fd`
+the current setting, and `clog_create_from_file_path` and `clog_create_from_fd`
 return `CLOG_NULL` for such a minimum level.
 
 A bad field key never shows up in the log, and nothing in the log says so;
@@ -882,8 +882,8 @@ Overview:
 Opening and closing:
 [clog_create_from_fd_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_create_from_fd_mp.3.html)
 (also `clog_create_from_fd`),
-[clog_create_from_file_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_create_from_file_mp.3.html)
-(also `clog_create_from_file`; rotation, compression, one file one logger),
+[clog_create_from_file_path_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_create_from_file_path_mp.3.html)
+(also `clog_create_from_file_path`; rotation, compression, one file one logger),
 [clog_derive(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_derive.3.html),
 [clog_flush(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_flush.3.html),
 [clog_close(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_close.3.html)

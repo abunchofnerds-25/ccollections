@@ -374,7 +374,7 @@ static bool queue_mutex_registry_add(ccol__mutex *m, size_t *index) {
   bool ok = false;
   if (queue_mutex_registry.addrs != NULL) {
     queue_mutex_registry_entry e = {.mutex = m, .index = index};
-    *index = cvector_elem_count(queue_mutex_registry.addrs);
+    *index = cvector_size(queue_mutex_registry.addrs);
     ok = cvector_push_back(queue_mutex_registry.addrs, &e) == ccol_success;
   }
   ccol__mutex_unlock(queue_mutex_registry.mutex);
@@ -400,7 +400,7 @@ static void queue_mutex_registry_remove(ccol__mutex *m, size_t *index) {
     ccol__mutex_unlock(queue_mutex_registry.mutex);
     return;
   }
-  size_t n = cvector_elem_count(queue_mutex_registry.addrs);
+  size_t n = cvector_size(queue_mutex_registry.addrs);
   size_t i = *index;
 #ifdef RUNNING_UNIT_TESTS
   atomic_fetch_add_explicit(&g_queue_registry_remove_probes_for_tests,
@@ -418,7 +418,7 @@ static void queue_mutex_registry_remove(ccol__mutex *m, size_t *index) {
     }
   }
   if (queue_mutex_registry.release_deferred &&
-      cvector_elem_count(queue_mutex_registry.addrs) == 0) {
+      cvector_size(queue_mutex_registry.addrs) == 0) {
     cvector_destroy(queue_mutex_registry.addrs);
     queue_mutex_registry.release_deferred = false;
   }
@@ -433,9 +433,8 @@ bool ccol__queue_mutex_registry_check_for_tests(size_t *count,
                                                 uint64_t *remove_probes) {
   ccol__call_once(queue_mutex_registry.once, queue_mutex_registry_init_globals);
   ccol__mutex_lock(queue_mutex_registry.mutex);
-  size_t n = queue_mutex_registry.addrs
-                 ? cvector_elem_count(queue_mutex_registry.addrs)
-                 : 0;
+  size_t n =
+      queue_mutex_registry.addrs ? cvector_size(queue_mutex_registry.addrs) : 0;
   bool ok = true;
   for (size_t k = 0; k < n; k++) {
     queue_mutex_registry_entry *e =
@@ -458,7 +457,7 @@ __attribute__((destructor)) static void cleanup_queue_mutex_registry(void) {
   ccol__call_once(queue_mutex_registry.once, queue_mutex_registry_init_globals);
   ccol__mutex_lock(queue_mutex_registry.mutex);
   if (queue_mutex_registry.addrs) {
-    if (cvector_elem_count(queue_mutex_registry.addrs) > 0)
+    if (cvector_size(queue_mutex_registry.addrs) > 0)
       queue_mutex_registry.release_deferred = true;
     else
       cvector_destroy(queue_mutex_registry.addrs);
@@ -2853,9 +2852,8 @@ static void release_event_loop_slot_table_if_deferred_locked(void);
 // it, so a resolve finds nothing and a create fails cleanly. The caller holds
 // either side of the table lock.
 static inline size_t event_loop_slot_count_locked(void) {
-  return ceventloop_slot_table.slots
-             ? cvector_elem_count(ceventloop_slot_table.slots)
-             : 0;
+  return ceventloop_slot_table.slots ? cvector_size(ceventloop_slot_table.slots)
+                                     : 0;
 }
 
 #if CCOL_FORK_SAFETY_REQUIRED
@@ -3046,9 +3044,8 @@ static void cthreadcomm_atfork_prepare(void) {
     }
   }
 
-  size_t n_addrs = queue_mutex_registry.addrs
-                       ? cvector_elem_count(queue_mutex_registry.addrs)
-                       : 0;
+  size_t n_addrs =
+      queue_mutex_registry.addrs ? cvector_size(queue_mutex_registry.addrs) : 0;
   for (size_t k = 0; k < n_addrs; k++) {
     ccol__mutex *m = ((queue_mutex_registry_entry *)cvector_at(
                           queue_mutex_registry.addrs, k))
@@ -3109,9 +3106,8 @@ static void cthreadcomm_atfork_release_impl(bool is_child) {
     }
   }
 
-  size_t n_addrs = queue_mutex_registry.addrs
-                       ? cvector_elem_count(queue_mutex_registry.addrs)
-                       : 0;
+  size_t n_addrs =
+      queue_mutex_registry.addrs ? cvector_size(queue_mutex_registry.addrs) : 0;
   for (size_t k = 0; k < n_addrs; k++) {
     ccol__mutex *m = ((queue_mutex_registry_entry *)cvector_at(
                           queue_mutex_registry.addrs, k))
@@ -3228,7 +3224,7 @@ static void ceventloop_free_index_release_locked(uint32_t idx) {
 // it. The caller holds the write lock.
 static __attribute__((noinline)) bool ceventloop_reclaim_lost_index_locked(
     uint32_t *out_idx) {
-  size_t slot_count = cvector_elem_count(ceventloop_slot_table.slots);
+  size_t slot_count = cvector_size(ceventloop_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
     ceventloop_slot *slot =
         (ceventloop_slot *)cvector_at(ceventloop_slot_table.slots, i);
@@ -3258,7 +3254,7 @@ static ceventloop ceventloop_handle_slot_acquire(struct ceventloop__s *loop) {
   }
   uint32_t idx;
   ceventloop_slot *slot;
-  if (cvector_elem_count(ceventloop_slot_table.free_indices) > 0) {
+  if (cvector_size(ceventloop_slot_table.free_indices) > 0) {
     cvector_pop_back(ceventloop_slot_table.free_indices, &idx);
     slot = (ceventloop_slot *)cvector_at(ceventloop_slot_table.slots, idx);
   } else if (ceventloop_slot_table.lost_indices > 0 &&
@@ -3271,7 +3267,7 @@ static ceventloop ceventloop_handle_slot_acquire(struct ceventloop__s *loop) {
       ccol__rw_lock_unlock(ceventloop_slot_table.rwlock);
       return 0;
     }
-    idx = (uint32_t)cvector_elem_count(ceventloop_slot_table.slots) - 1;
+    idx = (uint32_t)cvector_size(ceventloop_slot_table.slots) - 1;
     slot = (ceventloop_slot *)cvector_at(ceventloop_slot_table.slots, idx);
   }
   slot->generation++;
@@ -3337,7 +3333,7 @@ static bool fd_registry_insert(ceventloop_stripe *stripe, int fd,
 // entry's publish fails). The caller holds the stripe lock.
 static void fd_registry_remove(ceventloop_stripe *stripe, int fd) {
   cmap_pair key_pair = {.ptr = &fd, .size = sizeof(fd)};
-  chashmap_delete_elem(stripe->fd_index, &key_pair);
+  chashmap_remove_elem(stripe->fd_index, &key_pair);
 }
 
 // Links and unlinks a queue registration in its stripe's list, which the
@@ -3528,7 +3524,7 @@ size_t ceventloop__reg_slot_count_for_tests(ceventloop loop) {
   struct ceventloop__s *raw = ceventloop_resolve(loop);
   if (!raw) return 0;
   ccol__rw_lock_rdlock(raw->reg_slot_rwlock);
-  size_t n = cvector_elem_count(raw->reg_slots);
+  size_t n = cvector_size(raw->reg_slots);
   ccol__rw_lock_unlock(raw->reg_slot_rwlock);
   ceventloop_resolve_unpin(raw);
   return n;
@@ -3541,7 +3537,7 @@ size_t ceventloop__reg_slot_count_for_tests(ceventloop loop) {
 // reg_slot_rwlock.
 static __attribute__((noinline)) bool ceventloop_reg_reclaim_lost_index_locked(
     struct ceventloop__s *loop, uint32_t *out_idx) {
-  size_t slot_count = cvector_elem_count(loop->reg_slots);
+  size_t slot_count = cvector_size(loop->reg_slots);
   for (size_t i = 0; i < slot_count; i++) {
     ceventloop_reg_slot *slot =
         (ceventloop_reg_slot *)cvector_at(loop->reg_slots, i);
@@ -3574,7 +3570,7 @@ static ceventloop_reg ceventloop_reg_slot_acquire(struct ceventloop__s *loop,
   ccol__rw_lock_wrlock(loop->reg_slot_rwlock);
   uint32_t idx;
   ceventloop_reg_slot *slot;
-  if (cvector_elem_count(loop->reg_free_indices) > 0) {
+  if (cvector_size(loop->reg_free_indices) > 0) {
     cvector_pop_back(loop->reg_free_indices, &idx);
     slot = (ceventloop_reg_slot *)cvector_at(loop->reg_slots, idx);
   } else if (loop->reg_lost_indices > 0 &&
@@ -3586,7 +3582,7 @@ static ceventloop_reg ceventloop_reg_slot_acquire(struct ceventloop__s *loop,
       ccol__rw_lock_unlock(loop->reg_slot_rwlock);
       return 0;
     }
-    idx = (uint32_t)cvector_elem_count(loop->reg_slots) - 1;
+    idx = (uint32_t)cvector_size(loop->reg_slots) - 1;
     slot = (ceventloop_reg_slot *)cvector_at(loop->reg_slots, idx);
   }
   slot->generation++;
@@ -3615,7 +3611,7 @@ static ceventloop_reg_s *ceventloop_reg_resolve(struct ceventloop__s *loop,
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
   ccol__rw_lock_rdlock(loop->reg_slot_rwlock);
   ceventloop_reg_s *raw = NULL;
-  if (idx < cvector_elem_count(loop->reg_slots)) {
+  if (idx < cvector_size(loop->reg_slots)) {
     ceventloop_reg_slot *slot =
         (ceventloop_reg_slot *)cvector_at(loop->reg_slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;

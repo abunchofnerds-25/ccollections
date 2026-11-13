@@ -327,7 +327,7 @@ static inline __attribute__((always_inline)) void csort_contiguous_passes(
 }
 
 // Sorts the length elements at base in place, stably; it's the sort behind
-// cvec_sort() and cvector_sort_with_comparison_proc(), which avoids a getter
+// cvec_sort() and cvec_sort_with(), which avoids a getter
 // call per element access. The buffer comes from mprocs. Gives true on success
 // or when there's nothing to do, false when csort_check_sort_shape() refuses or
 // the allocation fails. The widths 1, 2, 4, 8 and 16 get their own copy of the

@@ -71,7 +71,7 @@ static void csort_test_seed(unsigned int seed) {
       cvector_push_back(cvec, &(type){rand() % modulus_value}); \
     }                                                           \
                                                                 \
-    REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);   \
+    REQUIRE_EQ(cvector_size(cvec), (size_t)num_sample);         \
                                                                 \
     cvec_sort(cvec);                                            \
                                                                 \
@@ -100,7 +100,7 @@ TEST(csort, cvector_integer_sort) {
     cvector_push_back(cvec, &(int){rand()});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -138,7 +138,7 @@ define_integer_type_test(char, char, 100) define_integer_type_test(short, short,
     cvector_push_back(cvec, &(double){((double)rand() / RAND_MAX * 10)});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -167,7 +167,7 @@ TEST(csort, cvector_float_sort) {
     cvector_push_back(cvec, &(float){((float)rand() / (float)RAND_MAX * 10)});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -197,7 +197,7 @@ TEST(csort, cvector_long_double_sort) {
                       &(long double){((long double)rand() / RAND_MAX * 10)});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -245,7 +245,7 @@ TEST(csort, cvector_string_sort_with_known_values) {
   for (i = 0; i < num_sample; i++) {
     cvector_push_back(cvec, &(char *){test_strings[i]});
   }
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -295,7 +295,7 @@ TEST(csort, cvector_string_sort_with_random_values) {
     cvector_push_back(cvec, &(char *){rand_strings[i]});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -340,9 +340,9 @@ TEST(csort, cvector_custom_test_struct_sort) {
     cvector_push_back(cvec, &(custom_test_struct){.data = rand()});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)num_sample);
 
-  cvector_sort_with_comparison_proc(cvec, custom_test_struct_comparison_proc);
+  cvec_sort_with(cvec, custom_test_struct_comparison_proc);
 
   custom_test_struct *p_struct_first;
   custom_test_struct *p_struct_second;
@@ -358,9 +358,9 @@ TEST(csort, cvector_custom_test_struct_sort) {
 
 TEST(csort, empty_vector_sort) {
   cvec_construct(v, int);
-  REQUIRE_EQ(cvector_elem_count(v), 0);
+  REQUIRE_EQ(cvector_size(v), 0);
   cvec_sort(v);
-  REQUIRE_EQ(cvector_elem_count(v), 0);
+  REQUIRE_EQ(cvector_size(v), 0);
   cvec_destroy(v);
 }
 
@@ -368,7 +368,7 @@ TEST(csort, single_element_sort) {
   cvec_construct(v, int);
   cvec_push(v, 42);
   cvec_sort(v);
-  REQUIRE_EQ(cvector_elem_count(v), 1);
+  REQUIRE_EQ(cvector_size(v), 1);
   REQUIRE_EQ(cvec_at(v, 0), 42);
   cvec_destroy(v);
 }
@@ -862,7 +862,7 @@ TEST(csort, sort_is_stable) {
                       &(stability_elem_t){.key = keys[i], .original_index = i});
   }
 
-  cvector_sort_with_comparison_proc(v, stability_elem_comparison_proc);
+  cvec_sort_with(v, stability_elem_comparison_proc);
 
   for (int i = 1; i < n; i++) {
     stability_elem_t *prev = (stability_elem_t *)cvector_at(v, i - 1);
@@ -1061,7 +1061,7 @@ TEST(csort, sort_all_duplicates) {
 
   cvec_sort(v);
 
-  REQUIRE_EQ(cvector_elem_count(v), (size_t)n);
+  REQUIRE_EQ(cvector_size(v), (size_t)n);
   for (int i = 0; i < n; i++) {
     REQUIRE_EQ(cvec_at(v, i), 7);
   }
@@ -1104,7 +1104,7 @@ TEST(csort, cvector_unsigned_long_long_sort) {
     cvector_push_back(cvec, &val);
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 

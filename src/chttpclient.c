@@ -317,7 +317,7 @@ static void chttpcli_free_index_release_locked(uint32_t idx) {
 // acquires don't scan again.
 static __attribute__((noinline)) bool chttpcli_reclaim_lost_index_locked(
     uint32_t *out_idx) {
-  size_t slot_count = cvector_elem_count(chttpcli_slot_table.slots);
+  size_t slot_count = cvector_size(chttpcli_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
     chttpcli_slot *slot =
         (chttpcli_slot *)cvector_at(chttpcli_slot_table.slots, i);
@@ -483,14 +483,14 @@ static chttpcli chttpcli_handle_slot_acquire(struct chttpclient *cli) {
   ccol__rw_lock_wrlock(chttpcli_slot_table.rwlock);
   uint32_t idx;
   chttpcli_slot *slot;
-  if (cvector_elem_count(chttpcli_slot_table.free_indices) > 0) {
+  if (cvector_size(chttpcli_slot_table.free_indices) > 0) {
     cvector_pop_back(chttpcli_slot_table.free_indices, &idx);
     slot = (chttpcli_slot *)cvector_at(chttpcli_slot_table.slots, idx);
   } else if (chttpcli_slot_table.lost_indices > 0 &&
              chttpcli_reclaim_lost_index_locked(&idx)) {
     slot = (chttpcli_slot *)cvector_at(chttpcli_slot_table.slots, idx);
   } else {
-    if (cvector_elem_count(chttpcli_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
+    if (cvector_size(chttpcli_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
       ccol__rw_lock_unlock(chttpcli_slot_table.rwlock);
       return 0;
     }
@@ -499,7 +499,7 @@ static chttpcli chttpcli_handle_slot_acquire(struct chttpclient *cli) {
       ccol__rw_lock_unlock(chttpcli_slot_table.rwlock);
       return 0;
     }
-    idx = (uint32_t)cvector_elem_count(chttpcli_slot_table.slots) - 1;
+    idx = (uint32_t)cvector_size(chttpcli_slot_table.slots) - 1;
     slot = (chttpcli_slot *)cvector_at(chttpcli_slot_table.slots, idx);
   }
   slot->generation++;
@@ -2957,13 +2957,13 @@ static bool idle_pool_take(struct chttpclient *cli, const char *origin_key,
       cmap_pair vp;
       if (chashmap_get_elem_ref(cli->idle_pools, &kp, &vp) == ccol_success) {
         cvec list = read_cvec(vp.ptr);
-        if (list && cvector_elem_count(list) > 0 &&
+        if (list && cvector_size(list) > 0 &&
             cvector_pop_back(list, out) == ccol_success) {
           got = true;
           if (cli->idle_total_count > 0) cli->idle_total_count--;
-          if (cvector_elem_count(list) == 0) {
+          if (cvector_size(list) == 0) {
             cvector__destroy(list);
-            chashmap_delete_elem(cli->idle_pools, &kp);
+            chashmap_remove_elem(cli->idle_pools, &kp);
           }
         }
       }
@@ -3013,7 +3013,7 @@ static void idle_pool_offer(struct chttpclient *cli, chttp_conn *c) {
       list = read_cvec(vp.ptr);
     }
     if (!list &&
-        chashmap_elem_count(cli->idle_pools) < effective_max_idle_origins()) {
+        chashmap_size(cli->idle_pools) < effective_max_idle_origins()) {
       char *cverr = NULL;
       list = cvector_create_full(sizeof(chttp_conn), cli->m_procs, &cverr);
       if (list) {
@@ -3024,7 +3024,7 @@ static void idle_pool_offer(struct chttpclient *cli, chttp_conn *c) {
         }
       }
     }
-    if (list && cvector_elem_count(list) < CHTTP_MAX_IDLE_PER_ORIGIN) {
+    if (list && cvector_size(list) < CHTTP_MAX_IDLE_PER_ORIGIN) {
       clock_gettime(CLOCK_MONOTONIC, &c->last_used);
       if (cvector_push_back(list, c) == ccol_success) {
         pooled = true;
@@ -6316,19 +6316,19 @@ static bool async_idle_remove_locked(struct chttpclient *cli,
     return false;
   cvec list = read_cvec(vp.ptr);
   if (!list) return false;
-  size_t n = cvector_elem_count(list);
+  size_t n = cvector_size(list);
   for (size_t i = 0; i < n; i++) {
     chttp_async_ctx **slot = (chttp_async_ctx **)cvector_at(list, i);
     if (*slot != target) continue;
     chttp_async_ctx *last = NULL;
     cvector_pop_back(list, &last);
-    if (i < cvector_elem_count(list)) {
+    if (i < cvector_size(list)) {
       chttp_async_ctx **slot2 = (chttp_async_ctx **)cvector_at(list, i);
       *slot2 = last;
     }
-    if (cvector_elem_count(list) == 0) {
+    if (cvector_size(list) == 0) {
       cvector__destroy(list);
-      chashmap_delete_elem(cli->idle_pools_async, &kp);
+      chashmap_remove_elem(cli->idle_pools_async, &kp);
     }
     return true;
   }
@@ -6354,7 +6354,7 @@ static bool async_idle_pool_take(struct chttpclient *cli,
       if (list) {
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
-        size_t n = cvector_elem_count(list);
+        size_t n = cvector_size(list);
         for (size_t idx = n; idx-- > 0;) {
           chttp_async_ctx **slot = (chttp_async_ctx **)cvector_at(list, idx);
           chttp_async_ctx *cand = *slot;
@@ -6367,15 +6367,15 @@ static bool async_idle_pool_take(struct chttpclient *cli,
           }
           chttp_async_ctx *last = NULL;
           cvector_pop_back(list, &last);
-          if (idx < cvector_elem_count(list)) {
+          if (idx < cvector_size(list)) {
             chttp_async_ctx **slot2 = (chttp_async_ctx **)cvector_at(list, idx);
             *slot2 = last;
           }
           async_idle_count_dec_locked(cli);
           ctx = cand;
-          if (cvector_elem_count(list) == 0) {
+          if (cvector_size(list) == 0) {
             cvector__destroy(list);
-            chashmap_delete_elem(cli->idle_pools_async, &kp);
+            chashmap_remove_elem(cli->idle_pools_async, &kp);
           }
           break;
         }
@@ -6441,8 +6441,8 @@ static bool async_idle_pool_offer(chttp_async_ctx *ctx) {
         ccol_success) {
       list = read_cvec(vp.ptr);
     }
-    if (!list && chashmap_elem_count(cli->idle_pools_async) <
-                     effective_max_idle_origins()) {
+    if (!list &&
+        chashmap_size(cli->idle_pools_async) < effective_max_idle_origins()) {
       char *cverr = NULL;
       list =
           cvector_create_full(sizeof(chttp_async_ctx *), cli->m_procs, &cverr);
@@ -6455,7 +6455,7 @@ static bool async_idle_pool_offer(chttp_async_ctx *ctx) {
         }
       }
     }
-    has_room = (list && cvector_elem_count(list) < CHTTP_MAX_IDLE_PER_ORIGIN);
+    has_room = (list && cvector_size(list) < CHTTP_MAX_IDLE_PER_ORIGIN);
   }
   if (!has_room) {
     ccol__mutex_unlock(cli->lock);
@@ -8815,7 +8815,7 @@ void chttpcli__force_async_idle_stale_for_tests(struct chttpclient *cli) {
     for (; it; it = it->ccol__next_fn(it)) {
       cvec list = read_cvec(it->val_pair->ptr);
       if (!list) continue;
-      size_t n = cvector_elem_count(list);
+      size_t n = cvector_size(list);
       for (size_t i = 0; i < n; i++) {
         chttp_async_ctx *actx = *(chttp_async_ctx **)cvector_at(list, i);
         actx->last_used.tv_sec -= (CHTTP_IDLE_MAX_AGE_MS / 1000L) + 5;
@@ -8835,7 +8835,7 @@ void chttpcli__shutdown_async_idle_connections_for_tests(
     for (; it; it = it->ccol__next_fn(it)) {
       cvec list = read_cvec(it->val_pair->ptr);
       if (!list) continue;
-      size_t n = cvector_elem_count(list);
+      size_t n = cvector_size(list);
       for (size_t i = 0; i < n; i++) {
         chttp_async_ctx *actx = *(chttp_async_ctx **)cvector_at(list, i);
         int afd = actx->fd;
@@ -8863,7 +8863,7 @@ size_t chttpcli__async_idle_timed_out_count_for_tests(struct chttpclient *cli) {
     cmap_iterator *it = chashmap_begin_iter(cli->idle_pools_async, NULL);
     for (; it; it = it->ccol__next_fn(it)) {
       cvec list = read_cvec(it->val_pair->ptr);
-      size_t count = list ? cvector_elem_count(list) : 0;
+      size_t count = list ? cvector_size(list) : 0;
       for (size_t i = 0; i < count; i++) {
         chttp_async_ctx **slot = (chttp_async_ctx **)cvector_at(list, i);
         if ((*slot)->timed_out) n++;
@@ -8878,15 +8878,14 @@ size_t chttpcli__async_idle_timed_out_count_for_tests(struct chttpclient *cli) {
 // see that an emptied origin loses its entry.
 size_t chttpcli__idle_pools_key_count_for_tests(struct chttpclient *cli) {
   ccol__mutex_lock(cli->lock);
-  size_t n = cli->idle_pools ? chashmap_elem_count(cli->idle_pools) : 0;
+  size_t n = cli->idle_pools ? chashmap_size(cli->idle_pools) : 0;
   ccol__mutex_unlock(cli->lock);
   return n;
 }
 
 size_t chttpcli__idle_pools_async_key_count_for_tests(struct chttpclient *cli) {
   ccol__mutex_lock(cli->lock);
-  size_t n =
-      cli->idle_pools_async ? chashmap_elem_count(cli->idle_pools_async) : 0;
+  size_t n = cli->idle_pools_async ? chashmap_size(cli->idle_pools_async) : 0;
   ccol__mutex_unlock(cli->lock);
   return n;
 }
@@ -8905,7 +8904,7 @@ struct chttpclient *chttpcli__resolve_for_tests(chttpcli h) {
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
   ccol__rw_lock_rdlock(chttpcli_slot_table.rwlock);
   struct chttpclient *raw = NULL;
-  if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
+  if (idx < cvector_size(chttpcli_slot_table.slots)) {
     chttpcli_slot *slot =
         (chttpcli_slot *)cvector_at(chttpcli_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
@@ -8919,7 +8918,7 @@ struct chttpclient *chttpcli__resolve_for_tests(chttpcli h) {
 size_t chttpcli__free_index_count_for_tests(void) {
   ccol__call_once(chttpcli_slot_table.once, chttpcli_slot_table_init_globals);
   ccol__rw_lock_rdlock(chttpcli_slot_table.rwlock);
-  size_t n = cvector_elem_count(chttpcli_slot_table.free_indices);
+  size_t n = cvector_size(chttpcli_slot_table.free_indices);
   ccol__rw_lock_unlock(chttpcli_slot_table.rwlock);
   return n;
 }
@@ -8927,7 +8926,7 @@ size_t chttpcli__free_index_count_for_tests(void) {
 size_t chttpcli__slot_table_capacity_for_tests(void) {
   ccol__call_once(chttpcli_slot_table.once, chttpcli_slot_table_init_globals);
   ccol__rw_lock_rdlock(chttpcli_slot_table.rwlock);
-  size_t n = cvector_elem_count(chttpcli_slot_table.slots);
+  size_t n = cvector_size(chttpcli_slot_table.slots);
   ccol__rw_lock_unlock(chttpcli_slot_table.rwlock);
   return n;
 }
@@ -9475,7 +9474,7 @@ void chttpcli__destroy(chttpcli cli) {
   ccol__rw_lock_wrlock(chttpcli_slot_table.rwlock);
   chttpcli_slot *slot = NULL;
   struct chttpclient *raw = NULL;
-  if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
+  if (idx < cvector_size(chttpcli_slot_table.slots)) {
     chttpcli_slot *s =
         (chttpcli_slot *)cvector_at(chttpcli_slot_table.slots, idx);
     if (s->in_use && s->generation == gen) {
@@ -9540,7 +9539,7 @@ void chttpcli__destroy(chttpcli cli) {
       cvec list = read_cvec(v->ptr);
       if (list) {
         chttp_conn c;
-        while (cvector_elem_count(list) > 0 &&
+        while (cvector_size(list) > 0 &&
                cvector_pop_back(list, &c) == ccol_success)
           conn_teardown(raw->m_procs, &c);
         cvector__destroy(list);
@@ -9558,7 +9557,7 @@ void chttpcli__destroy(chttpcli cli) {
       e = ccol_chmap_entry_read(e, &k, &v);
       cvec list = read_cvec(v->ptr);
       if (!list) continue;
-      size_t n = cvector_elem_count(list);
+      size_t n = cvector_size(list);
       for (size_t i = 0; i < n; i++) {
         chttp_async_ctx *actx = *(chttp_async_ctx **)cvector_at(list, i);
         int afd = actx->fd;
@@ -10360,7 +10359,7 @@ __attribute__((destructor)) static void cleanup_default_client(void) {
 // destroy clears in_use first and still needs the table until its last step.
 // The caller holds the write lock.
 static bool chttpcli_any_slot_live_locked(void) {
-  size_t slot_count = cvector_elem_count(chttpcli_slot_table.slots);
+  size_t slot_count = cvector_size(chttpcli_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
     chttpcli_slot *slot =
         (chttpcli_slot *)cvector_at(chttpcli_slot_table.slots, i);
@@ -10394,7 +10393,8 @@ static void chttpcli_release_slot_table_locked(void) {
 //
 // Runs req on the default client, for callers that need no client of their own.
 // *resp_out is set to NULL first.
-ccol_retval chttp_do(const chttp_request *req, chttpcli_response **resp_out) {
+ccol_retval chttp_do_default(const chttp_request *req,
+                             chttpcli_response **resp_out) {
   if (!resp_out) return ccol_invalid_args;
   *resp_out = NULL;
   chttpcli cli = chttp_default_client();
@@ -10405,9 +10405,9 @@ ccol_retval chttp_do(const chttp_request *req, chttpcli_response **resp_out) {
 // Builds a request from the arguments and runs it on the default client. A bad
 // method or an inconsistent body is ccol_invalid_args before the create, so a
 // failed create means only a failed allocation.
-ccol_retval chttp_run_query(chttp_method method, const char *url,
-                            const chttp_request_body *body, chmap headers,
-                            chttpcli_response **resp_out) {
+ccol_retval chttp_perform(chttp_method method, const char *url,
+                          const chttp_request_body *body, chmap headers,
+                          chttpcli_response **resp_out) {
   if (!resp_out) return ccol_invalid_args;
   *resp_out = NULL;
   if (!url) return ccol_invalid_args;
@@ -10417,35 +10417,35 @@ ccol_retval chttp_run_query(chttp_method method, const char *url,
   if (!req) return ccol_not_enough_memory;
 
   req->headers = headers;
-  ccol_retval rv = chttp_do(req, resp_out);
+  ccol_retval rv = chttp_do_default(req, resp_out);
   req->headers = NULL;
   chttp_request_free(req);
   return rv;
 }
 
 // Run a GET, POST, PUT, DELETE or PATCH on the default client through
-// chttp_run_query, the one-line forms of the most common requests.
+// chttp_perform, the one-line forms of the most common requests.
 ccol_retval chttp_get(const char *url, chttpcli_response **resp_out) {
-  return chttp_run_query(CHTTP_GET, url, NULL, NULL, resp_out);
+  return chttp_perform(CHTTP_GET, url, NULL, NULL, resp_out);
 }
 
 ccol_retval chttp_post(const char *url, const chttp_request_body *body,
                        chttpcli_response **resp_out) {
-  return chttp_run_query(CHTTP_POST, url, body, NULL, resp_out);
+  return chttp_perform(CHTTP_POST, url, body, NULL, resp_out);
 }
 
 ccol_retval chttp_put(const char *url, const chttp_request_body *body,
                       chttpcli_response **resp_out) {
-  return chttp_run_query(CHTTP_PUT, url, body, NULL, resp_out);
+  return chttp_perform(CHTTP_PUT, url, body, NULL, resp_out);
 }
 
 ccol_retval chttp_delete(const char *url, chttpcli_response **resp_out) {
-  return chttp_run_query(CHTTP_DELETE, url, NULL, NULL, resp_out);
+  return chttp_perform(CHTTP_DELETE, url, NULL, NULL, resp_out);
 }
 
 ccol_retval chttp_patch(const char *url, const chttp_request_body *body,
                         chttpcli_response **resp_out) {
-  return chttp_run_query(CHTTP_PATCH, url, body, NULL, resp_out);
+  return chttp_perform(CHTTP_PATCH, url, body, NULL, resp_out);
 }
 
 // Response API

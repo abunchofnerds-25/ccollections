@@ -466,7 +466,7 @@ void *cvector_at(cvec v, size_t index) {
 
 // Gives the number of elements; the struct is opaque, so this is the only way
 // to read it. Asserts on a NULL v.
-size_t cvector_elem_count(cvec v) {
+size_t cvector_size(cvec v) {
   if (!v) {
     ccol__assert(false);
   }

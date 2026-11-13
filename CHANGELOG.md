@@ -13,10 +13,10 @@ needed.
 
 This release changes the binary interface, so the SONAME is
 `libccollections.so.2` (ABI version 2). A program built against `1.0.0`
-has to be rebuilt, and code that names one of the library's types or
-`CHTTPSVR_BOUND_ADDRESS_MAX` needs the new names listed under Changed. The
-documented functions, macros and enumerators keep their names and their
-behavior.
+has to be rebuilt, and code that names one of the library's types,
+`CHTTPSVR_BOUND_ADDRESS_MAX` or one of the renamed functions and macros
+needs the new names listed under Changed. Every documented function, macro
+and enumerator keeps its behavior.
 
 ### Added
 
@@ -62,6 +62,29 @@ behavior.
   `ValT`, as those of `ccache_*` are.
 - Five macros inside the sources that matched names C11 7.31 reserves for
   `<errno.h>` have new names.
+- Some public functions and macros have new names, so that one idea has one
+  name across the library. Element counts end in `_size`, removal is
+  `remove`, and a route is registered with a verb:
+  - `cvector_elem_count`, `chashmap_elem_count` and `cbstmap_elem_count`
+    are `cvector_size`, `chashmap_size` and `cbstmap_size`, the names of
+    their `cvec_size`, `chmap_size` and `cbmap_size` aliases.
+  - `cjson_list_len` and `cyaml_list_len` are `cjson_list_size` and
+    `cyaml_list_size`, like `cjson_dictionary_size`.
+  - `chashmap_delete_elem` and `cbstmap_delete_elem` are
+    `chashmap_remove_elem` and `cbstmap_remove_elem`, and the path macros
+    `cjson_delete` and `cyaml_delete` are `cjson_remove` and `cyaml_remove`.
+    `chttp_delete` keeps its name, since it sends an HTTP `DELETE`.
+  - `chttpsvr_router_on` and `chttpsvr_router_on_stream` are
+    `chttpsvr_router_register_handler` and
+    `chttpsvr_router_register_streaming_handler`, the sub-router forms of
+    `chttpsvr_register_handler` and `chttpsvr_register_streaming_handler`.
+  - `chttp_do` is `chttp_do_default`, which names the default client and
+    can't be mistaken for `chttpcli_do`, and `chttp_run_query` is
+    `chttp_perform`.
+  - `clog_create_from_file` and `clog_create_from_file_mp` are
+    `clog_create_from_file_path` and `clog_create_from_file_path_mp`.
+  - `cvector_sort_with_comparison_proc` is `cvec_sort_with`, with the
+    `cvec_` prefix of the other typed vector macros.
 - Every exported symbol carries the version node `CCOL_2`, and the library
   is linked with `-Bsymbolic-functions` and `--exclude-libs,ALL` on ELF
   systems, so it exports no helper of the compiler's runtime. A program's
@@ -244,7 +267,7 @@ source level and at the binary level.
 - Every function that creates a handle is named `<module>_create...`, like
   `chashmap_create_full()`, `cthrpool_create_mp()`, `chttpsvr_create_mp()`,
   `chttpcli_create_mp()`, `chttp_request_create_mp()`,
-  `clog_create_from_fd_mp()`, `clog_create_from_file_mp()` and
+  `clog_create_from_fd_mp()`, `clog_create_from_file_path_mp()` and
   `ceventloop_create_mp()`. A form that ends in `_mp` takes an
   allocator table, and the same name without `_mp` passes `NULL`.
 - Networking: `chttpclient`, which speaks HTTP/1.1 over TLS or plain text in a

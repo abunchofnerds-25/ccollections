@@ -426,7 +426,7 @@ void cbstmap__destroy(cbmap cbm) {
 
 // Gives the number of entries in cbm, for callers and cbmap_size(). Asserts on
 // a NULL cbm.
-size_t cbstmap_elem_count(cbmap cbm) {
+size_t cbstmap_size(cbmap cbm) {
   if (!cbm) {
     ccol__assert(false);
   }
@@ -1260,7 +1260,7 @@ static bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
 // fixed path array, removes the node and rebalances upward, updating root and
 // elem_count. A rotation after a delete can lower a subtree, so the walk stops
 // on an unchanged height, not on whether a rotation happened.
-ccol_retval cbstmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
+ccol_retval cbstmap_remove_elem(cbmap cbm, const cmap_pair *key_pair) {
   if (!cbm) {
     ccol__assert(false);
   }

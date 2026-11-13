@@ -1,13 +1,13 @@
 .TH CHTTP_DO 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttp_do \- do an HTTP request with the default client
+chttp_do_default \- do an HTTP request with the default client
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/chttpclient.h>
 
-ccol_retval chttp_do(const chttp_request *req,
+ccol_retval chttp_do_default(const chttp_request *req,
                        chttpcli_response **resp_out);
 .fi
 .SH DESCRIPTION

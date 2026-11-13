@@ -24,7 +24,7 @@ An element type with no default comparison procedure is a compile-time
 error rather than a run-time one. Whether a type has a default comparison
 procedure depends on the type alone, so cvec_sort carries a
 _Static_assert and such a call never builds. The diagnostic names the
-vector and points at cvector_sort_with_comparison_proc.
+vector and points at cvec_sort_with.
 
 These element types sort: Every standard integer type in both
 signednesses, bool (false before true), every enumerated type, float,
@@ -32,7 +32,7 @@ double, long double, char*, const char*, signed char* and unsigned
 char*. Each of the char pointer types sorts as a NUL-terminated string in
 strcmp() order, and uint8_t* is an unsigned char* that sorts the same
 way. Sort a vector of pointers to binary buffers with
-cvector_sort_with_comparison_proc and a comparator that compares the
+cvec_sort_with and a comparator that compares the
 pointers. A char pointer that is itself const or volatile, such as
 const char *const, also sorts, by the content of its string. An
 enumerated type is compatible with one of the standard integer types, and
@@ -42,7 +42,7 @@ The types refused at compile time are the ones with no default
 comparison procedure: A struct, a union, a pointer to anything other than
 char, and a fixed-size char array such as char[64]. A vector of an enum
 type isn't one of them and sorts normally. Sort a refused element type
-with cvector_sort_with_comparison_proc and an explicit comparison
+with cvec_sort_with and an explicit comparison
 procedure.
 .fi
 .SH PARAMETERS
@@ -59,7 +59,7 @@ dereferenced.
 
 The code doesn't compile when the element type has no default comparison
 procedure; the diagnostic names the vector and points at
-cvector_sort_with_comparison_proc. cvec_find differs on purpose: It
+cvec_sort_with. cvec_find differs on purpose: It
 accepts every element type and falls back to byte-wise equality, because
 equality can come from the bytes of an element but an order can't.
 
@@ -79,6 +79,6 @@ cvec_sort(vec);  // vec is now [1, 2, 3]
 cvec_destroy(vec);
 .fi
 .SH "SEE ALSO"
-.BR cvector_sort_with_comparison_proc (3),
+.BR cvec_sort_with (3),
 .BR cvec_find (3),
 .BR csort_get_default_comparison_proc (3)

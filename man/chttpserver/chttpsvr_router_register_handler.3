@@ -1,13 +1,13 @@
 .TH CHTTPSVR_ROUTER_ON 3 "2026-08-03" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpsvr_router_on \- register a buffered handler on a sub-router
+chttpsvr_router_register_handler \- register a buffered handler on a sub-router
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/chttpserver.h>
 
-ccol_retval chttpsvr_router_on(chttpsvr_router *router,
+ccol_retval chttpsvr_router_register_handler(chttpsvr_router *router,
                                   chttp_method method,
                                   const char *pattern,
                                   chttpsvr_handler_fn fn, void *ctx);

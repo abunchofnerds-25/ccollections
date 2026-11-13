@@ -1404,13 +1404,12 @@ static ccol_retval ctls_ctx_rebuild_locked(ctls_ctx *tls) {
       tls->default_self_signed_name, &oom);
   if (!new_default) return ctls_rebuild_failure(oom);
 
-  if (tls->named_certs && chashmap_elem_count(tls->named_certs) > 0) {
+  if (tls->named_certs && chashmap_size(tls->named_certs) > 0) {
     SSL_CTX_set_tlsext_servername_callback(new_default, ctls_servername_cb);
     SSL_CTX_set_tlsext_servername_arg(new_default, tls);
   }
 
-  size_t named_count =
-      tls->named_certs ? chashmap_elem_count(tls->named_certs) : 0;
+  size_t named_count = tls->named_certs ? chashmap_size(tls->named_certs) : 0;
   SSL_CTX **new_named_ctxs = NULL;
   ctls_named_cert **new_named_entries = NULL;
   if (named_count > 0) {
@@ -1749,7 +1748,7 @@ ccol_retval ctls_ctx_cert_add(ctls_ctx *ctx, const char *server_name,
         ccol__assert(back == ccol_key_already_present);
         (void)back;
       } else {
-        ccol_retval gone = chashmap_delete_elem(ctx->named_certs, &kp);
+        ccol_retval gone = chashmap_remove_elem(ctx->named_certs, &kp);
         ccol__assert(gone == ccol_success);
         (void)gone;
       }

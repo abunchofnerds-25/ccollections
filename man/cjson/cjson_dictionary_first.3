@@ -69,7 +69,7 @@ valid:
     member, and whether this walk reaches it is unspecified.
 
 Removing the successor, through cjson_dictionary_remove(3),
-cjson_delete(3) or any other call, invalidates the cursor, and so
+cjson_remove(3) or any other call, invalidates the cursor, and so
 does destroying the object.  Calling cjson_dictionary_next(3) on an
 invalid cursor is undefined behavior, so start again with
 cjson_dictionary_first() after such a change.

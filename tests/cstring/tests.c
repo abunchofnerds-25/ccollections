@@ -1057,7 +1057,7 @@ TEST(cstrings, copy_of_empty_string) {
 
 // Destroys every token of a split result and the vector, for the split tests.
 static void free_cstr_vector(cvec parts) {
-  for (size_t i = 0; i < cvector_elem_count(parts); i++) {
+  for (size_t i = 0; i < cvector_size(parts); i++) {
     cstr *p = (cstr *)cvector_at(parts, i);
     cstring_destroy(*p);
   }
@@ -1069,7 +1069,7 @@ TEST(cstrings, split_basic) {
   cvec parts = cstring_split(s, ",", NULL);
 
   REQUIRE_NE((void *)parts, NULL);
-  REQUIRE_EQ(cvector_elem_count(parts), 3);
+  REQUIRE_EQ(cvector_size(parts), 3);
 
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 0)), "a");
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 1)), "b");
@@ -1084,7 +1084,7 @@ TEST(cstrings, split_multi_char_delimiter) {
   cvec parts = cstring_split(s, "::", NULL);
 
   REQUIRE_NE((void *)parts, NULL);
-  REQUIRE_EQ(cvector_elem_count(parts), 3);
+  REQUIRE_EQ(cvector_size(parts), 3);
 
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 0)), "one");
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 1)), "two");
@@ -1099,7 +1099,7 @@ TEST(cstrings, split_trailing_delimiter) {
   cvec parts = cstring_split(s, ",", NULL);
 
   REQUIRE_NE((void *)parts, NULL);
-  REQUIRE_EQ(cvector_elem_count(parts), 3);
+  REQUIRE_EQ(cvector_size(parts), 3);
 
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 0)), "a");
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 1)), "b");
@@ -1114,7 +1114,7 @@ TEST(cstrings, split_leading_delimiter) {
   cvec parts = cstring_split(s, ",", NULL);
 
   REQUIRE_NE((void *)parts, NULL);
-  REQUIRE_EQ(cvector_elem_count(parts), 3);
+  REQUIRE_EQ(cvector_size(parts), 3);
 
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 0)), "");
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 1)), "a");
@@ -1129,7 +1129,7 @@ TEST(cstrings, split_no_delimiter_found) {
   cvec parts = cstring_split(s, ",", NULL);
 
   REQUIRE_NE((void *)parts, NULL);
-  REQUIRE_EQ(cvector_elem_count(parts), 1);
+  REQUIRE_EQ(cvector_size(parts), 1);
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 0)), "hello");
 
   free_cstr_vector(parts);
@@ -1141,7 +1141,7 @@ TEST(cstrings, split_consecutive_delimiters) {
   cvec parts = cstring_split(s, ",", NULL);
 
   REQUIRE_NE((void *)parts, NULL);
-  REQUIRE_EQ(cvector_elem_count(parts), 3);
+  REQUIRE_EQ(cvector_size(parts), 3);
 
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 0)), "a");
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 1)), "");
@@ -1156,7 +1156,7 @@ TEST(cstrings, split_empty_source_string) {
   cvec parts = cstring_split(s, ",", NULL);
 
   REQUIRE_NE((void *)parts, NULL);
-  REQUIRE_EQ(cvector_elem_count(parts), 1);
+  REQUIRE_EQ(cvector_size(parts), 1);
   REQUIRE_STREQ(cstring_c_str(*(cstr *)cvector_at(parts, 0)), "");
 
   free_cstr_vector(parts);
@@ -1352,10 +1352,10 @@ TEST(cstrings, build_csv_line) {
 TEST(cstrings, round_trip_split_and_join) {
   cstr s = cstring_create("one:two:three", NULL);
   cvec parts = cstring_split(s, ":", NULL);
-  REQUIRE_EQ(cvector_elem_count(parts), 3);
+  REQUIRE_EQ(cvector_size(parts), 3);
 
   cstr_construct(joined, NULL);
-  for (size_t i = 0; i < cvector_elem_count(parts); i++) {
+  for (size_t i = 0; i < cvector_size(parts); i++) {
     if (i > 0) cstr_append(joined, ":");
     cstr *p = (cstr *)cvector_at(parts, i);
     cstr_append(joined, cstring_c_str(*p));
@@ -2029,7 +2029,7 @@ TEST(cstrings, copy_oom_propagates_create_full_failure) {
 static void free_cstr_vector_oom(cvec parts) {
   if (!parts) return;
   g_cstr_oom_budget = 1000000;
-  for (size_t i = 0; i < cvector_elem_count(parts); i++) {
+  for (size_t i = 0; i < cvector_size(parts); i++) {
     cstr *p = (cstr *)cvector_at(parts, i);
     cstring_destroy(*p);
   }
@@ -2095,7 +2095,7 @@ TEST(cstrings, split_allocates_a_long_token_once) {
   char *split_err = (char *)"poison";
   cvec parts = cstring_split(s, ",", &split_err);
   int left = g_cstr_oom_budget;
-  size_t count = parts ? cvector_elem_count(parts) : 0;
+  size_t count = parts ? cvector_size(parts) : 0;
   bool first_ok =
       count == 2 &&
       strcmp(cstring_c_str(*(cstr *)cvector_at(parts, 0)),
@@ -2129,7 +2129,7 @@ TEST(cstrings, split_oom_budget_exactly_sufficient_succeeds) {
   cvec parts = cstring_split(s, ",", &split_err);
   REQUIRE_NE((void *)parts, NULL);
   REQUIRE_EQ((void *)split_err, NULL);
-  REQUIRE_EQ(cvector_elem_count(parts), (size_t)3);
+  REQUIRE_EQ(cvector_size(parts), (size_t)3);
 
   g_cstr_oom_budget = 1000000;
   free_cstr_vector_oom(parts);

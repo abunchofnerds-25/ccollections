@@ -105,12 +105,12 @@ TEST(cvectors, create_succeeds) {
 TEST(cvectors, simple_push_backs) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
   REQUIRE_EQ(cvector_push_back(cvec, &(int){1}), ccol_success);
-  REQUIRE_EQ(cvector_elem_count(cvec), 1);
+  REQUIRE_EQ(cvector_size(cvec), 1);
 
   REQUIRE_EQ(cvector_push_back(cvec, &(int){1}), ccol_success);
-  REQUIRE_EQ(cvector_elem_count(cvec), 2);
+  REQUIRE_EQ(cvector_size(cvec), 2);
 
   cvector_destroy(cvec);
 }
@@ -122,12 +122,12 @@ TEST(cvectors, simple_push_backs_with_memmgmt_procs) {
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc},
       NULL);
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
   REQUIRE_EQ(cvector_push_back(cvec, &(int){1}), ccol_success);
-  REQUIRE_EQ(cvector_elem_count(cvec), 1);
+  REQUIRE_EQ(cvector_size(cvec), 1);
 
   REQUIRE_EQ(cvector_push_back(cvec, &(int){1}), ccol_success);
-  REQUIRE_EQ(cvector_elem_count(cvec), 2);
+  REQUIRE_EQ(cvector_size(cvec), 2);
 
   cvector_destroy(cvec);
 }
@@ -175,7 +175,7 @@ TEST(cvectors, push_back_null_element) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
 
   REQUIRE_EQ(cvector_push_back(cvec, NULL), ccol_invalid_args);
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
 
   cvector_destroy(cvec);
 }
@@ -210,17 +210,17 @@ TEST(cvectors, simple_pop_backs) {
   REQUIRE_EQ(cvector_pop_back(cvec, &target), ccol_container_empty);
   REQUIRE_EQ(target, -2);
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
   cvector_push_back(cvec, &(int){1});
   cvector_push_back(cvec, &(int){2});
-  REQUIRE_EQ(cvector_elem_count(cvec), 2);
+  REQUIRE_EQ(cvector_size(cvec), 2);
 
   REQUIRE_EQ(cvector_pop_back(cvec, &target), ccol_success);
   REQUIRE_EQ(target, 2);
-  REQUIRE_EQ(cvector_elem_count(cvec), 1);
+  REQUIRE_EQ(cvector_size(cvec), 1);
   REQUIRE_EQ(cvector_pop_back(cvec, &target), ccol_success);
   REQUIRE_EQ(target, 1);
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
 
   cvector_destroy(cvec);
 }
@@ -230,7 +230,7 @@ TEST(cvectors, pop_back_null_target) {
 
   cvector_push_back(cvec, &(int){42});
   REQUIRE_EQ(cvector_pop_back(cvec, NULL), ccol_invalid_args);
-  REQUIRE_EQ(cvector_elem_count(cvec), 1);
+  REQUIRE_EQ(cvector_size(cvec), 1);
 
   cvector_destroy(cvec);
 }
@@ -247,7 +247,7 @@ TEST(cvectors, push_back_self_alias_no_realloc) {
   int *elem_ptr = cvector_at(cvec, 1);
   ccol_retval result = cvector_push_back(cvec, elem_ptr);
   REQUIRE_EQ(result, ccol_success);
-  REQUIRE_EQ(cvector_elem_count(cvec), 4);
+  REQUIRE_EQ(cvector_size(cvec), 4);
   REQUIRE_EQ(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
 
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 10);
@@ -268,7 +268,7 @@ TEST(cvectors, push_back_self_alias_triggers_expansion) {
   int *elem_ptr = cvector_at(cvec, 3);
   ccol_retval result = cvector_push_back(cvec, elem_ptr);
   REQUIRE_EQ(result, ccol_success);
-  REQUIRE_EQ(cvector_elem_count(cvec), 5);
+  REQUIRE_EQ(cvector_size(cvec), 5);
   REQUIRE_NE(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
 
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 10);
@@ -302,15 +302,15 @@ TEST(cvectors, different_sizes) {
     REQUIRE_EQ(cvector_push_back(cvec, &(long){1}), ccol_success);
     REQUIRE_EQ(cvector_push_back(cvec, &(long){2}), ccol_success);
 
-    REQUIRE_EQ(cvector_elem_count(cvec), 2);
+    REQUIRE_EQ(cvector_size(cvec), 2);
 
     long target;
     REQUIRE_EQ(cvector_pop_back(cvec, &target), ccol_success);
     REQUIRE_EQ(target, 2);
-    REQUIRE_EQ(cvector_elem_count(cvec), 1);
+    REQUIRE_EQ(cvector_size(cvec), 1);
     REQUIRE_EQ(cvector_pop_back(cvec, &target), ccol_success);
     REQUIRE_EQ(target, 1);
-    REQUIRE_EQ(cvector_elem_count(cvec), 0);
+    REQUIRE_EQ(cvector_size(cvec), 0);
 
     cvector_destroy(cvec);
   }
@@ -321,15 +321,15 @@ TEST(cvectors, different_sizes) {
     REQUIRE_EQ(cvector_push_back(cvec, &(char){1}), ccol_success);
     REQUIRE_EQ(cvector_push_back(cvec, &(char){2}), ccol_success);
 
-    REQUIRE_EQ(cvector_elem_count(cvec), 2);
+    REQUIRE_EQ(cvector_size(cvec), 2);
 
     char target;
     REQUIRE_EQ(cvector_pop_back(cvec, &target), ccol_success);
     REQUIRE_EQ(target, 2);
-    REQUIRE_EQ(cvector_elem_count(cvec), 1);
+    REQUIRE_EQ(cvector_size(cvec), 1);
     REQUIRE_EQ(cvector_pop_back(cvec, &target), ccol_success);
     REQUIRE_EQ(target, 1);
-    REQUIRE_EQ(cvector_elem_count(cvec), 0);
+    REQUIRE_EQ(cvector_size(cvec), 0);
 
     cvector_destroy(cvec);
   }
@@ -340,15 +340,15 @@ TEST(cvectors, different_sizes) {
     REQUIRE_EQ(cvector_push_back(cvec, &(int16_t){1}), ccol_success);
     REQUIRE_EQ(cvector_push_back(cvec, &(int16_t){2}), ccol_success);
 
-    REQUIRE_EQ(cvector_elem_count(cvec), 2);
+    REQUIRE_EQ(cvector_size(cvec), 2);
 
     int16_t target;
     REQUIRE_EQ(cvector_pop_back(cvec, &target), ccol_success);
     REQUIRE_EQ(target, 2);
-    REQUIRE_EQ(cvector_elem_count(cvec), 1);
+    REQUIRE_EQ(cvector_size(cvec), 1);
     REQUIRE_EQ(cvector_pop_back(cvec, &target), ccol_success);
     REQUIRE_EQ(target, 1);
-    REQUIRE_EQ(cvector_elem_count(cvec), 0);
+    REQUIRE_EQ(cvector_size(cvec), 0);
 
     cvector_destroy(cvec);
   }
@@ -367,7 +367,7 @@ TEST(cvectors, large_struct_elements) {
   ls.arr[63] = 200;
 
   REQUIRE_EQ(cvector_push_back(cvec, &ls), ccol_success);
-  REQUIRE_EQ(cvector_elem_count(cvec), 1);
+  REQUIRE_EQ(cvector_size(cvec), 1);
 
   large_struct *retrieved = cvector_at(cvec, 0);
   REQUIRE_NE((void *)retrieved, NULL);
@@ -380,14 +380,14 @@ TEST(cvectors, large_struct_elements) {
 TEST(cvectors, reset) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
   for (int i = 0; i < 4; ++i) {
     cvector_push_back(cvec, &(int){i + 1});
   }
-  REQUIRE_EQ(cvector_elem_count(cvec), 4);
+  REQUIRE_EQ(cvector_size(cvec), 4);
 
   cvector_reset(cvec);
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
 
   cvector_destroy(cvec);
 }
@@ -399,7 +399,7 @@ TEST(cvectors, for_each_wr) {
     cvector_push_back(cvec, &i);
   }
 
-  int size = cvector_elem_count(cvec);
+  int size = cvector_size(cvec);
 
   for (int i = 0; i < size; ++i) {
     int *val_ptr = cvector_at(cvec, i);
@@ -423,7 +423,7 @@ TEST(cvectors, for_each_rd) {
     cvector_push_back(cvec, &i);
   }
 
-  int size = cvector_elem_count(cvec);
+  int size = cvector_size(cvec);
 
   int sum = 0;
   for (int i = 0; i < size; ++i) {
@@ -445,18 +445,18 @@ TEST(cvectors, for_each_rd) {
 TEST(cvectors, scaling) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
   REQUIRE_EQ(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
 
   for (size_t i = 0; i < ccol__cvector_minimum_capacity; ++i) {
     cvector_push_back(cvec, &i);
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), ccol__cvector_minimum_capacity);
+  REQUIRE_EQ(cvector_size(cvec), ccol__cvector_minimum_capacity);
   REQUIRE_EQ(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
 
   cvector_push_back(cvec, &(int){ccol__cvector_minimum_capacity});
-  REQUIRE_EQ(cvector_elem_count(cvec), ccol__cvector_minimum_capacity + 1);
+  REQUIRE_EQ(cvector_size(cvec), ccol__cvector_minimum_capacity + 1);
   REQUIRE_EQ(cvector_get_capacity(cvec),
              ccol__cvector_minimum_capacity * ccol__cvector_scaling_factor);
 
@@ -464,7 +464,7 @@ TEST(cvectors, scaling) {
   for (size_t i = 0; i <= ccol__cvector_minimum_capacity; ++i) {
     cvector_pop_back(cvec, &tmp);
   }
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
   REQUIRE_EQ(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
 
   cvector_destroy(cvec);
@@ -477,7 +477,7 @@ TEST(cvectors, scaling_multiple_doublings) {
     cvector_push_back(cvec, &i);
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 64);
+  REQUIRE_EQ(cvector_size(cvec), 64);
   REQUIRE_EQ(cvector_get_capacity(cvec), 64);
 
   for (int i = 0; i < 64; ++i) {
@@ -511,7 +511,7 @@ TEST(cvectors, scaling_shrink_threshold) {
     cvector_pop_back(cvec, &tmp);
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 3);
+  REQUIRE_EQ(cvector_size(cvec), 3);
   REQUIRE_EQ(cvector_get_capacity(cvec), 8);
 
   cvector_destroy(cvec);
@@ -547,7 +547,7 @@ TEST(cvectors, reserve_basic) {
   int result = (int)cvector_reserve(cvec, 100);
   REQUIRE_EQ(result, 1);
   REQUIRE_EQ(cvector_get_capacity(cvec), 128);
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
 
   cvector_destroy(cvec);
 }
@@ -602,7 +602,7 @@ TEST(cvectors, reserve_with_existing_elements) {
   }
 
   cvector_reserve(cvec, 100);
-  REQUIRE_EQ(cvector_elem_count(cvec), 10);
+  REQUIRE_EQ(cvector_size(cvec), 10);
 
   for (int i = 0; i < 10; ++i) {
     int *val = cvector_at(cvec, i);
@@ -638,7 +638,7 @@ TEST(cvectors, append_array_basic) {
   int result = (int)cvector_append_array(cvec, arr, 5);
 
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(cvec), 5);
+  REQUIRE_EQ(cvector_size(cvec), 5);
 
   for (int i = 0; i < 5; ++i) {
     int *val = cvector_at(cvec, i);
@@ -655,7 +655,7 @@ TEST(cvectors, append_array_empty) {
   int result = (int)cvector_append_array(cvec, arr, 0);
 
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
 
   cvector_destroy(cvec);
 }
@@ -670,7 +670,7 @@ TEST(cvectors, append_array_to_nonempty) {
   int arr[] = {10, 11, 12};
   cvector_append_array(cvec, arr, 3);
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 6);
+  REQUIRE_EQ(cvector_size(cvec), 6);
 
   for (int i = 0; i < 3; ++i) {
     int *val = cvector_at(cvec, i);
@@ -697,7 +697,7 @@ TEST(cvectors, append_array_triggers_expansion) {
 
   int result = (int)cvector_append_array(cvec, arr, 20);
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(cvec), 20);
+  REQUIRE_EQ(cvector_size(cvec), 20);
 
   size_t final_capacity = cvector_get_capacity(cvec);
   REQUIRE_NE(final_capacity, initial_capacity);
@@ -716,7 +716,7 @@ TEST(cvectors, append_array_large) {
 
   int result = (int)cvector_append_array(cvec, large_arr, 5000);
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(cvec), 5000);
+  REQUIRE_EQ(cvector_size(cvec), 5000);
 
   int *val0 = cvector_at(cvec, 0);
   REQUIRE_EQ(*val0, 0);
@@ -736,7 +736,7 @@ TEST(cvectors, append_array_null_ptr) {
 
   int result = (int)cvector_append_array(cvec, NULL, 3);
   REQUIRE_EQ(result, false);
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
 
   cvector_destroy(cvec);
 }
@@ -761,7 +761,7 @@ TEST(cvectors, append_array_self_alias_no_realloc) {
   size_t overlap_count_before = cvector_overlap_copy_count_for_tests;
   int result = (int)cvector_append_array(cvec, arr_ptr, 2);
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(cvec), 4);
+  REQUIRE_EQ(cvector_size(cvec), 4);
   REQUIRE_EQ(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
   REQUIRE_EQ(cvector_overlap_copy_count_for_tests, overlap_count_before);
 
@@ -783,7 +783,7 @@ TEST(cvectors, append_array_self_alias_triggers_expansion) {
   void *arr_ptr = cvector_data_ptr(cvec);
   int result = (int)cvector_append_array(cvec, arr_ptr, 3);
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(cvec), 6);
+  REQUIRE_EQ(cvector_size(cvec), 6);
   REQUIRE_NE(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
 
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 10);
@@ -806,7 +806,7 @@ TEST(cvectors, append_array_partial_self_alias_triggers_expansion) {
   int *arr_ptr = (int *)cvector_data_ptr(cvec) + 2;
   int result = (int)cvector_append_array(cvec, arr_ptr, 2);
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(cvec), 6);
+  REQUIRE_EQ(cvector_size(cvec), 6);
   REQUIRE_NE(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
 
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 0);
@@ -828,7 +828,7 @@ TEST(cvectors, append_array_self_alias_overlap_shift_by_one_no_realloc) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
   cvector_push_back(cvec, &(int){0});
   cvector_push_back(cvec, &(int){1});
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)2);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)2);
 
   REQUIRE_TRUE(cvector_reserve(cvec, (size_t)n));
   int *base = cvector_data_ptr(cvec);
@@ -839,7 +839,7 @@ TEST(cvectors, append_array_self_alias_overlap_shift_by_one_no_realloc) {
   size_t overlap_count_before = cvector_overlap_copy_count_for_tests;
   int result = (int)cvector_append_array(cvec, base + 1, (size_t)(n - 2));
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)n);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)n);
   REQUIRE_GT(cvector_overlap_copy_count_for_tests, overlap_count_before);
 
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 0);
@@ -868,7 +868,7 @@ TEST(cvectors,
   size_t overlap_count_before = cvector_overlap_copy_count_for_tests;
   int result = (int)cvector_append_array(cvec, base + 1, (size_t)(cap - 1));
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)(cap + 1));
+  REQUIRE_EQ(cvector_size(cvec), (size_t)(cap + 1));
   REQUIRE_NE(cvector_get_capacity(cvec), (size_t)cap);
   REQUIRE_GT(cvector_overlap_copy_count_for_tests, overlap_count_before);
 
@@ -895,8 +895,8 @@ TEST(cvectors, append_cvector_basic) {
 
   int result = (int)cvector_append_cvector(v1, v2);
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(v1), 6);
-  REQUIRE_EQ(cvector_elem_count(v2), 3);
+  REQUIRE_EQ(cvector_size(v1), 6);
+  REQUIRE_EQ(cvector_size(v2), 3);
 
   int *data = cvector_data_ptr(v1);
   REQUIRE_EQ(data[0], 0);
@@ -916,7 +916,7 @@ TEST(cvectors, append_cvector_empty_source) {
 
   int result = (int)cvector_append_cvector(v1, v2);
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(v1), 1);
+  REQUIRE_EQ(cvector_size(v1), 1);
 
   cvector_destroy(v1);
   cvector_destroy(v2);
@@ -932,7 +932,7 @@ TEST(cvectors, append_cvector_empty_destination) {
 
   int result = (int)cvector_append_cvector(v1, v2);
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(v1), 5);
+  REQUIRE_EQ(cvector_size(v1), 5);
 
   for (int i = 0; i < 5; ++i) {
     int *val = cvector_at(v1, i);
@@ -960,7 +960,7 @@ TEST(cvectors, append_cvector_triggers_expansion) {
   size_t cap_after = cvector_get_capacity(v1);
 
   REQUIRE_EQ(result, true);
-  REQUIRE_EQ(cvector_elem_count(v1), 25);
+  REQUIRE_EQ(cvector_size(v1), 25);
   REQUIRE_NE(cap_after, cap_before);
 
   cvector_destroy(v1);
@@ -975,7 +975,7 @@ TEST(cvectors, append_cvector_self_append) {
 
     REQUIRE_EQ(cvector_get_capacity(v), ccol__cvector_minimum_capacity);
     REQUIRE_EQ((int)cvector_append_cvector(v, v), true);
-    REQUIRE_EQ(cvector_elem_count(v), 4);
+    REQUIRE_EQ(cvector_size(v), 4);
     REQUIRE_EQ(cvector_get_capacity(v), ccol__cvector_minimum_capacity);
 
     REQUIRE_EQ(*(int *)cvector_at(v, 0), 1);
@@ -994,7 +994,7 @@ TEST(cvectors, append_cvector_self_append) {
 
     REQUIRE_EQ(cvector_get_capacity(v), ccol__cvector_minimum_capacity);
     REQUIRE_EQ((int)cvector_append_cvector(v, v), true);
-    REQUIRE_EQ(cvector_elem_count(v), 6);
+    REQUIRE_EQ(cvector_size(v), 6);
     REQUIRE_NE(cvector_get_capacity(v), ccol__cvector_minimum_capacity);
 
     REQUIRE_EQ(*(int *)cvector_at(v, 0), 10);
@@ -1028,7 +1028,7 @@ TEST(cvectors, push_pop_interleaved_sequence) {
     cvector_pop_back(cvec, &tmp);
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 4);
+  REQUIRE_EQ(cvector_size(cvec), 4);
 
   int *data = cvector_data_ptr(cvec);
   REQUIRE_EQ(data[0], 0);
@@ -1053,7 +1053,7 @@ TEST(cvectors, realistic_usage_scenario) {
     cvector_push_back(points, &p);
   }
 
-  REQUIRE_EQ(cvector_elem_count(points), 500);
+  REQUIRE_EQ(cvector_size(points), 500);
 
   Point3D *p100 = cvector_at(points, 100);
   REQUIRE_EQ(p100->x, 100.0);
@@ -1080,14 +1080,14 @@ TEST(cvectors, string_pointer_storage) {
   cvector_push_back(cvec, &s2);
   cvector_push_back(cvec, &s3);
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 3);
+  REQUIRE_EQ(cvector_size(cvec), 3);
 
   char **strings = cvector_data_ptr(cvec);
   REQUIRE_EQ(strcmp(strings[0], "Hello"), 0);
   REQUIRE_EQ(strcmp(strings[1], "World"), 0);
   REQUIRE_EQ(strcmp(strings[2], "Test"), 0);
 
-  for (size_t i = 0; i < cvector_elem_count(cvec); ++i) {
+  for (size_t i = 0; i < cvector_size(cvec); ++i) {
     free(strings[i]);
   }
 
@@ -1106,11 +1106,11 @@ TEST(cvectors, reset_after_growth) {
 
   cvector_reset(cvec);
 
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
   REQUIRE_EQ(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
 
   cvector_push_back(cvec, &(int){999});
-  REQUIRE_EQ(cvector_elem_count(cvec), 1);
+  REQUIRE_EQ(cvector_size(cvec), 1);
 
   cvector_destroy(cvec);
 }
@@ -1145,7 +1145,7 @@ TEST(cvectors, reset_skips_realloc_when_already_at_minimum_capacity) {
   REQUIRE_EQ(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
 
   cvector_reset(cvec);
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
   REQUIRE_EQ(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
   REQUIRE_EQ(g_reset_test_realloc_count, (size_t)0);
 
@@ -1156,7 +1156,7 @@ TEST(cvectors, reset_skips_realloc_when_already_at_minimum_capacity) {
 
   size_t realloc_count_before_shrink = g_reset_test_realloc_count;
   cvector_reset(cvec);
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
   REQUIRE_EQ(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
   REQUIRE_GT(g_reset_test_realloc_count, realloc_count_before_shrink);
 
@@ -1170,7 +1170,7 @@ TEST(cvectors, boundary_fill_to_capacity) {
     cvector_push_back(cvec, &i);
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), ccol__cvector_minimum_capacity);
+  REQUIRE_EQ(cvector_size(cvec), ccol__cvector_minimum_capacity);
   REQUIRE_EQ(cvector_get_capacity(cvec), ccol__cvector_minimum_capacity);
 
   cvector_destroy(cvec);
@@ -1182,13 +1182,13 @@ TEST(cvectors, many_small_operations) {
   for (int i = 0; i < 500; ++i) {
     cvector_push_back(cvec, &i);
 
-    if (i % 2 == 0 && cvector_elem_count(cvec) > 0) {
+    if (i % 2 == 0 && cvector_size(cvec) > 0) {
       int tmp;
       cvector_pop_back(cvec, &tmp);
     }
   }
 
-  REQUIRE_NE(cvector_elem_count(cvec), 0);
+  REQUIRE_NE(cvector_size(cvec), 0);
 
   cvector_destroy(cvec);
 }
@@ -1510,7 +1510,7 @@ TEST(cvectors, construct_scoped_lifecycle) {
     for (int i = 1; i <= 5; ++i) {
       cvec_push(v, i);
     }
-    REQUIRE_EQ(cvector_elem_count(v), 5);
+    REQUIRE_EQ(cvector_size(v), 5);
     for (int i = 0; i < 5; ++i) {
       REQUIRE_EQ(cvec_at(v, i), i + 1);
     }
@@ -1844,7 +1844,7 @@ TEST(cvectors, iterator_early_exit) {
   }
   REQUIRE_EQ(count, 4);
   REQUIRE_EQ((void *)it, NULL);
-  REQUIRE_EQ(cvector_elem_count(vec), 10);
+  REQUIRE_EQ(cvector_size(vec), 10);
 
   cvec_destroy(vec);
 }
@@ -1941,7 +1941,7 @@ TEST(cvectors, sort_custom_comparator_descending) {
     cvec_push(vec, i);
   }
 
-  cvector_sort_with_comparison_proc(vec, cmp_int_descending);
+  cvec_sort_with(vec, cmp_int_descending);
 
   for (int i = 0; i < 6; ++i) {
     REQUIRE_EQ(cvec_at(vec, i), 6 - i);
@@ -1978,7 +1978,7 @@ TEST(cvectors, sort_stable) {
   cvec_push(vec, ((cvec_stable_item){2, 2}));
   cvec_push(vec, ((cvec_stable_item){1, 2}));
 
-  cvector_sort_with_comparison_proc(vec, cmp_stable_item);
+  cvec_sort_with(vec, cmp_stable_item);
 
   REQUIRE_EQ(cvec_at(vec, 0).key, 1);
   REQUIRE_EQ(cvec_at(vec, 0).seq, 0);
@@ -2382,7 +2382,7 @@ TEST(cvectors, declare_scoped_lifecycle) {
     for (int i = 1; i <= 5; ++i) {
       cvec_push(v, i);
     }
-    REQUIRE_EQ(cvector_elem_count(v), 5);
+    REQUIRE_EQ(cvector_size(v), 5);
     for (int i = 0; i < 5; ++i) {
       REQUIRE_EQ(cvec_at(v, i), i + 1);
     }
@@ -2401,7 +2401,7 @@ TEST(cvectors, construct_mp_scoped_lifecycle) {
     for (int i = 1; i <= 5; ++i) {
       cvec_push(v, i);
     }
-    REQUIRE_EQ(cvector_elem_count(v), 5);
+    REQUIRE_EQ(cvector_size(v), 5);
     for (int i = 0; i < 5; ++i) {
       REQUIRE_EQ(cvec_at(v, i), i + 1);
     }
@@ -2413,7 +2413,7 @@ TEST(cvectors, data_ptr_empty_vector) {
 
   void *ptr = cvector_data_ptr(cvec);
   REQUIRE_NE(ptr, NULL);
-  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+  REQUIRE_EQ(cvector_size(cvec), 0);
 
   cvector_destroy(cvec);
 }
@@ -2435,7 +2435,7 @@ TEST(cvectors, iterator_raii_scope_exit) {
     }
   }
   REQUIRE_EQ(count, 2);
-  REQUIRE_EQ(cvector_elem_count(vec), 5);
+  REQUIRE_EQ(cvector_size(vec), 5);
 
   cvec_destroy(vec);
 }
@@ -2484,7 +2484,7 @@ TEST(cvectors, invariants_random_ops) {
       }
     }
 
-    size_t elem_count = cvector_elem_count(vec);
+    size_t elem_count = cvector_size(vec);
     size_t capacity = cvector_get_capacity(vec);
     REQUIRE_TRUE(elem_count <= capacity);
     REQUIRE_TRUE(capacity >= ccol__cvector_minimum_capacity);
@@ -2737,7 +2737,7 @@ TEST(cvectors, append_array_rejects_a_source_range_past_the_reservation) {
 
   int *base = (int *)cvector_data_ptr(cvec);
   REQUIRE_FALSE(cvector_append_array(cvec, base + 15, (size_t)15));
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)1);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)1);
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 7);
 
   cvector_destroy(cvec);
@@ -2757,14 +2757,14 @@ TEST(cvectors, append_array_accepts_a_source_range_ending_at_the_reservation) {
 
   cvector_push_back(cvec, &(int){100});
   REQUIRE_TRUE(cvector_append_array(cvec, base + 12, (size_t)4));
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)5);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)5);
   REQUIRE_EQ(*(int *)cvector_at(cvec, 1), 12);
   REQUIRE_EQ(*(int *)cvector_at(cvec, 4), 15);
 
   size_t capacity = cvector_get_capacity(cvec);
   base = (int *)cvector_data_ptr(cvec);
   REQUIRE_FALSE(cvector_append_array(cvec, base + (capacity - 4), (size_t)5));
-  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)5);
+  REQUIRE_EQ(cvector_size(cvec), (size_t)5);
 
   cvector_destroy(cvec);
 }
@@ -2974,7 +2974,7 @@ static unsigned cvec_sort_lcg(unsigned *state) {
         cvec_push(b, val);                                                 \
       }                                                                    \
       unsigned long long before = csort__contiguous_sorts_for_tests();     \
-      cvector_sort_with_comparison_proc(a, (cmp));                         \
+      cvec_sort_with(a, (cmp));                                            \
       unsigned long long after = csort__contiguous_sorts_for_tests();      \
       bool took_path = n < 2 ? after == before : after == before + 1;      \
       bool ok = csort_sort(b, n, sizeof(type), cvec_sort_counting_getter,  \
@@ -3037,7 +3037,7 @@ TEST(contiguous_sort, cvec_sort_is_stable_and_makes_no_getter_call) {
   }
   g_cvec_sort_getter_calls = 0;
   unsigned long long before = csort__contiguous_sorts_for_tests();
-  cvector_sort_with_comparison_proc(v, cvec_sort_stable_rec_cmp);
+  cvec_sort_with(v, cvec_sort_stable_rec_cmp);
   bool took_path = csort__contiguous_sorts_for_tests() == before + 1;
   bool stable = true;
   for (size_t i = 1; i < cvec_size(v); i++) {
@@ -3071,23 +3071,23 @@ TEST(contiguous_sort, cvec_sort_orders_nan_after_every_number) {
 }
 
 #if !defined(TEST_NO_LD_WRAP)
-// The Makefile links with --wrap=cvector_elem_count, so every call, the ones
-// inside macros included, reaches __wrap_cvector_elem_count, which counts it
+// The Makefile links with --wrap=cvector_size, so every call, the ones
+// inside macros included, reaches __wrap_cvector_size, which counts it
 // in g_cvec_elem_count_calls and calls the real function. That's how the test
 // sees whether cvec_at reads the count on success. Apple's linker has no
 // --wrap, and there the test is skipped.
-size_t __real_cvector_elem_count(cvec v);
+size_t __real_cvector_size(cvec v);
 static unsigned long g_cvec_elem_count_calls = 0;
-size_t __wrap_cvector_elem_count(cvec v);
-size_t __wrap_cvector_elem_count(cvec v) {
+size_t __wrap_cvector_size(cvec v);
+size_t __wrap_cvector_size(cvec v) {
   g_cvec_elem_count_calls++;
-  return __real_cvector_elem_count(v);
+  return __real_cvector_size(v);
 }
 #endif
 
 TEST(cvec_at_cost, a_successful_access_does_not_read_the_element_count) {
 #if defined(TEST_NO_LD_WRAP)
-  fprintf(stderr, "SKIP: the linker cannot wrap cvector_elem_count\n");
+  fprintf(stderr, "SKIP: the linker cannot wrap cvector_size\n");
   return;
 #else
   cvec_construct(v, int);
@@ -3329,7 +3329,7 @@ TEST(cvectors, sort_with_comparison_proc_evaluates_the_vector_once) {
   cvector_append_array(vs[0], vals, 3);
   cvector_append_array(vs[1], vals, 3);
   int k = 0;
-  cvector_sort_with_comparison_proc(vs[k++], cvec_single_eval_cmp_int);
+  cvec_sort_with(vs[k++], cvec_single_eval_cmp_int);
   int first0 = *(int *)cvector_at(vs[0], 0);
   int first1 = *(int *)cvector_at(vs[1], 0);
   cvector_destroy(vs[0]);
@@ -3428,7 +3428,7 @@ TEST(cvec_macros, pop_of_a_const_element_type) {
   cvec_push(cv, 4);
   int a = cvec_pop(cv);
   int b = cvec_pop(cv);
-  size_t left = cvector_elem_count(cv);
+  size_t left = cvector_size(cv);
   cvec_destroy(cv);
   REQUIRE_EQ(a, 4);
   REQUIRE_EQ(b, 3);
@@ -3568,8 +3568,8 @@ TEST(alloc_failure, a_pop_whose_shrink_fails_keeps_the_vector_whole) {
   size_t cap = cvector_get_capacity(v);
   int out = -1;
   bool pops_ok = true;
-  while (cvector_get_capacity(v) == cap && cvector_elem_count(v) > 0) {
-    size_t count = cvector_elem_count(v);
+  while (cvector_get_capacity(v) == cap && cvector_size(v) > 0) {
+    size_t count = cvector_size(v);
     _flaky_arm(1);
     ccol_retval r = cvector_pop_back(v, &out);
     bool fired = g_flaky_seen >= 1;
@@ -3580,7 +3580,7 @@ TEST(alloc_failure, a_pop_whose_shrink_fails_keeps_the_vector_whole) {
     }
     if (fired) break;
   }
-  size_t count_after = cvector_elem_count(v);
+  size_t count_after = cvector_size(v);
   size_t cap_after = cvector_get_capacity(v);
   bool intact = true;
   for (size_t i = 0; i < count_after; i++)
@@ -3611,7 +3611,7 @@ TEST(alloc_failure, a_failed_reserve_returns_false_and_keeps_the_vector) {
   bool reserved = cvector_reserve(v, 1000);
   _flaky_arm(0);
   size_t cap_after = cvector_get_capacity(v);
-  size_t count_after = cvector_elem_count(v);
+  size_t count_after = cvector_size(v);
   bool intact = count_after == 3;
   for (size_t i = 0; intact && i < count_after; i++)
     if (*(int *)cvector_at(v, i) != (int)i) intact = false;
@@ -3644,7 +3644,7 @@ TEST(alloc_failure, a_failed_iterator_allocation_reports_why) {
   bool begun = it2 != NULL;
   int seen = it2 ? *(int *)it2->val_pair->ptr : -1;
   if (it2) ccol_iter_destroy(it2);
-  size_t count = cvector_elem_count(v);
+  size_t count = cvector_size(v);
   cvector_destroy(v);
 
   REQUIRE_TRUE(filled);
@@ -3669,13 +3669,13 @@ TEST(alloc_failure, a_push_whose_growth_fails_leaves_the_vector_as_it_was) {
   _flaky_arm(1);
   ccol_retval r = cvector_push_back(v, &extra);
   _flaky_arm(0);
-  size_t count_after = cvector_elem_count(v);
+  size_t count_after = cvector_size(v);
   size_t cap_after = cvector_get_capacity(v);
   bool intact = true;
   for (size_t i = 0; i < count_after; i++)
     if (*(int *)cvector_at(v, i) != (int)i) intact = false;
   ccol_retval r_again = cvector_push_back(v, &extra);
-  int last = cvector_elem_count(v) > cap ? *(int *)cvector_at(v, cap) : -1;
+  int last = cvector_size(v) > cap ? *(int *)cvector_at(v, cap) : -1;
   cvector_destroy(v);
 
   REQUIRE_TRUE(filled);
@@ -3699,7 +3699,7 @@ TEST(alloc_failure, a_reset_whose_shrink_fails_empties_the_vector) {
   _flaky_arm(1);
   cvector_reset(v);
   bool realloc_tried = g_flaky_seen >= 1;
-  size_t count_after = cvector_elem_count(v);
+  size_t count_after = cvector_size(v);
   size_t cap_after = cvector_get_capacity(v);
   _flaky_arm(1);
   bool pushed = true;
@@ -3707,7 +3707,7 @@ TEST(alloc_failure, a_reset_whose_shrink_fails_empties_the_vector) {
     if (cvector_push_back(v, &i) != ccol_success) pushed = false;
   int calls_while_pushing = g_flaky_seen;
   _flaky_arm(0);
-  bool intact = cvector_elem_count(v) == cap;
+  bool intact = cvector_size(v) == cap;
   for (size_t i = 0; intact && i < cap; i++)
     if (*(int *)cvector_at(v, i) != (int)i) intact = false;
   cvector_destroy(v);
@@ -3774,7 +3774,7 @@ static void _null_case_run(null_case_t c) {
       (void)cvector_at(NULL, 0);
       break;
     case NULL_ELEM_COUNT:
-      (void)cvector_elem_count(NULL);
+      (void)cvector_size(NULL);
       break;
     case NULL_RESET:
       cvector_reset(NULL);

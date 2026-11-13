@@ -112,7 +112,7 @@ void *cvector_at(cvec v, size_t index);
 
 // Gives the number of elements; the struct is opaque, so this is how you read
 // it. Asserts on a NULL v.
-size_t cvector_elem_count(cvec v);
+size_t cvector_size(cvec v);
 
 // Removes every element and tries to shrink the capacity back to 4, so you can
 // reuse a vector without creating a new one. When that realloc fails the
@@ -377,7 +377,7 @@ static inline __attribute__((always_inline)) void *cvec__at_checked(
   if (__builtin_expect(!ptr, 0)) {
     ccol__fatal_err("cvec_at('%s'): index %lu out of bounds (size: %lu)",
                     vec_name, (unsigned long)index,
-                    (unsigned long)cvector_elem_count(v));
+                    (unsigned long)cvector_size(v));
   }
   return ptr;
 }
@@ -406,7 +406,7 @@ static inline __attribute__((always_inline)) void *cvec__at_checked(
   ((__typeof__(*v##__ccol_val_type_var) *)(cvector_at((v), (index))))
 
 // Evaluates to the number of elements in v, as a size_t. Asserts on a NULL v.
-#define cvec_size(v) cvector_elem_count((v))
+#define cvec_size(v) cvector_size((v))
 
 // Removes every element of v and tries to shrink the capacity back to 4, so you
 // can reuse the vector; when that shrink fails the capacity stays, but the
@@ -486,26 +486,25 @@ bool cvector__sort(cvec v, ccol_comparison_proc comparison_proc);
 // a different one. Each argument is evaluated once. A NULL v, a NULL
 // comparator or a failed allocation stops the program; on failure v is left
 // unsorted and unchanged. It's a statement.
-#define cvector_sort_with_comparison_proc(v, comparison_proc)               \
-  do {                                                                      \
-    __typeof__(v) cvec__sort_v = (v);                                       \
-    if (!cvec__sort_v) {                                                    \
-      ccol__fatal_err(                                                      \
-          "cvector_sort_with_comparison_proc('%s'): vector is NULL", #v);   \
-    }                                                                       \
-    ccol_comparison_proc cvec__sort_cmp = (comparison_proc);                \
-    if (!cvec__sort_cmp) {                                                  \
-      ccol__fatal_err(                                                      \
-          "cvector_sort_with_comparison_proc('%s'): comparison_proc is "    \
-          "NULL; pass a real comparison procedure",                         \
-          #v);                                                              \
-    }                                                                       \
-    if (!cvector__sort(cvec__sort_v, cvec__sort_cmp)) {                     \
-      ccol__fatal_err(                                                      \
-          "cvector_sort_with_comparison_proc('%s'): out of memory; vector " \
-          "left unsorted",                                                  \
-          #v);                                                              \
-    }                                                                       \
+#define cvec_sort_with(v, comparison_proc)                         \
+  do {                                                             \
+    __typeof__(v) cvec__sort_v = (v);                              \
+    if (!cvec__sort_v) {                                           \
+      ccol__fatal_err("cvec_sort_with('%s'): vector is NULL", #v); \
+    }                                                              \
+    ccol_comparison_proc cvec__sort_cmp = (comparison_proc);       \
+    if (!cvec__sort_cmp) {                                         \
+      ccol__fatal_err(                                             \
+          "cvec_sort_with('%s'): comparison_proc is "              \
+          "NULL; pass a real comparison procedure",                \
+          #v);                                                     \
+    }                                                              \
+    if (!cvector__sort(cvec__sort_v, cvec__sort_cmp)) {            \
+      ccol__fatal_err(                                             \
+          "cvec_sort_with('%s'): out of memory; vector "           \
+          "left unsorted",                                         \
+          #v);                                                     \
+    }                                                              \
   } while (0)
 
 // Sorts v in place with a stable mergesort and the default order of its
@@ -513,7 +512,7 @@ bool cvector__sort(cvec v, ccol_comparison_proc comparison_proc);
 // last), enums, bool (false first) and char pointers (strcmp order, NULL
 // first). A type with no default order (a struct, a union, another pointer, a
 // char array) is a compile error that points you to
-// cvector_sort_with_comparison_proc(). A failed allocation of the temporary
+// cvec_sort_with(). A failed allocation of the temporary
 // buffer prints an error and ends the program, with v unchanged.
 #define cvec_sort(v)                                                         \
   do {                                                                       \
@@ -523,12 +522,12 @@ bool cvector__sort(cvec v, ccol_comparison_proc comparison_proc);
         "): this vector's element type has no default comparison procedure " \
         "(a struct, a union, a pointer to anything other than char and a "   \
         "fixed-size char array all have none). Sort this vector with "       \
-        "cvector_sort_with_comparison_proc(" #v                              \
+        "cvec_sort_with(" #v                                                 \
         ", your_comparison_proc) and an explicit comparison procedure "      \
         "instead.");                                                         \
     ccol_comparison_proc ccol__cvec_sort_cmp =                               \
         csort_get_default_comparison_proc(*(v##__ccol_val_type_var));        \
-    cvector_sort_with_comparison_proc(v, ccol__cvec_sort_cmp);               \
+    cvec_sort_with(v, ccol__cvec_sort_cmp);                                  \
   } while (0)
 
 // Evaluates to the index of the first element of v equal to elem, or

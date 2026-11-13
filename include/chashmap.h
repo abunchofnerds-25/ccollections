@@ -158,7 +158,7 @@ chashmap_create_ch(size_t initial_bucket_array_size, ccol_data_type key_type,
 
 // Returns the number of key-value pairs that the map holds. Asserts on a NULL
 // chm.
-size_t chashmap_elem_count(chmap chm);
+size_t chashmap_size(chmap chm);
 
 // Removes and frees every element, so the map can be filled again without a
 // new map. A new_bucket_array_size other than 0 also resizes the bucket array
@@ -216,7 +216,7 @@ ccol_retval chashmap__get_val_accessor(chmap chm, const cmap_pair *key_pair,
 // open-addressing map it moves other entries. Open addressing halves below a
 // load of 0.25 and chaining shrinks by 4 once elem_count <
 // (bucket_count + 1) / 8, never below the minimum.
-ccol_retval chashmap_delete_elem(chmap chm, const cmap_pair *key_pair);
+ccol_retval chashmap_remove_elem(chmap chm, const cmap_pair *key_pair);
 
 // Iteration
 
@@ -689,7 +689,7 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     ccol__clear_padding(&ccol__chmap_key_tmp);                                 \
     cmap_pair *ccol__chmap_kp = &(cmap_pair){};                                \
     ccol__populate_cmap_pair(ccol__chmap_kp, ccol__chmap_key_tmp);             \
-    ccol_retval ccol__chmap_r = chashmap_delete_elem(hm_name, ccol__chmap_kp); \
+    ccol_retval ccol__chmap_r = chashmap_remove_elem(hm_name, ccol__chmap_kp); \
     ccol__chmap_r;                                                             \
   })
 
@@ -827,7 +827,7 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
 
 // Evaluates to the number of key-value pairs in the map, as a size_t. Asserts
 // on a NULL handle.
-#define chmap_size(chm) chashmap_elem_count((chm))
+#define chmap_size(chm) chashmap_size((chm))
 
 // Removes and frees every entry, so the map can be filled again without a new
 // map. A new_bucket_array_size other than 0 also resizes the bucket array to

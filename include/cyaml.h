@@ -342,7 +342,7 @@ const char *cyaml_str_val(cyaml node);
 
 // Gives the number of elements of a CYAML_LIST node, for a walk by index. Ends
 // the program with a fatal error when node is NULL or isn't a list.
-size_t cyaml_list_len(cyaml node);
+size_t cyaml_list_size(cyaml node);
 
 // Gives the number of keys of a CYAML_DICTIONARY node. Ends the program with a
 // fatal error when node is NULL or isn't a dictionary.
@@ -471,15 +471,15 @@ static inline void cyaml__destroy_cleanup(cyaml *node) {
 // copy of a path of 256 bytes or more fails.
 cyaml cyaml__get(cyaml root, const char *path);
 
-// Internal: The body of cyaml_delete(). ccol_invalid_args for a NULL or empty
+// Internal: The body of cyaml_remove(). ccol_invalid_args for a NULL or empty
 // path, a malformed component anywhere, or a parent of the wrong type;
 // ccol_key_not_found for a well-formed component that is absent;
 // ccol_not_enough_memory when the path copy fails.
-ccol_retval cyaml__delete(cyaml root, const char *path);
+ccol_retval cyaml__remove(cyaml root, const char *path);
 
 // Internal: The body of cyaml_set(). raw points at the value, raw_size is its
 // sizeof() (a pointer to the string for CYAML_STRING) and is checked before the
-// value is read. The errors are those of cyaml__delete(), plus a string value
+// value is read. The errors are those of cyaml__remove(), plus a string value
 // that isn't well-formed UTF-8, and ccol_container_full for a new key past the
 // largest count. An absent key at the leaf is created; an absent list index or
 // an absent key above the leaf is ccol_key_not_found.
@@ -630,6 +630,6 @@ ccol_retval cyaml__set_typed(cyaml root, const char *path, cyaml_node_type type,
 // ccol_invalid_args for a NULL root or path, an empty or malformed path or one
 // whose shape doesn't fit the tree, ccol_key_not_found when a well-formed
 // component is absent, or ccol_not_enough_memory.
-#define cyaml_delete(root, path) cyaml__delete((root), (path))
+#define cyaml_remove(root, path) cyaml__remove((root), (path))
 
 #pragma GCC visibility pop

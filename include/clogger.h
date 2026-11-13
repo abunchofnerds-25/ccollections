@@ -45,8 +45,8 @@ SOFTWARE.
 // after the interval), into <path>.<YYYYMMDDHHMMSS>[_N], optionally gzipped by
 // a background thread, keeping max_rotated_files generations. At exit() an exit
 // handler drains every async logger and the queued compressions within 5
-// seconds. clog_create_from_file_mp(3), clogger(7) and doc/clogger.md have the
-// full rules.
+// seconds. clog_create_from_file_path_mp(3), clogger(7) and doc/clogger.md have
+// the full rules.
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -86,14 +86,14 @@ typedef enum {
 
 #define CLOG_DEFAULT_MAX_ROTATED_FILES 7
 
-// How a file logger rotates; pass it to clog_create_from_file_mp(). A zero or
-// negative max_file_size or max_rotated_files, and a zero rotation_interval_us,
-// take the CLOG_DEFAULT_* value, so old files are always pruned. With
-// compress_rotated each rotated file becomes <rotated>.gz on a background
-// thread; a failed compression keeps the uncompressed file, and a static link
-// needs -lz. The members are fixed-width (bytes, microseconds) so the layout
-// doesn't depend on _FILE_OFFSET_BITS or _TIME_BITS. Example: Rotate at 50 MiB,
-// keep 14 gzipped files:
+// How a file logger rotates; pass it to clog_create_from_file_path_mp(). A zero
+// or negative max_file_size or max_rotated_files, and a zero
+// rotation_interval_us, take the CLOG_DEFAULT_* value, so old files are always
+// pruned. With compress_rotated each rotated file becomes <rotated>.gz on a
+// background thread; a failed compression keeps the uncompressed file, and a
+// static link needs -lz. The members are fixed-width (bytes, microseconds) so
+// the layout doesn't depend on _FILE_OFFSET_BITS or _TIME_BITS. Example: Rotate
+// at 50 MiB, keep 14 gzipped files:
 //
 //   clog_rotation_cfg cfg = {.size_rotation_enabled = true,
 //                            .max_file_size = 50 * 1024 * 1024,
@@ -190,10 +190,10 @@ static inline __attribute__((always_inline)) clog clog_create_from_fd(
 // at least a second later. Gives the handle, or CLOG_NULL on a bad path or
 // min_level, an allocation failure, a conflicting logger, or a call after the
 // library's exit destructor. Close the handle with clog_close().
-clog clog_create_from_file_mp(const char *path, clog_level min_level,
-                              const clog_rotation_cfg *cfg,
-                              const clog_async_cfg *async_cfg,
-                              ccol_memmgmt_procs *mprocs);
+clog clog_create_from_file_path_mp(const char *path, clog_level min_level,
+                                   const clog_rotation_cfg *cfg,
+                                   const clog_async_cfg *async_cfg,
+                                   ccol_memmgmt_procs *mprocs);
 
 // Creates a logger that appends to the file at path (created with mode 0644
 // under the umask), using malloc for its memory. cfg turns on rotation (NULL
@@ -204,10 +204,10 @@ clog clog_create_from_file_mp(const char *path, clog_level min_level,
 // differs. Gives the handle, or CLOG_NULL on a bad path or min_level, an
 // allocation failure, a conflicting logger, or a call after the library's exit
 // destructor. Close the handle with clog_close().
-static inline __attribute__((always_inline)) clog clog_create_from_file(
+static inline __attribute__((always_inline)) clog clog_create_from_file_path(
     const char *path, clog_level min_level, const clog_rotation_cfg *cfg,
     const clog_async_cfg *async_cfg) {
-  return clog_create_from_file_mp(path, min_level, cfg, async_cfg, NULL);
+  return clog_create_from_file_path_mp(path, min_level, cfg, async_cfg, NULL);
 }
 
 // Flushes and closes logger. The caller must make sure no other thread uses

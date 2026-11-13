@@ -181,7 +181,7 @@ check_tsan_supp: build_tsan
 # whole process and can't be undone, because the library never builds
 # default_client_bundler.client again after it clears that field (see the doc
 # comment of chttp_default_client). Such a destroy must not run inside
-# tests.c, where it would break the chttp_do and chttp_get calls of every
+# tests.c, where it would break the chttp_do_default and chttp_get calls of every
 # other test for the rest of that process. So, like tests_parser, it gets one
 # more binary in this directory instead of a new top-level directory under
 # tests/.

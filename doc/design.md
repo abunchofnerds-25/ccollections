@@ -237,7 +237,7 @@ name of the handle (`cvec_`, `cstr_`, `chmap_`, `cbmap_`, `ccache_`), and a
 raw function uses the name of the module (`cvector_`, `cstring_`,
 `chashmap_`, `cbstmap_`, `clrucache_`). Some raw calls are just as useful
 with typed code, so the typed layer has short aliases for them that behave
-the same way: `chmap_size()` is `chashmap_elem_count()`, `cbmap_reset()` is
+the same way: `chmap_size()` is `chashmap_size()`, `cbmap_reset()` is
 `cbstmap_reset()` and `ccache_destroy()` is `clrucache_destroy()`.
 
 ## Error handling

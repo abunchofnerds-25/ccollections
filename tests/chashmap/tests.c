@@ -467,7 +467,7 @@ int get_int_ref_from_string(chashmap *chmap, const char *key, int **val_ptr) {
 
 // Deletes key through the raw layer.
 ccol_retval delete_int_from_string(chashmap *chmap, const char *key) {
-  return chashmap_delete_elem(
+  return chashmap_remove_elem(
       chmap, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)});
 }
 
@@ -480,17 +480,17 @@ TEST(chash_maps, basic_insertions_and_lookups) {
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &val), ccol_key_not_found);
   REQUIRE_EQ(get_int_from_string(chmap, "", &val), ccol_invalid_args);
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), 0);
+  REQUIRE_EQ(chashmap_size(chmap), 0);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 2), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 1);
+  REQUIRE_EQ(chashmap_size(chmap), 1);
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_key_already_present);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 1);
+  REQUIRE_EQ(chashmap_size(chmap), 1);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 4), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 2);
+  REQUIRE_EQ(chashmap_size(chmap), 2);
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_key_already_present);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 2);
+  REQUIRE_EQ(chashmap_size(chmap), 2);
 
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &val), ccol_success);
   REQUIRE_EQ(val, 3);
@@ -513,17 +513,17 @@ TEST(chash_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &val), ccol_key_not_found);
   REQUIRE_EQ(get_int_from_string(chmap, "", &val), ccol_invalid_args);
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), 0);
+  REQUIRE_EQ(chashmap_size(chmap), 0);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 2), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 1);
+  REQUIRE_EQ(chashmap_size(chmap), 1);
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_key_already_present);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 1);
+  REQUIRE_EQ(chashmap_size(chmap), 1);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 4), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 2);
+  REQUIRE_EQ(chashmap_size(chmap), 2);
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_key_already_present);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 2);
+  REQUIRE_EQ(chashmap_size(chmap), 2);
 
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &val), ccol_success);
   REQUIRE_EQ(val, 3);
@@ -856,10 +856,10 @@ TEST(chash_maps, destroy_with_dtor_after_oa_deletes_visits_live_values) {
   for (int i = 0; i < 10; i += 2) {
     int key = i;
     REQUIRE_EQ(
-        chashmap_delete_elem(m, &(cmap_pair){.ptr = &key, .size = sizeof(key)}),
+        chashmap_remove_elem(m, &(cmap_pair){.ptr = &key, .size = sizeof(key)}),
         ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(m), (size_t)5);
+  REQUIRE_EQ(chashmap_size(m), (size_t)5);
 
   int expected_sum = 0;
   for (int i = 1; i < 10; i += 2) {
@@ -906,7 +906,7 @@ TEST(chash_maps, basic_deletions) {
 
   int val = -1;
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), 0);
+  REQUIRE_EQ(chashmap_size(chmap), 0);
 
   REQUIRE_EQ(delete_int_from_string(chmap, "key1"), ccol_key_not_found);
   REQUIRE_EQ(delete_int_from_string(chmap, ""), ccol_invalid_args);
@@ -914,7 +914,7 @@ TEST(chash_maps, basic_deletions) {
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), 2);
+  REQUIRE_EQ(chashmap_size(chmap), 2);
 
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &val), ccol_success);
   REQUIRE_EQ(val, 3);
@@ -924,12 +924,12 @@ TEST(chash_maps, basic_deletions) {
   REQUIRE_EQ(delete_int_from_string(chmap, "key1"), ccol_success);
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &val), ccol_key_not_found);
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), 1);
+  REQUIRE_EQ(chashmap_size(chmap), 1);
 
   REQUIRE_EQ(delete_int_from_string(chmap, "key2"), ccol_success);
   REQUIRE_EQ(get_int_from_string(chmap, "key2", &val), ccol_key_not_found);
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), 0);
+  REQUIRE_EQ(chashmap_size(chmap), 0);
 
   REQUIRE_EQ(delete_int_from_string(chmap, "key1"), ccol_key_not_found);
   REQUIRE_EQ(delete_int_from_string(chmap, ""), ccol_invalid_args);
@@ -948,12 +948,12 @@ TEST(chash_maps, accessing_references) {
   REQUIRE_EQ(get_int_ref_from_string(chmap, "", &val_ptr), -1);
   REQUIRE_EQ((void *)val_ptr, NULL);
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), 0);
+  REQUIRE_EQ(chashmap_size(chmap), 0);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", -3), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 1);
+  REQUIRE_EQ(chashmap_size(chmap), 1);
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", -5), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 2);
+  REQUIRE_EQ(chashmap_size(chmap), 2);
 
   int tmp;
 
@@ -978,22 +978,22 @@ TEST(chash_maps, reset) {
   chashmap *chmap = chashmap_create(1, ccol_string, ccol_int, NULL);
   REQUIRE_NE((void *)chmap, NULL);
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), 0);
+  REQUIRE_EQ(chashmap_size(chmap), 0);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 1);
+  REQUIRE_EQ(chashmap_size(chmap), 1);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 2);
+  REQUIRE_EQ(chashmap_size(chmap), 2);
 
   REQUIRE_EQ(chashmap_reset(chmap, 2), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 0);
+  REQUIRE_EQ(chashmap_size(chmap), 0);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 4), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 1);
+  REQUIRE_EQ(chashmap_size(chmap), 1);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 6), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 2);
+  REQUIRE_EQ(chashmap_size(chmap), 2);
 
   int tmp;
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &tmp), ccol_success);
@@ -1002,13 +1002,13 @@ TEST(chash_maps, reset) {
   REQUIRE_EQ(tmp, 6);
 
   REQUIRE_EQ(chashmap_reset(chmap, 8192), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 0);
+  REQUIRE_EQ(chashmap_size(chmap), 0);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 4), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 1);
+  REQUIRE_EQ(chashmap_size(chmap), 1);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 6), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(chmap), 2);
+  REQUIRE_EQ(chashmap_size(chmap), 2);
 
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &tmp), ccol_success);
   REQUIRE_EQ(tmp, 4);
@@ -1078,7 +1078,7 @@ TEST(chash_maps, scaling) {
     REQUIRE_EQ(insert_string_to_int(chmap, key_buf, i + 1), ccol_success);
   }
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), first_up_threshold + 1);
+  REQUIRE_EQ(chashmap_size(chmap), first_up_threshold + 1);
 
   REQUIRE_TRUE(first_up_threshold < chmap_get_elem_count_to_scale_up(chmap));
   REQUIRE_TRUE(first_down_threshold <
@@ -1090,7 +1090,7 @@ TEST(chash_maps, scaling) {
     delete_int_from_string(chmap, key_buf);
   }
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), 0);
+  REQUIRE_EQ(chashmap_size(chmap), 0);
 
   REQUIRE_EQ(first_up_threshold, chmap_get_elem_count_to_scale_up(chmap));
   REQUIRE_EQ(first_down_threshold, chmap_get_elem_count_to_scale_down(chmap));
@@ -1115,7 +1115,7 @@ TEST(chash_maps, oa_update_of_existing_key_never_triggers_rehash) {
                              &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
         ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)12);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)12);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)16);
 
   int key0 = 0;
@@ -1136,7 +1136,7 @@ TEST(chash_maps, oa_update_of_existing_key_never_triggers_rehash) {
                  &(cmap_pair){.ptr = &new_val5, .size = sizeof(new_val5)}),
              ccol_key_already_present);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)12);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)12);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)16);
 
   REQUIRE_EQ((void *)key0_val_pair.ptr, key0_val_addr_before);
@@ -1162,7 +1162,7 @@ TEST(chash_maps, stress_scaling_ints) {
     chmap_insert(chm, i, val);
   }
 
-  REQUIRE_EQ(chashmap_elem_count(chm), max_elems + 1);
+  REQUIRE_EQ(chashmap_size(chm), max_elems + 1);
 
   for (size_t i = 0; i <= max_elems; ++i) {
     REQUIRE_EQ(chmap_get(chm, i), (int)i * 10);
@@ -1172,7 +1172,7 @@ TEST(chash_maps, stress_scaling_ints) {
     chmap_remove(chm, i);
   }
 
-  REQUIRE_EQ(chashmap_elem_count(chm), 0);
+  REQUIRE_EQ(chashmap_size(chm), 0);
 
   chmap_destroy(chm);
 }
@@ -1189,7 +1189,7 @@ TEST(chash_maps, stress_scaling_strings) {
     REQUIRE_EQ(insert_string_to_int(chmap, key_buf, i + 1), ccol_success);
   }
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), max_elems + 1);
+  REQUIRE_EQ(chashmap_size(chmap), max_elems + 1);
 
   for (size_t i = 0; i <= max_elems; ++i) {
     snprintf(key_buf, sizeof(key_buf), "k%zu", i);
@@ -1199,7 +1199,7 @@ TEST(chash_maps, stress_scaling_strings) {
     }
   }
 
-  REQUIRE_EQ(chashmap_elem_count(chmap), 0);
+  REQUIRE_EQ(chashmap_size(chmap), 0);
 
   chmap_destroy(chmap);
 }
@@ -1214,7 +1214,7 @@ TEST(chash_maps, stress_scaling_ptrs) {
     chmap_insert(chm, i, val);
   }
 
-  REQUIRE_EQ(chashmap_elem_count(chm), max_elems + 1);
+  REQUIRE_EQ(chashmap_size(chm), max_elems + 1);
 
   for (size_t i = 0; i <= max_elems; ++i) {
     REQUIRE_EQ((uintptr_t)chmap_get(chm, i), (uintptr_t)i * 10);
@@ -1224,7 +1224,7 @@ TEST(chash_maps, stress_scaling_ptrs) {
     chmap_remove(chm, i);
   }
 
-  REQUIRE_EQ(chashmap_elem_count(chm), 0);
+  REQUIRE_EQ(chashmap_size(chm), 0);
 
   chmap_destroy(chm);
 }
@@ -1687,7 +1687,7 @@ TEST(chash_maps, construct_scoped_lifecycle) {
     for (int i = 1; i <= 5; ++i) {
       REQUIRE_EQ(chmap_get(hm, i), i * 100);
     }
-    REQUIRE_EQ(chashmap_elem_count(hm), 5);
+    REQUIRE_EQ(chashmap_size(hm), 5);
   }
 }
 
@@ -1819,21 +1819,21 @@ TEST(chash_maps, oa_deletes_free_slots_while_growth_fails) {
                              &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
         ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 16);
+  REQUIRE_EQ(chashmap_size(hm), 16);
 
   for (int i = 0; i < 10; i++) {
     REQUIRE_EQ(
-        chashmap_delete_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)}),
+        chashmap_remove_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)}),
         ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 6);
+  REQUIRE_EQ(chashmap_size(hm), 6);
 
   int new_key = 16, new_val = 160;
   REQUIRE_EQ(chashmap_insert_elem(
                  hm, &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
                  &(cmap_pair){.ptr = &new_val, .size = sizeof(new_val)}),
              ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), 7);
+  REQUIRE_EQ(chashmap_size(hm), 7);
 
   int retrieved = 0;
   REQUIRE_EQ(chashmap_get_elem_copy(
@@ -1867,7 +1867,7 @@ TEST(chash_maps, oa_insert_sustained_oom_reports_not_enough_memory) {
                              &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
         ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)16);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)16);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)16);
 
   int overflow_key = 16, overflow_val = 1600;
@@ -1876,7 +1876,7 @@ TEST(chash_maps, oa_insert_sustained_oom_reports_not_enough_memory) {
           hm, &(cmap_pair){.ptr = &overflow_key, .size = sizeof(overflow_key)},
           &(cmap_pair){.ptr = &overflow_val, .size = sizeof(overflow_val)}),
       ccol_not_enough_memory);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)16);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)16);
 
   g_calloc_fail = false;
 
@@ -1885,7 +1885,7 @@ TEST(chash_maps, oa_insert_sustained_oom_reports_not_enough_memory) {
           hm, &(cmap_pair){.ptr = &overflow_key, .size = sizeof(overflow_key)},
           &(cmap_pair){.ptr = &overflow_val, .size = sizeof(overflow_val)}),
       ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)17);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)17);
   REQUIRE_TRUE(chmap_get_bucket_arr_size(hm) > 16);
 
   chmap_destroy(hm);
@@ -1899,18 +1899,18 @@ TEST(chash_maps, oa_repopulate_after_full_delete) {
     int val = i * 10;
     chmap_insert(hm, i, val);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 20);
+  REQUIRE_EQ(chashmap_size(hm), 20);
 
   for (int i = 0; i < 20; ++i) {
     chmap_remove(hm, i);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 0);
+  REQUIRE_EQ(chashmap_size(hm), 0);
 
   for (int i = 0; i < 20; ++i) {
     int val = i * 100;
     chmap_insert(hm, i, val);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 20);
+  REQUIRE_EQ(chashmap_size(hm), 20);
 
   for (int i = 0; i < 20; ++i) {
     REQUIRE_EQ(chmap_get(hm, i), i * 100);
@@ -1943,7 +1943,7 @@ TEST(chash_maps, sc_large_key_and_large_value) {
   chmap_insert(hm, k2, v2);
   chmap_insert(hm, k3, v3);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)3);
 
   REQUIRE_STREQ(chmap_get(hm, k1), val1);
   REQUIRE_STREQ(chmap_get(hm, k2), val2);
@@ -2077,7 +2077,7 @@ TEST(chash_maps, key_converts_to_the_declared_type_and_stays_findable) {
   int *p = chmap_get_ptr(hm, ik);
   REQUIRE_NE((void *)p, NULL);
   REQUIRE_EQ(*p, 7);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   chmap_destroy(hm);
 }
 
@@ -2116,9 +2116,9 @@ TEST(chash_maps, array_key_and_string_literal_key_agree) {
   snprintf(buf, sizeof(buf), "shared");
   chmap_insert(hm, buf, 5);
   REQUIRE_EQ(chmap_get(hm, "shared"), 5);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   chmap_insert(hm, "shared", 9);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   REQUIRE_EQ(chmap_get(hm, buf), 9);
   chmap_destroy(hm);
 }
@@ -2171,7 +2171,7 @@ TEST(chash_maps, char_type_variants_as_string_keys) {
 
     chmap_insert(hm, k1, v1);
     chmap_insert(hm, k2, v2);
-    REQUIRE_EQ(chashmap_elem_count(hm), 2);
+    REQUIRE_EQ(chashmap_size(hm), 2);
     REQUIRE_EQ(chmap_get(hm, k1), 10);
     REQUIRE_EQ(chmap_get(hm, k2), 20);
 
@@ -2181,7 +2181,7 @@ TEST(chash_maps, char_type_variants_as_string_keys) {
     REQUIRE_EQ(chmap_get(hm, ck2), 20);
 
     chmap_remove(hm, k2);
-    REQUIRE_EQ(chashmap_elem_count(hm), 1);
+    REQUIRE_EQ(chashmap_size(hm), 1);
 
     chmap_destroy(hm);
   }
@@ -2195,7 +2195,7 @@ TEST(chash_maps, char_type_variants_as_string_keys) {
 
     chmap_insert(hm, k1, v1);
     chmap_insert(hm, k2, v2);
-    REQUIRE_EQ(chashmap_elem_count(hm), 2);
+    REQUIRE_EQ(chashmap_size(hm), 2);
     REQUIRE_EQ(chmap_get(hm, k1), 30);
     REQUIRE_EQ(chmap_get(hm, k2), 40);
 
@@ -2306,19 +2306,19 @@ TEST(chash_maps, oa_reset_zero_preserves_capacity) {
     int val = i * 7;
     chmap_insert(hm, i, val);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 10);
+  REQUIRE_EQ(chashmap_size(hm), 10);
 
   size_t capacity_before = chmap_get_bucket_arr_size(hm);
 
   REQUIRE_EQ(chashmap_reset(hm, 0), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), 0);
+  REQUIRE_EQ(chashmap_size(hm), 0);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), capacity_before);
 
   for (int i = 0; i < 10; ++i) {
     int val = i * 13;
     chmap_insert(hm, i, val);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 10);
+  REQUIRE_EQ(chashmap_size(hm), 10);
   for (int i = 0; i < 10; ++i) {
     REQUIRE_EQ(chmap_get(hm, i), i * 13);
   }
@@ -2441,17 +2441,17 @@ TEST(chash_maps, oa_reset_with_new_size) {
     int val = i * 7;
     chmap_insert(hm, i, val);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 10);
+  REQUIRE_EQ(chashmap_size(hm), 10);
 
   REQUIRE_EQ(chashmap_reset(hm, 256), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), 0);
+  REQUIRE_EQ(chashmap_size(hm), 0);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)256);
 
   for (int i = 0; i < 10; ++i) {
     int val = i * 13;
     chmap_insert(hm, i, val);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 10);
+  REQUIRE_EQ(chashmap_size(hm), 10);
   for (int i = 0; i < 10; ++i) {
     REQUIRE_EQ(chmap_get(hm, i), i * 13);
   }
@@ -2767,7 +2767,7 @@ TEST(chash_maps, oa_custom_hashing) {
   chmap_insert(hm, k20, v200);
   chmap_insert(hm, k30, v300);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), 3);
+  REQUIRE_EQ(chashmap_size(hm), 3);
   REQUIRE_EQ(chmap_get(hm, k10), 100);
   REQUIRE_EQ(chmap_get(hm, k20), 200);
   REQUIRE_EQ(chmap_get(hm, k30), 300);
@@ -2778,7 +2778,7 @@ TEST(chash_maps, oa_custom_hashing) {
 
   ccol_retval r = chmap_remove(hm, k10);
   REQUIRE_EQ(r, ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), 2);
+  REQUIRE_EQ(chashmap_size(hm), 2);
   REQUIRE_EQ((void *)chmap_get_ptr(hm, k10), (void *)NULL);
 
   int key_sum = 0;
@@ -2809,7 +2809,7 @@ TEST(chash_maps, sc_custom_hashing_with_variable_length_key) {
   chmap_insert(hm, "abc", v2);
   chmap_insert(hm, "abcd", v3);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), 3);
+  REQUIRE_EQ(chashmap_size(hm), 3);
   REQUIRE_EQ(chmap_get(hm, "ab"), 1);
   REQUIRE_EQ(chmap_get(hm, "abc"), 2);
   REQUIRE_EQ(chmap_get(hm, "abcd"), 3);
@@ -2848,11 +2848,11 @@ TEST(chash_maps, insert_and_ref_invalid_args) {
   REQUIRE_EQ(chashmap_get_elem_ref(hm, NULL, &out), ccol_invalid_args);
   REQUIRE_EQ(chashmap_get_elem_ref(hm, &valid_key, NULL), ccol_invalid_args);
 
-  REQUIRE_EQ(chashmap_delete_elem(hm, &key_null_ptr), ccol_invalid_args);
-  REQUIRE_EQ(chashmap_delete_elem(hm, &key_zero_size), ccol_invalid_args);
-  REQUIRE_EQ(chashmap_delete_elem(hm, NULL), ccol_invalid_args);
+  REQUIRE_EQ(chashmap_remove_elem(hm, &key_null_ptr), ccol_invalid_args);
+  REQUIRE_EQ(chashmap_remove_elem(hm, &key_zero_size), ccol_invalid_args);
+  REQUIRE_EQ(chashmap_remove_elem(hm, NULL), ccol_invalid_args);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), 0);
+  REQUIRE_EQ(chashmap_size(hm), 0);
   chmap_destroy(hm);
 }
 
@@ -2892,7 +2892,7 @@ TEST(chash_maps, sc_construct_scoped_lifecycle) {
     chmap_insert(hm, "beta", v2);
     chmap_insert(hm, "gamma", v3);
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)3);
     REQUIRE_EQ(chmap_get(hm, "alpha"), 10);
     REQUIRE_EQ(chmap_get(hm, "beta"), 20);
     REQUIRE_EQ(chmap_get(hm, "gamma"), 30);
@@ -2962,14 +2962,14 @@ TEST(chash_maps, oa_iterator_visits_only_live_entries_after_deletes) {
     int val = i * 10;
     chmap_insert(hm, i, val);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)5);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)5);
 
   int del1 = 2, del2 = 4, absent = 99;
   ccol_retval r = chmap_remove(hm, del1);
   REQUIRE_EQ(r, ccol_success);
   r = chmap_remove(hm, del2);
   REQUIRE_EQ(r, ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)3);
 
   r = chmap_remove(hm, absent);
   REQUIRE_EQ(r, ccol_key_not_found);
@@ -2997,19 +2997,19 @@ TEST(chash_maps, sc_reset_zero_preserves_capacity) {
     snprintf(key_buf, sizeof(key_buf), "key%d", i);
     REQUIRE_EQ(insert_string_to_int(hm, key_buf, i * 7), ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 10);
+  REQUIRE_EQ(chashmap_size(hm), 10);
 
   size_t capacity_before = chmap_get_bucket_arr_size(hm);
 
   REQUIRE_EQ(chashmap_reset(hm, 0), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), 0);
+  REQUIRE_EQ(chashmap_size(hm), 0);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), capacity_before);
 
   for (int i = 0; i < 5; ++i) {
     snprintf(key_buf, sizeof(key_buf), "key%d", i);
     REQUIRE_EQ(insert_string_to_int(hm, key_buf, i * 13), ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), 5);
+  REQUIRE_EQ(chashmap_size(hm), 5);
   for (int i = 0; i < 5; ++i) {
     int val;
     snprintf(key_buf, sizeof(key_buf), "key%d", i);
@@ -3031,7 +3031,7 @@ TEST(chash_maps, oa_float_and_double_keys) {
     chmap_insert(hm, k2, v2);
     chmap_insert(hm, k3, v3);
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)3);
     REQUIRE_EQ(chmap_get(hm, k1), 10);
     REQUIRE_EQ(chmap_get(hm, k2), 20);
     REQUIRE_EQ(chmap_get(hm, k3), 30);
@@ -3042,7 +3042,7 @@ TEST(chash_maps, oa_float_and_double_keys) {
 
     ccol_retval r = chmap_remove(hm, k1);
     REQUIRE_EQ(r, ccol_success);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)2);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)2);
     REQUIRE_EQ((void *)chmap_get_ptr(hm, k1), (void *)NULL);
 
     int sum = 0, count = 0;
@@ -3067,7 +3067,7 @@ TEST(chash_maps, oa_float_and_double_keys) {
     chmap_insert(hm, k2, v2);
     chmap_insert(hm, k3, v3);
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)3);
     REQUIRE_EQ(chmap_get(hm, k1), 100);
     REQUIRE_EQ(chmap_get(hm, k2), 200);
     REQUIRE_EQ(chmap_get(hm, k3), 300);
@@ -3085,17 +3085,17 @@ TEST(chash_maps, float_double_keys_negative_zero_canonicalized) {
     int v1 = 111;
     chmap_insert(hm, neg_zero, v1);
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)1);
     REQUIRE_NE((void *)chmap_get_ptr(hm, pos_zero), (void *)NULL);
     REQUIRE_EQ(chmap_get(hm, pos_zero), 111);
 
     int v2 = 222;
     chmap_insert(hm, pos_zero, v2);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)1);
     REQUIRE_EQ(chmap_get(hm, neg_zero), 222);
 
     REQUIRE_EQ(chmap_remove(hm, pos_zero), ccol_success);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)0);
 
     chmap_destroy(hm);
   }
@@ -3108,7 +3108,7 @@ TEST(chash_maps, float_double_keys_negative_zero_canonicalized) {
     int v1 = 42;
     chmap_insert(hm, neg_zero, v1);
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)1);
     REQUIRE_EQ(chmap_get(hm, pos_zero), 42);
 
     chmap_destroy(hm);
@@ -3121,7 +3121,7 @@ TEST(chash_maps, float_double_keys_negative_zero_canonicalized) {
     double pos_zero = 0.0;
     chmap_insert(hm, neg_zero, "hello");
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)1);
     REQUIRE_STREQ(chmap_get(hm, pos_zero), "hello");
 
     chmap_destroy(hm);
@@ -3146,7 +3146,7 @@ TEST(chash_maps, float_double_nan_keys_bitwise_identity) {
 
     int v2 = 1000;
     chmap_insert(hm, other_nan, v2);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)2);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)2);
     REQUIRE_EQ(chmap_get(hm, nan_key), 999);
     REQUIRE_EQ(chmap_get(hm, other_nan), 1000);
 
@@ -3166,7 +3166,7 @@ TEST(chash_maps, long_double_keys_padding_insensitive_equality) {
 
   int va = 111;
   chmap_insert(hm, a, va);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   REQUIRE_NE((void *)chmap_get_ptr(hm, b), (void *)NULL);
   REQUIRE_EQ(chmap_get(hm, b), 111);
 
@@ -3202,13 +3202,13 @@ TEST(chash_maps, long_double_keys_negative_zero_unified) {
   int v1 = 42;
   chmap_insert(hm, neg_zero, v1);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   REQUIRE_NE((void *)chmap_get_ptr(hm, pos_zero), (void *)NULL);
   REQUIRE_EQ(chmap_get(hm, pos_zero), 42);
 
   int v2 = 84;
   chmap_insert(hm, pos_zero, v2);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   REQUIRE_EQ(chmap_get(hm, neg_zero), 84);
 
   chmap_destroy(hm);
@@ -3239,7 +3239,7 @@ TEST(chash_maps, long_double_nan_keys_collapse_to_one_key) {
 
   int v2 = 1000;
   chmap_insert(hm, other_nan, v2);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   REQUIRE_EQ(chmap_get(hm, nan_key), 1000);
   REQUIRE_EQ(chmap_get(hm, other_nan), 1000);
 
@@ -3257,7 +3257,7 @@ TEST(chash_maps, long_double_infinity_keys) {
   chmap_insert(hm, neg_inf, v2);
   chmap_insert(hm, finite, v3);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)3);
   REQUIRE_EQ(chmap_get(hm, pos_inf), 1);
   REQUIRE_EQ(chmap_get(hm, neg_inf), 2);
   REQUIRE_EQ(chmap_get(hm, finite), 3);
@@ -3281,15 +3281,15 @@ TEST(chash_maps, long_double_key_size_mismatch_returns_invalid_args) {
   cmap_pair val_pair = {.ptr = &val, .size = sizeof(val)};
 
   REQUIRE_EQ(chashmap_insert_elem(hm, &bad_key, &val_pair), ccol_invalid_args);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)0);
 
   cmap_pair out = {NULL, 0};
   REQUIRE_EQ(chashmap_get_elem_ref(hm, &bad_key, &out), ccol_invalid_args);
-  REQUIRE_EQ(chashmap_delete_elem(hm, &bad_key), ccol_invalid_args);
+  REQUIRE_EQ(chashmap_remove_elem(hm, &bad_key), ccol_invalid_args);
 
   long double good_key = 1.0L;
   chmap_insert(hm, good_key, val);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   REQUIRE_EQ(chmap_get(hm, good_key), 5);
 
   free(tiny_key_buf);
@@ -3307,7 +3307,7 @@ TEST(chash_maps, oa_char_and_short_and_long_long_keys) {
     chmap_insert(hm, k2, v2);
     chmap_insert(hm, k3, v3);
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)3);
     REQUIRE_EQ(chmap_get(hm, k1), 10);
     REQUIRE_EQ(chmap_get(hm, k2), 20);
     REQUIRE_EQ(chmap_get(hm, k3), 30);
@@ -3318,7 +3318,7 @@ TEST(chash_maps, oa_char_and_short_and_long_long_keys) {
 
     ccol_retval r = chmap_remove(hm, k1);
     REQUIRE_EQ(r, ccol_success);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)2);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)2);
     REQUIRE_EQ((void *)chmap_get_ptr(hm, k1), (void *)NULL);
 
     chmap_destroy(hm);
@@ -3334,7 +3334,7 @@ TEST(chash_maps, oa_char_and_short_and_long_long_keys) {
     chmap_insert(hm, k2, v2);
     chmap_insert(hm, k3, v3);
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)3);
     REQUIRE_EQ(chmap_get(hm, k1), 10);
     REQUIRE_EQ(chmap_get(hm, k2), 20);
     REQUIRE_EQ(chmap_get(hm, k3), 30);
@@ -3359,7 +3359,7 @@ TEST(chash_maps, oa_char_and_short_and_long_long_keys) {
     chmap_insert(hm, k2, v2);
     chmap_insert(hm, k3, v3);
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)3);
     REQUIRE_EQ(chmap_get(hm, k1), 10);
     REQUIRE_EQ(chmap_get(hm, k2), 20);
     REQUIRE_EQ(chmap_get(hm, k3), 30);
@@ -3379,7 +3379,7 @@ TEST(chash_maps, oa_signed_char_and_int8_t_keys) {
     chmap_insert(hm, k2, v2);
     chmap_insert(hm, k3, v3);
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)3);
     REQUIRE_EQ(chmap_get(hm, k1), 10);
     REQUIRE_EQ(chmap_get(hm, k2), 20);
     REQUIRE_EQ(chmap_get(hm, k3), 30);
@@ -3390,7 +3390,7 @@ TEST(chash_maps, oa_signed_char_and_int8_t_keys) {
 
     ccol_retval r = chmap_remove(hm, k1);
     REQUIRE_EQ(r, ccol_success);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)2);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)2);
     REQUIRE_EQ((void *)chmap_get_ptr(hm, k1), (void *)NULL);
 
     chmap_destroy(hm);
@@ -3406,7 +3406,7 @@ TEST(chash_maps, oa_signed_char_and_int8_t_keys) {
     chmap_insert(hm, k2, v2);
     chmap_insert(hm, k3, v3);
 
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)3);
     REQUIRE_EQ(chmap_get(hm, k1), 1);
     REQUIRE_EQ(chmap_get(hm, k2), 2);
     REQUIRE_EQ(chmap_get(hm, k3), 3);
@@ -3426,14 +3426,14 @@ TEST(chash_maps, sc_string_to_string) {
   chmap_insert(hm, k2, v2);
   chmap_insert(hm, k3, v3);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)3);
   REQUIRE_STREQ(chmap_get(hm, k1), "red");
   REQUIRE_STREQ(chmap_get(hm, k2), "yellow");
   REQUIRE_STREQ(chmap_get(hm, k3), "dark red");
 
   char *v2_new = "green";
   chmap_insert(hm, k2, v2_new);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)3);
   REQUIRE_STREQ(chmap_get(hm, k2), "green");
 
   int count = 0;
@@ -3444,7 +3444,7 @@ TEST(chash_maps, sc_string_to_string) {
   REQUIRE_EQ(count, 3);
 
   REQUIRE_EQ(chmap_remove(hm, k1), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)2);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)2);
   REQUIRE_EQ((void *)chmap_get_ptr(hm, k1), (void *)NULL);
 
   chmap_destroy(hm);
@@ -3462,7 +3462,7 @@ TEST(chash_maps, ccol_iter_early_exit) {
     chmap_insert(hm, "c", v3);
     chmap_insert(hm, "d", v4);
     chmap_insert(hm, "e", v5);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)5);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)5);
 
     int visited = 0;
     {
@@ -3472,7 +3472,7 @@ TEST(chash_maps, ccol_iter_early_exit) {
       }
     }
     REQUIRE_EQ(visited, 2);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)5);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)5);
 
     chmap_destroy(hm);
   }
@@ -3484,7 +3484,7 @@ TEST(chash_maps, ccol_iter_early_exit) {
       int val = i * 10;
       chmap_insert(hm, i, val);
     }
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)5);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)5);
 
     int visited = 0;
     ccol_iter_declare(hm, it);
@@ -3495,7 +3495,7 @@ TEST(chash_maps, ccol_iter_early_exit) {
       }
     }
     REQUIRE_EQ(visited, 2);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)5);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)5);
 
     chmap_destroy(hm);
   }
@@ -3513,7 +3513,7 @@ TEST(chash_maps, void_ptr_keys_oa_backend) {
   chmap_insert(hm, k2, v2);
   chmap_insert(hm, k3, v3);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)3);
   REQUIRE_EQ(chmap_get(hm, k1), 10);
   REQUIRE_EQ(chmap_get(hm, k2), 20);
   REQUIRE_EQ(chmap_get(hm, k3), 30);
@@ -3529,7 +3529,7 @@ TEST(chash_maps, void_ptr_keys_oa_backend) {
 
   ccol_retval r = chmap_remove(hm, k1);
   REQUIRE_EQ(r, ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)2);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)2);
   REQUIRE_EQ((void *)chmap_get_ptr(hm, k1), (void *)NULL);
 
   void *absent = (void *)0xDEAD;
@@ -3691,7 +3691,7 @@ TEST(chash_maps, sc_struct_key_full_hash_collision_still_resolves_correctly) {
   chmap_insert(hm, k3, v3);
   chmap_insert(hm, k4, v4);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)4);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)4);
 
   REQUIRE_EQ(chmap_get(hm, k1), 100);
   REQUIRE_EQ(chmap_get(hm, k2), 200);
@@ -3704,7 +3704,7 @@ TEST(chash_maps, sc_struct_key_full_hash_collision_still_resolves_correctly) {
 
   ccol_retval r = chmap_remove(hm, k3);
   REQUIRE_EQ(r, ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)3);
   REQUIRE_EQ((void *)chmap_get_ptr(hm, k3), (void *)NULL);
 
   REQUIRE_EQ(chmap_get(hm, k1), 100);
@@ -3758,10 +3758,9 @@ TEST(chash_maps, oa_invariants_random_ops) {
         REQUIRE_EQ((void *)chmap_get_ptr(hm, k), (void *)NULL);
       }
     }
-    REQUIRE_EQ(chashmap_elem_count(hm), shadow_count);
-    REQUIRE_TRUE(chashmap_elem_count(hm) <= chmap_get_bucket_arr_size(hm));
-    REQUIRE_TRUE(chashmap_elem_count(hm) <=
-                 chmap_get_elem_count_to_scale_up(hm) + 1);
+    REQUIRE_EQ(chashmap_size(hm), shadow_count);
+    REQUIRE_TRUE(chashmap_size(hm) <= chmap_get_bucket_arr_size(hm));
+    REQUIRE_TRUE(chashmap_size(hm) <= chmap_get_elem_count_to_scale_up(hm) + 1);
   }
 
   chmap_destroy(hm);
@@ -3809,7 +3808,7 @@ TEST(chash_maps, sc_invariants_random_ops) {
         REQUIRE_EQ((void *)chmap_get_ptr(hm, key_buf), (void *)NULL);
       }
     }
-    REQUIRE_EQ(chashmap_elem_count(hm), shadow_count);
+    REQUIRE_EQ(chashmap_size(hm), shadow_count);
 
     size_t iter_count = 0;
     ccol_iter_declare(hm, it);
@@ -3835,19 +3834,19 @@ TEST(chash_maps, reset_with_oversized_size_still_clears_elements) {
       int val = i * 7;
       chmap_insert(hm, i, val);
     }
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)10);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)10);
 
     size_t capacity_before = chmap_get_bucket_arr_size(hm);
 
     REQUIRE_EQ(chashmap_reset(hm, SIZE_MAX), ccol_not_enough_memory);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)0);
     REQUIRE_EQ(chmap_get_bucket_arr_size(hm), capacity_before);
 
     for (int i = 0; i < 10; ++i) {
       int val = i * 13;
       chmap_insert(hm, i, val);
     }
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)10);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)10);
     for (int i = 0; i < 10; ++i) {
       REQUIRE_EQ(chmap_get(hm, i), i * 13);
     }
@@ -3864,19 +3863,19 @@ TEST(chash_maps, reset_with_oversized_size_still_clears_elements) {
       snprintf(key_buf, sizeof(key_buf), "key%d", i);
       REQUIRE_EQ(insert_string_to_int(hm, key_buf, i * 7), ccol_success);
     }
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)10);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)10);
 
     size_t capacity_before = chmap_get_bucket_arr_size(hm);
 
     REQUIRE_EQ(chashmap_reset(hm, SIZE_MAX), ccol_not_enough_memory);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)0);
     REQUIRE_EQ(chmap_get_bucket_arr_size(hm), capacity_before);
 
     for (int i = 0; i < 5; ++i) {
       snprintf(key_buf, sizeof(key_buf), "key%d", i);
       REQUIRE_EQ(insert_string_to_int(hm, key_buf, i * 13), ccol_success);
     }
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)5);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)5);
     for (int i = 0; i < 5; ++i) {
       int val;
       snprintf(key_buf, sizeof(key_buf), "key%d", i);
@@ -3903,16 +3902,16 @@ TEST(chash_maps, oa_size_mismatch_returns_invalid_args) {
 
   REQUIRE_EQ(chashmap_insert_elem(hm, &bad_key, &good_val), ccol_invalid_args);
   REQUIRE_EQ(chashmap_insert_elem(hm, &good_key, &bad_val), ccol_invalid_args);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)0);
 
   REQUIRE_EQ(chashmap_insert_elem(hm, &good_key, &good_val), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
 
   cmap_pair out = {NULL, 0};
   REQUIRE_EQ(chashmap_get_elem_ref(hm, &bad_key, &out), ccol_invalid_args);
-  REQUIRE_EQ(chashmap_delete_elem(hm, &bad_key), ccol_invalid_args);
+  REQUIRE_EQ(chashmap_remove_elem(hm, &bad_key), ccol_invalid_args);
 
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   REQUIRE_EQ(chmap_get(hm, key), 100);
 
   chmap_destroy(hm);
@@ -3934,15 +3933,15 @@ TEST(chash_maps, sc_integral_key_size_mismatch_returns_invalid_args) {
   cmap_pair val = {.ptr = (void *)"hello", .size = strlen("hello") + 1};
 
   REQUIRE_EQ(chashmap_insert_elem(hm, &bad_key, &val), ccol_invalid_args);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)0);
 
   cmap_pair out = {NULL, 0};
   REQUIRE_EQ(chashmap_get_elem_ref(hm, &bad_key, &out), ccol_invalid_args);
-  REQUIRE_EQ(chashmap_delete_elem(hm, &bad_key), ccol_invalid_args);
+  REQUIRE_EQ(chashmap_remove_elem(hm, &bad_key), ccol_invalid_args);
 
   int good_key = 5;
   chmap_insert(hm, good_key, "hello");
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   REQUIRE_STREQ(chmap_get(hm, good_key), "hello");
 
   free(tiny_key_buf);
@@ -3964,15 +3963,15 @@ TEST(chash_maps, sc_float_key_size_mismatch_returns_invalid_args) {
   cmap_pair val = {.ptr = (void *)"world", .size = strlen("world") + 1};
 
   REQUIRE_EQ(chashmap_insert_elem(hm, &bad_key, &val), ccol_invalid_args);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)0);
 
   cmap_pair out = {NULL, 0};
   REQUIRE_EQ(chashmap_get_elem_ref(hm, &bad_key, &out), ccol_invalid_args);
-  REQUIRE_EQ(chashmap_delete_elem(hm, &bad_key), ccol_invalid_args);
+  REQUIRE_EQ(chashmap_remove_elem(hm, &bad_key), ccol_invalid_args);
 
   float good_key = 1.0f;
   chmap_insert(hm, good_key, "world");
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)1);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)1);
   REQUIRE_STREQ(chmap_get(hm, good_key), "world");
 
   free(tiny_key_buf);
@@ -4014,10 +4013,10 @@ TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
     memcpy(&got, out.ptr, sizeof(got));
     REQUIRE_EQ(got, 111);
 
-    REQUIRE_EQ(chashmap_delete_elem(
+    REQUIRE_EQ(chashmap_remove_elem(
                    hm, &(cmap_pair){.ptr = raw + 1, .size = sizeof(s_val)}),
                ccol_success);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)0);
 
     chmap_destroy(hm);
   }
@@ -4039,10 +4038,10 @@ TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
     memcpy(&got, out.ptr, sizeof(got));
     REQUIRE_EQ(got, 222);
 
-    REQUIRE_EQ(chashmap_delete_elem(
+    REQUIRE_EQ(chashmap_remove_elem(
                    hm, &(cmap_pair){.ptr = raw + 3, .size = sizeof(i_val)}),
                ccol_success);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)0);
 
     chmap_destroy(hm);
   }
@@ -4064,10 +4063,10 @@ TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
     memcpy(&got, out.ptr, sizeof(got));
     REQUIRE_EQ(got, 333);
 
-    REQUIRE_EQ(chashmap_delete_elem(
+    REQUIRE_EQ(chashmap_remove_elem(
                    hm, &(cmap_pair){.ptr = raw + 5, .size = sizeof(l_val)}),
                ccol_success);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)0);
 
     chmap_destroy(hm);
   }
@@ -4089,10 +4088,10 @@ TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
     memcpy(&got, out.ptr, sizeof(got));
     REQUIRE_EQ(got, 444);
 
-    REQUIRE_EQ(chashmap_delete_elem(
+    REQUIRE_EQ(chashmap_remove_elem(
                    hm, &(cmap_pair){.ptr = raw + 9, .size = sizeof(ll_val)}),
                ccol_success);
-    REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+    REQUIRE_EQ(chashmap_size(hm), (size_t)0);
 
     chmap_destroy(hm);
   }
@@ -4121,20 +4120,20 @@ TEST(chash_maps, sc_bucket_array_shrinks_to_minimum_from_off_lineage_size) {
     snprintf(key_buf, sizeof(key_buf), "key%d", i);
     REQUIRE_EQ(insert_string_to_int(hm, key_buf, i), ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)5);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)5);
 
   for (int i = 0; i < 2; ++i) {
     snprintf(key_buf, sizeof(key_buf), "key%d", i);
     REQUIRE_EQ(delete_int_from_string(hm, key_buf), ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)3);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)3);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)16);
 
   for (int i = 2; i < 5; ++i) {
     snprintf(key_buf, sizeof(key_buf), "key%d", i);
     REQUIRE_EQ(delete_int_from_string(hm, key_buf), ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)0);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)16);
 
   REQUIRE_EQ(insert_string_to_int(hm, "after", 42), ccol_success);
@@ -4164,14 +4163,14 @@ TEST(chash_maps, oa_reset_allocation_failure_still_clears_elements) {
                              &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
         ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)10);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)10);
   size_t capacity_before = chmap_get_bucket_arr_size(hm);
 
   g_calloc_fail = true;
   REQUIRE_EQ(chashmap_reset(hm, 64), ccol_not_enough_memory);
   g_calloc_fail = false;
 
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)0);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), capacity_before);
 
   for (int i = 0; i < 10; ++i) {
@@ -4182,7 +4181,7 @@ TEST(chash_maps, oa_reset_allocation_failure_still_clears_elements) {
                              &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
         ccol_success);
   }
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)10);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)10);
   for (int i = 0; i < 10; ++i) {
     int k = 100 + i;
     int retrieved = -1;
@@ -4242,7 +4241,7 @@ TEST(chashmap_reset, a_bucket_count_whose_byte_size_wraps_is_refused) {
   int got = 0;
   ccol_retval fetched = chashmap_get_elem_copy(m, &kp, &got, sizeof(got));
   bool survived = (ins == ccol_success && fetched == ccol_success && got == 7);
-  size_t count = chashmap_elem_count(m);
+  size_t count = chashmap_size(m);
   chmap_destroy(m);
 
   REQUIRE_EQ(r, ccol_not_enough_memory);
@@ -4274,7 +4273,7 @@ TEST(chashmap_open_addressing,
   }
   unsigned long long lookup_probes = chashmap_oa_probe_steps_for_tests();
 
-  size_t stored = chashmap_elem_count(m);
+  size_t stored = chashmap_size(m);
   chmap_destroy(m);
 
   REQUIRE_EQ(stored, (size_t)N);
@@ -4310,7 +4309,7 @@ TEST(chashmap_hash, packed_pair_64_bit_keys_spread_over_the_table) {
     }
   }
   unsigned long long lookup_probes = chashmap_oa_probe_steps_for_tests();
-  size_t stored = chashmap_elem_count(m);
+  size_t stored = chashmap_size(m);
   chmap_destroy(m);
 
   const long long n = (long long)PACKED_GRID * PACKED_GRID;
@@ -4338,7 +4337,7 @@ TEST(chashmap_hash, packed_pair_double_keys_spread_over_the_table) {
     }
   }
   unsigned long long insert_probes = chashmap_oa_probe_steps_for_tests();
-  size_t stored = chashmap_elem_count(m);
+  size_t stored = chashmap_size(m);
   chmap_destroy(m);
 
   const long long n = (long long)PACKED_GRID * PACKED_GRID;
@@ -4354,7 +4353,7 @@ TEST(chashmap_hash, packed_pair_64_bit_keys_spread_over_the_chains) {
       chmap_insert(m, (x << 32) | y, "v");
     }
   }
-  size_t stored = chashmap_elem_count(m);
+  size_t stored = chashmap_size(m);
   size_t longest = chashmap_sc_longest_chain_for_tests(m);
   chmap_destroy(m);
 
@@ -4396,7 +4395,7 @@ TEST(chashmap_hash, custom_hash_with_low_bit_entropy_does_not_collapse) {
   }
   unsigned long long lookup_probes = chashmap_oa_probe_steps_for_tests();
 
-  size_t stored = chashmap_elem_count(m);
+  size_t stored = chashmap_size(m);
   chashmap__destroy(m);
 
   REQUIRE_TRUE(all_inserted);
@@ -4463,7 +4462,7 @@ TEST(chashmap_open_addressing, a_growing_insert_counts_both_of_its_probes) {
     }
   }
 
-  size_t stored = created ? chashmap_elem_count(m) : 0;
+  size_t stored = created ? chashmap_size(m) : 0;
   if (created) chashmap__destroy(m);
 
   REQUIRE_TRUE(created);
@@ -4516,7 +4515,7 @@ TEST(chmap_macro_arg_lifetime, a_compound_literal_key_survives_every_lookup) {
   REQUIRE_EQ(chmap_get(hm, (int){7}), 900);
 
   REQUIRE_EQ(chmap_remove(hm, (int){7}), ccol_success);
-  REQUIRE_EQ(chashmap_elem_count(hm), (size_t)0);
+  REQUIRE_EQ(chashmap_size(hm), (size_t)0);
 }
 
 // A value wider than 8 bytes, so the map uses separate chaining.
@@ -4954,7 +4953,7 @@ static chmap_churn_result chmap_churn_window(long window, long steps) {
     long *v = chmap_get_ptr(m, k);
     if (!v || *v != k * 3) res.all_found = false;
   }
-  if (chashmap_elem_count(m) != (size_t)window) res.all_found = false;
+  if (chashmap_size(m) != (size_t)window) res.all_found = false;
   chmap_destroy(m);
   return res;
 }
@@ -5071,19 +5070,19 @@ TEST(key_equality, a_padded_key_is_found_whatever_its_padding_holds) {
   }
   chmap_padded_key upd = chmap_padded_make('a', 0, 0x11);
   chmap_insert(m, upd, -7);
-  size_t count_after_update = chashmap_elem_count(m);
+  size_t count_after_update = chashmap_size(m);
   chmap_padded_key probe = chmap_padded_make('a', 0, 0xEE);
   int updated = chmap_get(m, probe);
   chmap_padded_key del = chmap_padded_make('a', 0, 0x77);
   cmap_pair kp;
   ccol__populate_cmap_pair(&kp, del);
-  ccol_retval del_r = chashmap_delete_elem(m, &kp);
+  ccol_retval del_r = chashmap_remove_elem(m, &kp);
   cmap_pair after_del = {NULL, 0};
   ccol_retval get_r = chashmap_get_elem_ref(m, &kp, &after_del);
   chmap_padded_key other = chmap_padded_make('b', 0, 0xAB);
   int *missing = chmap_get_ptr(m, other);
   unsigned long eq_calls = g_chmap_padded_eq_calls;
-  size_t final_count = chashmap_elem_count(m);
+  size_t final_count = chashmap_size(m);
   chmap_destroy(m);
 
   REQUIRE_LT(cap_before, cap_after);
@@ -5121,11 +5120,11 @@ TEST(key_equality, an_integral_key_type_honours_the_procedure) {
   chmap_insert(m, 5, 1);
   chmap_insert(m, 105, 2);
   chmap_insert(m, 6, 3);
-  size_t count = chashmap_elem_count(m);
+  size_t count = chashmap_size(m);
   int v = chmap_get(m, 205);
   chmap_remove(m, 305);
   int *gone = chmap_get_ptr(m, 5);
-  size_t final_count = chashmap_elem_count(m);
+  size_t final_count = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_EQ(count, (size_t)2);
   REQUIRE_EQ(v, 2);
@@ -5229,7 +5228,7 @@ TEST(key_equality, the_macros_clear_the_padding_of_their_key_copy) {
       if (b[j] != 0) padding_zero = false;
     }
   }
-  size_t n = chashmap_elem_count(m);
+  size_t n = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_TRUE(all_found);
   REQUIRE_TRUE(padding_zero);
@@ -5256,7 +5255,7 @@ TEST(insert_or_get, an_absent_key_is_inserted_and_a_present_one_is_untouched) {
   long seen = existing.ptr ? *(const long *)existing.ptr : -1;
   size_t seen_size = existing.ptr ? existing.size : 0;
   long stored = chmap_get(m, "alpha");
-  size_t count = chashmap_elem_count(m);
+  size_t count = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_EQ(r1, ccol_success);
   REQUIRE_EQ(inserted_seen, 10L);
@@ -5297,7 +5296,7 @@ TEST(insert_or_get, an_owning_pointer_value_is_replaced_in_one_pass) {
     if (*(int *)p != 1000 + i) all_new = false;
     free(p);
   }
-  size_t count = chashmap_elem_count(m);
+  size_t count = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_EQ(replaced, (size_t)N);
   REQUIRE_TRUE(all_new);
@@ -5364,7 +5363,7 @@ TEST(insert_or_get, a_rejected_call_leaves_the_out_parameter_empty) {
   cmap_pair existing = {(void *)0x1, 12345};
   ccol_retval r_bad = ccol_chmap_insert_or_get_elem(m, &bad_kp, &vp, &existing);
   ccol_retval r_null = ccol_chmap_insert_or_get_elem(m, &kp, &vp, NULL);
-  size_t count = chashmap_elem_count(m);
+  size_t count = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_EQ(r_bad, ccol_invalid_args);
   REQUIRE_EQ(existing.ptr, NULL);
@@ -5420,7 +5419,7 @@ TEST(insert_or_get, the_slot_of_a_new_key_is_writable_on_open_addressing) {
   chmap_construct(m, long, long);
   bool grew = false;
   bool ok = chmap_upsert_write_through(m, 5000, &grew);
-  size_t n = chashmap_elem_count(m);
+  size_t n = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_TRUE(grew);
   REQUIRE_TRUE(ok);
@@ -5454,7 +5453,7 @@ TEST(insert_or_get, the_slot_of_a_new_key_is_writable_on_separate_chaining) {
   REQUIRE_NE((void *)m, NULL);
   bool grew = false;
   bool ok = chmap_upsert_write_through(m, 5000, &grew);
-  size_t n = chashmap_elem_count(m);
+  size_t n = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_TRUE(grew);
   REQUIRE_TRUE(ok);
@@ -5607,7 +5606,7 @@ TEST(backward_shift, a_randomized_differential_run_against_a_reference) {
         iterations++;
       }
       if (phase == 0 && chmap_get_bucket_arr_size(m) != 64) ok = false;
-      if (chashmap_elem_count(m) != live) ok = false;
+      if (chashmap_size(m) != live) ok = false;
     }
     if (phase == 1) {
       for (size_t i = 0; i < POOL && ok; i++) {
@@ -5619,7 +5618,7 @@ TEST(backward_shift, a_randomized_differential_run_against_a_reference) {
       }
     }
   }
-  size_t final_count = chashmap_elem_count(m);
+  size_t final_count = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_TRUE(ok);
   REQUIRE_GT(deletes, (size_t)1000);
@@ -6046,7 +6045,7 @@ static void int_flood_probe_counts(int family, unsigned long long *inserts,
     if (!p || *p != i) *ok = false;
   }
   *lookups = chashmap_oa_probe_steps_for_tests();
-  if (chashmap_elem_count(m) != INT_FLOOD_KEYS) *ok = false;
+  if (chashmap_size(m) != INT_FLOOD_KEYS) *ok = false;
   chmap_destroy(m);
 }
 
@@ -6084,7 +6083,7 @@ TEST(hash_seed, inverse_multiplier_integer_keys_spread_over_the_chains) {
   for (uint64_t i = 0; i < INT_FLOOD_KEYS; i++) {
     chmap_insert(m, (unsigned long long)int_flood_key(0, i), "v");
   }
-  size_t stored = chashmap_elem_count(m);
+  size_t stored = chashmap_size(m);
   size_t longest = chashmap_sc_longest_chain_for_tests(m);
   chmap_destroy(m);
   REQUIRE_EQ(stored, (size_t)INT_FLOOD_KEYS);
@@ -6136,7 +6135,7 @@ TEST(hash_seed, a_custom_hash_is_finalized_with_the_secret) {
     if (chashmap_insert_elem(m, &kp, &vp) != ccol_success) ok = false;
   }
   unsigned long long ins = chashmap_oa_probe_steps_for_tests();
-  size_t stored = chashmap_elem_count(m);
+  size_t stored = chashmap_size(m);
   chashmap__destroy(m);
   REQUIRE_TRUE(ok);
   REQUIRE_EQ(stored, (size_t)INT_FLOOD_KEYS);
@@ -6194,7 +6193,7 @@ TEST(insert_or_get_entry, refuses_open_addressing_and_null_out_parameters) {
   cmap_pair vp = {.ptr = &v, .size = sizeof(v)};
   const cmap_pair *ks = &kp, *vs = &kp;
   ccol_retval r_oa = ccol_chmap_insert_or_get_entry(m, &kp, &vp, &ks, &vs);
-  size_t count = chashmap_elem_count(m);
+  size_t count = chashmap_size(m);
   const cmap_pair *ks_after = ks, *vs_after = vs;
   ccol_retval r_null_key =
       ccol_chmap_insert_or_get_entry(m, &kp, &vp, NULL, &vs);
@@ -6288,10 +6287,10 @@ TEST(ordered_entries, the_successor_survives_a_delete_of_the_current_entry) {
   const cmap_pair *k, *v;
   for (const ccol_chmap_entry_ref *e = ccol_chmap_oldest_entry(m); e;) {
     e = ccol_chmap_entry_read(e, &k, &v);
-    chashmap_delete_elem(m, k);
+    chashmap_remove_elem(m, k);
     visited++;
   }
-  size_t count = chashmap_elem_count(m);
+  size_t count = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_EQ(visited, (size_t)3);
   REQUIRE_EQ(count, (size_t)0);
@@ -6358,7 +6357,7 @@ static int chmap_null_probe_get_ptr_key(void) {
   chmap_insert(env, "HOME", "/home/someone");
   char *absent = getenv(CHMAP_NULL_TEST_UNSET_VAR);
   char *const *p = chmap_get_ptr(env, absent);
-  int ok = absent == NULL && p == NULL && chashmap_elem_count(env) == 1;
+  int ok = absent == NULL && p == NULL && chashmap_size(env) == 1;
   chmap_destroy(env);
   return ok;
 }
@@ -6368,7 +6367,7 @@ static int chmap_null_probe_remove_key(void) {
   chmap_construct(env, char *, int);
   chmap_insert(env, "HOME", 1);
   ccol_retval r = chmap_remove(env, getenv(CHMAP_NULL_TEST_UNSET_VAR));
-  int ok = r == ccol_invalid_args && chashmap_elem_count(env) == 1;
+  int ok = r == ccol_invalid_args && chashmap_size(env) == 1;
   chmap_destroy(env);
   return ok;
 }
@@ -6458,7 +6457,7 @@ TEST(chmap_binary_keys, a_digest_struct_key_compares_every_byte) {
   chmap_insert(seen, d1, 1);
   chmap_insert(seen, d2, 2);
   chmap_insert(seen, d3, 3);
-  size_t count = chashmap_elem_count(seen);
+  size_t count = chashmap_size(seen);
   int v1 = chmap_get(seen, d1);
   int v2 = chmap_get(seen, d2);
   int v3 = chmap_get(seen, d3);
@@ -6489,7 +6488,7 @@ TEST(chmap_binary_keys, a_raw_layer_key_with_embedded_zeros) {
   ccol_retval r1 = chashmap_insert_elem(m, &kp1, &vp1);
   ccol_retval r2 = chashmap_insert_elem(m, &kp2, &vp2);
   ccol_retval r3 = chashmap_insert_elem(m, &kp3, &vp3);
-  size_t count = chashmap_elem_count(m);
+  size_t count = chashmap_size(m);
   unsigned char probe[16];
   memcpy(probe, k2, sizeof(probe));
   cmap_pair pp = {probe, sizeof(probe)};
@@ -6765,7 +6764,7 @@ static bool fp_delete_range(chmap m, int from, int to) {
     char k[32];
     snprintf(k, sizeof(k), "key_%d", i);
     cmap_pair kp = {.ptr = k, .size = strlen(k) + 1};
-    if (chashmap_delete_elem(m, &kp) != ccol_success) return false;
+    if (chashmap_remove_elem(m, &kp) != ccol_success) return false;
   }
   return true;
 }
@@ -6885,7 +6884,7 @@ TEST(footprint, a_steady_window_on_a_compact_map_never_resizes) {
     steps++;
   }
   long calls = g_fp.calls - calls_before;
-  size_t count = ok ? chashmap_elem_count(m) : 0;
+  size_t count = ok ? chashmap_size(m) : 0;
   size_t size = ok ? chmap_get_bucket_arr_size(m) : 0;
   long blocks = g_fp.blocks;
   if (m) chmap_destroy(m);
@@ -6929,7 +6928,7 @@ TEST(footprint, the_block_array_is_taken_back_on_a_shrink_and_a_reset) {
   ccol_retval rfail = ok ? chashmap_reset(m, 256) : ccol_success;
   g_fp.fail_at = 0;
   size_t size_after_fail = ok ? chmap_get_bucket_arr_size(m) : 0;
-  size_t count_after_fail = ok ? chashmap_elem_count(m) : 1;
+  size_t count_after_fail = ok ? chashmap_size(m) : 1;
   long blocks_after_fail = g_fp.blocks;
   bool usable = ok && fp_insert_range(m, 0, 30) && fp_lookup_range(m, 0, 30) &&
                 fp_orders_match(m, 0, 30);
@@ -7005,7 +7004,7 @@ TEST(footprint, every_allocation_failure_leaves_nothing_behind) {
     g_fp.fail_at = 0;
     if (r == ccol_not_enough_memory) {
       inserts_failed++;
-      if (g_fp.blocks != blocks_before || chashmap_elem_count(m) != 0)
+      if (g_fp.blocks != blocks_before || chashmap_size(m) != 0)
         inserts_clean = false;
     } else if (r != ccol_success || g_fp.blocks != blocks_before + 3) {
       inserts_clean = false;
@@ -7229,7 +7228,7 @@ static bool ah_get_u64(chmap m, unsigned long long k, unsigned long long *v) {
 
 static ccol_retval ah_del_u64(chmap m, unsigned long long k) {
   cmap_pair kp = {&k, sizeof(k)};
-  return chashmap_delete_elem(m, &kp);
+  return chashmap_remove_elem(m, &kp);
 }
 
 // Inserts k into an unsigned long long to char * map (separate chaining),
@@ -7667,7 +7666,7 @@ TEST(adaptive_hash, churn_at_the_highest_load_never_switches) {
       if (ah_put_u64(m, nk, r) != ccol_success) failed++;
     }
     rehashes += chashmap_oa_rehashes_for_tests() - r0;
-    if (chashmap_elem_count(m) != LIVE) failed++;
+    if (chashmap_size(m) != LIVE) failed++;
     if (!chashmap_oa_check_invariants_for_tests(m)) failed++;
     if (chashmap_is_keyed_for_tests(m)) switched++;
     chmap_destroy(m);
@@ -7686,7 +7685,7 @@ TEST(adaptive_hash, churn_at_the_highest_load_never_switches) {
     for (uint64_t r = 0; r < ROUNDS; r++) {
       ah_string_key(sliding ? 0 : 2, r, key, sizeof(key));
       cmap_pair dp = {key, strlen(key) + 1};
-      if (chashmap_delete_elem(m, &dp) != ccol_success) failed++;
+      if (chashmap_remove_elem(m, &dp) != ccol_success) failed++;
       ah_string_key(sliding ? 0 : 2, r + SC_LIVE, key, sizeof(key));
       int v = (int)r;
       cmap_pair kp = {key, strlen(key) + 1};
@@ -7784,7 +7783,7 @@ static ah_flood_result ah_flood_oa(ah_gen_t gen, size_t keys) {
   }
   res.lookup_probes =
       (double)chashmap_oa_probe_steps_for_tests() / (double)keys;
-  if (chashmap_elem_count(m) != keys) res.ok = false;
+  if (chashmap_size(m) != keys) res.ok = false;
   if (!chashmap_oa_check_invariants_for_tests(m)) res.ok = false;
   chmap_destroy(m);
   return res;
@@ -7807,7 +7806,7 @@ static ah_flood_result ah_flood_sc(ah_gen_t gen, size_t keys) {
   }
   res.lookup_probes =
       (double)chashmap_sc_node_visits_for_tests() / (double)keys;
-  if (chashmap_elem_count(m) != keys) res.ok = false;
+  if (chashmap_size(m) != keys) res.ok = false;
   chmap_destroy(m);
   return res;
 }
@@ -8478,9 +8477,9 @@ TEST(adaptive_hash, the_switch_keeps_every_separate_chaining_entry) {
   }
   for (unsigned i = 0; i < HONEST + FLOOD; i += 2) {
     cmap_pair kp = {&keys[i], sizeof(keys[0])};
-    if (chashmap_delete_elem(m, &kp) != ccol_success) ok = false;
+    if (chashmap_remove_elem(m, &kp) != ccol_success) ok = false;
   }
-  size_t left = chashmap_elem_count(m);
+  size_t left = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_TRUE(ok);
   REQUIRE_TRUE(fast_before);
@@ -8523,7 +8522,7 @@ TEST(adaptive_hash, the_switch_keeps_every_open_addressing_entry) {
       ok = false;
     }
   }
-  size_t left = chashmap_elem_count(m);
+  size_t left = chashmap_size(m);
   if (!chashmap_oa_check_invariants_for_tests(m)) ok = false;
   chmap_destroy(m);
   unsigned long long expect = 0;
@@ -8682,7 +8681,7 @@ TEST(adaptive_hash, key_identity_does_not_depend_on_the_mode) {
     if (chashmap_get_elem_copy(l, &lb, &out, sizeof(out)) != ccol_success) {
       ok = false;
     }
-    if (chashmap_elem_count(d) != 1 || chashmap_elem_count(l) != 1) ok = false;
+    if (chashmap_size(d) != 1 || chashmap_size(l) != 1) ok = false;
     if (pass == 0) {
       if (chashmap_switch_to_keyed_for_tests(d) != ccol_success) ok = false;
       if (chashmap_switch_to_keyed_for_tests(l) != ccol_success) ok = false;
@@ -8807,7 +8806,7 @@ TEST(adaptive_hash, a_shrink_restarts_the_open_addressing_window) {
     ok = ah_put_u64(m, ah_key_for_home(4 * k, LOG2, 0), k) == ccol_success;
   }
   uint64_t extra = 0;
-  while (ok && (chashmap_elem_count(m) < 2048 || ah_window_inserts(m) != 0)) {
+  while (ok && (chashmap_size(m) < 2048 || ah_window_inserts(m) != 0)) {
     ok = ah_put_u64(m, ah_key_for_home(4 * (1000 + extra) + 2, LOG2, 0),
                     extra) == ccol_success;
     extra++;
@@ -9287,14 +9286,14 @@ TEST(adaptive_hash, a_fast_attempt_keeps_every_separate_chaining_entry) {
   }
   for (unsigned i = 0; i < HONEST + FLOOD; i += 2) {
     cmap_pair kp = {&keys[i], sizeof(keys[0])};
-    if (chashmap_delete_elem(m, &kp) != ccol_success) ok = false;
+    if (chashmap_remove_elem(m, &kp) != ccol_success) ok = false;
   }
   for (unsigned i = 1; i < HONEST + FLOOD; i += 2) {
     cmap_pair kp = {&keys[i], sizeof(keys[0])};
     cmap_pair out = {NULL, 0};
     if (chashmap_get_elem_ref(m, &kp, &out) != ccol_success) ok = false;
   }
-  size_t left = chashmap_elem_count(m);
+  size_t left = chashmap_size(m);
   chmap_destroy(m);
   REQUIRE_TRUE(ok);
   REQUIRE_TRUE(fast_after_grow);
@@ -9353,7 +9352,7 @@ TEST(adaptive_hash, a_fast_attempt_keeps_every_open_addressing_entry) {
       ok = false;
     }
   }
-  size_t left = chashmap_elem_count(m);
+  size_t left = chashmap_size(m);
   if (!chashmap_oa_check_invariants_for_tests(m)) ok = false;
   chmap_destroy(m);
   unsigned long long expect = 0;
@@ -9602,7 +9601,7 @@ TEST(oa_aliasing, an_insert_that_grows_reads_pairs_that_point_into_the_map) {
         *(const long *)v.ptr != key)
       all_found = false;
   }
-  size_t count = chashmap_elem_count(m);
+  size_t count = chashmap_size(m);
   size_t cap1 = chmap_get_bucket_arr_size(m);
   chmap_destroy(m);
   REQUIRE_TRUE(ok);
@@ -9658,7 +9657,7 @@ TEST(chmap_aliases, size_and_reset_follow_the_raw_layer) {
   chmap_construct(m, int, int);
   for (int i = 0; i < 40; i++) chmap_insert(m, i, i * 3);
   size_t typed = chmap_size(m);
-  size_t raw = chashmap_elem_count(m);
+  size_t raw = chashmap_size(m);
   ccol_retval rv = chmap_reset(m, 64);
   size_t after = chmap_size(m);
   chmap_insert(m, 7, 8);

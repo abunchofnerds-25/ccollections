@@ -133,12 +133,12 @@ cyaml_set(doc, "server.name", "edge-1");    /* CYAML_STRING  */
 cyaml_set(doc, "server.tls", (bool)true);   /* CYAML_BOOL; write (bool)true */
 cyaml_set(doc, "server.limit", 1.0 / 0.0);  /* .inf is valid YAML */
 cyaml_set(doc, "server.proxy", NULL);       /* CYAML_NULL */
-cyaml_delete(doc, "server.debug");
+cyaml_remove(doc, "server.debug");
 ```
 
 The rules are the cjson ones. The parent of a new key has to exist, a list
 index has to be inside the list and a string has to be valid UTF-8.
-`cyaml_set` and `cyaml_delete` return `ccol_invalid_args`, at any position
+`cyaml_set` and `cyaml_remove` return `ccol_invalid_args`, at any position
 in the path, for a malformed component (an empty one, a bad `#N` on a list,
 or one that isn't valid UTF-8) and for a path whose shape can't apply to the
 tree (a scalar in the middle, a name on a list). `ccol_key_not_found` only
@@ -427,7 +427,7 @@ int main(void) {
 
     /* Two or more documents give a list of their roots. */
     if (cyaml_type(docs) == CYAML_LIST) {
-        for (size_t i = 0; i < cyaml_list_len(docs); i++)
+        for (size_t i = 0; i < cyaml_list_size(docs); i++)
             edit_manifest(cyaml_list_get(docs, i));
     } else {
         edit_manifest(docs);
@@ -541,7 +541,7 @@ static cyaml convert(cjson j) {
     case CJSON_STRING:  return cyaml_create_string(cjson_str_val(j));
     case CJSON_LIST: {
         cyaml out = cyaml_create_list();
-        for (size_t i = 0; out && i < cjson_list_len(j); i++) {
+        for (size_t i = 0; out && i < cjson_list_size(j); i++) {
             cyaml child = convert(cjson_list_get(j, i));
             ccol_retval r = cyaml_list_push(out, child);
             if (r != ccol_success) {
@@ -664,7 +664,7 @@ Parse and write:
 Paths:
 [cyaml_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_get.3.html),
 [cyaml_set(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_set.3.html),
-[cyaml_delete(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_delete.3.html)
+[cyaml_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_remove.3.html)
 
 Read nodes:
 [cyaml_type(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_type.3.html),
@@ -677,7 +677,7 @@ Read nodes:
 [cyaml_node_set_tag(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_node_set_tag.3.html)
 
 Lists:
-[cyaml_list_len(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_list_len.3.html),
+[cyaml_list_size(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_list_size.3.html),
 [cyaml_list_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_list_get.3.html),
 [cyaml_list_push(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_list_push.3.html),
 [cyaml_list_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_list_remove.3.html)

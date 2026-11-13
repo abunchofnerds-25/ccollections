@@ -90,7 +90,7 @@ Every JSON value is a `cjson` handle, and `cjson_type()` tells you its type:
 | `CJSON_INTEGER` | a number with no `.` and no exponent that fits in a `long long` | `cjson_int_val` |
 | `CJSON_FLOAT` | any other number, as a `double` | `cjson_double_val` |
 | `CJSON_STRING` | a string, always valid UTF-8 | `cjson_str_val` |
-| `CJSON_LIST` | an array | `cjson_list_len`, `cjson_list_get` |
+| `CJSON_LIST` | an array | `cjson_list_size`, `cjson_list_get` |
 | `CJSON_DICTIONARY` | an object | `cjson_dictionary_size`, `cjson_dictionary_get` |
 
 The value readers are strict, and `cjson_int_val` on a string or on `NULL`
@@ -160,17 +160,17 @@ included, is replaced and the old value is freed.
 `long double`, most pointers) are refused with `ccol_invalid_args`, and the
 document is left unchanged.
 
-Removing a value is `cjson_delete`:
+Removing a value is `cjson_remove`:
 
 ```c
-cjson_delete(doc, "config.debug");   /* an object member */
-cjson_delete(doc, "items.#2");       /* an array element; the elements after it move down */
+cjson_remove(doc, "config.debug");   /* an object member */
+cjson_remove(doc, "items.#2");       /* an array element; the elements after it move down */
 ```
 
 If you already hold the parent, `cjson_dictionary_remove(obj, key)` and
 `cjson_list_remove(arr, index)` do the same job without a path.
 
-`cjson_set` and `cjson_delete` can tell a bad path from an absent one. An
+`cjson_set` and `cjson_remove` can tell a bad path from an absent one. An
 empty component (two dots together, or a dot at either end), a component
 that isn't valid UTF-8, a malformed `#N` on an array (`#x`, `#-1` or a bare
 `#`), and a path whose shape can't apply to the tree give
@@ -236,7 +236,7 @@ the walk you may remove the current member
 (`cjson_dictionary_remove(obj, it.key)`) and replace values, but don't
 remove the member *after* the current one, because that makes the cursor
 invalid. An array
-doesn't need a cursor; loop from 0 to `cjson_list_len()` and call
+doesn't need a cursor; loop from 0 to `cjson_list_size()` and call
 `cjson_list_get()`.
 
 If a parsed object has the same key twice, the tree keeps the last value at
@@ -384,7 +384,7 @@ static bool load_config(const char *text, server_config *cfg) {
             fprintf(stderr, "backends: expected a list\n");
             ok = false;
         } else {
-            cfg->backend_count = cjson_list_len(backends);
+            cfg->backend_count = cjson_list_size(backends);
             for (size_t i = 0; ok && i < cfg->backend_count; i++) {
                 char path[32], url[128] = "";
                 snprintf(path, sizeof(path), "#%zu.url", i);
@@ -548,7 +548,7 @@ static bool is_secret(const char *key) {
 
 static void scrub(cjson node) {
     if (cjson_type(node) == CJSON_LIST) {
-        for (size_t i = 0; i < cjson_list_len(node); i++)
+        for (size_t i = 0; i < cjson_list_size(node); i++)
             scrub(cjson_list_get(node, i));
         return;
     }
@@ -599,7 +599,7 @@ int main(void) {
         cjson_destroy(copy);
 
     /* A path can also delete a value. */
-    cjson_delete(doc, "sessions.#1");
+    cjson_remove(doc, "sessions.#1");
 
     char *out = cjson_serialize(doc);
     if (out)
@@ -720,7 +720,7 @@ Parse and write:
 Paths:
 [cjson_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_get.3.html),
 [cjson_set(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_set.3.html),
-[cjson_delete(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_delete.3.html)
+[cjson_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_remove.3.html)
 
 Read nodes:
 [cjson_type(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_type.3.html),
@@ -731,7 +731,7 @@ Read nodes:
 [cjson_str_val(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_str_val.3.html)
 
 Arrays:
-[cjson_list_len(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_list_len.3.html),
+[cjson_list_size(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_list_size.3.html),
 [cjson_list_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_list_get.3.html),
 [cjson_list_push(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_list_push.3.html),
 [cjson_list_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_list_remove.3.html)

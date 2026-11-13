@@ -97,7 +97,7 @@ static void dump_node(cyaml node) {
       break;
     case CYAML_LIST: {
       putchar('[');
-      size_t n = cyaml_list_len(node);
+      size_t n = cyaml_list_size(node);
       for (size_t i = 0; i < n; i++) {
         if (i) putchar(',');
         dump_node(cyaml_list_get(node, i));

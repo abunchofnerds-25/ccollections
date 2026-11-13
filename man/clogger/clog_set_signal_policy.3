@@ -63,7 +63,7 @@ Regular file, under CLOG_SIGNALS_AUTO
     limit, because after a record that ends exactly at the limit the
     next write raises SIGXFSZ with no short write before it.
     A write at the limit then fails with EFBIG, and the logger repairs
-    the file once it has room, as clog_create_from_file_mp(3)
+    the file once it has room, as clog_create_from_file_path_mp(3)
     describes.  The async writer thread of the logger and the thread
     that compresses its rotated files also keep SIGXFSZ blocked in
     their own signal masks, and take back the SIGXFSZ that their own
@@ -151,7 +151,7 @@ clog_close(lg);
 .fi
 .SH "SEE ALSO"
 .BR clog_create_from_fd_mp (3),
-.BR clog_create_from_file_mp (3),
+.BR clog_create_from_file_path_mp (3),
 .BR clog_fatal (3),
 .BR getrlimit (2),
 .BR signal (7)

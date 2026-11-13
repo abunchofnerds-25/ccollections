@@ -13,8 +13,8 @@
     <elf-symbol name='cbstmap__iterator_destroy' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cbstmap_begin_iter' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cbstmap_create_full' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cbstmap_delete_elem' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cbstmap_elem_count' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cbstmap_remove_elem' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cbstmap_size' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cbstmap_get_elem_copy' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cbstmap_get_elem_ref' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cbstmap_insert_elem' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -69,9 +69,9 @@
     <elf-symbol name='chashmap__iterator_destroy' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chashmap_begin_iter' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chashmap_create_full' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chashmap_delete_elem' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chashmap_remove_elem' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chashmap_destroy_with_dtor' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chashmap_elem_count' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chashmap_size' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chashmap_get_elem_copy' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chashmap_get_elem_ref' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chashmap_insert_elem' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -81,7 +81,7 @@
     <elf-symbol name='chttp_basic_auth_mp' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttp_default_client' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttp_delete' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttp_do' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttp_do_default' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttp_get' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttp_patch' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttp_post' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -90,7 +90,7 @@
     <elf-symbol name='chttp_request_free' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttp_request_get_header' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttp_request_set_header' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttp_run_query' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttp_perform' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpcli__destroy' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpcli_async_result_free' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpcli_async_result_get' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -148,8 +148,8 @@
     <elf-symbol name='chttpsvr_resp_write' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpsvr_resp_write_json' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpsvr_resp_write_str' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpsvr_router_on' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='chttpsvr_router_on_stream' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpsvr_router_register_handler' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='chttpsvr_router_register_streaming_handler' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpsvr_router_use' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpsvr_set_engine_logger' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpsvr_set_engine_mem_mgmt_procs' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -158,7 +158,7 @@
     <elf-symbol name='chttpsvr_stop' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpsvr_subrouter' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='chttpsvr_use' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cjson__delete' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cjson__remove' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cjson__destroy' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cjson__get' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cjson__set_typed' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -180,7 +180,7 @@
     <elf-symbol name='cjson_double_val' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cjson_int_val' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cjson_list_get' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cjson_list_len' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cjson_list_size' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cjson_list_push' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cjson_list_remove' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cjson_parse_mp' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -194,7 +194,7 @@
     <elf-symbol name='clog_clear_fields' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='clog_close' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='clog_create_from_fd_mp' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='clog_create_from_file_mp' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='clog_create_from_file_path_mp' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='clog_derive' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='clog_flush' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='clog_get_facility' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -306,14 +306,14 @@
     <elf-symbol name='cvector_begin_iter' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_create_full' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_data_ptr' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cvector_elem_count' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cvector_size' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_find' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_get_mprocs' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_pop_back' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_push_back' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_reserve' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cvector_reset' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cyaml__delete' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cyaml__remove' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cyaml__destroy' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cyaml__get' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cyaml__set_typed' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -335,7 +335,7 @@
     <elf-symbol name='cyaml_double_val' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cyaml_int_val' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cyaml_list_get' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='cyaml_list_len' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='cyaml_list_size' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cyaml_list_push' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cyaml_list_remove' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='cyaml_node_set_tag' version='CCOL_2' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -824,7 +824,7 @@
       <parameter type-id='type-id-55' name='cbm' filepath='src/cbstmap.c' line='447' column='1'/>
       <return type-id='type-id-52'/>
     </function-decl>
-    <function-decl name='cbstmap_elem_count' mangled-name='cbstmap_elem_count' filepath='src/cbstmap.c' line='462' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cbstmap_elem_count@@CCOL_2' hash='9d519c215ecaff9e'>
+    <function-decl name='cbstmap_size' mangled-name='cbstmap_size' filepath='src/cbstmap.c' line='462' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cbstmap_size@@CCOL_2' hash='9d519c215ecaff9e'>
       <parameter type-id='type-id-55' name='cbm' filepath='src/cbstmap.c' line='462' column='1'/>
       <return type-id='type-id-18'/>
     </function-decl>
@@ -857,7 +857,7 @@
       <parameter type-id='type-id-41' name='val_accessor' filepath='src/cbstmap.c' line='1503' column='1'/>
       <return type-id='type-id-27'/>
     </function-decl>
-    <function-decl name='cbstmap_delete_elem' mangled-name='cbstmap_delete_elem' filepath='src/cbstmap.c' line='1564' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cbstmap_delete_elem@@CCOL_2' hash='481705aa836a297d'>
+    <function-decl name='cbstmap_remove_elem' mangled-name='cbstmap_remove_elem' filepath='src/cbstmap.c' line='1564' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cbstmap_remove_elem@@CCOL_2' hash='481705aa836a297d'>
       <parameter type-id='type-id-55' name='cbm' filepath='src/cbstmap.c' line='1564' column='1'/>
       <parameter type-id='type-id-13' name='key_pair' filepath='src/cbstmap.c' line='1564' column='1'/>
       <return type-id='type-id-27'/>
@@ -1009,12 +1009,12 @@
       <parameter type-id='type-id-18' name='target_buf_size' filepath='src/chashmap.c' line='3860' column='1'/>
       <return type-id='type-id-27'/>
     </function-decl>
-    <function-decl name='chashmap_delete_elem' mangled-name='chashmap_delete_elem' filepath='src/chashmap.c' line='3880' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chashmap_delete_elem@@CCOL_2' hash='481705aa836a297d'>
+    <function-decl name='chashmap_remove_elem' mangled-name='chashmap_remove_elem' filepath='src/chashmap.c' line='3880' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chashmap_remove_elem@@CCOL_2' hash='481705aa836a297d'>
       <parameter type-id='type-id-90' name='chm' filepath='src/chashmap.c' line='3880' column='1'/>
       <parameter type-id='type-id-13' name='key_pair' filepath='src/chashmap.c' line='3880' column='1'/>
       <return type-id='type-id-27'/>
     </function-decl>
-    <function-decl name='chashmap_elem_count' mangled-name='chashmap_elem_count' filepath='src/chashmap.c' line='3903' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chashmap_elem_count@@CCOL_2' hash='9d519c215ecaff9e'>
+    <function-decl name='chashmap_size' mangled-name='chashmap_size' filepath='src/chashmap.c' line='3903' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chashmap_size@@CCOL_2' hash='9d519c215ecaff9e'>
       <parameter type-id='type-id-90' name='chm' filepath='src/chashmap.c' line='3903' column='1'/>
       <return type-id='type-id-18'/>
     </function-decl>
@@ -1910,12 +1910,12 @@
     <function-decl name='chttp_default_client' mangled-name='chttp_default_client' filepath='src/chttpclient.c' line='16068' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chttp_default_client@@CCOL_2' hash='0d3783357a029fea'>
       <return type-id='type-id-168'/>
     </function-decl>
-    <function-decl name='chttp_do' mangled-name='chttp_do' filepath='src/chttpclient.c' line='16202' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chttp_do@@CCOL_2' hash='9239c8b69d22d52a'>
+    <function-decl name='chttp_do_default' mangled-name='chttp_do_default' filepath='src/chttpclient.c' line='16202' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chttp_do_default@@CCOL_2' hash='9239c8b69d22d52a'>
       <parameter type-id='type-id-195' name='req' filepath='src/chttpclient.c' line='16202' column='1'/>
       <parameter type-id='type-id-189' name='resp_out' filepath='src/chttpclient.c' line='16202' column='1'/>
       <return type-id='type-id-27'/>
     </function-decl>
-    <function-decl name='chttp_run_query' mangled-name='chttp_run_query' filepath='src/chttpclient.c' line='16215' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chttp_run_query@@CCOL_2' hash='bb54e7fa2a14579e'>
+    <function-decl name='chttp_perform' mangled-name='chttp_perform' filepath='src/chttpclient.c' line='16215' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chttp_perform@@CCOL_2' hash='bb54e7fa2a14579e'>
       <parameter type-id='type-id-142' name='method' filepath='src/chttpclient.c' line='16215' column='1'/>
       <parameter type-id='type-id-39' name='url' filepath='src/chttpclient.c' line='16215' column='1'/>
       <parameter type-id='type-id-197' name='body' filepath='src/chttpclient.c' line='16216' column='1'/>
@@ -2426,7 +2426,7 @@
       <parameter type-id='type-id-39' name='prefix' filepath='src/chttpserver.c' line='16147' column='1'/>
       <return type-id='type-id-320'/>
     </function-decl>
-    <function-decl name='chttpsvr_router_on' mangled-name='chttpsvr_router_on' filepath='src/chttpserver.c' line='16228' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chttpsvr_router_on@@CCOL_2' hash='10ed0e21716c8737'>
+    <function-decl name='chttpsvr_router_register_handler' mangled-name='chttpsvr_router_register_handler' filepath='src/chttpserver.c' line='16228' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chttpsvr_router_register_handler@@CCOL_2' hash='10ed0e21716c8737'>
       <parameter type-id='type-id-320' name='router' filepath='src/chttpserver.c' line='16239' column='1'/>
       <parameter type-id='type-id-142' name='method' filepath='src/chttpserver.c' line='16240' column='1'/>
       <parameter type-id='type-id-39' name='pattern' filepath='src/chttpserver.c' line='16240' column='1'/>
@@ -2434,7 +2434,7 @@
       <parameter type-id='type-id-17' name='ctx' filepath='src/chttpserver.c' line='16241' column='1'/>
       <return type-id='type-id-27'/>
     </function-decl>
-    <function-decl name='chttpsvr_router_on_stream' mangled-name='chttpsvr_router_on_stream' filepath='src/chttpserver.c' line='16239' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chttpsvr_router_on_stream@@CCOL_2' hash='10ed0e21716c8737'>
+    <function-decl name='chttpsvr_router_register_streaming_handler' mangled-name='chttpsvr_router_register_streaming_handler' filepath='src/chttpserver.c' line='16239' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='chttpsvr_router_register_streaming_handler@@CCOL_2' hash='10ed0e21716c8737'>
       <parameter type-id='type-id-320' name='router' filepath='src/chttpserver.c' line='16239' column='1'/>
       <parameter type-id='type-id-142' name='method' filepath='src/chttpserver.c' line='16240' column='1'/>
       <parameter type-id='type-id-39' name='pattern' filepath='src/chttpserver.c' line='16240' column='1'/>
@@ -2731,7 +2731,7 @@
       <parameter type-id='type-id-362' name='node' filepath='src/cjson.c' line='1435' column='1'/>
       <return type-id='type-id-39'/>
     </function-decl>
-    <function-decl name='cjson_list_len' mangled-name='cjson_list_len' filepath='src/cjson.c' line='1447' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cjson_list_len@@CCOL_2' hash='9d519c215ecaff9e'>
+    <function-decl name='cjson_list_size' mangled-name='cjson_list_size' filepath='src/cjson.c' line='1447' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cjson_list_size@@CCOL_2' hash='9d519c215ecaff9e'>
       <parameter type-id='type-id-362' name='node' filepath='src/cjson.c' line='1455' column='1'/>
       <return type-id='type-id-18'/>
     </function-decl>
@@ -2824,7 +2824,7 @@
       <parameter type-id='type-id-1' name='is_signed' filepath='src/cjson.c' line='3786' column='1'/>
       <return type-id='type-id-27'/>
     </function-decl>
-    <function-decl name='cjson__delete' mangled-name='cjson__delete' filepath='src/cjson.c' line='3956' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cjson__delete@@CCOL_2' hash='17c0286e9eb0dce8'>
+    <function-decl name='cjson__remove' mangled-name='cjson__remove' filepath='src/cjson.c' line='3956' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cjson__remove@@CCOL_2' hash='17c0286e9eb0dce8'>
       <parameter type-id='type-id-362' name='root' filepath='src/cjson.c' line='3956' column='1'/>
       <parameter type-id='type-id-39' name='path' filepath='src/cjson.c' line='3956' column='1'/>
       <return type-id='type-id-27'/>
@@ -3290,7 +3290,7 @@
       <parameter type-id='type-id-31'/>
       <return type-id='type-id-173'/>
     </function-decl>
-    <function-decl name='clog_create_from_file_mp' mangled-name='clog_create_from_file_mp' filepath='src/clogger.c' line='8260' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='clog_create_from_file_mp@@CCOL_2' hash='402c32d1a8b8893c'>
+    <function-decl name='clog_create_from_file_path_mp' mangled-name='clog_create_from_file_path_mp' filepath='src/clogger.c' line='8260' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='clog_create_from_file_path_mp@@CCOL_2' hash='402c32d1a8b8893c'>
       <parameter type-id='type-id-39' name='path' filepath='src/clogger.c' line='8260' column='1'/>
       <parameter type-id='type-id-116' name='min_level' filepath='src/clogger.c' line='8260' column='1'/>
       <parameter type-id='type-id-416' name='cfg' filepath='src/clogger.c' line='8261' column='1'/>
@@ -5242,7 +5242,7 @@
       <parameter type-id='type-id-18'/>
       <return type-id='type-id-17'/>
     </function-decl>
-    <function-decl name='cvector_elem_count' mangled-name='cvector_elem_count' filepath='src/cvector.c' line='558' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cvector_elem_count@@CCOL_2' hash='9d519c215ecaff9e'>
+    <function-decl name='cvector_size' mangled-name='cvector_size' filepath='src/cvector.c' line='558' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cvector_size@@CCOL_2' hash='9d519c215ecaff9e'>
       <parameter type-id='type-id-270'/>
       <return type-id='type-id-18'/>
     </function-decl>
@@ -5378,7 +5378,7 @@
       <parameter type-id='type-id-774' name='node' filepath='src/cyaml.c' line='1421' column='1'/>
       <return type-id='type-id-39'/>
     </function-decl>
-    <function-decl name='cyaml_list_len' mangled-name='cyaml_list_len' filepath='src/cyaml.c' line='1433' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cyaml_list_len@@CCOL_2' hash='9d519c215ecaff9e'>
+    <function-decl name='cyaml_list_size' mangled-name='cyaml_list_size' filepath='src/cyaml.c' line='1433' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cyaml_list_size@@CCOL_2' hash='9d519c215ecaff9e'>
       <parameter type-id='type-id-774' name='node' filepath='src/cyaml.c' line='1441' column='1'/>
       <return type-id='type-id-18'/>
     </function-decl>
@@ -5474,7 +5474,7 @@
       <parameter type-id='type-id-1' name='is_signed' filepath='src/cyaml.c' line='12909' column='1'/>
       <return type-id='type-id-27'/>
     </function-decl>
-    <function-decl name='cyaml__delete' mangled-name='cyaml__delete' filepath='src/cyaml.c' line='13054' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cyaml__delete@@CCOL_2' hash='17c0286e9eb0dce8'>
+    <function-decl name='cyaml__remove' mangled-name='cyaml__remove' filepath='src/cyaml.c' line='13054' column='1' visibility='default' binding='global' size-in-bits='32' elf-symbol-id='cyaml__remove@@CCOL_2' hash='17c0286e9eb0dce8'>
       <parameter type-id='type-id-774' name='root' filepath='src/cyaml.c' line='13054' column='1'/>
       <parameter type-id='type-id-39' name='path' filepath='src/cyaml.c' line='13054' column='1'/>
       <return type-id='type-id-27'/>

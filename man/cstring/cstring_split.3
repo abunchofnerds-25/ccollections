@@ -34,7 +34,7 @@ The caller has to destroy every cstr inside the vector and then the
 vector itself:
   cvec parts = cstring_split(s, ",", NULL);
   if (parts) {
-    for (size_t i = 0; i < cvector_elem_count(parts); i++) {
+    for (size_t i = 0; i < cvector_size(parts); i++) {
       cstr *p = (cstr *)cvector_at(parts, i);
       cstring_destroy(*p);
     }

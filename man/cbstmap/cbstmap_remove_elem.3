@@ -1,13 +1,13 @@
 .TH CBSTMAP_DELETE_ELEM 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-cbstmap_delete_elem \- remove a key-value pair from the BST map
+cbstmap_remove_elem \- remove a key-value pair from the BST map
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/cbstmap.h>
 
-ccol_retval cbstmap_delete_elem(cbmap cbm, const cmap_pair *key_pair);
+ccol_retval cbstmap_remove_elem(cbmap cbm, const cmap_pair *key_pair);
 .fi
 .SH DESCRIPTION
 .nf
@@ -40,7 +40,7 @@ them into an aligned local.
 
 The removal is O(log n). The function asserts if cbm is NULL.
 
-A NULL key_pair is reported as ccol_invalid_args, as chashmap_delete_elem(3)
+A NULL key_pair is reported as ccol_invalid_args, as chashmap_remove_elem(3)
 does. A key_pair whose ptr is NULL and whose size is not zero promises
 bytes it has no storage for, so it is ccol_invalid_args too.
 

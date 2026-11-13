@@ -16,7 +16,7 @@ This function caps the size of a buffered response body. The cap works
 in all three tiers, so it covers chttpcli_do, chttpcli_do_async
 and the pooled-sync wrappers built on chttpcli_do_async, such as
 chttpcli_do_pooled, chttp_get, chttp_post, chttp_put, chttp_delete,
-chttp_patch and chttp_run_query. Pass 0, the default, to buffer with no
+chttp_patch and chttp_perform. Pass 0, the default, to buffer with no
 limit again.
 
 The cap has no effect on chttpcli_do_streaming,

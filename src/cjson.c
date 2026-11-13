@@ -160,7 +160,7 @@ static inline cjson_node *cjson_read_child(const void *src) {
 // container costs one node); they treat a NULL store as empty, and every insert
 // goes through list_store() or dict_store() to create it.
 static inline size_t list_len_of(const cjson_node *n) {
-  return n->value.list ? cvector_elem_count(n->value.list) : 0;
+  return n->value.list ? cvector_size(n->value.list) : 0;
 }
 
 // Gives element index of list n, or NULL when index is out of range; used by
@@ -173,7 +173,7 @@ static inline cjson_node *list_child_at(const cjson_node *n, size_t index) {
 
 // Gives the number of members of dictionary n, for cjson_dictionary_size().
 static inline size_t dict_size_of(const cjson_node *n) {
-  return n->value.dictionary ? chashmap_elem_count(n->value.dictionary) : 0;
+  return n->value.dictionary ? chashmap_size(n->value.dictionary) : 0;
 }
 
 // Looks key_pair up in dictionary n, for every read of a member by key. On
@@ -1067,10 +1067,10 @@ const char *cjson_str_val(cjson node) {
   return n->value.string;
 }
 
-size_t cjson_list_len(cjson node) {
+size_t cjson_list_size(cjson node) {
   cjson_node *n = (cjson_node *)node;
   if (!n || n->type != CJSON_LIST)
-    ccol__fatal_err("cjson_list_len: node is %s, expected CJSON_LIST",
+    ccol__fatal_err("cjson_list_size: node is %s, expected CJSON_LIST",
                     n ? cjson_type_str((cjson)n) : "NULL");
   return list_len_of(n);
 }
@@ -1214,7 +1214,7 @@ cjson cjson_dictionary_get(cjson obj, const char *key) {
 }
 
 // Removes and destroys element index of arr, for callers and for
-// cjson__delete(). The later elements move left, O(n) in the elements after
+// cjson__remove(). The later elements move left, O(n) in the elements after
 // index. ccol_invalid_args for a NULL or non-list arr or a bad index.
 ccol_retval cjson_list_remove(cjson arr, size_t index) {
   if (!arr) return ccol_invalid_args;
@@ -1237,7 +1237,7 @@ ccol_retval cjson_list_remove(cjson arr, size_t index) {
 }
 
 // Removes the entry of key from obj and destroys its value, for callers and for
-// cjson__delete(). It reads the child before the delete and frees it only
+// cjson__remove(). It reads the child before the delete and frees it only
 // after, so the map never points at freed memory. ccol_invalid_args for bad
 // arguments, ccol_key_not_found when the key is absent.
 ccol_retval cjson_dictionary_remove(cjson obj, const char *key) {
@@ -1248,7 +1248,7 @@ ccol_retval cjson_dictionary_remove(cjson obj, const char *key) {
   cmap_pair vp;
   if (dict_lookup(n, &kp, &vp) != ccol_success) return ccol_key_not_found;
   cjson_node *child = cjson_read_child(vp.ptr);
-  ccol_retval r = chashmap_delete_elem(n->value.dictionary, &kp);
+  ccol_retval r = chashmap_remove_elem(n->value.dictionary, &kp);
   if (r == ccol_success) cjson__destroy((cjson)child);
   return r;
 }
@@ -2946,7 +2946,7 @@ ccol_retval cjson__set_typed(cjson root, const char *path, cjson_node_type type,
           memcpy(slot.ptr, &new_node, sizeof(new_node));
           new_node->attached = true;
         } else {
-          chashmap_delete_elem(pn->value.dictionary, &kp);
+          chashmap_remove_elem(pn->value.dictionary, &kp);
         }
       } else {
         ret = r;
@@ -2976,13 +2976,13 @@ ccol_retval cjson__set_typed(cjson root, const char *path, cjson_node_type type,
   return ret;
 }
 
-// Removes and destroys the node at path; it's the body of cjson_delete(). It
+// Removes and destroys the node at path; it's the body of cjson_remove(). It
 // splits the path like cjson__set_typed(), checks the leaf before walking the
 // parent, and then removes through cjson_dictionary_remove() or
 // cjson_list_remove(). An absent list index is checked here, so it gives
 // ccol_key_not_found and not the ccol_invalid_args that cjson_list_remove()
 // would.
-ccol_retval cjson__delete(cjson root, const char *path) {
+ccol_retval cjson__remove(cjson root, const char *path) {
   if (!root || !path || path[0] == '\0') return ccol_invalid_args;
 
   ccol_memmgmt_procs *mp = ((cjson_node *)root)->m_procs;

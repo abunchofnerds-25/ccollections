@@ -484,7 +484,7 @@ TEST(lifecycle, open_file_and_close) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_close(lg);
 
@@ -495,8 +495,8 @@ TEST(lifecycle, open_file_and_close) {
 }
 
 TEST(lifecycle, invalid_path_returns_null) {
-  clog lg = clog_create_from_file_mp("/nonexistent/deeply/nested/path/app.log",
-                                     CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(
+      "/nonexistent/deeply/nested/path/app.log", CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_EQ(lg, CLOG_NULL);
 }
 
@@ -603,7 +603,7 @@ TEST(output, logfmt_fields_present) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "hello world");
@@ -631,7 +631,7 @@ TEST(output, message_with_special_chars_is_quoted) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "key=\"value\"");
@@ -651,7 +651,7 @@ TEST(output, all_levels_in_output) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_trace(lg, "t");
@@ -679,7 +679,7 @@ TEST(output, error_produce_backtrace) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_ERROR, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_ERROR, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_error(lg, "something bad");
@@ -710,7 +710,7 @@ TEST(proc_field, logfmt_proc_has_name_pid_tid_structure) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pid_t pid = getpid();
@@ -756,7 +756,7 @@ TEST(proc_field, json_proc_has_name_pid_tid_structure) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -814,7 +814,7 @@ TEST(proc_field, different_threads_have_different_tids) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "main thread");
@@ -867,7 +867,7 @@ TEST(filtering, messages_below_min_level_dropped) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_WARN, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_WARN, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_trace(lg, "should not appear");
@@ -892,7 +892,7 @@ TEST(filtering, off_suppresses_all_log_output) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_OFF, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_OFF, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_error(lg, "suppressed");
@@ -913,7 +913,7 @@ TEST(filtering, set_level_changes_filter) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_WARN, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_WARN, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "before change - dropped");
@@ -945,12 +945,12 @@ TEST(filtering, a_level_outside_the_enum_is_refused) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog bad_file =
-      clog_create_from_file_mp(path, (clog_level)-3, NULL, NULL, NULL);
+      clog_create_from_file_path_mp(path, (clog_level)-3, NULL, NULL, NULL);
   clog bad_fd = clog_create_from_fd(STDERR_FILENO, (clog_level)8, NULL);
   if (bad_file != CLOG_NULL) clog_close(bad_file);
   if (bad_fd != CLOG_NULL) clog_close(bad_fd);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   ccol_retval rv_minus_3 = clog_set_level(lg, (clog_level)-3);
   clog_level after_minus_3 = clog_get_level(lg);
@@ -985,7 +985,7 @@ TEST(fields, set_field_appears_in_output) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg, "service", "auth");
@@ -1010,7 +1010,7 @@ TEST(fields, update_existing_field) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   ccol_retval rv_first = clog_set_field(lg, "req_id", "aaa");
@@ -1037,7 +1037,7 @@ TEST(fields, remove_field_disappears) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg, "trace_id", "xyz");
@@ -1061,7 +1061,7 @@ TEST(fields, clear_removes_all) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg, "a", "1");
@@ -1093,7 +1093,7 @@ TEST(fields, invalid_key_is_rejected) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   const char *bad_keys[] = {
@@ -1133,7 +1133,7 @@ TEST(fields, reserved_key_names_are_rejected) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -1168,7 +1168,7 @@ TEST(fields, value_with_spaces_is_quoted) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg, "host", "web server 01");
@@ -1193,7 +1193,7 @@ TEST(fields, value_with_an_equals_sign_is_quoted) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   ccol_retval set_rv = clog_set_field(lg, "query", "a=1&b=2");
@@ -1215,7 +1215,7 @@ TEST(fields, del_byte_in_value_is_escaped) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg, "k",
@@ -1244,7 +1244,7 @@ TEST(fields, del_byte_in_key_is_rejected) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg,
@@ -1295,7 +1295,7 @@ TEST(fields, newline_and_cr_in_value_are_escaped) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg, "payload", "line1\nline2\rend\ttab");
@@ -1333,7 +1333,7 @@ TEST(fields, empty_value_is_quoted) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg, "empty_field", "");
@@ -1355,7 +1355,7 @@ TEST(fields, backslash_in_value_is_quoted_and_escaped_in_logfmt) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg, "win_path", "C:\\Users\\foo");
@@ -1381,7 +1381,7 @@ TEST(output, long_message_uses_heap_and_is_not_truncated) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   char long_msg[2048];
@@ -1429,7 +1429,7 @@ TEST(output,
       .realloc = _size_capped_realloc,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   char long_msg[5000];
@@ -1460,7 +1460,7 @@ TEST(oversized, logfmt_message_over_buf_cap_falls_back_cleanly) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   size_t sz = 17UL * 1024 * 1024;
@@ -1503,7 +1503,7 @@ TEST(oversized, json_message_over_buf_cap_falls_back_cleanly) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -1547,7 +1547,7 @@ TEST(oversized, json_fallback_with_backtrace_marks_bt_as_unavailable) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_ERROR, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_ERROR, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -1625,7 +1625,7 @@ TEST(oversized,
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_ERROR, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_ERROR, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   size_t sz = 17UL * 1024 * 1024;
@@ -1729,7 +1729,7 @@ TEST(rotation, size_rotation_creates_new_file) {
       .max_rotated_files = 5,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   for (int i = 0; i < 20; i++)
@@ -1756,7 +1756,7 @@ TEST(rotation, max_rotated_files_respected) {
       .max_rotated_files = 2,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   for (int i = 0; i < 40; i++)
@@ -1787,7 +1787,7 @@ TEST(rotation, max_rotated_files_zero_falls_back_to_default) {
       .max_rotated_files = 0,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   for (int i = 0; i < 40; i++)
@@ -1816,7 +1816,7 @@ TEST(rotation, max_rotated_files_negative_falls_back_to_default) {
       .max_rotated_files = -3,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   for (int i = 0; i < 40; i++)
@@ -1859,7 +1859,7 @@ TEST(rotation, prune_never_deletes_unrelated_file_with_similar_name) {
       .max_rotated_files = 1,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   for (int i = 0; i < 40; i++)
@@ -1902,7 +1902,7 @@ TEST(rotation, logger_recovers_after_file_externally_deleted) {
       .max_rotated_files = 0,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   REQUIRE_EQ(unlink(path), 0);
@@ -1936,7 +1936,7 @@ TEST(rotation, time_based_rotation_creates_rotated_file) {
       .max_rotated_files = 0,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "before rotation");
@@ -1972,7 +1972,7 @@ TEST(rotation, same_second_collision_uses_suffix) {
       .max_rotated_files = 0,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   for (int i = 0; i < 5; i++) clog_info(lg, "collision test %d", i);
@@ -2008,7 +2008,7 @@ TEST(rotation, persistent_failure_does_not_retry_on_every_write) {
       .max_rotated_files = 0,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   REQUIRE_EQ(chmod(dir, 0555), 0);
@@ -2044,7 +2044,8 @@ TEST(derive, inherits_parent_fields) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog_set_field(parent, "service", "auth");
@@ -2073,7 +2074,8 @@ TEST(derive, child_field_does_not_affect_parent) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog child = clog_derive(parent);
@@ -2100,7 +2102,8 @@ TEST(derive, parent_field_after_derive_does_not_affect_child) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog child = clog_derive(parent);
@@ -2127,7 +2130,8 @@ TEST(derive, shares_output_target) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog child = clog_derive(parent);
@@ -2154,7 +2158,8 @@ TEST(derive, child_close_does_not_break_parent) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog child = clog_derive(parent);
@@ -2181,7 +2186,8 @@ TEST(derive, parent_close_does_not_break_child) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog child = clog_derive(parent);
@@ -2208,7 +2214,8 @@ TEST(derive, independent_level) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_WARN, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_WARN, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog child = clog_derive(parent);
@@ -2237,7 +2244,8 @@ TEST(derive, field_override_in_child_is_independent) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog_set_field(parent, "version", "1");
@@ -2283,7 +2291,8 @@ TEST(derive, grandchild_derive) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
   clog_set_field(parent, "origin", "parent");
 
@@ -2316,7 +2325,8 @@ TEST(derive, multiple_children_from_one_parent) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
   clog_set_field(parent, "shared", "yes");
 
@@ -2394,7 +2404,7 @@ TEST(threading, concurrent_writes_produce_no_garbled_lines) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pthread_t threads[THREAD_COUNT];
@@ -2502,7 +2512,7 @@ TEST(custom_alloc, open_file_uses_custom_allocator) {
       .realloc = _custom_realloc,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg, "env", "test");
@@ -2536,7 +2546,8 @@ TEST(custom_alloc, derived_logger_uses_parent_allocator) {
       .realloc = _custom_realloc,
   };
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, &procs);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, &procs);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog child = clog_derive(parent);
@@ -2570,7 +2581,7 @@ TEST(custom_alloc, invalid_mprocs_returns_null) {
 
 // An allocator whose malloc, calloc and realloc fail at exactly the
 // g_ctor_fail_at'th call (counting from 1 in g_ctor_fail_call_count; <= 0
-// never fails), so a test can fail each step of clog_create_from_file_mp()
+// never fails), so a test can fail each step of clog_create_from_file_path_mp()
 // after the log file is open.
 static _Atomic int g_ctor_fail_call_count = 0;
 static _Atomic int g_ctor_fail_at = -1;
@@ -2593,7 +2604,7 @@ static void *_ctor_fail_realloc(void *p, size_t sz) {
   return _ctor_fail_should_fail() ? NULL : realloc(p, sz);
 }
 
-// clog_create_from_file_mp() opens its file before the rest of the
+// clog_create_from_file_path_mp() opens its file before the rest of the
 // construction, so every later failure, the async setup included, must close
 // that fd. The test sweeps "fail the Nth allocation" over a wide range, so it
 // doesn't depend on the exact number of allocations, and the fd count must
@@ -2617,7 +2628,8 @@ TEST(custom_alloc, open_file_async_init_failure_does_not_leak_fd) {
   for (int fail_at = 1; fail_at <= 60; fail_at++) {
     atomic_store(&g_ctor_fail_call_count, 0);
     atomic_store(&g_ctor_fail_at, fail_at);
-    clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, &procs);
+    clog lg =
+        clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, &procs);
     atomic_store(&g_ctor_fail_at, -1);
 
     if (lg != CLOG_NULL) clog_close(lg);
@@ -2769,7 +2781,8 @@ TEST(robustness, error_with_backtrace_never_writes_malformed_lines_under_oom) {
     g_realloc_call_count = 0;
     g_realloc_fail_at = fail_at;
 
-    clog lg = clog_create_from_file_mp(path, CLOG_ERROR, NULL, NULL, &procs);
+    clog lg =
+        clog_create_from_file_path_mp(path, CLOG_ERROR, NULL, NULL, &procs);
     if (!lg) {
       cleanup_dir(dir, "app.log");
       continue;
@@ -2819,7 +2832,8 @@ TEST(robustness, json_backtrace_failure_is_never_silently_dropped) {
     g_realloc_call_count = 0;
     g_realloc_fail_at = fail_at;
 
-    clog lg = clog_create_from_file_mp(path, CLOG_ERROR, NULL, NULL, &procs);
+    clog lg =
+        clog_create_from_file_path_mp(path, CLOG_ERROR, NULL, NULL, &procs);
     if (!lg) {
       cleanup_dir(dir, "app.log");
       continue;
@@ -2947,7 +2961,8 @@ TEST(robustness, a_failed_calloc_during_a_record_keeps_its_fields) {
     char path[512];
     snprintf(path, sizeof(path), "%s/app.log", dir);
 
-    clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, &procs);
+    clog lg =
+        clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, &procs);
     REQUIRE_NE(lg, CLOG_NULL);
     clog_set_format(lg, formats[fi]);
 
@@ -3014,7 +3029,7 @@ TEST(robustness, header_build_allocation_failure_reported_accurately) {
       .realloc = _fail_next_malloc_realloc,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   char long_file[600];
@@ -3046,7 +3061,7 @@ TEST(robustness, long_file_path_in_src_field_is_still_quoted_in_logfmt) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   char long_file[600];
@@ -3089,7 +3104,7 @@ TEST(robustness, format_string_failure_writes_diagnostic_not_silence) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   volatile int huge_width_source = 2000000000;
@@ -3136,7 +3151,7 @@ TEST(json, basic_json_structure) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3170,7 +3185,7 @@ TEST(json, all_levels_in_json_output) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3198,7 +3213,7 @@ TEST(json, fields_are_top_level_json_keys) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
   clog_set_field(lg, "env", "prod");
@@ -3223,7 +3238,7 @@ TEST(json, special_chars_escaped_in_message) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3249,7 +3264,7 @@ TEST(json, special_chars_escaped_in_field_value) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
   clog_set_field(lg, "path", "C:\\Users\\foo");
@@ -3272,7 +3287,7 @@ TEST(json, del_byte_escaped_in_json) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3300,7 +3315,7 @@ TEST(json, valid_multibyte_utf8_passed_through_unescaped) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3416,7 +3431,7 @@ TEST(json, invalid_utf8_lone_continuation_byte_replaced_with_replacement_char) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3442,7 +3457,7 @@ TEST(json, invalid_utf8_overlong_encoding_replaced_with_replacement_char) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3471,7 +3486,7 @@ TEST(json, invalid_utf8_surrogate_half_replaced_with_replacement_char) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3497,7 +3512,7 @@ TEST(json, invalid_utf8_truncated_sequence_at_end_of_message_replaced) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3521,7 +3536,7 @@ TEST(json, invalid_utf8_in_field_value_is_also_sanitized) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
   clog_set_field(lg, "k",
@@ -3548,7 +3563,7 @@ TEST(json, error_has_inline_bt_array) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_ERROR, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_ERROR, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3579,7 +3594,7 @@ TEST(json, error_with_shallow_backtrace_capture_still_yields_empty_bt_array) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_ERROR, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_ERROR, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3604,7 +3619,8 @@ TEST(json, format_shared_with_derived_logger) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog_set_format(parent, CLOG_FMT_JSON);
@@ -3642,7 +3658,7 @@ TEST(output, alert_level_appears_in_logfmt) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_ALERT, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_ALERT, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_alert(lg, "alert message");
@@ -3667,7 +3683,7 @@ TEST(output, error_and_alert_level_strings_in_logfmt) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_error(lg, "error event");
@@ -3693,7 +3709,7 @@ TEST(output, alert_produces_backtrace) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_ALERT, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_ALERT, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_alert(lg, "critical failure");
@@ -3716,7 +3732,8 @@ TEST(json, set_format_on_derived_affects_parent) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
 
   clog child = clog_derive(parent);
@@ -3744,7 +3761,7 @@ TEST(json, error_and_alert_level_strings_in_json) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3769,7 +3786,7 @@ TEST(json, alert_has_inline_bt_array) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_ALERT, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_ALERT, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -3799,7 +3816,7 @@ TEST(json, tab_and_cr_in_field_value_are_escaped) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -4052,7 +4069,7 @@ TEST(syslog, file_logger_rejects_syslog_format) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   ccol_retval rv_syslog = clog_set_format(lg, CLOG_FMT_SYSLOG);
@@ -4243,12 +4260,12 @@ TEST(lifecycle, open_file_appends_to_existing) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg1 = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg1 = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg1, CLOG_NULL);
   clog_info(lg1, "first open");
   clog_close(lg1);
 
-  clog lg2 = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg2 = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg2, CLOG_NULL);
   clog_info(lg2, "second open");
   clog_close(lg2);
@@ -4269,7 +4286,7 @@ TEST(filtering, set_level_to_off_suppresses_everything) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "before off - visible");
@@ -4297,7 +4314,7 @@ TEST(fields, remove_nonexistent_field_is_noop) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_remove_field(lg, "nonexistent");
@@ -4319,7 +4336,7 @@ TEST(fields, clear_empty_fields_is_noop) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_clear_fields(lg);
@@ -4341,7 +4358,7 @@ TEST(fields, null_key_or_value_is_noop) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   ccol_retval rv_null_key = clog_set_field(lg, NULL, "v");
@@ -4397,7 +4414,7 @@ TEST(fields, set_field_reports_a_failed_allocation_and_changes_nothing) {
       .calloc = _field_alloc_calloc,
       .realloc = _field_alloc_realloc,
   };
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   ccol_retval rv_old =
@@ -4582,7 +4599,8 @@ TEST(threading, concurrent_parent_and_derived_writers_no_garbled_lines) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_NULL);
   clog_set_field(parent, "role", "parent");
 
@@ -4661,7 +4679,7 @@ TEST(threading, concurrent_filtered_writes_and_level_changes_no_crash) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pthread_t writers[LEVEL_FASTPATH_WRITER_COUNT], toggler;
@@ -4742,7 +4760,7 @@ TEST(threading, concurrent_set_field_and_write_no_race) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pthread_t writers[FIELD_RACE_WRITER_COUNT], mutator;
@@ -4827,7 +4845,7 @@ TEST(threading, concurrent_derive_close_churn_stresses_slot_table) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pthread_t writers[SLOT_CHURN_WRITER_COUNT], deriver;
@@ -4875,7 +4893,7 @@ TEST(fork_safety, child_can_log_after_fork) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pid_t pid = fork();
@@ -4948,7 +4966,7 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   atomic_store(&_fork_churn_stop, 0);
@@ -5040,7 +5058,7 @@ static void _fork_safety_rollback_race_child(const char *marker_path) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog__test_force_next_fresh_slot_registration_failure(true);
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (lg != CLOG_NULL) {
     cleanup_dir(dir, "app.log");
     test_child_exit(0);
@@ -5069,7 +5087,7 @@ static void _fork_safety_publish_rollback_child(const char *marker_path) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   ccol__pintable_force_next_publish_failure_for_tests();
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (lg != CLOG_NULL) {
     clog_close(lg);
     cleanup_dir(dir, "app.log");
@@ -5077,7 +5095,7 @@ static void _fork_safety_publish_rollback_child(const char *marker_path) {
   }
   _fork_safety_marker_append(marker_path, "acquire_failed_as_expected\n");
 
-  clog probe = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog probe = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (probe != CLOG_NULL) {
     _fork_safety_marker_append(marker_path, "forced_failure_was_consumed\n");
     clog_close(probe);
@@ -5105,12 +5123,12 @@ TEST(fork_safety, handle_publish_rollback_leaves_no_registered_shared) {
   size_t before = clog__test_live_shareds_count();
 
   ccol__pintable_force_next_publish_failure_for_tests();
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   bool refused = (lg == CLOG_NULL);
   if (!refused) clog_close(lg);
   size_t after = clog__test_live_shareds_count();
 
-  clog probe = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog probe = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   bool probe_opened = (probe != CLOG_NULL);
   if (probe_opened) clog_close(probe);
 
@@ -5291,7 +5309,7 @@ TEST(fork_safety,
       .max_rotated_files = 1,
       .compress_rotated = true,
   };
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog__test_hold_compressions(true);
@@ -5405,7 +5423,7 @@ TEST(fork_safety, fork_during_concurrent_close_does_not_leak_target_in_child) {
 
   size_t baseline = clog__test_live_shareds_count();
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   REQUIRE_EQ(clog__test_live_shareds_count(), baseline + 1);
 
@@ -5507,7 +5525,7 @@ TEST(async, construct_and_close_unbounded_queue) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {0};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "hello async unbounded");
@@ -5528,7 +5546,7 @@ TEST(async, construct_and_close_bounded_queue) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {.queue_size = 8};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "hello async bounded");
@@ -5551,7 +5569,7 @@ TEST(async, degenerate_all_zero_config_falls_back_to_defaults) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {0};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "degenerate config still works");
@@ -5573,7 +5591,7 @@ TEST(async, messages_eventually_reach_target_without_explicit_flush) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {.flush_interval_us = 20000};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "eventually visible");
@@ -5592,7 +5610,7 @@ TEST(async, size_triggered_flush) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {.flush_buffer_size = 32, .flush_interval_us = 60000000};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   for (int i = 0; i < 20; i++) clog_info(lg, "size trigger filler %d", i);
@@ -5613,7 +5631,7 @@ TEST(async, duration_triggered_flush) {
 
   clog_async_cfg cfg = {.flush_buffer_size = 1 << 20,
                         .flush_interval_us = 30000};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "duration trigger marker");
@@ -5635,7 +5653,7 @@ TEST(async, an_interval_that_ran_out_during_a_job_still_flushes) {
 
   clog_async_cfg cfg = {.flush_buffer_size = 1 << 20,
                         .flush_interval_us = 20000};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   bool seen = false;
   if (lg != CLOG_NULL) {
     clog__test_set_writer_job_delay_us(100000);
@@ -5661,7 +5679,7 @@ TEST(async, long_message_uses_heap_and_is_not_truncated) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {0};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   char long_msg[2048];
@@ -5698,7 +5716,7 @@ TEST(async,
   };
 
   clog_async_cfg cfg = {0};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   char long_msg[5000];
@@ -5725,7 +5743,7 @@ TEST(async, format_string_failure_writes_diagnostic_not_silence) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {0};
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   volatile int huge_width_source = 2000000000;
@@ -5756,7 +5774,7 @@ TEST(async, fields_snapshot_reflects_submission_time_not_flush_time) {
 
   clog_async_cfg cfg = {.flush_buffer_size = 1 << 20,
                         .flush_interval_us = 60000000};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_set_field(lg, "stage", "before");
@@ -5795,7 +5813,8 @@ TEST(async, backtrace_captured_on_calling_thread_not_writer_thread) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {0};
-  g_bt_test_lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  g_bt_test_lg =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(g_bt_test_lg, CLOG_NULL);
 
   pthread_t th;
@@ -5966,13 +5985,14 @@ TEST(async, fatal_drains_queue_before_writing_and_terminating) {
 
   pid_t pid = fork();
   if (pid == 0) {
-    fprintf(stderr,
-            "[DEBUG_TEST] child pid=%d about to clog_create_from_file_mp\n",
-            (int)getpid());
+    fprintf(
+        stderr,
+        "[DEBUG_TEST] child pid=%d about to clog_create_from_file_path_mp\n",
+        (int)getpid());
     forget_parent_fixtures_in_child();
     clog_async_cfg cfg = {.flush_buffer_size = 1 << 20,
                           .flush_interval_us = 60000000};
-    clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+    clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
     if (lg == CLOG_NULL) test_child_exit(2);
     fprintf(stderr,
             "[DEBUG_TEST] child pid=%d opened, about to log queued "
@@ -6047,7 +6067,7 @@ TEST(async, idle_logger_does_not_rotate_until_next_write_after_interval) {
       .rotation_interval_us = 100000000,
   };
   clog_async_cfg acfg = {.flush_interval_us = 50000};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &rcfg, &acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &rcfg, &acfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "first message");
@@ -6079,7 +6099,7 @@ TEST(async, flush_drains_a_slow_to_self_flush_setup) {
 
   clog_async_cfg cfg = {.flush_buffer_size = 1 << 20,
                         .flush_interval_us = 60000000};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "needs an explicit flush");
@@ -6126,7 +6146,7 @@ TEST(async, flush_returns_promptly_when_enqueue_fails) {
   };
 
   clog_async_cfg cfg = {0};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   atomic_store(&g_flush_oom_fail_malloc, true);
@@ -6151,7 +6171,7 @@ TEST(async, flush_returns_promptly_when_mutex_init_fails) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {0};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "before forced ccol__mutex_init failure");
@@ -6186,7 +6206,7 @@ TEST(async, flush_returns_promptly_when_condvar_init_fails) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {0};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "before forced condvar_init failure");
@@ -6245,7 +6265,7 @@ TEST(async, close_recovers_from_transient_oom_instead_of_hanging) {
 
   clog_async_cfg cfg = {0};
   g_teardown_retry_lg =
-      clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, &procs);
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, &procs);
   REQUIRE_NE(g_teardown_retry_lg, CLOG_NULL);
 
   clog_info(g_teardown_retry_lg, "before oom");
@@ -6322,7 +6342,8 @@ TEST(async, enqueue_failure_fallback_still_rotates_on_size) {
 
   clog_async_cfg acfg = {0};
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &rcfg, &acfg, &procs);
+  clog lg =
+      clog_create_from_file_path_mp(path, CLOG_INFO, &rcfg, &acfg, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "seed");
@@ -6365,7 +6386,8 @@ TEST(async, enqueue_failure_fallback_still_rotates_on_time) {
 
   clog_async_cfg acfg = {0};
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &rcfg, &acfg, &procs);
+  clog lg =
+      clog_create_from_file_path_mp(path, CLOG_INFO, &rcfg, &acfg, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "seed");
@@ -6408,7 +6430,7 @@ TEST(async,
 
   clog_async_cfg acfg = {.flush_buffer_size = 1 << 20,
                          .flush_interval_us = 60000000};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "message A (already queued)");
@@ -6449,7 +6471,7 @@ TEST(async, field_snapshot_growbuf_oom_does_not_double_free) {
   };
 
   clog_async_cfg acfg = {0};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   char big_value[400];
@@ -6482,7 +6504,7 @@ TEST(async,
   snprintf(calib_path, sizeof(calib_path), "%s/calib.log", calib_dir);
 
   clog calib_lg =
-      clog_create_from_file_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
+      clog_create_from_file_path_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(calib_lg, CLOG_NULL);
   const char *calib_msg = "CALIBRATION_MESSAGE_CONTENT";
   clog_info(calib_lg, "%s", calib_msg);
@@ -6501,7 +6523,7 @@ TEST(async,
 
   const size_t write_buf_cap = 20UL * 1024 * 1024;
   clog_async_cfg acfg = {.flush_buffer_size = write_buf_cap};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   const size_t room = 20;
@@ -6563,7 +6585,7 @@ TEST(async,
   char calib_path[512];
   snprintf(calib_path, sizeof(calib_path), "%s/calib.log", calib_dir);
   clog calib_lg =
-      clog_create_from_file_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
+      clog_create_from_file_path_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(calib_lg, CLOG_NULL);
   const char *calib_msg = "FILLER_OVERHEAD_CALIBRATION_MESSAGE";
   clog_info(calib_lg, "%s", calib_msg);
@@ -6580,7 +6602,7 @@ TEST(async,
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg acfg = {.flush_buffer_size = 20UL * 1024 * 1024};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   const size_t write_buf_cap = 16UL * 1024 * 1024;
@@ -6631,7 +6653,7 @@ TEST(async, backtrace_never_silently_lost_when_batch_buffer_is_nearly_full) {
   char calib_path[512];
   snprintf(calib_path, sizeof(calib_path), "%s/calib.log", calib_dir);
   clog calib_lg =
-      clog_create_from_file_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
+      clog_create_from_file_path_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(calib_lg, CLOG_NULL);
   const char *calib_msg = "FILLER_OVERHEAD_CALIBRATION_MESSAGE";
   clog_info(calib_lg, "%s", calib_msg);
@@ -6648,7 +6670,7 @@ TEST(async, backtrace_never_silently_lost_when_batch_buffer_is_nearly_full) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg acfg = {.flush_buffer_size = 20UL * 1024 * 1024};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   const size_t write_buf_cap = 16UL * 1024 * 1024;
@@ -6702,7 +6724,7 @@ TEST(async, json_backtrace_never_silently_becomes_an_empty_array) {
   char calib_path[512];
   snprintf(calib_path, sizeof(calib_path), "%s/calib.log", calib_dir);
   clog calib_lg =
-      clog_create_from_file_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
+      clog_create_from_file_path_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(calib_lg, CLOG_NULL);
   clog_set_format(calib_lg, CLOG_FMT_JSON);
   const char *calib_msg = "FILLER_OVERHEAD_CALIBRATION_MESSAGE";
@@ -6720,7 +6742,7 @@ TEST(async, json_backtrace_never_silently_becomes_an_empty_array) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg acfg = {.flush_buffer_size = 20UL * 1024 * 1024};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -6776,7 +6798,7 @@ TEST(robustness,
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog__test_write_unrepresentable_record(lg, CLOG_FMT_LOGFMT, CLOG_ERROR,
@@ -6801,7 +6823,7 @@ TEST(robustness, unrepresentable_record_logfmt_no_marker_without_backtrace) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog__test_write_unrepresentable_record(lg, CLOG_FMT_LOGFMT, CLOG_ERROR,
@@ -6826,7 +6848,7 @@ TEST(robustness, unrepresentable_record_json_embeds_bt_error_marker) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog__test_write_unrepresentable_record(lg, CLOG_FMT_JSON, CLOG_ERROR, true);
@@ -6848,7 +6870,7 @@ TEST(robustness, unrepresentable_record_json_no_marker_without_backtrace) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog__test_write_unrepresentable_record(lg, CLOG_FMT_JSON, CLOG_ERROR, false);
@@ -6897,7 +6919,7 @@ TEST(robustness, logfmt_backtrace_capture_failure_emits_marker_line) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog__test_force_backtrace_capture_failure(true);
@@ -6981,7 +7003,7 @@ TEST(robustness, logfmt_shallow_backtrace_capture_emits_no_marker) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog__test_force_shallow_backtrace_depth(true);
@@ -7050,7 +7072,7 @@ TEST(threading, concurrent_async_writes_produce_no_garbled_lines) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg cfg = {.flush_buffer_size = 4096, .flush_interval_us = 20000};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pthread_t writers[ASYNC_STRESS_WRITER_COUNT];
@@ -7109,7 +7131,7 @@ TEST(compression, rotated_file_is_valid_gzip) {
       .compress_rotated = true,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   for (int i = 0; i < 20; i++)
@@ -7144,7 +7166,7 @@ TEST(compression, decompressed_content_matches_written_log) {
       .compress_rotated = true,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(
@@ -7194,7 +7216,7 @@ TEST(compression, no_compression_when_disabled) {
       .compress_rotated = false,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   for (int i = 0; i < 20; i++)
@@ -7225,7 +7247,7 @@ TEST(compression, max_rotated_files_respected_with_compression) {
       .compress_rotated = true,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   for (int i = 0; i < 60; i++)
@@ -7261,7 +7283,7 @@ TEST(compression, empty_file_compresses_cleanly) {
       .compress_rotated = true,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "trigger rotation");
@@ -7336,7 +7358,7 @@ TEST(compression, concurrent_rotations_never_corrupt_or_lose_a_gz_file) {
       .compress_rotated = true,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pthread_t threads[ROTATE_STRESS_THREAD_COUNT];
@@ -7403,7 +7425,7 @@ TEST(compression,
       .compress_rotated = true,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog__test_hold_compressions(true);
@@ -7480,7 +7502,8 @@ TEST(compression,
       .compress_rotated = true,
   };
 
-  clog lg = clog_create_from_file_mp("app.log", CLOG_INFO, &cfg, NULL, NULL);
+  clog lg =
+      clog_create_from_file_path_mp("app.log", CLOG_INFO, &cfg, NULL, NULL);
   if (lg == CLOG_NULL) {
     if (chdir(oldcwd) != 0) perror("chdir back to the original directory");
     REQUIRE_NE(lg, CLOG_NULL);
@@ -7549,7 +7572,7 @@ TEST(fatal, terminates_process) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pid_t pid = fork();
@@ -7584,7 +7607,7 @@ TEST(fatal, writes_log_before_terminating) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pid_t pid = fork();
@@ -7626,7 +7649,7 @@ TEST(fatal, writes_backtrace_before_terminating) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pid_t pid = fork();
@@ -7666,7 +7689,7 @@ TEST(fatal, writes_and_terminates_with_clog_off) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_OFF, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_OFF, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   pid_t pid = fork();
@@ -7708,7 +7731,7 @@ TEST(json, fatal_level_string_in_json) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -7749,7 +7772,7 @@ TEST(json, fatal_has_inline_bt_array) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_FATAL, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_FATAL, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
@@ -7945,7 +7968,7 @@ TEST(split_record_framing,
       .flush_interval_us = 60000000,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
 
   char body1[320], body2[320], body3[320];
@@ -8007,7 +8030,7 @@ TEST(split_record_framing, a_fatal_record_never_lands_inside_a_retained_one) {
     forget_parent_fixtures_in_child();
     clog_async_cfg cfg = {.flush_buffer_size = 1 << 20,
                           .flush_interval_us = 60000000};
-    clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+    clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &cfg, NULL);
     if (lg == CLOG_NULL) test_child_exit(2);
 
     char body1[320], body2[320];
@@ -8078,8 +8101,8 @@ TEST(undelivered_batch, an_error_no_retry_outlasts_drops_it_with_a_marker) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &g_undelivered_acfg,
-                                     NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL,
+                                          &g_undelivered_acfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -8123,8 +8146,8 @@ TEST(undelivered_batch, a_transient_error_keeps_it_for_the_next_flush) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &g_undelivered_acfg,
-                                     NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL,
+                                          &g_undelivered_acfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -8157,8 +8180,8 @@ TEST(undelivered_batch, a_close_names_what_its_last_flush_could_not_deliver) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &g_undelivered_acfg,
-                                     NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL,
+                                          &g_undelivered_acfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -8194,8 +8217,8 @@ TEST(undelivered_batch, a_fatal_record_names_what_the_batch_could_not_deliver) {
   pid_t pid = fork();
   if (pid == 0) {
     forget_parent_fixtures_in_child();
-    clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL,
-                                       &g_undelivered_acfg, NULL);
+    clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL,
+                                            &g_undelivered_acfg, NULL);
     if (lg == CLOG_NULL) test_child_exit(2);
     clog_info(lg, "BATCHRECORDONE");
     clog__test_force_write_errors(ENOSPC, 2);
@@ -8254,7 +8277,7 @@ static __attribute__((noinline)) void log_multi_line_record(clog lg) {
 static size_t multi_line_primary_len(const char *dir) {
   char path[512];
   snprintf(path, sizeof(path), "%s/probe.log", dir);
-  clog probe = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog probe = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (probe == CLOG_NULL) return 0;
   log_multi_line_record(probe);
   clog_close(probe);
@@ -8693,7 +8716,7 @@ static clog g_deferred_release_b = CLOG_NULL;
 // close drops the last reference to its shared object and walks
 // live_shareds. The pair is published only once fully set up. If the release
 // runs ahead of a close still in flight, the binary aborts at exit in
-// cvector_elem_count, after the summary; make test sees the exit status.
+// cvector_size, after the summary; make test sees the exit status.
 TEST(clogger_deferred_release, a_racing_pair_left_open_defers_then_releases) {
   int fd = open("/dev/null", O_WRONLY);
   REQUIRE_NE(fd, -1);
@@ -8842,7 +8865,7 @@ TEST(rotation, a_rotation_never_prunes_the_file_it_just_created) {
       .max_rotated_files = 2,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_info(lg, "PAYLOAD-MARKER-ROTATED %s",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -8931,7 +8954,7 @@ TEST(short_write, a_cut_short_record_is_terminated_and_the_loss_reported) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "FIRST-RECORD");
@@ -8967,7 +8990,7 @@ TEST(short_write, an_async_batch_keeps_what_the_write_did_not_take) {
       .flush_interval_us = 60000000,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "ASYNC-BATCHED-ONE");
@@ -9036,7 +9059,7 @@ TEST(short_write, rotation_waits_for_the_retained_half_of_a_record) {
 
   char probe_path[512];
   snprintf(probe_path, sizeof(probe_path), "%s/probe.log", dir);
-  clog probe = clog_create_from_file(probe_path, CLOG_INFO, NULL, NULL);
+  clog probe = clog_create_from_file_path(probe_path, CLOG_INFO, NULL, NULL);
   REQUIRE_NE(probe, CLOG_NULL);
   clog_info(probe, "%s", body);
   clog_close(probe);
@@ -9059,7 +9082,7 @@ TEST(short_write, rotation_waits_for_the_retained_half_of_a_record) {
       .flush_interval_us = 60000000,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &rcfg, &acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &rcfg, &acfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
 
   clog_info(lg, "%s", body);
@@ -9124,7 +9147,7 @@ TEST(rotation, retention_orders_rotated_files_by_name_not_modification_time) {
       .max_rotated_files = 2,
   };
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog_info(lg, "one message to cross the size threshold");
   clog_close(lg);
@@ -9297,8 +9320,8 @@ static int _rtn_run_case(const rtn_case_t *c, int *out_gens) {
   clog_async_cfg acfg = {
       .queue_size = 0, .flush_buffer_size = 256, .flush_interval_us = 5000};
 
-  clog root = clog_create_from_file_mp(path, CLOG_INFO, &cfg,
-                                       c->async ? &acfg : NULL, NULL);
+  clog root = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg,
+                                            c->async ? &acfg : NULL, NULL);
   if (root == CLOG_NULL) {
     cleanup_dir(dir, "app.log");
     return 2;
@@ -9397,7 +9420,7 @@ TEST(retention, a_reopened_logger_numbers_above_the_names_on_disk) {
 
   int open_failures = 0;
   for (int round = 0; round < 2; round++) {
-    clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+    clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
     if (lg == CLOG_NULL) {
       open_failures++;
       continue;
@@ -9468,7 +9491,7 @@ TEST(retention, a_new_name_sorts_above_every_existing_name) {
       .time_rotation_enabled = false,
       .max_rotated_files = 2,
   };
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   bool opened = (lg != CLOG_NULL);
   bool after_first_10000 = false, after_first_9998_gone = false;
   if (opened) {
@@ -9517,7 +9540,7 @@ TEST(retention, concurrent_compressions_keep_the_documented_bound) {
       .max_rotated_files = 3,
       .compress_rotated = true,
   };
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -9589,7 +9612,7 @@ TEST(retention, a_rotation_never_waits_for_a_compression) {
       .max_rotated_files = 3,
       .compress_rotated = true,
   };
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -9691,7 +9714,7 @@ TEST(thread_identity, each_thread_reads_its_identity_once) {
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -9775,7 +9798,7 @@ TEST(thread_identity, set_thread_name_renames_and_updates_records) {
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -9836,7 +9859,7 @@ TEST(thread_identity, set_thread_name_works_before_any_logger) {
   char saved[17] = {0};
   _test_get_thread_name(saved);
   ccol_retval main_rv = ccol_set_thread_name("early-main");
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (lg != CLOG_NULL) {
     clog_info(lg, "early record");
     clog_close(lg);
@@ -9870,7 +9893,7 @@ TEST(thread_identity, a_forked_child_logs_its_own_pid_and_tid) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
   clog_info(lg, "parent record");
@@ -9878,7 +9901,7 @@ TEST(thread_identity, a_forked_child_logs_its_own_pid_and_tid) {
 
   pid_t pid = fork();
   if (pid == 0) {
-    clog clg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+    clog clg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, NULL);
     if (clg != CLOG_NULL) {
       clog_info(clg, "child record");
       clog_close(clg);
@@ -10014,7 +10037,7 @@ TEST(retention, a_pass_that_misses_the_running_compression_still_counts_it) {
       .max_rotated_files = 2,
       .compress_rotated = true,
   };
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -10057,7 +10080,7 @@ TEST(rotation_dir, relative_path_keeps_its_directory_after_chdir) {
         .max_file_size = 200,
         .max_rotated_files = 3,
     };
-    lg = clog_create_from_file("rel.log", CLOG_INFO, &cfg, NULL);
+    lg = clog_create_from_file_path("rel.log", CLOG_INFO, &cfg, NULL);
     if (lg != CLOG_NULL) {
       clog_info(lg, "before chdir");
       moved_on = chdir("../B") == 0;
@@ -10161,7 +10184,7 @@ TEST(async, flush_interval_holds_under_sustained_load) {
   clog_async_cfg acfg = {.queue_size = 64,
                          .flush_buffer_size = 64u * 1024u * 1024u,
                          .flush_interval_us = 50000};
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, &acfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, &acfg);
   if (lg == CLOG_NULL) cleanup_dir(dir, "load.log");
   REQUIRE_NE(lg, CLOG_NULL);
   clog__test_set_writer_job_delay_us(200);
@@ -10242,7 +10265,7 @@ TEST(compression, gzip_never_runs_on_the_logging_thread) {
       .max_rotated_files = 5,
       .compress_rotated = true,
   };
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -10282,7 +10305,7 @@ TEST(compression, gzip_never_runs_on_the_async_writer_thread) {
       .compress_rotated = true,
   };
   clog_async_cfg acfg = {.queue_size = 4};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, &acfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, &acfg);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -10330,7 +10353,7 @@ TEST(compression, close_finishes_every_queued_compression) {
       .max_rotated_files = 10,
       .compress_rotated = true,
   };
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -10394,7 +10417,7 @@ TEST(compression, fatal_waits_for_queued_compressions_before_exit) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+    clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
     if (lg == CLOG_NULL) test_child_exit(0);
     clog__test_set_pending_compress_delay_us(300000);
     clog_fatal(lg, "fatal record that rotates");
@@ -10498,8 +10521,8 @@ TEST(rotation_time, interval_counts_from_the_newest_rotated_generation) {
       .rotation_interval_us = 100000000,
       .max_rotated_files = 5,
   };
-  clog lg =
-      prepared ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = prepared ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                     : CLOG_NULL;
   if (lg != CLOG_NULL) {
     clog_info(lg, "new record");
     clog_close(lg);
@@ -10538,8 +10561,8 @@ TEST(rotation_time, interval_counts_from_birth_time_else_mtime) {
       .rotation_interval_us = 100000000,
       .max_rotated_files = 5,
   };
-  clog lg =
-      prepared ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = prepared ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                     : CLOG_NULL;
   if (lg != CLOG_NULL) {
     clog_info(lg, "new record");
     clog_close(lg);
@@ -10585,8 +10608,8 @@ TEST(rotation_time, old_birth_time_rotates_a_recently_modified_file) {
       .rotation_interval_us = 100000000,
       .max_rotated_files = 5,
   };
-  clog lg =
-      prepared ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = prepared ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                     : CLOG_NULL;
   if (lg != CLOG_NULL) {
     clog_info(lg, "new record");
     clog_close(lg);
@@ -10630,8 +10653,8 @@ TEST(rotation_time, empty_file_starts_the_interval_at_open) {
       .rotation_interval_us = 100000000,
       .max_rotated_files = 5,
   };
-  clog lg =
-      prepared ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = prepared ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                     : CLOG_NULL;
   if (lg != CLOG_NULL) {
     clog_info(lg, "first record");
     clog_close(lg);
@@ -10658,7 +10681,7 @@ TEST(rotation_time, a_clock_that_steps_back_restarts_the_interval) {
       .rotation_interval_us = 10000000,
       .max_rotated_files = 10,
   };
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   int after_skew = -1, after_correction = -1, after_interval = -1;
   if (lg != CLOG_NULL) {
     clog__test_set_wall_clock_offset(3600);
@@ -10695,7 +10718,7 @@ TEST(rotation_time,
       .max_file_size = 10,
       .max_rotated_files = 10,
   };
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   size_t attempts = 0;
   int rotated = -1;
   if (lg != CLOG_NULL) {
@@ -10754,7 +10777,7 @@ TEST(compression, old_generation_kept_for_compression_goes_when_it_ends) {
       .max_rotated_files = 1,
       .compress_rotated = true,
   };
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -10922,7 +10945,7 @@ static void exit_drain_child(const char *path, clog_format fmt, size_t qsize,
   clog__test_set_exit_drain_budget_ms(60000);
   clog_async_cfg acfg = {.queue_size = qsize,
                          .flush_interval_us = EXIT_TEST_NO_TIMER_US};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, NULL);
   if (lg == CLOG_NULL) test_child_exit(3);
   clog_set_format(lg, fmt);
   pthread_t tids[8];
@@ -10978,7 +11001,7 @@ static void exit_drain_full_queue_child(const char *path, int report_fd) {
   char verdict = 'x';
   clog_async_cfg acfg = {.queue_size = 1,
                          .flush_interval_us = EXIT_TEST_NO_TIMER_US};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, NULL);
   if (lg != CLOG_NULL) {
     clog__test_set_writer_job_delay_us(3000000);
     clog_info(lg, "record A");
@@ -11079,7 +11102,7 @@ static void exit_compress_child(const char *path, bool hold) {
                            .max_file_size = 1,
                            .max_rotated_files = 5,
                            .compress_rotated = true};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   if (lg == CLOG_NULL) test_child_exit(3);
   if (hold) {
     clog__test_set_exit_drain_budget_ms(200);
@@ -11222,8 +11245,8 @@ static void exit_from_worker_child(const char *path, bool compress) {
                            .max_rotated_files = 5,
                            .compress_rotated = true};
   clog_async_cfg acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, compress ? &cfg : NULL,
-                                     compress ? NULL : &acfg, &mp);
+  clog lg = clog_create_from_file_path_mp(
+      path, CLOG_INFO, compress ? &cfg : NULL, compress ? NULL : &acfg, &mp);
   if (lg == CLOG_NULL) test_child_exit(3);
   clog__test_set_exit_drain_budget_ms(600000);
   mark_child_ready(path);
@@ -11294,8 +11317,9 @@ static void exit_with_held_lock_child(const char *path, bool table_lock) {
                            .max_rotated_files = 5,
                            .compress_rotated = true};
   clog_async_cfg acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, table_lock ? NULL : &cfg,
-                                     table_lock ? &acfg : NULL, NULL);
+  clog lg =
+      clog_create_from_file_path_mp(path, CLOG_INFO, table_lock ? NULL : &cfg,
+                                    table_lock ? &acfg : NULL, NULL);
   if (lg == CLOG_NULL) test_child_exit(3);
   clog_info(lg, "HELDLOCKBODY");
   clog__test_set_exit_drain_budget_ms(300);
@@ -11352,7 +11376,7 @@ static void die_during_compression_child(const char *path) {
                            .max_file_size = 1,
                            .max_rotated_files = 5,
                            .compress_rotated = true};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   if (lg == CLOG_NULL) test_child_exit(3);
   clog__test_hold_compressions(true);
   clog_info(lg, "COMPRESSEDRECORDBODY");
@@ -11389,7 +11413,7 @@ TEST(compression, a_death_during_compression_leaves_no_gz_and_open_redoes_it) {
                            .max_file_size = 1 << 20,
                            .max_rotated_files = 5,
                            .compress_rotated = true};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   if (lg != CLOG_NULL) clog_close(lg);
   exit_compress_state_t reopened;
   inspect_exit_compress_dir(dir, &reopened);
@@ -11440,8 +11464,8 @@ TEST(compression, open_redoes_compressions_that_an_earlier_process_left) {
                            .max_file_size = 1 << 20,
                            .max_rotated_files = 5,
                            .compress_rotated = true};
-  clog lg =
-      setup ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = setup ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                  : CLOG_NULL;
   if (lg != CLOG_NULL) clog_close(lg);
 
   exit_compress_state_t st;
@@ -11473,7 +11497,7 @@ TEST(compression, compressed_file_keeps_the_mode_of_its_source) {
                            .max_file_size = 1,
                            .max_rotated_files = 5,
                            .compress_rotated = true};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   bool chmod_ok = lg != CLOG_NULL && chmod(path, 0640) == 0;
   if (lg != CLOG_NULL) {
     clog_info(lg, "MODERECORD");
@@ -11526,8 +11550,8 @@ TEST(same_file, two_rotating_opens_share_one_target_and_lose_nothing) {
                            .max_file_size = 4096,
                            .max_rotated_files = 1000,
                            .compress_rotated = true};
-  clog a = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
-  clog b = clog_create_from_file(path2, CLOG_INFO, &cfg, NULL);
+  clog a = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
+  clog b = clog_create_from_file_path(path2, CLOG_INFO, &cfg, NULL);
   enum { PER = 2000 };
   bool started[2] = {false, false};
   pthread_t tids[2];
@@ -11577,10 +11601,10 @@ TEST(same_file, a_zero_interval_is_the_default_interval) {
   clog_async_cfg aother = {.flush_interval_us =
                                CLOG_DEFAULT_ASYNC_FLUSH_INTERVAL_US + 1u};
 
-  clog a = clog_create_from_file(path, CLOG_INFO, &zero, &azero);
-  clog b = clog_create_from_file(path, CLOG_INFO, &spelled, &aspelled);
-  clog diff_rot = clog_create_from_file(path, CLOG_INFO, &other, &azero);
-  clog diff_flush = clog_create_from_file(path, CLOG_INFO, &zero, &aother);
+  clog a = clog_create_from_file_path(path, CLOG_INFO, &zero, &azero);
+  clog b = clog_create_from_file_path(path, CLOG_INFO, &spelled, &aspelled);
+  clog diff_rot = clog_create_from_file_path(path, CLOG_INFO, &other, &azero);
+  clog diff_flush = clog_create_from_file_path(path, CLOG_INFO, &zero, &aother);
   if (diff_flush != CLOG_NULL) clog_close(diff_flush);
   if (diff_rot != CLOG_NULL) clog_close(diff_rot);
   if (b != CLOG_NULL) clog_close(b);
@@ -11609,17 +11633,17 @@ TEST(same_file, a_second_open_with_another_configuration_fails) {
   other.max_rotated_files = 4;
   clog_async_cfg acfg = {0};
 
-  clog a = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
-  clog diff_rot = clog_create_from_file(path, CLOG_INFO, &other, NULL);
-  clog no_rot = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
-  clog async = clog_create_from_file(path, CLOG_INFO, &cfg, &acfg);
-  clog same = clog_create_from_file(path, CLOG_DEBUG, &cfg, NULL);
+  clog a = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
+  clog diff_rot = clog_create_from_file_path(path, CLOG_INFO, &other, NULL);
+  clog no_rot = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
+  clog async = clog_create_from_file_path(path, CLOG_INFO, &cfg, &acfg);
+  clog same = clog_create_from_file_path(path, CLOG_DEBUG, &cfg, NULL);
   clog_level same_level = same != CLOG_NULL ? clog_get_level(same) : 0;
   clog_level a_level = a != CLOG_NULL ? clog_get_level(a) : 0;
   if (same != CLOG_NULL) clog_close(same);
   if (a != CLOG_NULL) clog_close(a);
-  clog again = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
-  clog again2 = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+  clog again = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
+  clog again2 = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
   if (again != CLOG_NULL) clog_close(again);
   if (again2 != CLOG_NULL) clog_close(again2);
   if (diff_rot != CLOG_NULL) clog_close(diff_rot);
@@ -11695,7 +11719,7 @@ static int join_sweep(const char *path, const clog_rotation_cfg *cfg,
     for (long trip = 1; trip <= 40; trip++) {
       atomic_store(&g_join_calls, 0);
       atomic_store(&g_join_trip, trip);
-      clog b = clog_create_from_file_mp(path, CLOG_INFO, cfg, NULL, procs);
+      clog b = clog_create_from_file_path_mp(path, CLOG_INFO, cfg, NULL, procs);
       atomic_store(&g_join_trip, -1);
       clog__test_force_next_fresh_slot_registration_failure(false);
       if (b == CLOG_NULL) {
@@ -11726,14 +11750,14 @@ TEST(same_file, a_join_that_fails_gives_back_its_reference) {
                            .max_file_size = 1 << 20,
                            .max_rotated_files = 3};
   atomic_store(&g_join_live, 0);
-  clog a = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, &procs);
+  clog a = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, &procs);
   int refused = a != CLOG_NULL ? join_sweep(path, &cfg, &procs) : -1;
   if (a != CLOG_NULL) {
     clog_info(a, "FIRST STILL WRITES");
     clog_close(a);
   }
   long live = atomic_load(&g_join_live);
-  clog other = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+  clog other = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
   if (other != CLOG_NULL) clog_close(other);
   static char buf[65536];
   read_file(path, buf, sizeof(buf));
@@ -11768,18 +11792,20 @@ TEST(same_file, a_second_open_with_another_allocator_fails) {
   clog_rotation_cfg cfg = {.size_rotation_enabled = true,
                            .max_file_size = 1 << 20,
                            .max_rotated_files = 3};
-  clog a = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, &procs);
-  clog plain = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
-  clog diff = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, &other);
-  clog joined = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, &same);
+  clog a = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, &procs);
+  clog plain = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  clog diff =
+      clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, &other);
+  clog joined =
+      clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, &same);
   if (joined != CLOG_NULL) clog_close(joined);
   if (diff != CLOG_NULL) clog_close(diff);
   if (plain != CLOG_NULL) clog_close(plain);
   if (a != CLOG_NULL) clog_close(a);
   clog plain_first =
-      clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+      clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   clog procs_second =
-      clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, &procs);
+      clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, &procs);
   if (procs_second != CLOG_NULL) clog_close(procs_second);
   if (plain_first != CLOG_NULL) clog_close(plain_first);
   cleanup_dir(dir, "app.log");
@@ -11884,7 +11910,7 @@ static bool run_field_without_room(const clog_async_cfg *acfg, char *buf,
   static char big[9001];
   memset(big, 'v', sizeof(big) - 1);
   big[sizeof(big) - 1] = '\0';
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, acfg, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, acfg, &procs);
   bool ok = lg != CLOG_NULL;
   if (ok) {
     ok = clog_set_field(lg, "big", big) == ccol_success;
@@ -11949,7 +11975,7 @@ static bool run_backtrace_without_room(clog_format fmt, size_t room, char *buf,
                               .free = _join_free,
                               .calloc = _join_calloc,
                               .realloc = _grow_realloc};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, &procs);
   if (lg == CLOG_NULL) {
     cleanup_dir(dir, "app.log");
     return false;
@@ -12185,7 +12211,8 @@ TEST(derive, a_derive_without_memory_reports_it_and_gives_everything_back) {
                               .calloc = _join_calloc,
                               .realloc = _join_realloc};
   atomic_store(&g_join_live, 0);
-  clog parent = clog_create_from_file_mp(path, CLOG_INFO, NULL, NULL, &procs);
+  clog parent =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, NULL, &procs);
   REQUIRE_NE(parent, CLOG_NULL);
   bool fields_set = true;
   char key[16], value[48];
@@ -12255,7 +12282,7 @@ TEST(async, the_writer_unblocks_its_signals_under_the_untouched_policy) {
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
   clog_async_cfg acfg = {0};
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, &acfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, &acfg);
   if (lg == CLOG_NULL) {
     cleanup_dir(dir, "app.log");
     pthread_sigmask(SIG_SETMASK, &old_mask, NULL);
@@ -12347,7 +12374,7 @@ TEST(same_file, an_open_waits_for_the_last_close_of_the_same_file) {
                            .max_file_size = 1,
                            .max_rotated_files = 5,
                            .compress_rotated = true};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   clog__test_hold_compressions(true);
   clog_info(lg, "ROTATED AWAY");
@@ -12369,7 +12396,7 @@ TEST(same_file, an_open_waits_for_the_last_close_of_the_same_file) {
   clog again = CLOG_NULL;
   int gz_at_open = 0;
   if (releaser_started) {
-    again = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+    again = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
     gz_at_open = count_files_with_suffix(dir, ".gz");
     pthread_join(releaser, NULL);
   }
@@ -12409,7 +12436,7 @@ TEST(retention, a_generation_with_both_files_counts_once_and_goes_whole) {
   clog_rotation_cfg cfg = {.size_rotation_enabled = true,
                            .max_file_size = 1,
                            .max_rotated_files = 2};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_NULL);
   bool planted =
       write_whole_file(plain, "OLD\n", 4) && write_whole_file(gz, "OLD\n", 4);
@@ -12445,7 +12472,7 @@ TEST(retention, a_deletion_pass_without_memory_leaks_nothing) {
                            .max_rotated_files = 2};
   atomic_store(&g_join_live, 0);
   atomic_store(&g_join_trip_arms_slot, false);
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, &procs);
   REQUIRE_NE(lg, CLOG_NULL);
   for (int i = 0; i < 3; i++) clog_info(lg, "FILL %d", i);
   for (long trip = 1; trip <= 40; trip++) {
@@ -12722,7 +12749,7 @@ static void fatal_beside_blocked_pipe_child(const char *path) {
   memset(rec, 'x', 2 * cap);
   rec[2 * cap] = '\0';
   clog pipe_lg = clog_create_from_fd(p[1], CLOG_INFO, NULL);
-  clog file_lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+  clog file_lg = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
   if (pipe_lg == CLOG_NULL || file_lg == CLOG_NULL) test_child_exit(3);
   blocked_writer_arg_t arg = {.lg = pipe_lg, .rec = rec};
   pthread_t tid;
@@ -12881,8 +12908,8 @@ TEST(rotation, every_generation_keeps_the_mode_of_the_log) {
                            .max_file_size = 1,
                            .max_rotated_files = 100,
                            .compress_rotated = true};
-  clog lg =
-      created ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = created ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                    : CLOG_NULL;
   if (lg != CLOG_NULL) {
     for (int i = 0; i < 6; i++) clog_info(lg, "SECRETRECORD %d", i);
     clog_close(lg);
@@ -13134,7 +13161,7 @@ static void fatal_behind_busy_writer_child(const char *path) {
   int devnull = open("/dev/null", O_WRONLY);
   if (devnull >= 0) dup2(devnull, STDERR_FILENO);
   clog_async_cfg acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, &acfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, &acfg);
   if (lg == CLOG_NULL) test_child_exit(3);
   clog__test_set_writer_job_delay_us(20000);
   for (int i = 0; i < 200; i++) clog_info(lg, "BACKLOG %d", i);
@@ -13292,7 +13319,7 @@ static void log_after_drain_child(const char *path, size_t qsize,
   forget_parent_fixtures_in_child();
   clog_async_cfg acfg = {.queue_size = qsize,
                          .flush_interval_us = EXIT_TEST_NO_TIMER_US};
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, &acfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, &acfg);
   if (lg == CLOG_NULL) test_child_exit(3);
   clog_info(lg, "BEFOREEXITRECORD");
   g_after_drain_logger = lg;
@@ -13342,7 +13369,8 @@ static void exit_drain_race_child(const char *path, size_t qsize) {
   forget_parent_fixtures_in_child();
   clog_async_cfg acfg = {.queue_size = qsize,
                          .flush_interval_us = EXIT_TEST_NO_TIMER_US};
-  drain_race_lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  drain_race_lg =
+      clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, NULL);
   if (drain_race_lg == CLOG_NULL) test_child_exit(3);
   clog__test_set_writer_unlocked_job_delay_us(1000000);
   clog_info(drain_race_lg, "BEFOREDRAINRECORD");
@@ -13431,8 +13459,9 @@ TEST(compression, a_name_too_long_to_compress_is_reported) {
                            .max_file_size = 1,
                            .max_rotated_files = 5,
                            .compress_rotated = true};
-  clog lg = name_max == 255 ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL)
-                            : CLOG_NULL;
+  clog lg = name_max == 255
+                ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                : CLOG_NULL;
   if (lg != CLOG_NULL) {
     clog_info(lg, "LONGNAMERECORD");
     clog_close(lg);
@@ -13462,7 +13491,7 @@ typedef struct {
 // against the recovery of the first one.
 static void *recover_opener(void *arg) {
   recover_open_arg_t *a = (recover_open_arg_t *)arg;
-  a->lg = clog_create_from_file(a->path, CLOG_INFO, a->cfg, NULL);
+  a->lg = clog_create_from_file_path(a->path, CLOG_INFO, a->cfg, NULL);
   return NULL;
 }
 
@@ -13490,8 +13519,9 @@ TEST(compression, open_recovery_leaves_a_running_compression_alone) {
     entered = clog__test_compression_recovery_entered();
     if (!entered) usleep(1000);
   }
-  clog second =
-      started ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog second = started
+                    ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                    : CLOG_NULL;
   if (second != CLOG_NULL) clog_info(second, "RECOVERYRACERECORD");
   bool held = false;
   for (long long deadline_ms = test_now_ms() + 10000;
@@ -13538,7 +13568,7 @@ static void run_fallback_order_case(unsigned int errors, long *off_a,
       .realloc = _enqueue_fail_realloc,
   };
   clog_async_cfg acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &acfg, &procs);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL, &acfg, &procs);
   if (lg != CLOG_NULL) {
     clog_info(lg, "RECORD_A");
     clog__test_force_write_errors(ENOSPC, errors);
@@ -13696,8 +13726,8 @@ TEST(rotation_hijack, a_link_put_at_the_live_name_gets_no_record) {
   clog_rotation_cfg cfg = {.size_rotation_enabled = true,
                            .max_file_size = 200,
                            .max_rotated_files = 3};
-  clog lg =
-      setup ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = setup ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                  : CLOG_NULL;
   if (lg != CLOG_NULL) {
     for (int i = 0; i < 40; i++) clog_info(lg, "RHRECORD %d", i);
     clog_close(lg);
@@ -13736,7 +13766,7 @@ TEST(rotation_hijack, a_fifo_put_at_the_live_name_gets_no_record) {
   clog_rotation_cfg cfg = {.size_rotation_enabled = true,
                            .max_file_size = 200,
                            .max_rotated_files = 3};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   if (lg != CLOG_NULL) {
     for (int i = 0; i < 4; i++) clog_info(lg, "RHFIFO %d padding", i);
     clog_close(lg);
@@ -13768,7 +13798,7 @@ static void rh_fifo_at_rotated_name_child(const char *path) {
                            .max_file_size = 1 << 20,
                            .max_rotated_files = 1,
                            .compress_rotated = true};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   if (lg == CLOG_NULL) test_child_exit(3);
   clog_info(lg, "RHGEN");
   clog_close(lg);
@@ -13825,8 +13855,8 @@ TEST(rotation_foreign, a_link_at_a_rotated_name_is_never_read_or_removed) {
                            .max_file_size = 300,
                            .max_rotated_files = 1,
                            .compress_rotated = true};
-  clog lg =
-      setup ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = setup ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                  : CLOG_NULL;
   if (lg != CLOG_NULL) {
     for (int i = 0; i < 30; i++) clog_info(lg, "RHGEN %d padding-padding", i);
     clog_close(lg);
@@ -13863,8 +13893,8 @@ TEST(rotation_foreign, a_far_future_name_neither_stops_rotation_nor_counts) {
   clog_rotation_cfg cfg = {.size_rotation_enabled = true,
                            .max_file_size = 300,
                            .max_rotated_files = 2};
-  clog lg =
-      setup ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = setup ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                  : CLOG_NULL;
   if (lg != CLOG_NULL) {
     for (int i = 0; i < 60; i++)
       clog_info(lg, "RHSTALL %d padding-padding-padding", i);
@@ -13903,8 +13933,8 @@ TEST(rotation_foreign, ignored_entries_are_reported_at_a_bounded_rate) {
                            .max_file_size = 1 << 20,
                            .max_rotated_files = 5,
                            .compress_rotated = true};
-  clog lg =
-      setup ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = setup ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                  : CLOG_NULL;
   if (lg != CLOG_NULL) clog_close(lg);
   int warns = rh_count_lines_with(
       path,
@@ -13946,7 +13976,7 @@ TEST(rotation, a_max_file_size_of_zero_is_the_default_size) {
   clog_rotation_cfg cfg = {.size_rotation_enabled = true,
                            .max_file_size = 0,
                            .max_rotated_files = 3};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   if (lg != CLOG_NULL) {
     for (int i = 0; i < 40; i++) clog_info(lg, "ZERO LIMIT %02d", i);
     clog_close(lg);
@@ -13975,7 +14005,7 @@ TEST(lifecycle, a_rotating_open_of_a_too_long_directory_fails) {
                            .max_file_size = 4096,
                            .max_rotated_files = 3};
   errno = 0;
-  clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL);
   int err = errno;
   if (lg != CLOG_NULL) clog_close(lg);
   REQUIRE_EQ(lg, CLOG_NULL);
@@ -14024,8 +14054,8 @@ TEST(rotation_foreign, a_long_ignored_name_is_cut_in_its_warning) {
                            .max_file_size = 1 << 20,
                            .max_rotated_files = 5,
                            .compress_rotated = true};
-  clog lg =
-      setup ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = setup ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                  : CLOG_NULL;
   if (lg != CLOG_NULL) clog_close(lg);
   static char buf[8192];
   read_file(path, buf, sizeof(buf));
@@ -14130,8 +14160,8 @@ TEST(rotation_foreign, a_file_another_user_owns_is_never_compressed) {
                            .max_file_size = 300,
                            .max_rotated_files = 1,
                            .compress_rotated = true};
-  clog lg =
-      setup ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = setup ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                  : CLOG_NULL;
   if (lg != CLOG_NULL) {
     for (int i = 0; i < 30; i++) clog_info(lg, "RHGEN %d padding-padding", i);
     clog_close(lg);
@@ -14164,8 +14194,8 @@ TEST(rotation_foreign, open_removes_only_an_empty_private_file_of_a_rotation) {
   clog_rotation_cfg cfg = {.size_rotation_enabled = true,
                            .max_file_size = 1 << 20,
                            .max_rotated_files = 5};
-  clog lg =
-      setup ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = setup ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                  : CLOG_NULL;
   if (lg != CLOG_NULL) clog_close(lg);
   mode_t empty_kind = rh_entry_kind(empty);
   mode_t full_kind = rh_entry_kind(full);
@@ -14194,8 +14224,8 @@ TEST(rotation_foreign, a_live_path_that_is_a_link_is_moved_aside_once) {
                            .max_file_size = 300,
                            .max_rotated_files = 50,
                            .compress_rotated = true};
-  clog lg =
-      setup ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = setup ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                  : CLOG_NULL;
   if (lg != CLOG_NULL) {
     for (int i = 0; i < 30; i++)
       clog_info(lg, "RHLINK %02d padding-padding", i);
@@ -14272,7 +14302,7 @@ static bool run_sync_no_room(clog_format fmt, char *buf, size_t cap) {
   if (make_tmpdir(dir, sizeof(dir)) != 0) return false;
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
   if (lg == CLOG_NULL) {
     cleanup_dir(dir, "app.log");
     return false;
@@ -14428,8 +14458,8 @@ TEST(output_without_room, a_loss_is_named_once_the_output_has_room) {
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &g_undelivered_acfg,
-                                     NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL,
+                                          &g_undelivered_acfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -14540,8 +14570,8 @@ TEST(output_without_room, a_refused_continuation_does_not_stop_rotation) {
   clog_rotation_cfg rcfg = {.size_rotation_enabled = true,
                             .max_file_size = 2000,
                             .max_rotated_files = 2};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &rcfg,
-                                     &g_undelivered_acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &rcfg,
+                                          &g_undelivered_acfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -14593,7 +14623,7 @@ static void fsize_cut_child(const char *dir, bool async, int fd_out) {
   signal(SIGXFSZ, SIG_IGN);
   char probe[512];
   snprintf(probe, sizeof(probe), "%s/probe.txt", dir);
-  clog pl = clog_create_from_file(probe, CLOG_INFO, NULL, NULL);
+  clog pl = clog_create_from_file_path(probe, CLOG_INFO, NULL, NULL);
   size_t rec = 0;
   if (pl != CLOG_NULL) {
     clog_info(pl, "FSZCUT %03d %s", 0, "wwwwwwwwwwwwwwwwwwwwwwwwwwwwww");
@@ -14609,8 +14639,8 @@ static void fsize_cut_child(const char *dir, bool async, int fd_out) {
                       .rlim_max = rec * 10 + rec * 3 / 4};
   clog lg = CLOG_NULL;
   if (rec > 0 && setrlimit(RLIMIT_FSIZE, &rl) == 0)
-    lg = clog_create_from_file_mp(path, CLOG_INFO, &rcfg,
-                                  async ? &g_undelivered_acfg : NULL, NULL);
+    lg = clog_create_from_file_path_mp(
+        path, CLOG_INFO, &rcfg, async ? &g_undelivered_acfg : NULL, NULL);
   if (lg != CLOG_NULL) {
     for (int i = 0; i < 60; i++) {
       clog_info(lg, "FSZCUT %03d %s", i, "wwwwwwwwwwwwwwwwwwwwwwwwwwwwww");
@@ -14698,7 +14728,7 @@ TEST(output_without_room, a_backlog_is_split_across_generations) {
                             .max_rotated_files = 50};
   clog_async_cfg acfg = {.flush_buffer_size = 1024,
                          .flush_interval_us = 60000000};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &rcfg, &acfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &rcfg, &acfg);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -14772,7 +14802,7 @@ TEST(output_without_room,
                             .max_rotated_files = 100};
   clog_async_cfg acfg = {.flush_buffer_size = 1024,
                          .flush_interval_us = 60000000};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &rcfg, &acfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &rcfg, &acfg);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -14807,8 +14837,8 @@ TEST(rotation_foreign, a_cut_warning_is_named_as_a_loss) {
   clog_rotation_cfg cfg = {.size_rotation_enabled = true,
                            .max_file_size = 1,
                            .max_rotated_files = 10};
-  clog lg =
-      setup ? clog_create_from_file(path, CLOG_INFO, &cfg, NULL) : CLOG_NULL;
+  clog lg = setup ? clog_create_from_file_path(path, CLOG_INFO, &cfg, NULL)
+                  : CLOG_NULL;
   off_t rec_len = 0;
   static char live[8192];
   if (lg != CLOG_NULL) {
@@ -14858,7 +14888,7 @@ TEST(output_without_room, a_backlog_that_starts_mid_record_is_split_too) {
                             .max_rotated_files = 50};
   clog_async_cfg acfg = {.flush_buffer_size = 1024,
                          .flush_interval_us = 60000000};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &rcfg, &acfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &rcfg, &acfg);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -14884,7 +14914,7 @@ TEST(output_without_room, an_owed_repair_is_paid_at_exit) {
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -14969,7 +14999,7 @@ TEST(thread_identity, a_record_after_the_module_destructor_allocates_nothing) {
     close(pfd[0]);
     forget_parent_fixtures_in_child();
     char verdict = 'x';
-    clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+    clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
     if (lg != CLOG_NULL) {
       clog__test_run_identity_fini();
       pthread_t t;
@@ -15067,7 +15097,7 @@ TEST(compression, a_temporary_output_left_behind_is_removed_later) {
                             .max_file_size = 1,
                             .max_rotated_files = 10,
                             .compress_rotated = true};
-  clog lg = clog_create_from_file(path, CLOG_INFO, &rcfg, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, &rcfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 
@@ -15259,7 +15289,7 @@ TEST(exit_drain, loggers_through_the_exit_do_not_hold_a_destructor_close) {
 static void exit_with_full_output_child(const char *path) {
   forget_parent_fixtures_in_child();
   clog_async_cfg acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, &acfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, &acfg);
   if (lg == CLOG_NULL) test_child_exit(3);
   clog_info(lg, "DRAINEDRECORD %s", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
   clog_info(lg, "SECONDDRAINEDRECORD");
@@ -15307,8 +15337,8 @@ TEST(output_without_room, a_record_behind_a_full_backlog_is_a_named_loss) {
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
   snprintf(path, sizeof(path), "%s/app.log", dir);
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, NULL, &g_undelivered_acfg,
-                                     NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, NULL,
+                                          &g_undelivered_acfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
   size_t big_len = 60000;
@@ -15354,8 +15384,8 @@ TEST(output_without_room, a_rotation_gives_kept_records_another_attempt) {
   clog_rotation_cfg rcfg = {.size_rotation_enabled = true,
                             .max_file_size = 2000,
                             .max_rotated_files = 5};
-  clog lg = clog_create_from_file_mp(path, CLOG_INFO, &rcfg,
-                                     &g_undelivered_acfg, NULL);
+  clog lg = clog_create_from_file_path_mp(path, CLOG_INFO, &rcfg,
+                                          &g_undelivered_acfg, NULL);
   if (lg == CLOG_NULL) cleanup_dir(dir, "app.log");
   REQUIRE_NE(lg, CLOG_NULL);
 

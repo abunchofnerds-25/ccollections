@@ -221,7 +221,7 @@ static void clrucache_free_index_release_locked(uint32_t idx) {
 // clears lost_indices.
 static __attribute__((noinline)) bool clrucache_reclaim_lost_index_locked(
     uint32_t *out_idx) {
-  size_t slot_count = cvector_elem_count(clrucache_slot_table.slots);
+  size_t slot_count = cvector_size(clrucache_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
     clrucache_slot *slot =
         (clrucache_slot *)cvector_at(clrucache_slot_table.slots, i);
@@ -253,14 +253,14 @@ static ccache clrucache_handle_slot_acquire(struct clrucache *cache,
   }
   uint32_t idx;
   clrucache_slot *slot;
-  if (cvector_elem_count(clrucache_slot_table.free_indices) > 0) {
+  if (cvector_size(clrucache_slot_table.free_indices) > 0) {
     cvector_pop_back(clrucache_slot_table.free_indices, &idx);
     slot = (clrucache_slot *)cvector_at(clrucache_slot_table.slots, idx);
   } else if (clrucache_slot_table.lost_indices > 0 &&
              clrucache_reclaim_lost_index_locked(&idx)) {
     slot = (clrucache_slot *)cvector_at(clrucache_slot_table.slots, idx);
   } else {
-    if (cvector_elem_count(clrucache_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
+    if (cvector_size(clrucache_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
       ccol__rw_lock_unlock(clrucache_slot_table.rwlock);
       return 0;
     }
@@ -269,7 +269,7 @@ static ccache clrucache_handle_slot_acquire(struct clrucache *cache,
       ccol__rw_lock_unlock(clrucache_slot_table.rwlock);
       return 0;
     }
-    idx = (uint32_t)cvector_elem_count(clrucache_slot_table.slots) - 1;
+    idx = (uint32_t)cvector_size(clrucache_slot_table.slots) - 1;
     slot = (clrucache_slot *)cvector_at(clrucache_slot_table.slots, idx);
   }
   slot->generation++;
@@ -372,7 +372,7 @@ static bool evict_lru(ccache_shard *cache) {
   }
 
   cmap_pair kp = {.ptr = victim->key, .size = victim->key_size};
-  chashmap_delete_elem(cache->map, &kp);
+  chashmap_remove_elem(cache->map, &kp);
 
   victim->evicted = true;
   ccol__cond_var_broadcast(victim->cond);
@@ -644,7 +644,7 @@ void clrucache__destroy(ccache cache) {
   clrucache_slot *slot = NULL;
   struct clrucache *raw = NULL;
   if (clrucache_slot_table.slots != NULL &&
-      idx < cvector_elem_count(clrucache_slot_table.slots)) {
+      idx < cvector_size(clrucache_slot_table.slots)) {
     clrucache_slot *s =
         (clrucache_slot *)cvector_at(clrucache_slot_table.slots, idx);
     if (s->in_use && s->generation == gen) {
@@ -695,7 +695,7 @@ struct clrucache *clrucache__resolve_for_tests(ccache h) {
   ccol__rw_lock_rdlock(clrucache_slot_table.rwlock);
   struct clrucache *raw = NULL;
   if (clrucache_slot_table.slots != NULL &&
-      idx < cvector_elem_count(clrucache_slot_table.slots)) {
+      idx < cvector_size(clrucache_slot_table.slots)) {
     clrucache_slot *slot =
         (clrucache_slot *)cvector_at(clrucache_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
@@ -747,7 +747,7 @@ size_t clrucache__free_index_count_for_tests(void) {
   ccol__call_once(clrucache_slot_table.once, clrucache_slot_table_init_globals);
   ccol__rw_lock_rdlock(clrucache_slot_table.rwlock);
   size_t n = clrucache_slot_table.free_indices
-                 ? cvector_elem_count(clrucache_slot_table.free_indices)
+                 ? cvector_size(clrucache_slot_table.free_indices)
                  : 0;
   ccol__rw_lock_unlock(clrucache_slot_table.rwlock);
   return n;
@@ -776,9 +776,8 @@ int clrucache__key_waiters_for_tests(ccache cache, const cmap_pair *key_pair) {
 size_t clrucache__slot_table_capacity_for_tests(void) {
   ccol__call_once(clrucache_slot_table.once, clrucache_slot_table_init_globals);
   ccol__rw_lock_rdlock(clrucache_slot_table.rwlock);
-  size_t n = clrucache_slot_table.slots
-                 ? cvector_elem_count(clrucache_slot_table.slots)
-                 : 0;
+  size_t n =
+      clrucache_slot_table.slots ? cvector_size(clrucache_slot_table.slots) : 0;
   ccol__rw_lock_unlock(clrucache_slot_table.rwlock);
   return n;
 }
@@ -819,7 +818,7 @@ static void ccache_test_maybe_delay_post_publish(void) {
 // reads ptr, not in_use: A destroy clears in_use first but still uses the table
 // until its last step.
 static bool clrucache_any_slot_live_locked(void) {
-  size_t slot_count = cvector_elem_count(clrucache_slot_table.slots);
+  size_t slot_count = cvector_size(clrucache_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
     clrucache_slot *slot =
         (clrucache_slot *)cvector_at(clrucache_slot_table.slots, i);
@@ -959,7 +958,7 @@ clrucache_get_full_locked(struct clrucache *raw, ccache_shard *shard,
     } else {
       if (fetched.ptr) ccol__mem_free(shard->m_procs, fetched.ptr);
       cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
-      chashmap_delete_elem(shard->map, &kp);
+      chashmap_remove_elem(shard->map, &kp);
       entry->evicted = true;
       entry->fetch_failed = true;
       ccol__cond_var_broadcast(entry->cond);
@@ -1211,7 +1210,7 @@ ccol_retval clrucache_set_full(ccache cache, const cmap_pair *key_pair,
   }
   if (!remote_ok && !entry->in_lru) {
     cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
-    chashmap_delete_elem(shard->map, &kp);
+    chashmap_remove_elem(shard->map, &kp);
     entry->evicted = true;
   }
 
@@ -1296,7 +1295,7 @@ clrucache_get_into_locked(struct clrucache *raw, ccache_shard *shard,
       if (fetched.size != buf_size) {
         ccol__mem_free(shard->m_procs, fetched.ptr);
         cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
-        chashmap_delete_elem(shard->map, &kp);
+        chashmap_remove_elem(shard->map, &kp);
         entry->evicted = true;
         entry->fetch_size_mismatch = true;
         entry->fetch_failed = true;
@@ -1326,7 +1325,7 @@ clrucache_get_into_locked(struct clrucache *raw, ccache_shard *shard,
     } else {
       if (fetched.ptr) ccol__mem_free(shard->m_procs, fetched.ptr);
       cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
-      chashmap_delete_elem(shard->map, &kp);
+      chashmap_remove_elem(shard->map, &kp);
       entry->evicted = true;
       entry->fetch_failed = true;
       ccol__cond_var_broadcast(entry->cond);

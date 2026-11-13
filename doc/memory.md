@@ -30,7 +30,7 @@ creates an object:
 | `cjson`, `cyaml` | `cjson_parse_mp`, `cjson_create_*_mp`, and the same forms for `cyaml` |
 | `cthreadcomm` | `ccircq_create_mp` and the other `_create_mp` constructors |
 | `cmempool` | `cmempool_create_mp`, `crmempool_create_mp` and the other `_create_mp` constructors |
-| `clrucache`, `clogger`, `cthreadpool`, `chttpclient`, `chttpserver` | `clrucache_create_full`, `clog_create_from_file_mp`, `cthrpool_create_mp`, `chttpcli_create_mp`, `chttpsvr_create_mp` |
+| `clrucache`, `clogger`, `cthreadpool`, `chttpclient`, `chttpserver` | `clrucache_create_full`, `clog_create_from_file_path_mp`, `cthrpool_create_mp`, `chttpcli_create_mp`, `chttpsvr_create_mp` |
 
 A form without `_mp` is the same call with `NULL`.
 

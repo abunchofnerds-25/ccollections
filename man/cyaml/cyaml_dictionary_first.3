@@ -83,7 +83,7 @@ successor in place:
     member, and it is unspecified whether this iteration reaches it.
 
 Removing the successor, through cyaml_dictionary_remove(3),
-cyaml_delete(3) or any other call, makes the cursor invalid, and so
+cyaml_remove(3) or any other call, makes the cursor invalid, and so
 does destroying the dictionary.  A later cyaml_dictionary_next(3) on
 an invalid cursor is undefined behavior, so start again with
 cyaml_dictionary_first() after such a change.

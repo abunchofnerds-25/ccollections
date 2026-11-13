@@ -24,10 +24,10 @@ chmap_remove(3), keep the key type and the value type with the handle,
 and on a hard error they stop the program through ccol__fatal_err(). The
 raw functions, chashmap_create_full(3), chashmap_insert_elem(3),
 chashmap_get_elem_ref(3), chashmap_get_elem_copy(3) and
-chashmap_delete_elem(3), take every key and value as a cmap_pair and
+chashmap_remove_elem(3), take every key and value as a cmap_pair and
 return a ccol_retval. The typed layer also has chmap_destroy(3),
 chmap_size(3) and chmap_reset(3), short names for chashmap_destroy(3),
-chashmap_elem_count(3) and chashmap_reset(3).
+chashmap_size(3) and chashmap_reset(3).
 .fi
 .SH "OWNERSHIP OF KEYS AND VALUES"
 .nf

@@ -26,8 +26,9 @@ A trailing slash on the prefix is removed, so "/api/v1/" and
 "/api/v1" are the same prefix and route in the same way.
 
 The returned pointer belongs to the server, and the caller must not
-free it.  Every chttpsvr_router_on, chttpsvr_router_on_stream and
-chttpsvr_router_use call on that router first checks that the server
+free it.  Every chttpsvr_router_register_handler,
+chttpsvr_router_register_streaming_handler and chttpsvr_router_use
+call on that router first checks that the server
 has not been destroyed, also against a destroy on another thread at
 the same time, so you can keep the pointer across a restart with
 chttpsvr_stop and chttpsvr_start.  A registration call that races a
@@ -109,5 +110,5 @@ request whatever its path, register routes directly on the server
 with chttpsvr_register_handler or chttpsvr_register_streaming_handler.
 .fi
 .SH "SEE ALSO"
-.BR chttpsvr_router_on (3),
+.BR chttpsvr_router_register_handler (3),
 .BR chttpsvr_router_use (3)

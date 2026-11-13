@@ -1381,10 +1381,12 @@ __attribute__((constructor)) static void _setup(void) {
     exit(1);
   }
   chttpsvr_router_use(api, _router_mw, NULL);
-  chttpsvr_router_on(api, CHTTP_GET, "/", _api_root_handler, NULL);
-  chttpsvr_router_on(api, CHTTP_GET, "/items/{id}", _api_items_handler, NULL);
-  chttpsvr_router_on_stream(api, CHTTP_POST, "/stream-echo",
-                            _stream_echo_handler, NULL);
+  chttpsvr_router_register_handler(api, CHTTP_GET, "/", _api_root_handler,
+                                   NULL);
+  chttpsvr_router_register_handler(api, CHTTP_GET, "/items/{id}",
+                                   _api_items_handler, NULL);
+  chttpsvr_router_register_streaming_handler(api, CHTTP_POST, "/stream-echo",
+                                             _stream_echo_handler, NULL);
 
   chttpsvr_router *blocked_r = chttpsvr_subrouter(g_srv, "/blocked-area");
   if (!blocked_r) {
@@ -1392,7 +1394,8 @@ __attribute__((constructor)) static void _setup(void) {
     exit(1);
   }
   chttpsvr_router_use(blocked_r, _blocking_mw, NULL);
-  chttpsvr_router_on(blocked_r, CHTTP_GET, "/secret", _hello_handler, NULL);
+  chttpsvr_router_register_handler(blocked_r, CHTTP_GET, "/secret",
+                                   _hello_handler, NULL);
 
   chttpsvr_router *mw_chain = chttpsvr_subrouter(g_srv, "/mw-chain");
   if (!mw_chain) {
@@ -1401,14 +1404,16 @@ __attribute__((constructor)) static void _setup(void) {
   }
   chttpsvr_router_use(mw_chain, _mw_a, NULL);
   chttpsvr_router_use(mw_chain, _mw_b, NULL);
-  chttpsvr_router_on(mw_chain, CHTTP_GET, "/ping", _hello_handler, NULL);
+  chttpsvr_router_register_handler(mw_chain, CHTTP_GET, "/ping", _hello_handler,
+                                   NULL);
 
   chttpsvr_router *api_v3 = chttpsvr_subrouter(g_srv, "/api/v3/");
   if (!api_v3) {
     fprintf(stderr, "FATAL: could not create /api/v3/ subrouter\n");
     exit(1);
   }
-  chttpsvr_router_on(api_v3, CHTTP_GET, "/ping", _hello_handler, NULL);
+  chttpsvr_router_register_handler(api_v3, CHTTP_GET, "/ping", _hello_handler,
+                                   NULL);
 
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/null-guard",
                             _null_guard_handler, g_null_guard_results);
@@ -1447,7 +1452,8 @@ __attribute__((constructor)) static void _setup(void) {
     fprintf(stderr, "FATAL: could not create / subrouter\n");
     exit(1);
   }
-  chttpsvr_router_on(root_r, CHTTP_GET, "/", _root_subrouter_handler, NULL);
+  chttpsvr_router_register_handler(root_r, CHTTP_GET, "/",
+                                   _root_subrouter_handler, NULL);
 
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/head-pref", _hello_handler,
                             NULL);
@@ -1462,7 +1468,8 @@ __attribute__((constructor)) static void _setup(void) {
       fprintf(stderr, "FATAL: could not create /shadow-test subrouter\n");
       exit(1);
     }
-    chttpsvr_router_on(shadow_r, CHTTP_GET, "/ping", _shadow_sub_handler, NULL);
+    chttpsvr_router_register_handler(shadow_r, CHTTP_GET, "/ping",
+                                     _shadow_sub_handler, NULL);
   }
 
   {
@@ -1474,9 +1481,10 @@ __attribute__((constructor)) static void _setup(void) {
     for (int i = 0; i < 32; i++) {
       chttpsvr_router_use(ov_live, _global_mw, NULL);
     }
-    chttpsvr_router_on(ov_live, CHTTP_GET, "/ping", _hello_handler, NULL);
-    chttpsvr_router_on_stream(ov_live, CHTTP_POST, "/stream-ping",
-                              _stream_echo_handler, NULL);
+    chttpsvr_router_register_handler(ov_live, CHTTP_GET, "/ping",
+                                     _hello_handler, NULL);
+    chttpsvr_router_register_streaming_handler(
+        ov_live, CHTTP_POST, "/stream-ping", _stream_echo_handler, NULL);
   }
 
   chttpsvr_register_handler(g_srv, CHTTP_ANY, "/any-method",
@@ -2059,7 +2067,8 @@ TEST(chttpserver, duplicate_param_name_in_pattern_rejected) {
 
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/dup-router");
   REQUIRE_TRUE(r != NULL);
-  rv = chttpsvr_router_on(r, CHTTP_GET, "/{id}/b/{id}", _hello_handler, NULL);
+  rv = chttpsvr_router_register_handler(r, CHTTP_GET, "/{id}/b/{id}",
+                                        _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 
   rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "/dup/{id}/b/{other_id}",
@@ -2259,7 +2268,8 @@ TEST(chttpserver, custom_allocator_lifecycle) {
 
   chttpsvr_router *r = chttpsvr_subrouter(srv, "/sub");
   REQUIRE_TRUE(r != NULL);
-  rv = chttpsvr_router_on(r, CHTTP_GET, "/x", _hello_handler, NULL);
+  rv = chttpsvr_router_register_handler(r, CHTTP_GET, "/x", _hello_handler,
+                                        NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 
   size_t allocs_before_destroy = g_wrap_malloc_count + g_wrap_calloc_count;
@@ -4007,16 +4017,16 @@ TEST(chttpserver, subrouter_prefix_cache_shared_across_candidates) {
   REQUIRE_TRUE(r2 != NULL);
   REQUIRE_TRUE(r3 != NULL);
   REQUIRE_EQ(
-      (int)chttpsvr_router_on(r1, CHTTP_GET, "/leaf", _cache_literal_handler,
-                              (void *)"alpha-leaf"),
+      (int)chttpsvr_router_register_handler(
+          r1, CHTTP_GET, "/leaf", _cache_literal_handler, (void *)"alpha-leaf"),
       (int)ccol_success);
   REQUIRE_EQ(
-      (int)chttpsvr_router_on(r2, CHTTP_GET, "/leaf", _cache_literal_handler,
-                              (void *)"beta-leaf"),
+      (int)chttpsvr_router_register_handler(
+          r2, CHTTP_GET, "/leaf", _cache_literal_handler, (void *)"beta-leaf"),
       (int)ccol_success);
   REQUIRE_EQ(
-      (int)chttpsvr_router_on(r3, CHTTP_GET, "/leaf", _cache_literal_handler,
-                              (void *)"gamma-leaf"),
+      (int)chttpsvr_router_register_handler(
+          r3, CHTTP_GET, "/leaf", _cache_literal_handler, (void *)"gamma-leaf"),
       (int)ccol_success);
 
   chttpcli_response *resp = _get("/pfx-sh%61re/gamma/leaf");
@@ -4035,12 +4045,12 @@ TEST(chttpserver,
   REQUIRE_TRUE(r1 != NULL);
   REQUIRE_TRUE(r2 != NULL);
   REQUIRE_EQ(
-      (int)chttpsvr_router_on(r1, CHTTP_GET, "/leaf", _cache_literal_handler,
-                              (void *)"one-leaf"),
+      (int)chttpsvr_router_register_handler(
+          r1, CHTTP_GET, "/leaf", _cache_literal_handler, (void *)"one-leaf"),
       (int)ccol_success);
   REQUIRE_EQ(
-      (int)chttpsvr_router_on(r2, CHTTP_GET, "/leaf", _cache_literal_handler,
-                              (void *)"two-leaf"),
+      (int)chttpsvr_router_register_handler(
+          r2, CHTTP_GET, "/leaf", _cache_literal_handler, (void *)"two-leaf"),
       (int)ccol_success);
 
   char buf[1024];
@@ -4090,7 +4100,8 @@ TEST(chttpserver, router_on_null_pattern_rejected) {
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-pat-rt");
   REQUIRE_TRUE(r != NULL);
-  ccol_retval rv = chttpsvr_router_on(r, CHTTP_GET, NULL, _hello_handler, NULL);
+  ccol_retval rv = chttpsvr_router_register_handler(r, CHTTP_GET, NULL,
+                                                    _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -4098,8 +4109,8 @@ TEST(chttpserver, router_on_stream_null_pattern_rejected) {
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-pat-stream");
   REQUIRE_TRUE(r != NULL);
-  ccol_retval rv =
-      chttpsvr_router_on_stream(r, CHTTP_POST, NULL, _hello_handler, NULL);
+  ccol_retval rv = chttpsvr_router_register_streaming_handler(
+      r, CHTTP_POST, NULL, _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -4230,7 +4241,8 @@ TEST(chttpserver, router_on_stream_null_fn_rejected) {
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-stream-fn");
   REQUIRE_TRUE(r != NULL);
-  ccol_retval rv = chttpsvr_router_on_stream(r, CHTTP_POST, "/x", NULL, NULL);
+  ccol_retval rv = chttpsvr_router_register_streaming_handler(r, CHTTP_POST,
+                                                              "/x", NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -4403,7 +4415,8 @@ TEST(chttpserver, router_on_null_fn_rejected) {
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-fn-rt");
   REQUIRE_TRUE(r != NULL);
-  ccol_retval rv = chttpsvr_router_on(r, CHTTP_GET, "/x", NULL, NULL);
+  ccol_retval rv =
+      chttpsvr_router_register_handler(r, CHTTP_GET, "/x", NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -4670,8 +4683,8 @@ TEST(chttpserver, middleware_overflow_registration_rejected) {
   ccol_retval rv33 = chttpsvr_router_use(ov_r, _global_mw, NULL);
   REQUIRE_EQ((int)rv33, (int)ccol_not_permitted);
 
-  ccol_retval rv =
-      chttpsvr_router_on(ov_r, CHTTP_GET, "/ping", _hello_handler, NULL);
+  ccol_retval rv = chttpsvr_router_register_handler(ov_r, CHTTP_GET, "/ping",
+                                                    _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 }
 
@@ -4755,14 +4768,14 @@ TEST(chttpserver, on_null_srv_returns_invalid_args) {
 }
 
 TEST(chttpserver, router_on_null_router_returns_invalid_args) {
-  ccol_retval rv =
-      chttpsvr_router_on(NULL, CHTTP_GET, "/any", _hello_handler, NULL);
+  ccol_retval rv = chttpsvr_router_register_handler(NULL, CHTTP_GET, "/any",
+                                                    _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
 TEST(chttpserver, router_on_stream_null_router_returns_invalid_args) {
-  ccol_retval rv =
-      chttpsvr_router_on_stream(NULL, CHTTP_GET, "/any", _hello_handler, NULL);
+  ccol_retval rv = chttpsvr_router_register_streaming_handler(
+      NULL, CHTTP_GET, "/any", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -7459,7 +7472,7 @@ TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
     REQUIRE_NE((void *)req, NULL);
     chttp_request_set_header(req, "Connection", "close");
     chttpcli_response *resp = NULL;
-    chttp_do(req, &resp);
+    chttp_do_default(req, &resp);
     chttp_request_free(req);
     if (resp && resp->status_code == 200) got_200 = true;
     if (resp) chttpcli_resp_free(resp);
@@ -8896,12 +8909,13 @@ typedef struct {
 // a destroy.
 static void *router_use_setter_thread(void *arg) {
   router_use_setter_arg_t *a = (router_use_setter_arg_t *)arg;
-  chttpsvr_router_on(a->router, CHTTP_GET, "/race", _hello_handler, NULL);
+  chttpsvr_router_register_handler(a->router, CHTTP_GET, "/race",
+                                   _hello_handler, NULL);
   return NULL;
 }
 
-// The same race through chttpsvr_router_on, which resolves the owning server
-// like the other router calls.
+// The same race through chttpsvr_router_register_handler, which resolves the
+// owning server like the other router calls.
 TEST(chttpsvr_handle_lifecycle, router_resolve_unpin_race_stress) {
   enum { ITERATIONS = 30 };
   for (int i = 0; i < ITERATIONS; i++) {
@@ -9880,8 +9894,8 @@ TEST(chttpserver, subrouter_middleware_not_bypassed_by_broad_root_pattern) {
   REQUIRE_TRUE(admin != NULL);
   REQUIRE_EQ((int)chttpsvr_router_use(admin, _prec_auth_mw, NULL),
              (int)ccol_success);
-  REQUIRE_EQ((int)chttpsvr_router_on(admin, CHTTP_GET, "/secret",
-                                     _prec_secret_handler, NULL),
+  REQUIRE_EQ((int)chttpsvr_router_register_handler(admin, CHTTP_GET, "/secret",
+                                                   _prec_secret_handler, NULL),
              (int)ccol_success);
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_GET, "/{a}/{b}",
                                             _prec_root_handler, NULL),
@@ -9919,11 +9933,11 @@ TEST(chttpserver, more_specific_mount_wins_over_less_specific_one) {
   chttpsvr_router *deep = chttpsvr_subrouter(srv, "/api/v1");
   REQUIRE_TRUE(shallow != NULL);
   REQUIRE_TRUE(deep != NULL);
-  REQUIRE_EQ((int)chttpsvr_router_on(shallow, CHTTP_GET, "/v1/thing",
-                                     _prec_root_handler, NULL),
+  REQUIRE_EQ((int)chttpsvr_router_register_handler(
+                 shallow, CHTTP_GET, "/v1/thing", _prec_root_handler, NULL),
              (int)ccol_success);
-  REQUIRE_EQ((int)chttpsvr_router_on(deep, CHTTP_GET, "/thing",
-                                     _prec_secret_handler, NULL),
+  REQUIRE_EQ((int)chttpsvr_router_register_handler(deep, CHTTP_GET, "/thing",
+                                                   _prec_secret_handler, NULL),
              (int)ccol_success);
 
   chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -10037,8 +10051,8 @@ static chttpsvr _rej_srv_start(void) {
   if (!mounted) goto done;
   if (chttpsvr_router_use(mounted, _rej_mount_mw, NULL) != ccol_success)
     goto done;
-  if (chttpsvr_router_on(mounted, CHTTP_POST, "/up", _echo_body_handler,
-                         NULL) != ccol_success)
+  if (chttpsvr_router_register_handler(
+          mounted, CHTTP_POST, "/up", _echo_body_handler, NULL) != ccol_success)
     goto done;
   {
     chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -12618,13 +12632,14 @@ static chttpsvr _own_server(void) {
     return CHTTPSVR_NULL;
   }
   chttpsvr_router_use(adm, _own_guard_mw, NULL);
-  chttpsvr_router_on(adm, CHTTP_GET, "/secret", _own_text_handler,
-                     "admin-secret");
-  chttpsvr_router_on(adm, CHTTP_POST, "/post-only", _own_text_handler,
-                     "admin-post");
-  chttpsvr_router_on(adm, CHTTP_ANY, "/{a}/{b}", _own_text_handler,
-                     "admin-two");
-  chttpsvr_router_on(deep, CHTTP_GET, "/x", _own_text_handler, "deep-x");
+  chttpsvr_router_register_handler(adm, CHTTP_GET, "/secret", _own_text_handler,
+                                   "admin-secret");
+  chttpsvr_router_register_handler(adm, CHTTP_POST, "/post-only",
+                                   _own_text_handler, "admin-post");
+  chttpsvr_router_register_handler(adm, CHTTP_ANY, "/{a}/{b}",
+                                   _own_text_handler, "admin-two");
+  chttpsvr_router_register_handler(deep, CHTTP_GET, "/x", _own_text_handler,
+                                   "deep-x");
   chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
   cfg.port = _OWN_PORT;
@@ -16322,18 +16337,19 @@ TEST(chttpserver, a_method_outside_the_enum_is_refused_by_every_registration) {
     REQUIRE_EQ((int)chttpsvr_register_streaming_handler(srv, m, "/a",
                                                         _hello_handler, NULL),
                (int)ccol_invalid_args);
-    REQUIRE_EQ((int)chttpsvr_router_on(sub, m, "/a", _hello_handler, NULL),
+    REQUIRE_EQ((int)chttpsvr_router_register_handler(sub, m, "/a",
+                                                     _hello_handler, NULL),
                (int)ccol_invalid_args);
-    REQUIRE_EQ(
-        (int)chttpsvr_router_on_stream(sub, m, "/a", _hello_handler, NULL),
-        (int)ccol_invalid_args);
+    REQUIRE_EQ((int)chttpsvr_router_register_streaming_handler(
+                   sub, m, "/a", _hello_handler, NULL),
+               (int)ccol_invalid_args);
   }
   REQUIRE_EQ((int)chttpsvr_register_handler(srv, CHTTP_ANY, "/any",
                                             _hello_handler, NULL),
              (int)ccol_success);
-  REQUIRE_EQ(
-      (int)chttpsvr_router_on(sub, CHTTP_OPTIONS, "/o", _hello_handler, NULL),
-      (int)ccol_success);
+  REQUIRE_EQ((int)chttpsvr_router_register_handler(sub, CHTTP_OPTIONS, "/o",
+                                                   _hello_handler, NULL),
+             (int)ccol_success);
 }
 
 // Answers 205 with a body, for reset_content_sends_no_body_and_a_zero_length.
@@ -16748,11 +16764,11 @@ TEST(req_context, middleware_values_reach_the_handler_through_a_subrouter) {
   REQUIRE_TRUE(sub != NULL);
   REQUIRE_EQ((int)chttpsvr_router_use(sub, _ctx_sub_mw, NULL),
              (int)ccol_success);
-  REQUIRE_EQ(
-      (int)chttpsvr_router_on(sub, CHTTP_GET, "/plain", _ctx_handler, NULL),
-      (int)ccol_success);
-  REQUIRE_EQ((int)chttpsvr_router_on_stream(sub, CHTTP_GET, "/stream",
-                                            _ctx_stream_handler, NULL),
+  REQUIRE_EQ((int)chttpsvr_router_register_handler(sub, CHTTP_GET, "/plain",
+                                                   _ctx_handler, NULL),
+             (int)ccol_success);
+  REQUIRE_EQ((int)chttpsvr_router_register_streaming_handler(
+                 sub, CHTTP_GET, "/stream", _ctx_stream_handler, NULL),
              (int)ccol_success);
   chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -17238,8 +17254,8 @@ TEST(oom_sweep, every_failed_allocation_of_a_server_setup_is_reported) {
       }
     }
     if (!stopped) {
-      rv = chttpsvr_router_on(sub, CHTTP_GET, "/things/{x}", _sw_plain_handler,
-                              NULL);
+      rv = chttpsvr_router_register_handler(sub, CHTTP_GET, "/things/{x}",
+                                            _sw_plain_handler, NULL);
       if (rv != ccol_success) {
         stopped = true;
         route_fails++;
@@ -17402,8 +17418,9 @@ TEST(oom_sweep, every_failed_allocation_of_a_request_ends_in_a_whole_answer) {
   chttpsvr_router *sub = chttpsvr_subrouter(srv, "/api");
   bool setup_ok =
       sub &&
-      chttpsvr_router_on(sub, CHTTP_GET, "/items/{id}/parts/{part}",
-                         _rsw_handler, NULL) == ccol_success &&
+      chttpsvr_router_register_handler(sub, CHTTP_GET,
+                                       "/items/{id}/parts/{part}", _rsw_handler,
+                                       NULL) == ccol_success &&
       chttpsvr_register_handler(srv, CHTTP_GET, "/plain", _sw_plain_handler,
                                 NULL) == ccol_success;
   chttpsvr_config cfg = CHTTPSVR_CONFIG_DEFAULT;

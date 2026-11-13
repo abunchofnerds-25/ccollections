@@ -17,7 +17,7 @@ when the call started, together with whatever sits in a partly filled
 aggregation buffer.
 
 On a synchronous logger, one created with no clog_async_cfg (see
-clog_create_from_fd_mp(3) and clog_create_from_file_mp(3)), the call
+clog_create_from_fd_mp(3) and clog_create_from_file_path_mp(3)), the call
 does nothing and returns at once.
 
 A record that another thread submits at the same time as this call, or
@@ -53,5 +53,5 @@ Asserts when logger is CLOG_NULL, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_create_from_fd_mp (3),
-.BR clog_create_from_file_mp (3),
+.BR clog_create_from_file_path_mp (3),
 .BR clog_close (3)

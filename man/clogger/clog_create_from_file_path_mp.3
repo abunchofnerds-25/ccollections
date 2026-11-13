@@ -1,18 +1,18 @@
 .TH CLOG_CREATE_FROM_FILE_MP 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
 .SH NAME
-clog_create_from_file_mp, clog_create_from_file \- create a file-backed logger with optional log rotation
+clog_create_from_file_path_mp, clog_create_from_file_path \- create a file-backed logger with optional log rotation
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/clogger.h>
 
-clog clog_create_from_file_mp(const char *path, clog_level min_level,
+clog clog_create_from_file_path_mp(const char *path, clog_level min_level,
                     const clog_rotation_cfg *cfg,
                     const clog_async_cfg *async_cfg,
                     ccol_memmgmt_procs *mprocs);
 /* convenience wrapper; default allocator */
-static inline clog clog_create_from_file(const char *path,
+static inline clog clog_create_from_file_path(const char *path,
                     clog_level min_level,
                     const clog_rotation_cfg *cfg,
                     const clog_async_cfg *async_cfg);

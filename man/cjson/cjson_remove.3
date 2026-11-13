@@ -1,13 +1,13 @@
 .TH CJSON_DELETE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cjson_delete \- remove and free the DOM node at a dot-separated path
+cjson_remove \- remove and free the DOM node at a dot-separated path
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/cjson.h>
 
-ccol_retval cjson_delete(cjson root, const char *path);
+ccol_retval cjson_remove(cjson root, const char *path);
 .fi
 .SH DESCRIPTION
 .nf
@@ -45,9 +45,9 @@ ccol_not_enough_memory when an internal allocation fails.
 .fi
 .SH EXAMPLES
 .nf
-cjson_delete(doc, "users.#0.address");
-cjson_delete(doc, "config.debug");
-cjson_delete(doc, "items.#2");
+cjson_remove(doc, "users.#0.address");
+cjson_remove(doc, "config.debug");
+cjson_remove(doc, "items.#2");
 .fi
 .SH "SEE ALSO"
 .BR cjson_get (3),

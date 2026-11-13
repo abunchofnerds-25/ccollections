@@ -1,13 +1,13 @@
 .TH CBSTMAP_ELEM_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-cbstmap_elem_count \- get the number of elements in the map
+cbstmap_size \- get the number of elements in the map
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/cbstmap.h>
 
-size_t cbstmap_elem_count(cbmap cbm);
+size_t cbstmap_size(cbmap cbm);
 .fi
 .SH DESCRIPTION
 .nf
@@ -27,4 +27,4 @@ O(1). The function asserts if cbm is NULL.
 .fi
 .SH "SEE ALSO"
 .BR cbstmap_insert_elem (3),
-.BR cbstmap_delete_elem (3)
+.BR cbstmap_remove_elem (3)

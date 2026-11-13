@@ -57,7 +57,7 @@ memtest: build build_c23 build_keys
 # depend on each other. fuzz_cjson_parse drives the JSON grammar itself, plus
 # the serializer and cjson_clone() over whatever the parser accepts.
 # fuzz_cjson_path drives the dot-separated path grammar that cjson_get,
-# cjson_set and cjson_delete read. Both need clang, because libFuzzer is a Clang
+# cjson_set and cjson_remove read. Both need clang, because libFuzzer is a Clang
 # and LLVM feature. The `fuzz` target of tests/cyaml/Makefile and the
 # `fuzz_request` and `fuzz_response` targets of tests/chttpclient/Makefile have
 # the same shape and the same reason for .PHONY: A fuzz/corpus_parse and a

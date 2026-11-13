@@ -52,7 +52,7 @@ typedef enum chttp_method {
   // A wildcard for registering a server handler: It matches all seven methods
   // above. It's never the method of a real request, so chttpsvr_req_method()
   // never gives it back. A client request refuses it (chttp_request_create()
-  // gives NULL, chttp_run_query() gives ccol_invalid_args), as any value
+  // gives NULL, chttp_perform() gives ccol_invalid_args), as any value
   // outside the seven. A method chttpserver doesn't know (TRACE, CONNECT, a
   // WebDAV or custom verb) gets 501 before routing, so even a CHTTP_ANY handler
   // never sees it.

@@ -92,11 +92,11 @@ typedef struct chttpsvr_route {
 
 // A sub-router, and the root router of a server (prefix ""). The struct itself,
 // the "shell", is never freed while a caller can hold a pointer to it, because
-// chttpsvr_router_on, _on_stream and _use read owner before any resolve or pin
-// can protect them. destroy_router frees only the contents (routes, mw nodes,
-// prefix) and stores CHTTPSVR_NULL in owner. The shell of a root router goes
-// away with its server, and after the registry's exit-time destructor has run
-// every shell of a destroyed server is freed too.
+// chttpsvr_router_register_handler, _on_stream and _use read owner before any
+// resolve or pin can protect them. destroy_router frees only the contents
+// (routes, mw nodes, prefix) and stores CHTTPSVR_NULL in owner. The shell of a
+// root router goes away with its server, and after the registry's exit-time
+// destructor has run every shell of a destroyed server is freed too.
 struct chttpsvr_router {
   char *prefix;
   size_t prefix_len;
@@ -802,7 +802,7 @@ static struct chttpserver *chttpsvr_resolve(chttpsvr h) {
   ccol__mutex_lock(chttpsvr_slot_table.mutex);
   struct chttpserver *raw = NULL;
   if (chttpsvr_slot_table.slots &&
-      idx < cvector_elem_count(chttpsvr_slot_table.slots)) {
+      idx < cvector_size(chttpsvr_slot_table.slots)) {
     chttpsvr_slot *slot =
         (chttpsvr_slot *)cvector_at(chttpsvr_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
@@ -838,7 +838,7 @@ static chttpsvr chttpsvr_handle_slot_acquire(struct chttpserver *srv) {
   }
   uint32_t idx;
   chttpsvr_slot *slot;
-  if (cvector_elem_count(chttpsvr_slot_table.free_indices) > 0) {
+  if (cvector_size(chttpsvr_slot_table.free_indices) > 0) {
     cvector_pop_back(chttpsvr_slot_table.free_indices, &idx);
     slot = (chttpsvr_slot *)cvector_at(chttpsvr_slot_table.slots, idx);
   } else {
@@ -847,7 +847,7 @@ static chttpsvr chttpsvr_handle_slot_acquire(struct chttpserver *srv) {
       ccol__mutex_unlock(chttpsvr_slot_table.mutex);
       return 0;
     }
-    idx = (uint32_t)cvector_elem_count(chttpsvr_slot_table.slots) - 1;
+    idx = (uint32_t)cvector_size(chttpsvr_slot_table.slots) - 1;
     slot = (chttpsvr_slot *)cvector_at(chttpsvr_slot_table.slots, idx);
   }
   slot->generation++;
@@ -9110,9 +9110,8 @@ static void chttpsvr_atfork_prepare(void) {
   ccol__mutex_lock(chttpsvr_router_shell_registry.mutex);
   ccol__mutex_lock(idle_sweep_bundler.wake_mu);
 
-  size_t n = chttpsvr_slot_table.slots
-                 ? cvector_elem_count(chttpsvr_slot_table.slots)
-                 : 0;
+  size_t n =
+      chttpsvr_slot_table.slots ? cvector_size(chttpsvr_slot_table.slots) : 0;
   for (size_t i = 0; i < n; i++) {
     chttpsvr_slot *slot =
         (chttpsvr_slot *)cvector_at(chttpsvr_slot_table.slots, i);
@@ -9144,9 +9143,8 @@ static void chttpsvr_atfork_prepare(void) {
 // or wait in the child neither joins a vanished thread nor waits for a
 // broadcast that never comes.
 static void chttpsvr_atfork_release_impl(bool is_child) {
-  size_t n = chttpsvr_slot_table.slots
-                 ? cvector_elem_count(chttpsvr_slot_table.slots)
-                 : 0;
+  size_t n =
+      chttpsvr_slot_table.slots ? cvector_size(chttpsvr_slot_table.slots) : 0;
   for (size_t i = 0; i < n; i++) {
     chttpsvr_slot *slot =
         (chttpsvr_slot *)cvector_at(chttpsvr_slot_table.slots, i);
@@ -10218,7 +10216,7 @@ void chttpsvr__destroy(chttpsvr srv) {
   chttpsvr_slot *slot = NULL;
   struct chttpserver *raw = NULL;
   if (chttpsvr_slot_table.slots &&
-      idx < cvector_elem_count(chttpsvr_slot_table.slots)) {
+      idx < cvector_size(chttpsvr_slot_table.slots)) {
     chttpsvr_slot *s =
         (chttpsvr_slot *)cvector_at(chttpsvr_slot_table.slots, idx);
     if (s->in_use && s->generation == gen) {
@@ -10367,7 +10365,7 @@ bool chttpsvr__slot_live_for_tests(chttpsvr h) {
   bool live = false;
   ccol__mutex_lock(chttpsvr_slot_table.mutex);
   if (chttpsvr_slot_table.slots &&
-      idx < cvector_elem_count(chttpsvr_slot_table.slots))
+      idx < cvector_size(chttpsvr_slot_table.slots))
     live = chttpsvr_slot_live(
         (chttpsvr_slot *)cvector_at(chttpsvr_slot_table.slots, idx));
   ccol__mutex_unlock(chttpsvr_slot_table.mutex);
@@ -10379,7 +10377,7 @@ void chttpsvr__slot_set_in_use_for_tests(chttpsvr h, bool in_use) {
   uint32_t idx = (uint32_t)(h >> 32);
   ccol__mutex_lock(chttpsvr_slot_table.mutex);
   if (chttpsvr_slot_table.slots &&
-      idx < cvector_elem_count(chttpsvr_slot_table.slots))
+      idx < cvector_size(chttpsvr_slot_table.slots))
     ((chttpsvr_slot *)cvector_at(chttpsvr_slot_table.slots, idx))->in_use =
         in_use;
   ccol__mutex_unlock(chttpsvr_slot_table.mutex);
@@ -10389,7 +10387,7 @@ void chttpsvr__slot_set_in_use_for_tests(chttpsvr h, bool in_use) {
 // Tells whether any slot of the table names a server. The caller holds the
 // table's mutex and the table exists.
 static bool chttpsvr_any_slot_live_locked(void) {
-  size_t slot_count = cvector_elem_count(chttpsvr_slot_table.slots);
+  size_t slot_count = cvector_size(chttpsvr_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++)
     if (chttpsvr_slot_live(
             (chttpsvr_slot *)cvector_at(chttpsvr_slot_table.slots, i)))
@@ -11140,7 +11138,7 @@ struct chttpserver *chttpsvr__resolve_for_tests(chttpsvr h) {
   ccol__mutex_lock(chttpsvr_slot_table.mutex);
   struct chttpserver *raw = NULL;
   if (chttpsvr_slot_table.slots &&
-      idx < cvector_elem_count(chttpsvr_slot_table.slots)) {
+      idx < cvector_size(chttpsvr_slot_table.slots)) {
     chttpsvr_slot *slot =
         (chttpsvr_slot *)cvector_at(chttpsvr_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
@@ -11154,9 +11152,8 @@ struct chttpserver *chttpsvr__resolve_for_tests(chttpsvr h) {
 size_t chttpsvr__slot_table_capacity_for_tests(void) {
   ccol__call_once(chttpsvr_slot_table.once, chttpsvr_slot_table_init_globals);
   ccol__mutex_lock(chttpsvr_slot_table.mutex);
-  size_t n = chttpsvr_slot_table.slots
-                 ? cvector_elem_count(chttpsvr_slot_table.slots)
-                 : 0;
+  size_t n =
+      chttpsvr_slot_table.slots ? cvector_size(chttpsvr_slot_table.slots) : 0;
   ccol__mutex_unlock(chttpsvr_slot_table.mutex);
   return n;
 }
@@ -11508,9 +11505,11 @@ static struct chttpserver *chttpsvr_router_reader_enter(
 // Adds a buffered route to a sub-router while its server is pinned, so a
 // destroyed server is refused with ccol_invalid_args instead of a write into
 // freed memory.
-ccol_retval chttpsvr_router_on(chttpsvr_router *router, chttp_method method,
-                               const char *pattern, chttpsvr_handler_fn fn,
-                               void *ctx) {
+ccol_retval chttpsvr_router_register_handler(chttpsvr_router *router,
+                                             chttp_method method,
+                                             const char *pattern,
+                                             chttpsvr_handler_fn fn,
+                                             void *ctx) {
   if (!router || !pattern || !fn) return ccol_invalid_args;
   struct chttpserver *raw = chttpsvr_router_reader_enter(router);
   if (!raw) return ccol_invalid_args;
@@ -11519,10 +11518,13 @@ ccol_retval chttpsvr_router_on(chttpsvr_router *router, chttp_method method,
   return rv;
 }
 
-// Adds a streaming route to a sub-router; same rules as chttpsvr_router_on.
-ccol_retval chttpsvr_router_on_stream(chttpsvr_router *router,
-                                      chttp_method method, const char *pattern,
-                                      chttpsvr_handler_fn fn, void *ctx) {
+// Adds a streaming route to a sub-router; same rules as
+// chttpsvr_router_register_handler.
+ccol_retval chttpsvr_router_register_streaming_handler(chttpsvr_router *router,
+                                                       chttp_method method,
+                                                       const char *pattern,
+                                                       chttpsvr_handler_fn fn,
+                                                       void *ctx) {
   if (!router || !pattern || !fn) return ccol_invalid_args;
   struct chttpserver *raw = chttpsvr_router_reader_enter(router);
   if (!raw) return ccol_invalid_args;
@@ -11532,7 +11534,7 @@ ccol_retval chttpsvr_router_on_stream(chttpsvr_router *router,
 }
 
 // Adds a middleware to a sub-router, which runs for every route mounted under
-// its prefix; same rules as chttpsvr_router_on.
+// its prefix; same rules as chttpsvr_router_register_handler.
 ccol_retval chttpsvr_router_use(chttpsvr_router *router,
                                 chttpsvr_middleware_fn fn, void *ctx) {
   if (!router || !fn) return ccol_invalid_args;

@@ -327,8 +327,11 @@ A sub-router groups routes under a path prefix and has its own middleware:
 ```c
 chttpsvr_router *admin = chttpsvr_subrouter(srv, "/admin");
 chttpsvr_router_use(admin, require_api_key, "s3cret");
-chttpsvr_router_on(admin, CHTTP_GET,  "/stats",  show_stats,  NULL);  /* /admin/stats */
-chttpsvr_router_on(admin, CHTTP_POST, "/reload", reload_conf, NULL);  /* /admin/reload */
+/* /admin/stats and /admin/reload */
+chttpsvr_router_register_handler(admin, CHTTP_GET, "/stats", show_stats,
+                                 NULL);
+chttpsvr_router_register_handler(admin, CHTTP_POST, "/reload", reload_conf,
+                                 NULL);
 ```
 
 A sub-router lives as long as its server. A pointer to it is safe to pass
@@ -541,10 +544,14 @@ int main(int argc, char **argv) {
     bool ok =
         chttpsvr_use(srv, access_log, NULL) == ccol_success && api &&
         chttpsvr_router_use(api, require_token, "Bearer secret") == ccol_success &&
-        chttpsvr_router_on(api, CHTTP_GET, "/notes", list_notes, &st) == ccol_success &&
-        chttpsvr_router_on(api, CHTTP_GET, "/notes/{id}", get_note, &st) == ccol_success &&
-        chttpsvr_router_on(api, CHTTP_PUT, "/notes/{id}", put_note, &st) == ccol_success &&
-        chttpsvr_router_on(api, CHTTP_DELETE, "/notes/{id}", delete_note, &st) == ccol_success &&
+        chttpsvr_router_register_handler(api, CHTTP_GET, "/notes", list_notes,
+                                         &st) == ccol_success &&
+        chttpsvr_router_register_handler(api, CHTTP_GET, "/notes/{id}",
+                                         get_note, &st) == ccol_success &&
+        chttpsvr_router_register_handler(api, CHTTP_PUT, "/notes/{id}",
+                                         put_note, &st) == ccol_success &&
+        chttpsvr_router_register_handler(api, CHTTP_DELETE, "/notes/{id}",
+                                         delete_note, &st) == ccol_success &&
         chttpsvr_register_handler(srv, CHTTP_POST, "/admin/shutdown",
                                   shutdown_handler, NULL) == ccol_success;
 
@@ -694,7 +701,8 @@ why: `ccol_msg_too_large` when the body is larger than `max_body_size`,
 `ccol_http_transfer_aborted` when the connection broke or the body was
 malformed.
 
-A sub-router registers streaming routes with `chttpsvr_router_on_stream`.
+A sub-router registers streaming routes with
+`chttpsvr_router_register_streaming_handler`.
 
 ## Slow and hostile clients
 
@@ -1001,8 +1009,8 @@ Routes, middleware and sub-routers:
 [chttpsvr_register_streaming_handler(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_register_streaming_handler.3.html),
 [chttpsvr_use(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_use.3.html),
 [chttpsvr_subrouter(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_subrouter.3.html),
-[chttpsvr_router_on(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_router_on.3.html),
-[chttpsvr_router_on_stream(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_router_on_stream.3.html),
+[chttpsvr_router_register_handler(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_router_register_handler.3.html),
+[chttpsvr_router_register_streaming_handler(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_router_register_streaming_handler.3.html),
 [chttpsvr_router_use(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_router_use.3.html)
 
 The request:

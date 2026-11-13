@@ -24,7 +24,7 @@ cjson_str_val() returns a pointer to the node's own copy of the
 string, and the caller must not free it.  The pointer is borrowed and
 stays valid until the node gets a new value or is destroyed, so any
 of these ends it: A cjson_set(3) that reaches the node, a
-cjson_list_remove(3), cjson_dictionary_remove(3) or cjson_delete(3)
+cjson_list_remove(3), cjson_dictionary_remove(3) or cjson_remove(3)
 of the node, a cjson_dictionary_set(3) that replaces it, and a
 destroy of its tree.  Copy the text if you need it longer.  The
 string is always well-formed UTF-8 whatever built the tree, because

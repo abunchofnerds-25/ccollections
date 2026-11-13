@@ -11,7 +11,7 @@ ccol_retval chmap_remove(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for chashmap_delete_elem() that returns the result
+Type-inferred wrapper for chashmap_remove_elem() that returns the result
 code, so a key_not_found does not stop the program.
 
 The lookup key is converted through the DECLARED key type of the map,
@@ -45,5 +45,5 @@ if (r == ccol_key_not_found) {
 }
 .fi
 .SH "SEE ALSO"
-.BR chashmap_delete_elem (3),
+.BR chashmap_remove_elem (3),
 .BR chmap_insert (3)

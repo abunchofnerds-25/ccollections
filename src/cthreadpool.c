@@ -255,9 +255,8 @@ static void cthrpool_atfork_prepare(void) {
 #endif
   ccol__rw_lock_wrlock(cthrpool_slot_table.rwlock);
 
-  size_t n = cthrpool_slot_table.slots
-                 ? cvector_elem_count(cthrpool_slot_table.slots)
-                 : 0;
+  size_t n =
+      cthrpool_slot_table.slots ? cvector_size(cthrpool_slot_table.slots) : 0;
   for (size_t i = 0; i < n; i++) {
     cthrpool_slot *slot =
         (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, i);
@@ -273,9 +272,8 @@ static void cthrpool_atfork_prepare(void) {
 // for ever) and reinitializes its condition variables and the table's rwlock.
 // A torn_down pool only needs its mu unlocked.
 static void cthrpool_atfork_release_impl(bool is_child) {
-  size_t n = cthrpool_slot_table.slots
-                 ? cvector_elem_count(cthrpool_slot_table.slots)
-                 : 0;
+  size_t n =
+      cthrpool_slot_table.slots ? cvector_size(cthrpool_slot_table.slots) : 0;
   for (size_t i = 0; i < n; i++) {
     cthrpool_slot *slot =
         (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, i);
@@ -391,7 +389,7 @@ static void cthrpool_free_index_release_locked(uint32_t idx) {
 // than free. A scan that finds nothing clears lost_indices.
 static __attribute__((noinline)) bool cthrpool_reclaim_lost_index_locked(
     uint32_t *out_idx) {
-  size_t slot_count = cvector_elem_count(cthrpool_slot_table.slots);
+  size_t slot_count = cvector_size(cthrpool_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
     cthrpool_slot *slot =
         (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, i);
@@ -420,14 +418,14 @@ static cthrpool cthrpool_handle_slot_acquire(cthread_pool *pool) {
   }
   uint32_t idx;
   cthrpool_slot *slot;
-  if (cvector_elem_count(cthrpool_slot_table.free_indices) > 0) {
+  if (cvector_size(cthrpool_slot_table.free_indices) > 0) {
     cvector_pop_back(cthrpool_slot_table.free_indices, &idx);
     slot = (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
   } else if (cthrpool_slot_table.lost_indices > 0 &&
              cthrpool_reclaim_lost_index_locked(&idx)) {
     slot = (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
   } else {
-    if (cvector_elem_count(cthrpool_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
+    if (cvector_size(cthrpool_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
       ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
       return 0;
     }
@@ -436,7 +434,7 @@ static cthrpool cthrpool_handle_slot_acquire(cthread_pool *pool) {
       ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
       return 0;
     }
-    idx = (uint32_t)cvector_elem_count(cthrpool_slot_table.slots) - 1;
+    idx = (uint32_t)cvector_size(cthrpool_slot_table.slots) - 1;
     slot = (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
   }
   slot->generation++;
@@ -1793,7 +1791,7 @@ void cthrpool__destroy(cthrpool pool) {
   cthrpool_slot *slot = NULL;
   cthread_pool *raw = NULL;
   if (cthrpool_slot_table.slots &&
-      idx < cvector_elem_count(cthrpool_slot_table.slots)) {
+      idx < cvector_size(cthrpool_slot_table.slots)) {
     cthrpool_slot *s =
         (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
     if (s->in_use && s->generation == gen) {
@@ -1844,7 +1842,7 @@ cthread_pool *cthrpool__resolve_for_tests(cthrpool h) {
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
   ccol__rw_lock_rdlock(cthrpool_slot_table.rwlock);
   cthread_pool *raw = NULL;
-  if (idx < cvector_elem_count(cthrpool_slot_table.slots)) {
+  if (idx < cvector_size(cthrpool_slot_table.slots)) {
     cthrpool_slot *slot =
         (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
@@ -1858,7 +1856,7 @@ cthread_pool *cthrpool__resolve_for_tests(cthrpool h) {
 size_t cthrpool__free_index_count_for_tests(void) {
   ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
   ccol__rw_lock_rdlock(cthrpool_slot_table.rwlock);
-  size_t n = cvector_elem_count(cthrpool_slot_table.free_indices);
+  size_t n = cvector_size(cthrpool_slot_table.free_indices);
   ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
   return n;
 }
@@ -1886,7 +1884,7 @@ bool cthrpool__is_self_call_for_tests(struct cthread_pool *pool) {
 size_t cthrpool__slot_table_capacity_for_tests(void) {
   ccol__call_once(cthrpool_slot_table.once, cthrpool_slot_table_init_globals);
   ccol__rw_lock_rdlock(cthrpool_slot_table.rwlock);
-  size_t n = cvector_elem_count(cthrpool_slot_table.slots);
+  size_t n = cvector_size(cthrpool_slot_table.slots);
   ccol__rw_lock_unlock(cthrpool_slot_table.rwlock);
   return n;
 }
@@ -1968,7 +1966,7 @@ void cthrpool_test_wrunlock_slot_table_for_tests(void) {
 // ptr, not in_use: A destroy clears in_use first but still uses the table until
 // its last step, and ptr stays set until then.
 static bool cthrpool_any_slot_live_locked(void) {
-  size_t slot_count = cvector_elem_count(cthrpool_slot_table.slots);
+  size_t slot_count = cvector_size(cthrpool_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
     cthrpool_slot *slot =
         (cthrpool_slot *)cvector_at(cthrpool_slot_table.slots, i);

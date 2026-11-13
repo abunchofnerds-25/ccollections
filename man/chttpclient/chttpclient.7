@@ -51,7 +51,7 @@ destroys a client.
 
 chttp_default_client returns a single client for the whole process,
 which chttp_get, chttp_post, chttp_put, chttp_delete, chttp_patch,
-chttp_do and chttp_run_query use. The library owns that client, so do
+chttp_do_default and chttp_perform use. The library owns that client, so do
 not destroy it.
 .fi
 .SS Timeouts

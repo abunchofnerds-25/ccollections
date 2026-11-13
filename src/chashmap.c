@@ -3088,7 +3088,7 @@ ccol_retval chashmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
 
 // Deletes a key and its value; the raw entry point behind chmap_remove(). It
 // checks the inputs and calls the backend's delete.
-ccol_retval chashmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
+ccol_retval chashmap_remove_elem(chmap chm, const cmap_pair* key_pair) {
   if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0) {
     return ccol_invalid_args;
   }
@@ -3111,7 +3111,7 @@ ccol_retval chashmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
 }
 
 // Gives the number of live entries of either backend. Asserts on a NULL chm.
-size_t chashmap_elem_count(chmap chm) {
+size_t chashmap_size(chmap chm) {
   if (!chm) {
     ccol__assert(false);
   }

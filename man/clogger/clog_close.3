@@ -16,7 +16,7 @@ Releases every resource that the logger owns:
     this is the last handle that shares the file.  While another
     handle (the root or a derived logger) is open, the fd stays open
     and the call only lowers the refcount of the file.  A handle that
-    a second clog_create_from_file_mp(3) of the same rotating file
+    a second clog_create_from_file_path_mp(3) of the same rotating file
     returns shares the file the same way.
   - With async logging on (see clog_create_from_fd_mp(3)) and this the
     last handle, the call drains everything that is already queued and
@@ -32,7 +32,7 @@ Releases every resource that the logger owns:
     neither waits for that thread nor joins it, and the logger is left
     in place for the end of the process.
   - When the logger compresses its rotated files (see
-    clog_create_from_file_mp(3)) and this is the last handle, the call
+    clog_create_from_file_path_mp(3)) and this is the last handle, the call
     waits until every compression that a rotation queued has finished
     and then stops the compression thread.  So by the time the call
     returns, every rotated file of the logger is compressed, or left
@@ -67,4 +67,4 @@ every handle stale and reports the same error.
 .fi
 .SH "SEE ALSO"
 .BR clog_create_from_fd_mp (3),
-.BR clog_create_from_file_mp (3)
+.BR clog_create_from_file_path_mp (3)

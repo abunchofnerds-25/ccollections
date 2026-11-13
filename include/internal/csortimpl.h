@@ -26,7 +26,7 @@ SOFTWARE.
 
 // INTERNAL ONLY. The contiguous-array mergesort that cvector uses for its own
 // sort. A user reaches it through cvec_sort and
-// cvector_sort_with_comparison_proc. The header is never installed and its
+// cvec_sort_with. The header is never installed and its
 // symbol isn't exported.
 
 #include <common.h>

@@ -223,8 +223,8 @@ int main(void) {
         cvec_push(table, wc);
     });
 
-    cvector_sort_with_comparison_proc(table, by_word);
-    cvector_sort_with_comparison_proc(table, by_count_desc);
+    cvec_sort_with(table, by_word);
+    cvec_sort_with(table, by_count_desc);
 
     for (size_t i = 0; i < 3 && i < cvec_size(table); i++)
         printf("%-5s %d\n", cvec_at(table, i).word, cvec_at(table, i).count);

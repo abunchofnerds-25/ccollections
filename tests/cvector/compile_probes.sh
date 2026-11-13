@@ -16,7 +16,7 @@
 #
 # We pin both halves of that rule. Every element type with no default
 # comparison procedure must FAIL to compile, with a diagnostic naming
-# cvector_sort_with_comparison_proc so the caller knows what to do, and
+# cvec_sort_with so the caller knows what to do, and
 # every element type that has one must compile. A check of the first half
 # alone would pass against a cvec_sort that rejects everything.
 #
@@ -42,7 +42,7 @@ EXTRA_CFLAGS=""
 # The diagnostic has to point the caller at the supported alternative. A bare
 # "static assertion failed" would be a compile-time abort that helps no more
 # than an abort at run time.
-EXPECTED_HINT="cvector_sort_with_comparison_proc"
+EXPECTED_HINT="cvec_sort_with"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -311,9 +311,9 @@ EOF_CQ
 
   # An unsupported element type sorts fine with an explicit comparison
   # procedure, which is exactly what the diagnostic tells the caller to do.
-  expect_accept "$cc" "cvector_sort_with_comparison_proc on bool" \
+  expect_accept "$cc" "cvec_sort_with on bool" \
     "int probe_cmp(const void *a, const void *b);" "bool" \
-    "cvector_sort_with_comparison_proc(probe_vec, probe_cmp);"
+    "cvec_sort_with(probe_vec, probe_cmp);"
 }
 
 # For the default list we take gcc, or else the newest versioned gccNN in

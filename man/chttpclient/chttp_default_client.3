@@ -36,7 +36,7 @@ returns CHTTPCLI_NULL.
 If you destroy it anyway, the chttpcli_destroy call does not crash,
 because the module recognizes the handle and clears its own reference
 to it. The library never builds the default client again, though, so
-every later call to chttp_default_client, chttp_do, chttp_get and the
+every later call to chttp_default_client, chttp_do_default, chttp_get and the
 other wrappers fails cleanly and runs no request, for the rest of the
 process's life. If you need a client whose lifetime you control,
 create your own with chttpcli_create or chttpcli_create_mp.
@@ -44,5 +44,5 @@ create your own with chttpcli_create or chttpcli_create_mp.
 .SH "SEE ALSO"
 .BR chttpcli_create (3),
 .BR chttpcli_destroy (3),
-.BR chttp_do (3),
+.BR chttp_do_default (3),
 .BR chttp_get (3)

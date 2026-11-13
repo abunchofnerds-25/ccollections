@@ -468,7 +468,7 @@ static void clog_slot_table_init_globals(void);
 // entry into its place. The close path uses it to take a target out of
 // live_shareds or file_shareds. The caller holds the table's write lock.
 static void clog_shareds_remove(cvec v, clog_shared *sh) {
-  size_t n = cvector_elem_count(v);
+  size_t n = cvector_size(v);
   for (size_t i = 0; i < n; i++) {
     if (*(clog_shared **)cvector_at(v, i) != sh) continue;
     clog_shared *last = *(clog_shared **)cvector_at(v, n - 1);
@@ -551,7 +551,7 @@ size_t clog__test_live_shareds_count(void) {
   ccol__call_once(clog_slot_table.once, clog_slot_table_init_globals);
   ccol__rw_lock_rdlock(clog_slot_table.rwlock);
   size_t n = clog_slot_table.live_shareds
-                 ? cvector_elem_count(clog_slot_table.live_shareds)
+                 ? cvector_size(clog_slot_table.live_shareds)
                  : 0;
   ccol__rw_lock_unlock(clog_slot_table.rwlock);
   return n;
@@ -643,11 +643,11 @@ static clog clog_handle_acquire(struct clogger *lg) {
   uint32_t idx;
   clog_slot *slot;
   if (!force_fresh_slot_reg_failure &&
-      cvector_elem_count(clog_slot_table.free_indices) > 0) {
+      cvector_size(clog_slot_table.free_indices) > 0) {
     cvector_pop_back(clog_slot_table.free_indices, &idx);
     slot = (clog_slot *)cvector_at(clog_slot_table.slots, idx);
   } else {
-    if (cvector_elem_count(clog_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
+    if (cvector_size(clog_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
       ccol__rw_lock_unlock(clog_slot_table.rwlock);
       return CLOG_NULL;
     }
@@ -656,12 +656,12 @@ static clog clog_handle_acquire(struct clogger *lg) {
       ccol__rw_lock_unlock(clog_slot_table.rwlock);
       return CLOG_NULL;
     }
-    idx = (uint32_t)cvector_elem_count(clog_slot_table.slots) - 1;
+    idx = (uint32_t)cvector_size(clog_slot_table.slots) - 1;
     slot = (clog_slot *)cvector_at(clog_slot_table.slots, idx);
   }
 
   bool already_registered = false;
-  size_t n = cvector_elem_count(clog_slot_table.live_shareds);
+  size_t n = cvector_size(clog_slot_table.live_shareds);
   for (size_t i = 0; i < n; i++) {
     clog_shared *seen =
         *(clog_shared **)cvector_at(clog_slot_table.live_shareds, i);
@@ -729,14 +729,14 @@ static void clog_atfork_prepare(void) {
   ccol__rw_lock_wrlock(clog_slot_table.rwlock);
   if (clog_slot_table.slots == NULL) return;
 
-  size_t ns = cvector_elem_count(clog_slot_table.live_shareds);
+  size_t ns = cvector_size(clog_slot_table.live_shareds);
   for (size_t i = 0; i < ns; i++) {
     clog_shared *sh =
         *(clog_shared **)cvector_at(clog_slot_table.live_shareds, i);
     ccol__mutex_lock(sh->mutex);
   }
 
-  size_t n = cvector_elem_count(clog_slot_table.slots);
+  size_t n = cvector_size(clog_slot_table.slots);
   for (size_t i = 0; i < n; i++) {
     clog_slot *slot = (clog_slot *)cvector_at(clog_slot_table.slots, i);
     if (slot->freed) continue;
@@ -774,7 +774,7 @@ static void clog_atfork_release(bool in_child) {
     }
     return;
   }
-  size_t nf = cvector_elem_count(clog_atfork_state.locked_fields);
+  size_t nf = cvector_size(clog_atfork_state.locked_fields);
   for (size_t i = nf; i-- > 0;) {
     struct clogger *lg =
         *(struct clogger **)cvector_at(clog_atfork_state.locked_fields, i);
@@ -784,7 +784,7 @@ static void clog_atfork_release(bool in_child) {
     ccol__mutex_unlock(lg->fields_mutex);
   }
 
-  size_t ns = cvector_elem_count(clog_slot_table.live_shareds);
+  size_t ns = cvector_size(clog_slot_table.live_shareds);
   for (size_t i = 0; i < ns; i++) {
     clog_shared *sh =
         *(clog_shared **)cvector_at(clog_slot_table.live_shareds, i);
@@ -804,7 +804,7 @@ static void clog_atfork_release(bool in_child) {
   }
 
   if (in_child) {
-    size_t nc = cvector_elem_count(clog_atfork_state.closing_slots);
+    size_t nc = cvector_size(clog_atfork_state.closing_slots);
     for (size_t i = 0; i < nc; i++) {
       clog_atfork_closing *c =
           (clog_atfork_closing *)cvector_at(clog_atfork_state.closing_slots, i);
@@ -834,12 +834,12 @@ static void clog_atfork_release(bool in_child) {
   }
 
   if (in_child) {
-    size_t nfs = cvector_elem_count(clog_slot_table.file_shareds);
+    size_t nfs = cvector_size(clog_slot_table.file_shareds);
     for (size_t i = nfs; i-- > 0;) {
       clog_shared *fs =
           *(clog_shared **)cvector_at(clog_slot_table.file_shareds, i);
       bool live = false;
-      size_t nl = cvector_elem_count(clog_slot_table.live_shareds);
+      size_t nl = cvector_size(clog_slot_table.live_shareds);
       for (size_t j = 0; j < nl && !live; j++)
         live =
             *(clog_shared **)cvector_at(clog_slot_table.live_shareds, j) == fs;
@@ -868,7 +868,7 @@ static bool clog_table_still_needed_locked(void);
 // only in its last locked step; in_use goes false much earlier. Callers go
 // through clog_table_still_needed_locked(). Needs the write lock.
 static bool clog_any_slot_live_locked(void) {
-  size_t n = cvector_elem_count(clog_slot_table.slots);
+  size_t n = cvector_size(clog_slot_table.slots);
   for (size_t i = 0; i < n; i++) {
     clog_slot *slot = (clog_slot *)cvector_at(clog_slot_table.slots, i);
     if (slot->ptr != NULL) return true;
@@ -5230,7 +5230,7 @@ static void snapshot_fields(struct clogger *lg, clog_field_view **out_fields,
   *out_failed = false;
 
   ccol__mutex_lock(lg->fields_mutex);
-  size_t n = chashmap_elem_count(lg->fields);
+  size_t n = chashmap_size(lg->fields);
   if (n == 0) {
     ccol__mutex_unlock(lg->fields_mutex);
     out_pool->buf = NULL;
@@ -5998,10 +5998,10 @@ static clog clog_file_register_or_attach(clog h, clog_shared *sh,
 // Async setup comes last. Finally it joins or refuses another target of the
 // same file (see clog_file_register_or_attach()). Gives the handle or
 // CLOG_NULL.
-clog clog_create_from_file_mp(const char *path, clog_level min_level,
-                              const clog_rotation_cfg *cfg,
-                              const clog_async_cfg *async_cfg,
-                              ccol_memmgmt_procs *mprocs) {
+clog clog_create_from_file_path_mp(const char *path, clog_level min_level,
+                                   const clog_rotation_cfg *cfg,
+                                   const clog_async_cfg *async_cfg,
+                                   ccol_memmgmt_procs *mprocs) {
   if (!path || !clog_level_is_valid(min_level)) return CLOG_NULL;
   if (!ccol__verify_memmgmt_procs(mprocs, (char **)NULL)) return CLOG_NULL;
 
@@ -6180,16 +6180,16 @@ static void clog_shared_unref(clog_shared *sh) {
   ccol__rw_lock_unlock(clog_slot_table.rwlock);
 }
 
-// The last step of clog_create_from_file_mp(), which keeps one target per file
-// whenever either open rotates, since two targets renaming and pruning the same
-// file lose records. h is the new logger on its new target sh. With no other
-// target on the same directory entry, sh is registered in file_shareds (after
-// its compression recovery, under the table lock, so no other handle can rotate
-// meanwhile) and h is returned. Otherwise, if either rotates, the new target is
-// closed and the open joins the existing one with a new logger at min_level
-// when the configurations match, or fails with CLOG_NULL. Two targets that
-// don't rotate stay independent. A target whose last close is still running is
-// waited for. Takes the table's write lock.
+// The last step of clog_create_from_file_path_mp(), which keeps one target per
+// file whenever either open rotates, since two targets renaming and pruning the
+// same file lose records. h is the new logger on its new target sh. With no
+// other target on the same directory entry, sh is registered in file_shareds
+// (after its compression recovery, under the table lock, so no other handle can
+// rotate meanwhile) and h is returned. Otherwise, if either rotates, the new
+// target is closed and the open joins the existing one with a new logger at
+// min_level when the configurations match, or fails with CLOG_NULL. Two targets
+// that don't rotate stay independent. A target whose last close is still
+// running is waited for. Takes the table's write lock.
 static clog clog_file_register_or_attach(clog h, clog_shared *sh,
                                          clog_level min_level) {
   if (!sh->file_id_known) return h;
@@ -6197,7 +6197,7 @@ static clog clog_file_register_or_attach(clog h, clog_shared *sh,
   for (;;) {
     ccol__rw_lock_wrlock(clog_slot_table.rwlock);
     clog_shared *match = NULL;
-    size_t n = cvector_elem_count(clog_slot_table.file_shareds);
+    size_t n = cvector_size(clog_slot_table.file_shareds);
     for (size_t i = 0; i < n && !match; i++) {
       clog_shared *fs =
           *(clog_shared **)cvector_at(clog_slot_table.file_shareds, i);
@@ -6308,7 +6308,7 @@ void clog_close(clog h) {
     ccol__rw_lock_wrlock(clog_slot_table.rwlock);
     clog_slot *slot = NULL;
     if (clog_slot_table.slots != NULL &&
-        idx < cvector_elem_count(clog_slot_table.slots))
+        idx < cvector_size(clog_slot_table.slots))
       slot = (clog_slot *)cvector_at(clog_slot_table.slots, idx);
     if (!slot || !slot->in_use || slot->generation != gen) {
       ccol__rw_lock_unlock(clog_slot_table.rwlock);
@@ -6612,7 +6612,7 @@ void clog_remove_field(clog h, const char *key) {
   ccol__mutex_lock(lg->fields_mutex);
 
   cmap_pair kp = {.ptr = (void *)key, .size = strlen(key) + 1};
-  chashmap_delete_elem(lg->fields, &kp);
+  chashmap_remove_elem(lg->fields, &kp);
 
   ccol__mutex_unlock(lg->fields_mutex);
   clog_resolve_unpin(lg);
@@ -7435,7 +7435,7 @@ static void clog_exit_drain(void) {
   struct timespec table_at = clog_realtime_at(&deadline);
   if (ccol__rw_lock_timedwrlock(clog_slot_table.rwlock, table_at) != 0) return;
   if (clog_slot_table.live_shareds) {
-    size_t n = cvector_elem_count(clog_slot_table.live_shareds);
+    size_t n = cvector_size(clog_slot_table.live_shareds);
     for (size_t i = 0; i < n; i++) {
       clog_shared *sh =
           *(clog_shared **)cvector_at(clog_slot_table.live_shareds, i);

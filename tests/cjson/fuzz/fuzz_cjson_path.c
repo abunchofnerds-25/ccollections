@@ -24,7 +24,7 @@ SOFTWARE.
 
 // A libFuzzer target for the path grammar of cjson (dot-separated keys, #N list
 // indices, the \. and \\ escapes) that cjson_get(), cjson_set() and
-// cjson_delete() read. The input is split on its first NUL byte: The part
+// cjson_remove() read. The input is split on its first NUL byte: The part
 // before it is parsed as JSON (it shares seed material with fuzz_cjson_parse),
 // and the part after it is the path, byte for byte. An input with no NUL or an
 // empty path adds nothing and is skipped.
@@ -79,7 +79,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
       break;
   }
 
-  cjson_delete(root, path);
+  cjson_remove(root, path);
 
   free(path);
   cjson_destroy(root);

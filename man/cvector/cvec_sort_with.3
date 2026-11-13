@@ -1,13 +1,13 @@
 .TH CVECTOR_SORT_WITH_COMPARISON_PROC 3 "2026-09-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cvector_sort_with_comparison_proc \- sort vector with custom comparison
+cvec_sort_with \- sort vector with custom comparison
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/cvector.h>
 
-cvector_sort_with_comparison_proc(v, comparison_proc);
+cvec_sort_with(v, comparison_proc);
 .fi
 .SH DESCRIPTION
 .nf
@@ -54,7 +54,7 @@ int compare_ints(const void *a, const void *b) {
 }
 cvec_construct(vec, int);
 // ... add elements ...
-cvector_sort_with_comparison_proc(vec, compare_ints);
+cvec_sort_with(vec, compare_ints);
 cvec_destroy(vec);
 .fi
 .SH "SEE ALSO"

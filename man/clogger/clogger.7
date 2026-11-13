@@ -18,7 +18,7 @@ syslog; see clog_set_format(3).
 
 A logger writes to one of these outputs:
   - a file descriptor that the caller owns (clog_create_from_fd_mp(3));
-  - a file that the logger opens itself (clog_create_from_file_mp(3)),
+  - a file that the logger opens itself (clog_create_from_file_path_mp(3)),
     with optional size rotation, time rotation and gzip compression of
     the rotated files.
 Either kind of logger can log synchronously, or hand its writes to a
@@ -105,7 +105,7 @@ visible.
 .SS Rotation
 .nf
 A rotating logger renames, compresses and deletes only its own rotated
-generations, and clog_create_from_file_mp(3) gives the exact test.  A
+generations, and clog_create_from_file_path_mp(3) gives the exact test.  A
 name whose timestamp is more than 30 days above both the clock and the
 newest name the logger made is not a generation, so the logger never
 renames, compresses or deletes it, and a CLOG_WARN record names it.
@@ -116,7 +116,7 @@ their timestamps; until then the operator removes or renames them.
 .fi
 .SS Memory management
 .nf
-clog_create_from_fd_mp(3) and clog_create_from_file_mp(3) take an
+clog_create_from_fd_mp(3) and clog_create_from_file_path_mp(3) take an
 optional ccol_memmgmt_procs, and the root logger and every logger
 derived from it allocate the shared output state, the write buffers,
 the message buffers and the fields through it.  Two allocations belong
@@ -180,7 +180,7 @@ SIGXFSZ or block it in every thread that can write a log file.
 .fi
 .SH "SEE ALSO"
 .BR clog_create_from_fd_mp (3),
-.BR clog_create_from_file_mp (3),
+.BR clog_create_from_file_path_mp (3),
 .BR clog_derive (3),
 .BR clog_close (3),
 .BR clog_flush (3),

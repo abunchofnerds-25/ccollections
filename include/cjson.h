@@ -50,7 +50,7 @@ SOFTWARE.
 // Memory: A parsed tree is linear in its input, at most about 65 bytes of tree
 // per input byte on a 64-bit target, so bounding the input bounds a parse.
 //
-// Paths (cjson_get, cjson_set, cjson_delete): Dot-separated components such as
+// Paths (cjson_get, cjson_set, cjson_remove): Dot-separated components such as
 // "users.#0.address.city". A plain component is a dictionary key; "#N" is a
 // zero-based index, but only on a list (elsewhere it's a literal key). "\." and
 // "\\" escape a dot and a backslash. An empty path gives the root for
@@ -324,7 +324,7 @@ const char *cjson_str_val(cjson node);
 // Gives the number of elements of a CJSON_LIST node, for a caller that walks it
 // by index. Ends the program with a fatal error when node is NULL or isn't a
 // list.
-size_t cjson_list_len(cjson node);
+size_t cjson_list_size(cjson node);
 
 // Gives the number of keys of a CJSON_DICTIONARY node. Ends the program with a
 // fatal error when node is NULL or isn't a dictionary.
@@ -466,11 +466,11 @@ static inline void cjson__destroy_cleanup(cjson *node) {
 cjson cjson__get(cjson root, const char *path);
 
 // Internal: Removes and deep-frees the node at path; it's the back-end of
-// cjson_delete(). It walks to the parent and removes the leaf through
+// cjson_remove(). It walks to the parent and removes the leaf through
 // cjson_dictionary_remove() or cjson_list_remove(). Errors follow the path
 // rules at the top of this header; ccol_not_enough_memory when an allocation
 // fails.
-ccol_retval cjson__delete(cjson root, const char *path);
+ccol_retval cjson__remove(cjson root, const char *path);
 
 // Internal: Writes a scalar to the leaf at path; it's the back-end of
 // cjson_set(). type is the JSON type, raw points at the C value of raw_size
@@ -641,6 +641,6 @@ ccol_retval cjson__set_typed(cjson root, const char *path, cjson_node_type type,
 // or path, an empty or malformed path or one whose shape doesn't fit the tree,
 // ccol_key_not_found when a well-formed component is absent, or
 // ccol_not_enough_memory.
-#define cjson_delete(root, path) cjson__delete((root), (path))
+#define cjson_remove(root, path) cjson__remove((root), (path))
 
 #pragma GCC visibility pop

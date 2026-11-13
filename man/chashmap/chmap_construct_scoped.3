@@ -74,7 +74,7 @@ int count_unique(char **words, size_t n) {
     for (size_t i = 0; i < n; i++) {
         chmap_insert(seen, words[i], one);
     }
-    return (int)chashmap_elem_count(seen);   /* seen is destroyed here */
+    return (int)chashmap_size(seen);   /* seen is destroyed here */
 }
 .fi
 .SH "SEE ALSO"

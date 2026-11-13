@@ -23,7 +23,7 @@ SOFTWARE.
 */
 
 // libFuzzer harness for the path grammar that cyaml__get(), cyaml_set() and
-// cyaml__delete() read, the counterpart of fuzz_cjson_path.c. The path walker
+// cyaml__remove() read, the counterpart of fuzz_cjson_path.c. The path walker
 // is a second parser that mutates the DOM the first one built, and aliases,
 // merge keys and tags give it shapes a plain parse never exercises. The input
 // splits at its first NUL: The bytes before it are parsed as YAML and the bytes
@@ -80,7 +80,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
       break;
   }
 
-  cyaml_delete(root, path);
+  cyaml_remove(root, path);
 
   char *text = cyaml_serialize(root);
   cyaml_serialize_free(text);

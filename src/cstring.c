@@ -127,7 +127,7 @@ static void destroy_cstr_vector(cvec v) {
   if (!v) {
     return;
   }
-  size_t count = cvector_elem_count(v);
+  size_t count = cvector_size(v);
   for (size_t i = 0; i < count; i++) {
     cstr *part = (cstr *)cvector_at(v, i);
     if (part && *part) {

@@ -1,13 +1,13 @@
 .TH CYAML_DELETE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cyaml_delete \- remove and free the DOM node at a dot-separated path
+cyaml_remove \- remove and free the DOM node at a dot-separated path
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/cyaml.h>
 
-ccol_retval cyaml_delete(cyaml root, const char *path);
+ccol_retval cyaml_remove(cyaml root, const char *path);
 .fi
 .SH DESCRIPTION
 .nf
@@ -46,9 +46,9 @@ ccol_not_enough_memory when an internal allocation fails.
 .fi
 .SH EXAMPLES
 .nf
-cyaml_delete(doc, "server.debug");
-cyaml_delete(doc, "hosts.#0");
-cyaml_delete(doc, "users.alice.address");
+cyaml_remove(doc, "server.debug");
+cyaml_remove(doc, "hosts.#0");
+cyaml_remove(doc, "users.alice.address");
 .fi
 .SH "SEE ALSO"
 .BR cyaml_get (3),

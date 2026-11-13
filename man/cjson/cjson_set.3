@@ -61,7 +61,7 @@ touching the target leaf, as it does for a double that is not finite.
 The same rule holds for the leaf component of the path, which becomes
 an object key when the library has to create the leaf.  Every key in
 the tree is valid UTF-8, so the library refuses a key that is not
-instead of storing it.  cjson_get(3) and cjson_delete(3) need no such
+instead of storing it.  cjson_get(3) and cjson_remove(3) need no such
 rule because they only look a component up, and a component that is
 not valid UTF-8 can never match a key that exists, so they report it
 as absent.
@@ -144,7 +144,7 @@ cjson_set(doc, "users.#0.deprecated", NULL);
 .fi
 .SH "SEE ALSO"
 .BR cjson_get (3),
-.BR cjson_delete (3),
+.BR cjson_remove (3),
 .BR cjson_double_val (3),
 .BR cjson_create_string (3),
 .BR cjson_dictionary_set (3),

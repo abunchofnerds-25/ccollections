@@ -43,7 +43,7 @@ such an array are not a char* value, while
 csort__default_string_comparison_proc dereferences a pointer, so its
 contract doesn't hold for an array. To sort a collection of fixed-size
 string buffers, write your own comparator and pass it directly to
-cvector_sort_with_comparison_proc() or to csort_sort().
+cvec_sort_with() or to csort_sort().
 .fi
 .SH PARAMETERS
 .nf

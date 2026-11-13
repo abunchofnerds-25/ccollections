@@ -209,8 +209,8 @@ TEST(sigpipe, regular_file_logger_leaves_the_disposition_alone) {
   const char *path = "sigpipe_regular_file.log";
   unlink(path);
 
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
-  clog alg = clog_create_from_file(path, CLOG_INFO, NULL, &_async_cfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
+  clog alg = clog_create_from_file_path(path, CLOG_INFO, NULL, &_async_cfg);
   bool opened = lg != CLOG_NULL && alg != CLOG_NULL;
   if (lg != CLOG_NULL) clog_info(lg, "synchronous record");
   if (alg != CLOG_NULL) {

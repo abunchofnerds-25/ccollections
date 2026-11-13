@@ -1,13 +1,13 @@
 .TH CHASHMAP_ELEM_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chashmap_elem_count \- get the number of elements in the hash map
+chashmap_size \- get the number of elements in the hash map
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/chashmap.h>
 
-size_t chashmap_elem_count(chmap chm);
+size_t chashmap_size(chmap chm);
 .fi
 .SH DESCRIPTION
 .nf
@@ -29,4 +29,4 @@ Asserts if chm is NULL
 .fi
 .SH "SEE ALSO"
 .BR chashmap_insert_elem (3),
-.BR chashmap_delete_elem (3)
+.BR chashmap_remove_elem (3)

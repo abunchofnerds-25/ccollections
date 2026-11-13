@@ -82,7 +82,7 @@ reach the wire: An explicit "content-type" header that you set later
 with chttp_request_set_header takes its place. If body->content_type
 holds a CR or an LF byte when the request is serialized, or any other
 byte below 0x20 except a horizontal tab, or 0x7F, the chttpcli_do,
-chttp_run_query or other call that uses this request fails with
+chttp_perform or other call that uses this request fails with
 ccol_invalid_args, and the value is never written to the wire.
 chttp_request_set_header(3) explains why.
 .fi

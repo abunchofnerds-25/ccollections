@@ -1,13 +1,13 @@
 .TH CHASHMAP_DELETE_ELEM 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chashmap_delete_elem \- remove a key-value pair from the hash map
+chashmap_remove_elem \- remove a key-value pair from the hash map
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/chashmap.h>
 
-ccol_retval chashmap_delete_elem(chmap chm, const cmap_pair *key_pair);
+ccol_retval chashmap_remove_elem(chmap chm, const cmap_pair *key_pair);
 .fi
 .SH DESCRIPTION
 .nf

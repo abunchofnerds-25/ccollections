@@ -42,7 +42,7 @@ control byte makes a message that a recipient may refuse or read
 differently. So for such a name or value the function returns
 ccol_invalid_args and stores nothing. The client repeats the same check
 when it writes a request, which means a header map that a caller builds
-directly, such as the map of chttp_run_query, also fails the request
+directly, such as the map of chttp_perform, also fails the request
 with ccol_invalid_args, and so does a body.content_type with such a
 byte.
 

@@ -222,7 +222,7 @@ TEST(chttpsvr_worker_key, a_server_destroyed_after_the_library_releases_all) {
     chttpsvr_router *api =
         srv != CHTTPSVR_NULL ? chttpsvr_subrouter(srv, "/api") : NULL;
     if (api &&
-        chttpsvr_router_on(api, CHTTP_GET, "/x", _hello, NULL) ==
+        chttpsvr_router_register_handler(api, CHTTP_GET, "/x", _hello, NULL) ==
             ccol_success &&
         chttpsvr_register_handler(srv, CHTTP_GET, "/hello", _hello, NULL) ==
             ccol_success &&

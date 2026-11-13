@@ -149,7 +149,7 @@ strings (in `strcmp` order). The sort is stable, so equal elements keep the
 relative order they had.
 
 Any other type, a struct for example, needs a comparator that you pass to
-`cvector_sort_with_comparison_proc`. It returns a negative number, zero or
+`cvec_sort_with`. It returns a negative number, zero or
 a positive number, like the one `qsort` takes:
 
 ```c
@@ -158,11 +158,11 @@ int by_age_desc(const void *a, const void *b) {
     return (y->age > x->age) - (y->age < x->age);
 }
 
-cvector_sort_with_comparison_proc(people, by_age_desc);
+cvec_sort_with(people, by_age_desc);
 ```
 
 `cvec_sort` on a vector of structs doesn't compile on purpose, and the
-error message points you to `cvector_sort_with_comparison_proc`. There's
+error message points you to `cvec_sort_with`. There's
 more about the default comparators in the [csort guide](csort.md).
 
 ## Give a vector to a function
@@ -248,7 +248,7 @@ int main(void) {
 
     cvec_construct_scoped(ranked, Student);
     cvec_append_array(ranked, roster, sizeof(roster) / sizeof(roster[0]));
-    cvector_sort_with_comparison_proc(ranked, by_score_desc);
+    cvec_sort_with(ranked, by_score_desc);
 
     for (size_t page = 0; page * 3 < cvec_size(ranked); page++) {
         printf("page %zu\n", page + 1);
@@ -408,7 +408,7 @@ Elements:
 [cvec_append_cvec(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_append_cvec.3.html)
 
 Sorting: [cvec_sort(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_sort.3.html),
-[cvector_sort_with_comparison_proc(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_sort_with_comparison_proc.3.html)
+[cvec_sort_with(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_sort_with.3.html)
 
 Raw functions (they give a status and do not stop the program):
 [cvector_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_create.3.html),
@@ -417,7 +417,7 @@ Raw functions (they give a status and do not stop the program):
 [cvector_push_back(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_push_back.3.html),
 [cvector_pop_back(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_pop_back.3.html),
 [cvector_at(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_at.3.html),
-[cvector_elem_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_elem_count.3.html),
+[cvector_size(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_size.3.html),
 [cvector_find(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_find.3.html),
 [cvector_reserve(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_reserve.3.html),
 [cvector_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_reset.3.html),

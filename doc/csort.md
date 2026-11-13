@@ -11,7 +11,7 @@ What you pay for this is a temporary buffer as large as the data (O(n)
 extra memory), which the sort allocates and frees on every call.
 
 Most of the time you reach `csort` through a vector, with `cvec_sort` or
-`cvector_sort_with_comparison_proc` (see the [cvector guide](cvector.md)).
+`cvec_sort_with` (see the [cvector guide](cvector.md)).
 You call `csort_sort` yourself when you want to sort a plain C array, or any
 other storage you can index, a ring buffer for example.
 
@@ -43,7 +43,7 @@ int main(void) {
 `cvec_sort` picks the comparison from the element type. That works for every
 integer type, for `bool` (`false` before `true`), for every floating-point
 type, for enums and for `char *` strings. A struct needs a comparator of
-your own, which you pass to `cvector_sort_with_comparison_proc`.
+your own, which you pass to `cvec_sort_with`.
 
 ## Write a comparator
 
@@ -249,8 +249,8 @@ int main(void) {
     cvec_construct(list, Employee);
     cvec_append_array(list, staff, sizeof(staff) / sizeof(staff[0]));
 
-    cvector_sort_with_comparison_proc(list, by_name);  /* minor key */
-    cvector_sort_with_comparison_proc(list, by_dept);  /* major key */
+    cvec_sort_with(list, by_name);  /* minor key */
+    cvec_sort_with(list, by_dept);  /* major key */
 
     for (size_t i = 0; i < cvec_size(list); i++)
         printf("%-6s %s\n", cvec_at(list, i).dept, cvec_at(list, i).name);
@@ -329,7 +329,7 @@ Overview: [csort(7)](https://abunchofnerds-25.github.io/ccollections/man/csort/c
 [csort_sort(3)](https://abunchofnerds-25.github.io/ccollections/man/csort/csort_sort.3.html),
 [csort_get_default_comparison_proc(3)](https://abunchofnerds-25.github.io/ccollections/man/csort/csort_get_default_comparison_proc.3.html),
 [cvec_sort(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_sort.3.html),
-[cvector_sort_with_comparison_proc(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_sort_with_comparison_proc.3.html)
+[cvec_sort_with(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_sort_with.3.html)
 
 Related guides:
 [Vectors](cvector.md),

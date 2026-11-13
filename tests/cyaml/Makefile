@@ -99,7 +99,7 @@ test: build build_spec_suite build_c23 build_keys nesting_probe
 fuzz:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(FUZZ_SRC_FILES) -o fuzz_cyaml $(LFLAGS)
 
-# The dot-separated path grammar that cyaml_get, cyaml_set and cyaml_delete
+# The dot-separated path grammar that cyaml_get, cyaml_set and cyaml_remove
 # read is a second parser, it MUTATES the DOM that the first one built, and
 # fuzz_cyaml never gets there. It's the counterpart of the fuzz_path target of
 # tests/cjson/Makefile and it's .PHONY for the same reason as `fuzz` above:

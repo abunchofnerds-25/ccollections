@@ -32,10 +32,10 @@ TAU_MAIN()
 // The destroy must then clear the process-wide singleton, or every later
 // convenience call uses it after the free and the exit-time destructor frees it
 // a second time. A destroyed default client is never rebuilt, so the next
-// chttp_default_client() gives CHTTPCLI_NULL and chttp_do fails cleanly without
-// network I/O. The destructor at exit must then do nothing, which a clean
-// memtest run checks. This can't be undone in a process, so it has a binary of
-// its own.
+// chttp_default_client() gives CHTTPCLI_NULL and chttp_do_default fails cleanly
+// without network I/O. The destructor at exit must then do nothing, which a
+// clean memtest run checks. This can't be undone in a process, so it has a
+// binary of its own.
 TEST(default_client, destroying_it_directly_does_not_crash_or_double_free) {
   chttpcli cli = chttp_default_client();
   REQUIRE_NE(cli, CHTTPCLI_NULL);
@@ -50,7 +50,7 @@ TEST(default_client, destroying_it_directly_does_not_crash_or_double_free) {
       chttp_request_create(CHTTP_GET, "http://127.0.0.1:1/x", NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_unexpected_failure);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_unexpected_failure);
   REQUIRE_EQ((void *)resp, NULL);
   chttp_request_free(req);
 }

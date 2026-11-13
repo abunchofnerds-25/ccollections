@@ -1,13 +1,13 @@
 .TH CHTTP_RUN_QUERY 3 "2026-07-14" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttp_run_query \- run one request with explicit headers, with the default client
+chttp_perform \- run one request with explicit headers, with the default client
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <ccollections/chttpclient.h>
 
-ccol_retval chttp_run_query(chttp_method method, const char *url,
+ccol_retval chttp_perform(chttp_method method, const char *url,
                               const chttp_request_body *body,
                               chmap headers,
                               chttpcli_response **resp_out);
@@ -16,7 +16,7 @@ ccol_retval chttp_run_query(chttp_method method, const char *url,
 .nf
 This is a convenience wrapper that builds a chttp_request
 internally, attaches headers to it without taking ownership, calls
-chttp_do and then frees the request it built. Of the convenience
+chttp_do_default and then frees the request it built. Of the convenience
 functions for the default client, this is the only one that takes a
 header set of your choice in a single call. With chttp_get, chttp_post
 and the others you have to build a chttp_request yourself, with
@@ -95,7 +95,7 @@ a token or a value with a control byte other than a horizontal tab
 "Transfer-Encoding" key.
 .fi
 .SH "SEE ALSO"
-.BR chttp_do (3),
+.BR chttp_do_default (3),
 .BR chttp_get (3),
 .BR chttp_post (3),
 .BR chttp_request_create (3),

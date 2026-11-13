@@ -33,7 +33,7 @@ pointer is borrowed and stays valid until the node's tag or value is
 set again or the node is destroyed, so any of these ends it: A
 cyaml_node_set_tag(3) on the node, a cyaml_set(3) that reaches the
 node (a new value drops a core tag that doesn't match it), a
-cyaml_list_remove(3), cyaml_dictionary_remove(3) or cyaml_delete(3)
+cyaml_list_remove(3), cyaml_dictionary_remove(3) or cyaml_remove(3)
 of the node, a cyaml_dictionary_set(3) that replaces it, and a
 destroy of its tree.  Copy the text if you need it longer.
 .fi

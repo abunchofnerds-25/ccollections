@@ -177,7 +177,7 @@ static void _cyaml_probe(cyaml doc, size_t *root_size, long long *leaf,
 
   cyaml sib = cyaml_dictionary_get(r, "sibling");
   cyaml third =
-      (sib && cyaml_type(sib) == CYAML_LIST && cyaml_list_len(sib) > 2)
+      (sib && cyaml_type(sib) == CYAML_LIST && cyaml_list_size(sib) > 2)
           ? cyaml_list_get(sib, 2)
           : NULL;
   cyaml deep_node = _cyaml_dict_child(third, "deep");
@@ -452,7 +452,7 @@ TEST(construction, empty_sequence) {
   cyaml s = cyaml_create_list();
   REQUIRE_NE((void *)s, NULL);
   REQUIRE_EQ(cyaml_type(s), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(s), (size_t)0);
+  REQUIRE_EQ(cyaml_list_size(s), (size_t)0);
   cyaml_destroy(s);
 }
 
@@ -462,7 +462,7 @@ TEST(construction, sequence_push_get) {
   REQUIRE_EQ(cyaml_list_push(s, cyaml_create_int(1)), ccol_success);
   REQUIRE_EQ(cyaml_list_push(s, cyaml_create_int(2)), ccol_success);
   REQUIRE_EQ(cyaml_list_push(s, cyaml_create_int(3)), ccol_success);
-  REQUIRE_EQ(cyaml_list_len(s), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(s), (size_t)3);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(s, 0)), 1LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(s, 1)), 2LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(s, 2)), 3LL);
@@ -973,7 +973,7 @@ TEST(implicit_types, float_overflow_with_the_float_tag_is_an_infinity) {
   cyaml n = cyaml_parse("[!!float 1e400, !!float -1.0e400]", &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)n, NULL);
-  bool ok = cyaml_list_len(n) == 2 &&
+  bool ok = cyaml_list_size(n) == 2 &&
             cyaml_type(cyaml_list_get(n, 0)) == CYAML_FLOAT &&
             cyaml_double_val(cyaml_list_get(n, 0)) == __builtin_inf() &&
             cyaml_double_val(cyaml_list_get(n, 1)) == -__builtin_inf();
@@ -2105,7 +2105,7 @@ TEST(multi_document, utf8_bom_skipped_before_first_document_marker) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "a");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "b");
   cyaml_destroy(doc);
@@ -2180,7 +2180,7 @@ TEST(bom_prefix, bom_before_a_later_document) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)3);
   REQUIRE_EQ(cyaml_int_val(cyaml_dictionary_get(cyaml_list_get(doc, 0), "a")),
              1LL);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "b");
@@ -2197,7 +2197,7 @@ TEST(bom_prefix, bom_before_a_later_block_document_keeps_columns) {
   cyaml doc = cyaml_parse(yaml, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   cyaml second = cyaml_list_get(doc, 1);
   REQUIRE_EQ(cyaml_dictionary_size(second), (size_t)2);
   REQUIRE_NE((void *)cyaml_dictionary_get(second, "a"), NULL);
@@ -2218,7 +2218,7 @@ TEST(block_sequence, simple_strings) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)3);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "alpha");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "beta");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 2)), "gamma");
@@ -2235,7 +2235,7 @@ TEST(block_sequence, mixed_types) {
   cyaml doc = cyaml_parse(yaml, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)4);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)4);
   REQUIRE_EQ(cyaml_type(cyaml_list_get(doc, 0)), CYAML_INTEGER);
   REQUIRE_EQ(cyaml_type(cyaml_list_get(doc, 1)), CYAML_BOOL);
   REQUIRE_EQ(cyaml_type(cyaml_list_get(doc, 2)), CYAML_STRING);
@@ -2256,7 +2256,7 @@ TEST(block_sequence, of_mappings) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
 
   cyaml alice = cyaml_list_get(doc, 0);
   REQUIRE_NE((void *)alice, NULL);
@@ -2287,7 +2287,7 @@ TEST(block_sequence, nested_sequence) {
   cyaml matrix = cyaml_dictionary_get(doc, "matrix");
   REQUIRE_NE((void *)matrix, NULL);
   REQUIRE_EQ(cyaml_type(matrix), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(matrix), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(matrix), (size_t)2);
 
   cyaml row0 = cyaml_list_get(matrix, 0);
   REQUIRE_EQ(cyaml_type(row0), CYAML_LIST);
@@ -2305,7 +2305,7 @@ TEST(flow, sequence_basic) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)3);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(doc, 0)), 1LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(doc, 1)), 2LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(doc, 2)), 3LL);
@@ -2317,7 +2317,7 @@ TEST(flow, sequence_empty) {
   cyaml doc = cyaml_parse("[]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)0);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)0);
   cyaml_destroy(doc);
 }
 
@@ -2325,7 +2325,7 @@ TEST(flow, sequence_mixed) {
   char *err = NULL;
   cyaml doc = cyaml_parse("[1, \"two\", true, ~]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)4);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)4);
   REQUIRE_EQ(cyaml_type(cyaml_list_get(doc, 0)), CYAML_INTEGER);
   REQUIRE_EQ(cyaml_type(cyaml_list_get(doc, 1)), CYAML_STRING);
   REQUIRE_EQ(cyaml_type(cyaml_list_get(doc, 2)), CYAML_BOOL);
@@ -2365,7 +2365,7 @@ TEST(flow, nested_flow) {
   cyaml a = cyaml_dictionary_get(doc, "a");
   REQUIRE_NE((void *)a, NULL);
   REQUIRE_EQ(cyaml_type(a), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(a), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(a), (size_t)2);
 
   cyaml b = cyaml_dictionary_get(doc, "b");
   REQUIRE_EQ(cyaml_type(b), CYAML_DICTIONARY);
@@ -2387,7 +2387,7 @@ TEST(flow, flow_value_in_block_mapping) {
   cyaml ports = cyaml_dictionary_get(doc, "ports");
   REQUIRE_NE((void *)ports, NULL);
   REQUIRE_EQ(cyaml_type(ports), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(ports), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(ports), (size_t)2);
 
   cyaml p0 = cyaml_list_get(ports, 0);
   REQUIRE_EQ(cyaml_type(p0), CYAML_DICTIONARY);
@@ -2436,7 +2436,7 @@ TEST(flow, plain_scalar_with_colon_in_sequence) {
   cyaml doc = cyaml_parse("[http://a.b, ftp://x.y]\n", &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "http://a.b");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "ftp://x.y");
   cyaml_destroy(doc);
@@ -2573,8 +2573,8 @@ TEST(anchors, sequence_anchor) {
   REQUIRE_NE((void *)copy, NULL);
   REQUIRE_EQ(cyaml_type(shared), CYAML_LIST);
   REQUIRE_EQ(cyaml_type(copy), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(shared), (size_t)2);
-  REQUIRE_EQ(cyaml_list_len(copy), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(shared), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(copy), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(copy, 0)), 80LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(copy, 1)), 443LL);
 
@@ -2610,7 +2610,7 @@ TEST(anchors, many_linear_aliases_to_small_anchor_still_works) {
   free(input);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  REQUIRE_EQ(cyaml_list_len(cyaml_dictionary_get(doc, "list")), n);
+  REQUIRE_EQ(cyaml_list_size(cyaml_dictionary_get(doc, "list")), n);
   cyaml_destroy(doc);
 }
 
@@ -2861,7 +2861,7 @@ TEST(path,
   REQUIRE_EQ((void *)err, NULL);
 
   REQUIRE_EQ(cyaml_set(doc, "items.#xyz.a", 9), ccol_invalid_args);
-  REQUIRE_EQ(cyaml_list_len(cyaml_dictionary_get(doc, "items")), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(cyaml_dictionary_get(doc, "items")), (size_t)2);
 
   cyaml_destroy(doc);
 }
@@ -2897,9 +2897,9 @@ TEST(delete, path_index_with_leading_sign_returns_invalid_args) {
   cyaml doc = cyaml_parse("items:\n  - a: 1\n  - a: 2\n", &err);
   REQUIRE_EQ((void *)err, NULL);
 
-  REQUIRE_EQ(cyaml_delete(doc, "items.#+0"), ccol_invalid_args);
-  REQUIRE_EQ(cyaml_delete(doc, "items.# 0"), ccol_invalid_args);
-  REQUIRE_EQ(cyaml_list_len(cyaml_dictionary_get(doc, "items")), (size_t)2);
+  REQUIRE_EQ(cyaml_remove(doc, "items.#+0"), ccol_invalid_args);
+  REQUIRE_EQ(cyaml_remove(doc, "items.# 0"), ccol_invalid_args);
+  REQUIRE_EQ(cyaml_list_size(cyaml_dictionary_get(doc, "items")), (size_t)2);
 
   cyaml_destroy(doc);
 }
@@ -3124,7 +3124,7 @@ TEST(path, delete_single_component_oom) {
   REQUIRE_NE((void *)doc, NULL);
 
   g_alloc_remaining = 1;
-  ccol_retval r = cyaml__delete(doc, "port");
+  ccol_retval r = cyaml__remove(doc, "port");
   g_alloc_remaining = -1;
   REQUIRE_EQ(r, ccol_not_enough_memory);
 
@@ -3447,7 +3447,7 @@ TEST(clone, empty_list) {
   REQUIRE_NE((void *)copy, NULL);
   REQUIRE_NE((void *)copy, (void *)src);
   REQUIRE_EQ(cyaml_type(copy), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(copy), (size_t)0);
+  REQUIRE_EQ(cyaml_list_size(copy), (size_t)0);
   cyaml_destroy(src);
   cyaml_destroy(copy);
 }
@@ -3541,7 +3541,7 @@ TEST(clone, deep_but_within_limit_list_still_works) {
   cyaml leaf = copy;
   for (size_t i = 0; i < depth; i++) {
     REQUIRE_EQ(cyaml_type(leaf), CYAML_LIST);
-    REQUIRE_EQ(cyaml_list_len(leaf), (size_t)1);
+    REQUIRE_EQ(cyaml_list_size(leaf), (size_t)1);
     leaf = cyaml_list_get(leaf, 0);
   }
   REQUIRE_EQ(cyaml_type(leaf), CYAML_INTEGER);
@@ -4177,7 +4177,7 @@ TEST(serialize, sequence_round_trip) {
   REQUIRE_NE((void *)out, NULL);
   cyaml doc2 = cyaml_parse(out, &err);
   REQUIRE_EQ((void *)err, NULL);
-  REQUIRE_EQ(cyaml_list_len(doc2), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(doc2), (size_t)3);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(doc2, 0)), 1LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(doc2, 1)), 2LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(doc2, 2)), 3LL);
@@ -4244,7 +4244,7 @@ TEST(serialize, empty_sequence_nested_in_mapping_round_trip) {
   cyaml val = cyaml_dictionary_get(doc2, "key");
   REQUIRE_NE((void *)val, NULL);
   REQUIRE_EQ(cyaml_type(val), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(val), (size_t)0);
+  REQUIRE_EQ(cyaml_list_size(val), (size_t)0);
 
   cyaml_serialize_free(s);
   cyaml_destroy(doc);
@@ -4291,10 +4291,10 @@ TEST(serialize, empty_sequence_as_sequence_element_round_trip) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc2, NULL);
   REQUIRE_EQ(cyaml_type(doc2), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc2), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(doc2), (size_t)3);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(doc2, 0)), 1LL);
   REQUIRE_EQ(cyaml_type(cyaml_list_get(doc2, 1)), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(cyaml_list_get(doc2, 1)), (size_t)0);
+  REQUIRE_EQ(cyaml_list_size(cyaml_list_get(doc2, 1)), (size_t)0);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(doc2, 2)), 2LL);
 
   cyaml_serialize_free(s);
@@ -4408,7 +4408,7 @@ TEST(lifecycle, list_push_oom) {
   g_alloc_remaining = -1;
   REQUIRE_NE(r, ccol_success);
 
-  REQUIRE_EQ(cyaml_list_len(list), (size_t)4);
+  REQUIRE_EQ(cyaml_list_size(list), (size_t)4);
   cyaml_destroy(list);
 }
 
@@ -4440,8 +4440,8 @@ TEST(lifecycle, list_push_refuses_an_already_attached_child) {
   REQUIRE_EQ(cyaml_list_push(first, child), ccol_success);
 
   ccol_retval r = cyaml_list_push(second, child);
-  size_t first_size = cyaml_list_len(first);
-  size_t second_size = cyaml_list_len(second);
+  size_t first_size = cyaml_list_size(first);
+  size_t second_size = cyaml_list_size(second);
 
   cyaml_destroy(second);
   cyaml_destroy(first);
@@ -4502,7 +4502,7 @@ TEST(lifecycle, a_container_refuses_to_be_attached_to_itself) {
 
   ccol_retval rs = cyaml_list_push(seq, seq);
   ccol_retval rm = cyaml_dictionary_set(map, "self", map);
-  size_t seq_size = cyaml_list_len(seq);
+  size_t seq_size = cyaml_list_size(seq);
   size_t map_size = cyaml_dictionary_size(map);
 
   cyaml_destroy(seq);
@@ -4527,7 +4527,7 @@ TEST(lifecycle, a_rejected_attach_into_a_bad_container_spares_an_owned_child) {
 
   ccol_retval r = cyaml_list_push(scalar, child);
   ccol_retval r2 = cyaml_list_push(NULL, child);
-  size_t owner_size = cyaml_list_len(owner);
+  size_t owner_size = cyaml_list_size(owner);
   cyaml still_there = cyaml_list_get(owner, 0);
   bool child_survived = (still_there == child);
 
@@ -4588,7 +4588,7 @@ TEST(real_world, docker_compose_like) {
   cyaml ports = cyaml_get(doc, "services.web.ports");
   REQUIRE_NE((void *)ports, NULL);
   REQUIRE_EQ(cyaml_type(ports), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(ports), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(ports), (size_t)2);
   cyaml port0 = cyaml_list_get(ports, 0);
   REQUIRE_NE((void *)port0, NULL);
   REQUIRE_EQ(cyaml_int_val(port0), 80LL);
@@ -4636,7 +4636,7 @@ TEST(real_world, github_actions_like) {
   cyaml steps = cyaml_get(doc, "jobs.build.steps");
   REQUIRE_NE((void *)steps, NULL);
   REQUIRE_EQ(cyaml_type(steps), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(steps), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(steps), (size_t)2);
 
   REQUIRE_STREQ(cyaml_str_val(cyaml_get(doc, "jobs.build.steps.#0.name")),
                 "Checkout");
@@ -4646,7 +4646,7 @@ TEST(real_world, github_actions_like) {
   cyaml branches = cyaml_get(doc, "on.push.branches");
   REQUIRE_NE((void *)branches, NULL);
   REQUIRE_EQ(cyaml_type(branches), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(branches), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(branches), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(branches, 0)), "main");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(branches, 1)), "develop");
 
@@ -4682,7 +4682,7 @@ TEST(real_world, ansible_like_with_anchors) {
   cyaml tasks = cyaml_dictionary_get(doc, "tasks");
   REQUIRE_NE((void *)tasks, NULL);
   REQUIRE_EQ(cyaml_type(tasks), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(tasks), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(tasks), (size_t)2);
 
   cyaml task0 = cyaml_list_get(tasks, 0);
   REQUIRE_NE((void *)task0, NULL);
@@ -4959,7 +4959,7 @@ TEST(parse_budget, byte_limit_scales_with_the_input) {
   char *d = _empty_lists_doc(20000);
   char *err = NULL;
   cyaml doc = d ? cyaml_parse(d, &err) : NULL;
-  size_t len = doc ? cyaml_list_len(doc) : 0;
+  size_t len = doc ? cyaml_list_size(doc) : 0;
   cyaml_destroy(doc);
   cyaml_test_parse_byte_floor = saved;
   free(d);
@@ -4990,7 +4990,7 @@ TEST(parse_budget, worst_ordinary_shape_parses_above_the_floors) {
     d[n * 2 + 1] = '\0';
     len = n * 2 + 1;
     cyaml doc = cyaml_parse(d, &err);
-    count = doc ? cyaml_list_len(doc) : 0;
+    count = doc ? cyaml_list_size(doc) : 0;
     nodes = cyaml_test_last_parse_nodes_charged;
     bytes = cyaml_test_last_parse_bytes_charged;
     cyaml_destroy(doc);
@@ -5022,7 +5022,7 @@ TEST(parse_budget, node_limit_scales_with_the_input) {
     d[n * 2] = ']';
     d[n * 2 + 1] = '\0';
     cyaml doc = cyaml_parse(d, &err);
-    len = doc ? cyaml_list_len(doc) : 0;
+    len = doc ? cyaml_list_size(doc) : 0;
     cyaml_destroy(doc);
   }
   cyaml_test_parse_node_floor = saved;
@@ -5188,7 +5188,7 @@ TEST(block_sequence, value_on_next_line_mapping) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
 
   cyaml alice = cyaml_list_get(doc, 0);
   REQUIRE_EQ(cyaml_type(alice), CYAML_DICTIONARY);
@@ -5213,7 +5213,7 @@ TEST(block_sequence, value_on_next_line_scalar) {
   cyaml doc = cyaml_parse(yaml, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "hello");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "world");
   cyaml_destroy(doc);
@@ -5227,7 +5227,7 @@ TEST(block_sequence, null_when_sibling_follows_on_next_line) {
   cyaml doc = cyaml_parse(yaml, &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   cyaml elem0 = cyaml_list_get(doc, 0);
   REQUIRE_NE((void *)elem0, NULL);
   REQUIRE_EQ(cyaml_type(elem0), CYAML_NULL);
@@ -5252,7 +5252,7 @@ TEST(block_sequence, nested_sequence_on_next_line) {
   cyaml matrix = cyaml_dictionary_get(doc, "matrix");
   REQUIRE_NE((void *)matrix, NULL);
   REQUIRE_EQ(cyaml_type(matrix), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(matrix), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(matrix), (size_t)2);
 
   cyaml row0 = cyaml_list_get(matrix, 0);
   REQUIRE_EQ(cyaml_type(row0), CYAML_LIST);
@@ -5650,7 +5650,7 @@ TEST(parse_n, sequence_bounded) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)3);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(doc, 2)), 3LL);
   cyaml_destroy(doc);
 }
@@ -5674,11 +5674,11 @@ TEST(delete, list_remove_middle) {
   char *err = NULL;
   cyaml root = cyaml_parse("- 10\n- 20\n- 30\n- 40\n", &err);
   REQUIRE_NE((void *)root, NULL);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)4);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)4);
 
   REQUIRE_EQ(cyaml_list_remove(root, 1), ccol_success);
 
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)3);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 0)), 10LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 1)), 30LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 2)), 40LL);
@@ -5692,7 +5692,7 @@ TEST(delete, list_remove_first) {
 
   REQUIRE_EQ(cyaml_list_remove(root, 0), ccol_success);
 
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 0)), 2LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 1)), 3LL);
   cyaml_destroy(root);
@@ -5705,7 +5705,7 @@ TEST(delete, list_remove_last) {
 
   REQUIRE_EQ(cyaml_list_remove(root, 2), ccol_success);
 
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 0)), 1LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 1)), 2LL);
   cyaml_destroy(root);
@@ -5717,7 +5717,7 @@ TEST(delete, list_remove_only_element) {
   REQUIRE_NE((void *)root, NULL);
 
   REQUIRE_EQ(cyaml_list_remove(root, 0), ccol_success);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)0);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)0);
   cyaml_destroy(root);
 }
 
@@ -5727,7 +5727,7 @@ TEST(delete, list_remove_out_of_bounds) {
   REQUIRE_NE((void *)root, NULL);
 
   REQUIRE_EQ(cyaml_list_remove(root, 2), ccol_invalid_args);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
   cyaml_destroy(root);
 }
 
@@ -5737,7 +5737,7 @@ TEST(delete, list_remove_subtree_freed) {
   REQUIRE_NE((void *)root, NULL);
 
   REQUIRE_EQ(cyaml_list_remove(root, 0), ccol_success);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)1);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)1);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 0)), 99LL);
   cyaml_destroy(root);
 }
@@ -5783,7 +5783,7 @@ TEST(delete, path_delete_dict_key) {
   cyaml root = cyaml_parse("x: 1\ny: 2\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, "x"), ccol_success);
+  REQUIRE_EQ(cyaml_remove(root, "x"), ccol_success);
   REQUIRE_EQ(cyaml_dictionary_size(root), (size_t)1);
   REQUIRE_EQ((void *)cyaml_get(root, "x"), NULL);
   REQUIRE_NE((void *)cyaml_get(root, "y"), NULL);
@@ -5795,7 +5795,7 @@ TEST(delete, path_delete_nested_key) {
   cyaml root = cyaml_parse("a:\n  b: 1\n  c: 2\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, "a.b"), ccol_success);
+  REQUIRE_EQ(cyaml_remove(root, "a.b"), ccol_success);
   REQUIRE_EQ((void *)cyaml_get(root, "a.b"), NULL);
   REQUIRE_NE((void *)cyaml_get(root, "a.c"), NULL);
   cyaml_destroy(root);
@@ -5806,11 +5806,11 @@ TEST(delete, path_delete_list_element) {
   cyaml root = cyaml_parse("items:\n  - 10\n  - 20\n  - 30\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, "items.#1"), ccol_success);
+  REQUIRE_EQ(cyaml_remove(root, "items.#1"), ccol_success);
 
   cyaml items = cyaml_get(root, "items");
   REQUIRE_NE((void *)items, NULL);
-  REQUIRE_EQ(cyaml_list_len(items), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(items), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(items, 0)), 10LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(items, 1)), 30LL);
   cyaml_destroy(root);
@@ -5823,8 +5823,8 @@ TEST(delete, path_delete_on_list_root) {
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
 
-  REQUIRE_EQ(cyaml_delete(root, "#1"), ccol_success);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_remove(root, "#1"), ccol_success);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 0)), 10LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 1)), 30LL);
   cyaml_destroy(root);
@@ -5835,7 +5835,7 @@ TEST(delete, path_missing_parent_returns_key_not_found) {
   cyaml root = cyaml_parse("a: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, "x.y"), ccol_key_not_found);
+  REQUIRE_EQ(cyaml_remove(root, "x.y"), ccol_key_not_found);
   cyaml_destroy(root);
 }
 
@@ -5844,7 +5844,7 @@ TEST(delete, path_missing_leaf_returns_key_not_found) {
   cyaml root = cyaml_parse("a:\n  b: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, "a.z"), ccol_key_not_found);
+  REQUIRE_EQ(cyaml_remove(root, "a.z"), ccol_key_not_found);
   cyaml_destroy(root);
 }
 
@@ -5860,16 +5860,16 @@ TEST(path, a_list_index_too_large_for_any_integer_is_absent) {
   for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
     ok = ok && cyaml_get(root, paths[i]) == NULL;
     ok = ok && cyaml_set(root, paths[i], 5) == ccol_key_not_found;
-    ok = ok && cyaml_delete(root, paths[i]) == ccol_key_not_found;
+    ok = ok && cyaml_remove(root, paths[i]) == ccol_key_not_found;
   }
   ok = ok && cyaml_set(root, "items.#18446744073709551616.x", 5) ==
                  ccol_key_not_found;
-  ok = ok && cyaml_list_len(cyaml_dictionary_get(root, "items")) == 2;
+  ok = ok && cyaml_list_size(cyaml_dictionary_get(root, "items")) == 2;
   cyaml_destroy(root);
   REQUIRE_TRUE(ok);
 }
 
-// For cyaml_delete() an out-of-range "#N" is an absent component
+// For cyaml_remove() an out-of-range "#N" is an absent component
 // (ccol_key_not_found), while cyaml_list_remove() called directly refuses the
 // same index with ccol_invalid_args.
 TEST(delete, path_out_of_range_list_index_returns_key_not_found) {
@@ -5877,8 +5877,8 @@ TEST(delete, path_out_of_range_list_index_returns_key_not_found) {
   cyaml root = cyaml_parse("items:\n  - 1\n  - 2\n  - 3\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, "items.#10"), ccol_key_not_found);
-  REQUIRE_EQ(cyaml_list_len(cyaml_dictionary_get(root, "items")), (size_t)3);
+  REQUIRE_EQ(cyaml_remove(root, "items.#10"), ccol_key_not_found);
+  REQUIRE_EQ(cyaml_list_size(cyaml_dictionary_get(root, "items")), (size_t)3);
   cyaml_destroy(root);
 }
 
@@ -5890,8 +5890,8 @@ TEST(delete,
   cyaml root = cyaml_parse("items:\n  - a: 1\n  - a: 2\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, "items.#xyz.a"), ccol_invalid_args);
-  REQUIRE_EQ(cyaml_list_len(cyaml_dictionary_get(root, "items")), (size_t)2);
+  REQUIRE_EQ(cyaml_remove(root, "items.#xyz.a"), ccol_invalid_args);
+  REQUIRE_EQ(cyaml_list_size(cyaml_dictionary_get(root, "items")), (size_t)2);
   cyaml_destroy(root);
 }
 
@@ -5900,7 +5900,7 @@ TEST(delete, path_wrong_type_in_non_leaf_component_returns_invalid_args) {
   cyaml root = cyaml_parse("a: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, "a.b.c"), ccol_invalid_args);
+  REQUIRE_EQ(cyaml_remove(root, "a.b.c"), ccol_invalid_args);
   REQUIRE_EQ(cyaml_int_val(cyaml_get(root, "a")), 1LL);
   cyaml_destroy(root);
 }
@@ -5913,7 +5913,7 @@ TEST(delete, path_delete_with_escaped_dot_in_key) {
   REQUIRE_EQ(cyaml_dictionary_set(root, "keep", cyaml_create_int(1)),
              ccol_success);
 
-  REQUIRE_EQ(cyaml_delete(root, "a\\.b"), ccol_success);
+  REQUIRE_EQ(cyaml_remove(root, "a\\.b"), ccol_success);
   REQUIRE_EQ(cyaml_dictionary_size(root), (size_t)1);
   REQUIRE_NE((void *)cyaml_dictionary_get(root, "keep"), NULL);
   cyaml_destroy(root);
@@ -5924,7 +5924,7 @@ TEST(delete, degenerate_path_empty) {
   cyaml root = cyaml_parse("key: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, ""), ccol_invalid_args);
+  REQUIRE_EQ(cyaml_remove(root, ""), ccol_invalid_args);
   REQUIRE_NE((void *)cyaml_get(root, "key"), NULL);
   cyaml_destroy(root);
 }
@@ -5934,7 +5934,7 @@ TEST(delete, degenerate_path_trailing_dot) {
   cyaml root = cyaml_parse("key: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, "key."), ccol_invalid_args);
+  REQUIRE_EQ(cyaml_remove(root, "key."), ccol_invalid_args);
   REQUIRE_NE((void *)cyaml_get(root, "key"), NULL);
   cyaml_destroy(root);
 }
@@ -5944,7 +5944,7 @@ TEST(delete, degenerate_path_consecutive_dots) {
   cyaml root = cyaml_parse("a:\n  b: 1\n", &err);
   REQUIRE_NE((void *)root, NULL);
 
-  REQUIRE_EQ(cyaml_delete(root, "a..b"), ccol_invalid_args);
+  REQUIRE_EQ(cyaml_remove(root, "a..b"), ccol_invalid_args);
   REQUIRE_NE((void *)cyaml_get(root, "a.b"), NULL);
   cyaml_destroy(root);
 }
@@ -5957,7 +5957,7 @@ TEST(delete, an_empty_component_after_an_absent_key_is_invalid) {
   ccol_retval set_rv[4], del_rv[4];
   for (int i = 0; i < 4; i++) {
     set_rv[i] = cyaml_set(root, paths[i], 1);
-    del_rv[i] = cyaml_delete(root, paths[i]);
+    del_rv[i] = cyaml_remove(root, paths[i]);
   }
   bool intact = cyaml_get(root, "a.b") != NULL && cyaml_get(root, "x") == NULL;
   cyaml_destroy(root);
@@ -5980,13 +5980,13 @@ TEST(multi_document, a_marker_after_a_lone_property_ends_the_document) {
   bool b_ok = b && cyaml_type(b) == CYAML_NULL;
   cyaml_destroy(b);
   cyaml c = cyaml_parse("!!str\n---\nb\n", &err);
-  bool c_ok = c && cyaml_type(c) == CYAML_LIST && cyaml_list_len(c) == 2 &&
+  bool c_ok = c && cyaml_type(c) == CYAML_LIST && cyaml_list_size(c) == 2 &&
               cyaml_type(cyaml_list_get(c, 0)) == CYAML_STRING &&
               strcmp(cyaml_str_val(cyaml_list_get(c, 0)), "") == 0 &&
               strcmp(cyaml_str_val(cyaml_list_get(c, 1)), "b") == 0;
   cyaml_destroy(c);
   cyaml d = cyaml_parse("a: 1\n--- !!str\n---\nz\n", &err);
-  bool d_ok = d && cyaml_type(d) == CYAML_LIST && cyaml_list_len(d) == 3 &&
+  bool d_ok = d && cyaml_type(d) == CYAML_LIST && cyaml_list_size(d) == 3 &&
               strcmp(cyaml_str_val(cyaml_list_get(d, 1)), "") == 0 &&
               strcmp(cyaml_str_val(cyaml_list_get(d, 2)), "z") == 0;
   cyaml_destroy(d);
@@ -6002,7 +6002,7 @@ TEST(multi_document, two_scalars_with_markers) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
   REQUIRE_EQ(cyaml_type(cyaml_list_get(root, 0)), CYAML_STRING);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(root, 0)), "hello");
   REQUIRE_EQ(cyaml_type(cyaml_list_get(root, 1)), CYAML_STRING);
@@ -6016,7 +6016,7 @@ TEST(multi_document, two_mappings_no_leading_marker) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
 
   cyaml doc0 = cyaml_list_get(root, 0);
   REQUIRE_EQ(cyaml_type(doc0), CYAML_DICTIONARY);
@@ -6036,19 +6036,19 @@ TEST(multi_document, two_sequences) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
 
   cyaml seq0 = cyaml_list_get(root, 0);
   REQUIRE_NE((void *)seq0, NULL);
   REQUIRE_EQ(cyaml_type(seq0), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(seq0), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(seq0), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(seq0, 0)), 1LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(seq0, 1)), 2LL);
 
   cyaml seq1 = cyaml_list_get(root, 1);
   REQUIRE_NE((void *)seq1, NULL);
   REQUIRE_EQ(cyaml_type(seq1), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(seq1), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(seq1), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(seq1, 0)), 3LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(seq1, 1)), 4LL);
   cyaml_destroy(root);
@@ -6060,7 +6060,7 @@ TEST(multi_document, with_document_end_markers) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_get(cyaml_list_get(root, 0), "a")), 1LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_get(cyaml_list_get(root, 1), "b")), 2LL);
   cyaml_destroy(root);
@@ -6072,7 +6072,7 @@ TEST(multi_document, empty_document_between_markers) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)3);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(root, 0)), "hello");
   cyaml doc1 = cyaml_list_get(root, 1);
   REQUIRE_NE((void *)doc1, NULL);
@@ -6089,7 +6089,7 @@ TEST(multi_document, three_documents) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)3);
   REQUIRE_STREQ(cyaml_str_val(cyaml_get(cyaml_list_get(root, 0), "kind")),
                 "Service");
   REQUIRE_STREQ(cyaml_str_val(cyaml_get(cyaml_list_get(root, 1), "kind")),
@@ -6132,7 +6132,7 @@ TEST(multi_document, triple_doc_start_in_sequence_value_is_data) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)1);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)1);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(root, 0)), "---");
   cyaml_destroy(root);
 }
@@ -6143,7 +6143,7 @@ TEST(multi_document, bare_document_after_end_marker_is_a_new_document) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
   cyaml doc0 = cyaml_list_get(root, 0);
   cyaml doc1 = cyaml_list_get(root, 1);
   REQUIRE_NE((void *)doc1, NULL);
@@ -6174,7 +6174,7 @@ TEST(multi_document,
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
   cyaml doc0 = cyaml_list_get(root, 0);
   cyaml doc1 = cyaml_list_get(root, 1);
   REQUIRE_EQ(cyaml_type(doc0), CYAML_DICTIONARY);
@@ -6190,7 +6190,7 @@ TEST(multi_document, three_consecutive_end_markers_then_bare_document) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
   cyaml doc0 = cyaml_list_get(root, 0);
   cyaml doc1 = cyaml_list_get(root, 1);
   REQUIRE_NE((void *)doc1, NULL);
@@ -6262,7 +6262,7 @@ TEST(multi_document, parse_n_multi_document) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_EQ(cyaml_type(root), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(root), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(root), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 0)), 1LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(root, 1)), 2LL);
   cyaml_destroy(root);
@@ -6308,7 +6308,7 @@ TEST(flow_serialize, close_bracket_in_string_round_trip) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)seq2, NULL);
   REQUIRE_EQ(cyaml_type(seq2), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(seq2), (size_t)1);
+  REQUIRE_EQ(cyaml_list_size(seq2), (size_t)1);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(seq2, 0)), "x]y");
   cyaml_serialize_free(s);
   cyaml_destroy(seq);
@@ -6363,7 +6363,7 @@ TEST(flow_serialize, colon_before_close_bracket_round_trip) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)seq2, NULL);
   REQUIRE_EQ(cyaml_type(seq2), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(seq2), (size_t)1);
+  REQUIRE_EQ(cyaml_list_size(seq2), (size_t)1);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(seq2, 0)), "v:]rest");
   cyaml_serialize_free(s);
   cyaml_destroy(seq);
@@ -6697,7 +6697,7 @@ TEST(flow_collections, sequence_bare_pair_shorthand) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)1);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)1);
   cyaml elem = cyaml_list_get(doc, 0);
   REQUIRE_EQ(cyaml_type(elem), CYAML_DICTIONARY);
   REQUIRE_STREQ(cyaml_str_val(cyaml_dictionary_get(elem, "foo")), "bar");
@@ -6815,7 +6815,7 @@ TEST(block_list, anchor_for_empty_node_does_not_swallow_sibling_entry) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   cyaml elem0 = cyaml_list_get(doc, 0);
   REQUIRE_NE((void *)elem0, NULL);
   REQUIRE_EQ(cyaml_type(elem0), CYAML_NULL);
@@ -6832,7 +6832,7 @@ TEST(block_mapping, sequence_value_same_indent_as_key) {
   cyaml one = cyaml_dictionary_get(doc, "one");
   REQUIRE_NE((void *)one, NULL);
   REQUIRE_EQ(cyaml_type(one), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(one), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(one), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(one, 0)), 2LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(one, 1)), 3LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_dictionary_get(doc, "four")), 5LL);
@@ -7072,7 +7072,7 @@ TEST(block_mapping, explicit_value_sequence_can_start_inline) {
   cyaml val = cyaml_dictionary_get(doc, "k");
   REQUIRE_NE((void *)val, NULL);
   REQUIRE_EQ(cyaml_type(val), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(val), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(val), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(val, 0)), "a");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(val, 1)), "b");
   cyaml_destroy(doc);
@@ -7244,7 +7244,7 @@ TEST(flow_collections, continuation_line_indented_enough_still_works) {
   cyaml flow = cyaml_dictionary_get(doc, "flow");
   REQUIRE_NE((void *)flow, NULL);
   REQUIRE_EQ(cyaml_type(flow), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(flow), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(flow), (size_t)3);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(flow, 0)), "a");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(flow, 1)), "b");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(flow, 2)), "c");
@@ -7365,7 +7365,7 @@ TEST(block_list, dash_space_content_still_works) {
   cyaml doc = cyaml_parse("- a\n- b\n", &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "a");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "b");
   cyaml_destroy(doc);
@@ -7464,7 +7464,7 @@ TEST(flow_collections, explicit_single_pair_entry) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)1);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)1);
   cyaml elem = cyaml_list_get(doc, 0);
   REQUIRE_NE((void *)elem, NULL);
   REQUIRE_EQ(cyaml_type(elem), CYAML_DICTIONARY);
@@ -7719,7 +7719,7 @@ TEST(block_mapping, anchored_flow_collection_key_alias_preserves_structure) {
   cyaml later = cyaml_dictionary_get(doc, "later");
   REQUIRE_NE((void *)later, NULL);
   REQUIRE_EQ(cyaml_type(later), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(later), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(later), (size_t)2);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(later, 0)), 1LL);
   REQUIRE_EQ(cyaml_int_val(cyaml_list_get(later, 1)), 2LL);
   cyaml_destroy(doc);
@@ -7850,7 +7850,7 @@ TEST(flow_list, anchor_followed_by_comma_still_works_in_flow_context) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_NE((void *)cyaml_list_get(doc, 0), NULL);
   REQUIRE_EQ(cyaml_type(cyaml_list_get(doc, 0)), CYAML_NULL);
   REQUIRE_NE((void *)cyaml_list_get(doc, 1), NULL);
@@ -7864,7 +7864,7 @@ TEST(flow_list, tag_followed_by_comma_still_works_in_flow_context) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "x");
   cyaml_destroy(doc);
@@ -7988,7 +7988,7 @@ TEST(multi_document, zero_indented_literal_scalar_ends_at_document_marker) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "foo\n");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "bar");
   cyaml_destroy(doc);
@@ -8000,7 +8000,7 @@ TEST(multi_document, zero_indented_folded_scalar_ends_at_document_marker) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "foo\n");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "bar");
   cyaml_destroy(doc);
@@ -8023,7 +8023,7 @@ TEST(multi_document,
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "foo\n");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "bar");
   cyaml_destroy(doc);
@@ -8035,7 +8035,7 @@ TEST(multi_document, indented_literal_scalar_still_ends_at_document_marker) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "foo\n");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "bar");
   cyaml_destroy(doc);
@@ -8147,7 +8147,7 @@ TEST(block_list, dash_followed_only_by_comment_is_a_null_entry) {
   cyaml doc = cyaml_parse("- # Empty\n- two\n", &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   cyaml elem0 = cyaml_list_get(doc, 0);
   REQUIRE_NE((void *)elem0, NULL);
   REQUIRE_EQ(cyaml_type(elem0), CYAML_NULL);
@@ -8160,7 +8160,7 @@ TEST(block_list, dash_followed_only_by_tag_is_an_empty_string_entry) {
   cyaml doc = cyaml_parse("- !!str\n- two\n", &err);
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_EQ(cyaml_type(cyaml_list_get(doc, 0)), CYAML_STRING);
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 0)), "");
   REQUIRE_STREQ(cyaml_str_val(cyaml_list_get(doc, 1)), "two");
@@ -8448,7 +8448,7 @@ TEST(tags, tag_on_collection_has_no_override_effect_on_parsing) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_node_tag(doc), CYAML_TAG_SEQ);
   cyaml_destroy(doc);
 }
@@ -8723,7 +8723,7 @@ TEST(tag_directives, per_document_scoping) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)2);
   REQUIRE_STREQ(cyaml_node_tag(cyaml_list_get(doc, 0)),
                 "tag:example.com,2000:foo");
   REQUIRE_STREQ(cyaml_node_tag(cyaml_list_get(doc, 1)),
@@ -9245,7 +9245,7 @@ TEST(tag_typing, seq_stored_without_altering_collection_parsing) {
   REQUIRE_EQ((void *)err, NULL);
   REQUIRE_NE((void *)doc, NULL);
   REQUIRE_EQ(cyaml_type(doc), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(doc), (size_t)3);
+  REQUIRE_EQ(cyaml_list_size(doc), (size_t)3);
   cyaml_destroy(doc);
 }
 
@@ -9396,7 +9396,7 @@ TEST(serialize_tags, custom_tag_on_collection_round_trips) {
   REQUIRE_EQ((void *)err2, NULL);
   REQUIRE_NE((void *)reparsed, NULL);
   REQUIRE_EQ(cyaml_type(reparsed), CYAML_LIST);
-  REQUIRE_EQ(cyaml_list_len(reparsed), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(reparsed), (size_t)2);
   REQUIRE_STREQ(cyaml_node_tag(reparsed), "!mytag");
 
   cyaml_serialize_free(out);
@@ -9872,7 +9872,7 @@ TEST(merge_keys, flow_sequence_implicit_shorthand_expands) {
   REQUIRE_NE((void *)doc, NULL);
   cyaml b = cyaml_dictionary_get(doc, "b");
   REQUIRE_NE((void *)b, NULL);
-  REQUIRE_EQ(cyaml_list_len(b), (size_t)1);
+  REQUIRE_EQ(cyaml_list_size(b), (size_t)1);
   cyaml elem0 = cyaml_list_get(b, 0);
   REQUIRE_NE((void *)elem0, NULL);
   REQUIRE_EQ(cyaml_dictionary_size(elem0), (size_t)1);
@@ -9890,7 +9890,7 @@ TEST(merge_keys, flow_sequence_bare_key_value_anchored_and_tagged_not_merged) {
   REQUIRE_NE((void *)doc, NULL);
   cyaml b = cyaml_dictionary_get(doc, "b");
   REQUIRE_NE((void *)b, NULL);
-  REQUIRE_EQ(cyaml_list_len(b), (size_t)1);
+  REQUIRE_EQ(cyaml_list_size(b), (size_t)1);
   cyaml elem0 = cyaml_list_get(b, 0);
   REQUIRE_NE((void *)elem0, NULL);
   REQUIRE_EQ(cyaml_dictionary_size(elem0), (size_t)1);
@@ -9906,7 +9906,7 @@ TEST(merge_keys, flow_sequence_bare_key_value_two_elements_only_first_merges) {
   REQUIRE_NE((void *)doc, NULL);
   cyaml b = cyaml_dictionary_get(doc, "b");
   REQUIRE_NE((void *)b, NULL);
-  REQUIRE_EQ(cyaml_list_len(b), (size_t)2);
+  REQUIRE_EQ(cyaml_list_size(b), (size_t)2);
   cyaml elem0 = cyaml_list_get(b, 0);
   REQUIRE_NE((void *)elem0, NULL);
   REQUIRE_EQ(cyaml_dictionary_size(elem0), (size_t)1);
@@ -9925,7 +9925,7 @@ TEST(merge_keys, flow_sequence_explicit_shorthand_expands) {
   REQUIRE_NE((void *)doc, NULL);
   cyaml b = cyaml_dictionary_get(doc, "b");
   REQUIRE_NE((void *)b, NULL);
-  REQUIRE_EQ(cyaml_list_len(b), (size_t)1);
+  REQUIRE_EQ(cyaml_list_size(b), (size_t)1);
   cyaml elem0 = cyaml_list_get(b, 0);
   REQUIRE_NE((void *)elem0, NULL);
   REQUIRE_EQ(cyaml_dictionary_size(elem0), (size_t)1);
@@ -9942,7 +9942,7 @@ TEST(merge_keys, flow_sequence_explicit_shorthand_followed_by_word_not_merged) {
   REQUIRE_NE((void *)doc, NULL);
   cyaml b = cyaml_dictionary_get(doc, "b");
   REQUIRE_NE((void *)b, NULL);
-  REQUIRE_EQ(cyaml_list_len(b), (size_t)1);
+  REQUIRE_EQ(cyaml_list_size(b), (size_t)1);
   cyaml elem0 = cyaml_list_get(b, 0);
   REQUIRE_NE((void *)elem0, NULL);
   REQUIRE_EQ(cyaml_dictionary_size(elem0), (size_t)1);
@@ -10730,7 +10730,7 @@ TEST(anchors, large_anchored_scalar_aliased_a_few_times_still_parses) {
   size_t len = 0;
   if (doc) {
     cyaml b = cyaml_dictionary_get(doc, "b");
-    if (b && cyaml_type(b) == CYAML_LIST) len = cyaml_list_len(b);
+    if (b && cyaml_type(b) == CYAML_LIST) len = cyaml_list_size(b);
     cyaml_destroy(doc);
   }
   REQUIRE_TRUE(parsed);
@@ -11025,7 +11025,7 @@ TEST(ownership,
   if (pooled_after_kind == pooled_kind) cyaml_destroy(child);
 
   ccol_retval r_self = cyaml_dictionary_set(wrong_kind, "k", wrong_kind);
-  bool wrong_kind_alive = (cyaml_list_len(wrong_kind) == 0);
+  bool wrong_kind_alive = (cyaml_list_size(wrong_kind) == 0);
 
   cyaml_destroy(wrong_kind);
   cyaml_destroy(map);
@@ -11644,7 +11644,7 @@ TEST(deep_documents, a_declined_key_speculation_re_reads_the_same_bytes) {
   cyaml alias_key = cyaml_parse("a: &r 1\n*r : v\n", NULL);
 
   bool as_value_ok = (as_value && cyaml_type(as_value) == CYAML_LIST &&
-                      cyaml_list_len(as_value) == 2);
+                      cyaml_list_size(as_value) == 2);
   bool as_key_ok = (as_key && cyaml_type(as_key) == CYAML_DICTIONARY &&
                     cyaml_dictionary_get(as_key, "[1, 2]") != NULL);
   bool map_value_ok = (map_value && cyaml_type(map_value) == CYAML_DICTIONARY &&
@@ -11794,7 +11794,7 @@ TEST(deep_documents, a_finished_frame_releases_the_nesting_level_it_took) {
     }
     size_t reached = 0;
     while (node && cyaml_type(node) == CYAML_LIST &&
-           cyaml_list_len(node) == 1) {
+           cyaml_list_size(node) == 1) {
       node = cyaml_list_get(node, 0);
       reached++;
     }
@@ -12162,8 +12162,8 @@ static bool _rt_deep_equal(cyaml a, cyaml b) {
     case CYAML_STRING:
       return strcmp(cyaml_str_val(a), cyaml_str_val(b)) == 0;
     case CYAML_LIST: {
-      size_t n = cyaml_list_len(a);
-      if (n != cyaml_list_len(b)) return false;
+      size_t n = cyaml_list_size(a);
+      if (n != cyaml_list_size(b)) return false;
       for (size_t i = 0; i < n; i++)
         if (!_rt_deep_equal(cyaml_list_get(a, i), cyaml_list_get(b, i)))
           return false;
@@ -12639,7 +12639,7 @@ TEST(duplicate_keys, redefined_anchor_resolves_to_the_later_node) {
                               &_dup_mp);
   bool parsed = root != NULL;
   cyaml c = parsed ? cyaml_get(root, "c") : NULL;
-  bool ok = c && cyaml_type(c) == CYAML_LIST && cyaml_list_len(c) == 2;
+  bool ok = c && cyaml_type(c) == CYAML_LIST && cyaml_list_size(c) == 2;
   if (root) cyaml_destroy(root);
   long live = _dup_live;
   REQUIRE_TRUE(parsed);
@@ -12691,7 +12691,7 @@ TEST(duplicate_keys, merge_keeps_the_explicit_value_and_frees_nothing_live) {
   cyaml x = parsed ? cyaml_get(root, "m.x") : NULL;
   cyaml y = parsed ? cyaml_get(root, "m.y") : NULL;
   bool ok = x && y && cyaml_type(x) == CYAML_INTEGER && cyaml_int_val(x) == 9 &&
-            cyaml_type(y) == CYAML_LIST && cyaml_list_len(y) == 2;
+            cyaml_type(y) == CYAML_LIST && cyaml_list_size(y) == 2;
   if (root) cyaml_destroy(root);
   long live = _dup_live;
   REQUIRE_TRUE(parsed);
@@ -12854,7 +12854,7 @@ TEST(number_locale, parse_reads_dot_decimal_floats_under_a_comma_locale) {
   cyaml timeout = d ? cyaml_get(d, "timeout") : NULL;
   cyaml list = d ? cyaml_get(d, "list") : NULL;
   bool types_ok = timeout && cyaml_type(timeout) == CYAML_FLOAT && list &&
-                  cyaml_list_len(list) == 3 &&
+                  cyaml_list_size(list) == 3 &&
                   cyaml_type(cyaml_list_get(list, 0)) == CYAML_FLOAT &&
                   cyaml_type(cyaml_list_get(list, 1)) == CYAML_FLOAT &&
                   cyaml_type(cyaml_list_get(list, 2)) == CYAML_FLOAT;
@@ -13049,7 +13049,7 @@ TEST(block_sequence, long_one_line_flow_value_is_not_limited_like_a_key) {
   char *err = NULL;
   cyaml d = doc ? cyaml_parse(doc, &err) : NULL;
   size_t alias_len =
-      d && cyaml_list_len(d) == 2 ? cyaml_list_len(cyaml_list_get(d, 1)) : 0;
+      d && cyaml_list_size(d) == 2 ? cyaml_list_size(cyaml_list_get(d, 1)) : 0;
   cyaml_destroy(d);
   free(doc);
   REQUIRE_EQ(failed, (size_t)0);
@@ -13133,8 +13133,8 @@ TEST(block_sequence, alias_entry_is_copied_once) {
   cyaml copy = anchor ? cyaml_clone(anchor) : NULL;
   size_t one_copy = _alias_allocs;
   bool shapes_ok =
-      d5 && d6 && copy && cyaml_list_len(cyaml_get(d6, "list")) == 6 &&
-      cyaml_list_len(cyaml_list_get(cyaml_get(d6, "list"), 5)) == 40;
+      d5 && d6 && copy && cyaml_list_size(cyaml_get(d6, "list")) == 6 &&
+      cyaml_list_size(cyaml_list_get(cyaml_get(d6, "list"), 5)) == 40;
   cyaml_destroy(copy);
   cyaml_destroy(d5);
   cyaml_destroy(d6);
@@ -13243,7 +13243,7 @@ static bool _long_key_round_trip(const char *base, bool expect_explicit) {
       k[n] = 'l';
       cyaml l = cyaml_dictionary_get(back, k);
       ok = s && cyaml_int_val(s) == 1 && dd && cyaml_dictionary_size(dd) == 1 &&
-           l && cyaml_list_len(l) == 1;
+           l && cyaml_list_size(l) == 1;
     } else {
       ok = false;
     }
@@ -13590,7 +13590,7 @@ TEST(serialize_stream, kubernetes_stream_round_trips_as_a_stream) {
   for (const char *p = stream; p && (p = strstr(p, "---\n")); p += 4)
     if (p == stream || p[-1] == '\n') markers++;
   bool starts = stream && strncmp(stream, "---\napiVersion: v1\n", 19) == 0;
-  size_t n_back = back ? cyaml_list_len(back) : 0;
+  size_t n_back = back ? cyaml_list_size(back) : 0;
   long long replicas =
       back ? cyaml_int_val(cyaml_get(back, "#1.spec.replicas")) : 0;
   cyaml_serialize_free(a);
@@ -13648,7 +13648,7 @@ TEST(serialize_stream, scalar_and_tagged_documents_round_trip) {
   char *a = docs ? cyaml_serialize_flow(docs) : NULL;
   char *b = back ? cyaml_serialize_flow(back) : NULL;
   bool same = a && b && strcmp(a, b) == 0;
-  size_t n = back ? cyaml_list_len(back) : 0;
+  size_t n = back ? cyaml_list_size(back) : 0;
   const char *tag = back ? cyaml_node_tag(cyaml_list_get(back, 3)) : NULL;
   bool tag_ok = tag && strcmp(tag, "!app/config") == 0;
   cyaml_serialize_free(a);
@@ -13691,10 +13691,10 @@ TEST(bom_inside_document, a_mark_before_a_document_start_is_a_prefix) {
   cyaml cmt = cyaml_parse("a: 1\n\xEF\xBB\xBF# c\n---\nb: 2\n", NULL);
   cyaml tail = cyaml_parse("a: 1\n\xEF\xBB\xBF", NULL);
   bool two_ok = two && cyaml_type(two) == CYAML_LIST &&
-                cyaml_list_len(two) == 2 &&
+                cyaml_list_size(two) == 2 &&
                 cyaml_int_val(cyaml_get(two, "#1.b")) == 2;
   bool cmt_ok =
-      cmt && cyaml_type(cmt) == CYAML_LIST && cyaml_list_len(cmt) == 2;
+      cmt && cyaml_type(cmt) == CYAML_LIST && cyaml_list_size(cmt) == 2;
   bool tail_ok = tail && cyaml_type(tail) == CYAML_DICTIONARY &&
                  cyaml_dictionary_size(tail) == 1;
   cyaml_destroy(two);
@@ -13943,7 +13943,7 @@ static bool _scalar_list_cost(const char *item, size_t n, size_t *held,
   cyaml doc = cyaml_parse_mp(d, NULL, &_held_mp);
   *held = _held_bytes - base;
   *charged = cyaml_test_last_parse_bytes_charged;
-  bool ok = doc && cyaml_list_len(doc) == n;
+  bool ok = doc && cyaml_list_size(doc) == n;
   cyaml_destroy(doc);
   free(d);
   return ok;
@@ -13983,7 +13983,7 @@ static bool _block_list_held(const char *item, size_t n, size_t *held) {
   size_t base = _held_bytes;
   cyaml doc = cyaml_parse_mp(d, NULL, &_held_mp);
   *held = _held_bytes - base;
-  bool ok = doc && cyaml_list_len(doc) == n &&
+  bool ok = doc && cyaml_list_size(doc) == n &&
             strcmp(cyaml_str_val(cyaml_list_get(doc, 0)), "x") == 0;
   cyaml_destroy(doc);
   free(d);
@@ -14125,7 +14125,7 @@ TEST(serialize_tags, a_verbatim_tag_holds_only_uri_characters) {
       cyaml s = cyaml_create_string("v");
       bool built = l && s && cyaml_node_set_tag(s, tags[i]) == ccol_success &&
                    cyaml_list_push(l, s) == ccol_success;
-      if (!built && l && s && cyaml_list_len(l) == 0) cyaml_destroy(s);
+      if (!built && l && s && cyaml_list_size(l) == 0) cyaml_destroy(s);
       char *out =
           built ? (flow ? cyaml_serialize_flow(l) : cyaml_serialize(l)) : NULL;
       bool uri_only = out != NULL;
@@ -14140,7 +14140,7 @@ TEST(serialize_tags, a_verbatim_tag_holds_only_uri_characters) {
         if (!ok) uri_only = false;
       }
       cyaml back = out ? cyaml_parse(out, NULL) : NULL;
-      const char *t = back && cyaml_list_len(back) == 1
+      const char *t = back && cyaml_list_size(back) == 1
                           ? cyaml_node_tag(cyaml_list_get(back, 0))
                           : NULL;
       bool same = t && strcmp(t, tags[i]) == 0;
@@ -15468,7 +15468,7 @@ TEST(flow_list, an_explicit_pair_may_leave_out_its_key) {
               cyaml_type(cyaml_dictionary_get(a0, "null")) == CYAML_NULL;
   cyaml bv = b0 ? cyaml_dictionary_get(b0, "null") : NULL;
   bool b_ok = bv && cyaml_type(bv) == CYAML_STRING &&
-              strcmp(cyaml_str_val(bv), "v") == 0 && cyaml_list_len(b) == 2;
+              strcmp(cyaml_str_val(bv), "v") == 0 && cyaml_list_size(b) == 2;
   cyaml mv = m ? cyaml_dictionary_get(m, "null") : NULL;
   bool same_as_map = mv && strcmp(cyaml_str_val(mv), "v") == 0;
   cyaml_destroy(a);
@@ -15749,7 +15749,7 @@ TEST(anchors, an_anchor_that_no_alias_names_copies_nothing) {
   cyaml_test_parse_node_floor = 1000;
   char *err = NULL;
   cyaml d1 = cyaml_parse(doc, &err);
-  size_t len1 = d1 ? cyaml_list_len(cyaml_get(d1, "a")) : 0;
+  size_t len1 = d1 ? cyaml_list_size(cyaml_get(d1, "a")) : 0;
   cyaml d2 = cyaml_parse(nested, &err);
   cyaml d3 = cyaml_parse(aliased, &err);
   bool alias_refused = d3 == NULL && err && strstr(err, "alias expansion");
@@ -15775,7 +15775,7 @@ TEST(anchors, an_alias_and_its_anchor_change_independently) {
   bool pushed = dst_list &&
                 cyaml_list_push(dst_list, cyaml_create_int(2)) == ccol_success;
   bool set = cyaml_set(d, "src.val.#0", 7) == ccol_success;
-  size_t src_len = src_list ? cyaml_list_len(src_list) : 0;
+  size_t src_len = src_list ? cyaml_list_size(src_list) : 0;
   long long dst_first =
       dst_list ? cyaml_int_val(cyaml_list_get(dst_list, 0)) : 0;
   cyaml_destroy(d);
@@ -15853,7 +15853,7 @@ TEST(paths, a_component_that_is_not_utf8_is_invalid_at_any_position) {
   int set_wrong = 0, delete_wrong = 0, get_wrong = 0;
   for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
     if (cyaml_set(doc, bad[i], 5) != ccol_invalid_args) set_wrong++;
-    if (cyaml_delete(doc, bad[i]) != ccol_invalid_args) delete_wrong++;
+    if (cyaml_remove(doc, bad[i]) != ccol_invalid_args) delete_wrong++;
     if (cyaml_get(doc, bad[i]) != NULL) get_wrong++;
   }
   static const char *const absent[] = {"missing.k", "d.x.k", "missing.x.y",
@@ -15861,12 +15861,12 @@ TEST(paths, a_component_that_is_not_utf8_is_invalid_at_any_position) {
   int absent_wrong = 0;
   for (size_t i = 0; i < sizeof(absent) / sizeof(absent[0]); i++) {
     if (cyaml_set(doc, absent[i], 5) != ccol_key_not_found) absent_wrong++;
-    if (cyaml_delete(doc, absent[i]) != ccol_key_not_found) absent_wrong++;
+    if (cyaml_remove(doc, absent[i]) != ccol_key_not_found) absent_wrong++;
   }
   bool shape_invalid = cyaml_set(doc, "d.k.x", 5) == ccol_invalid_args &&
                        cyaml_set(doc, "l.x", 5) == ccol_invalid_args &&
                        cyaml_set(doc, "l.#x.y", 5) == ccol_invalid_args &&
-                       cyaml_delete(doc, "missing..k") == ccol_invalid_args;
+                       cyaml_remove(doc, "missing..k") == ccol_invalid_args;
   char *flow = cyaml_serialize_flow(doc);
   bool unchanged = flow && strcmp(flow, "{d: {k: 1}, l: [1]}") == 0;
   if (flow) cyaml_serialize_free(flow);

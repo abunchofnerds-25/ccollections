@@ -95,7 +95,7 @@ cbstmap_create_ch(ccol_data_type key_type,
 }
 
 // Returns the number of key-value pairs in the map. Asserts on a NULL cbm.
-size_t cbstmap_elem_count(cbmap cbm);
+size_t cbstmap_size(cbmap cbm);
 
 // Removes and frees every key and value and leaves an empty map that you can
 // keep using. It allocates nothing and returns ccol_success. Asserts on a NULL
@@ -145,7 +145,7 @@ ccol_retval cbstmap__get_val_accessor(cbmap cbm, const cmap_pair *key_pair,
 // NULL key_pair, a NULL ptr with a non-zero size, a key whose size doesn't
 // match a fixed-width key type, or a size-0 key on a ccol_string map. Treat
 // pointers into the map as invalid after a delete. Asserts on a NULL cbm.
-ccol_retval cbstmap_delete_elem(cbmap cbm, const cmap_pair *key_pair);
+ccol_retval cbstmap_remove_elem(cbmap cbm, const cmap_pair *key_pair);
 
 // Internal: Frees an iterator, at the end of a walk or when a loop leaves early
 // (ccol_iter_destroy()). cbstmap_begin_iter() is declared in citerators.h,
@@ -556,7 +556,7 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     ccol__populate_cmap_pair(ccol__cbmap_kp, ccol__cbmap_key_tmp);           \
     ccol_retval ccol__cbmap_r =                                              \
         !ccol__cbmap_kp->ptr ? ccol_invalid_args                             \
-                             : cbstmap_delete_elem(hm_name, ccol__cbmap_kp); \
+                             : cbstmap_remove_elem(hm_name, ccol__cbmap_kp); \
     ccol__cbmap_r;                                                           \
   })
 
@@ -696,7 +696,7 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
 
 // Evaluates to the number of key-value pairs in the map, as a size_t. Asserts
 // on a NULL handle.
-#define cbmap_size(cbm) cbstmap_elem_count((cbm))
+#define cbmap_size(cbm) cbstmap_size((cbm))
 
 // Removes and frees every key and value and leaves an empty map that you can
 // keep using. Evaluates to ccol_success. Asserts on a NULL handle.

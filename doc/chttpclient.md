@@ -226,7 +226,7 @@ engine, and destroying any client from there stops the process too, because
 the destroy waits for work that those very threads run.
 
 The process-wide client can run your requests as well, through
-`chttp_do(req, &resp)`, and `chttp_run_query(method, url, body, headers,
+`chttp_do_default(req, &resp)`, and `chttp_perform(method, url, body, headers,
 &resp)` runs one request with a header map in a single call (a fragment):
 
 ```c
@@ -234,7 +234,7 @@ chmap_construct(headers, char *, char *);
 chmap_insert(headers, "X-Api-Version", "2");
 
 chttpcli_response *resp = NULL;
-chttp_run_query(CHTTP_POST, url, &CHTTP_TEXT_BODY("ping", 4), headers, &resp);
+chttp_perform(CHTTP_POST, url, &CHTTP_TEXT_BODY("ping", 4), headers, &resp);
 chmap_destroy(headers);          /* the call only borrowed the map */
 chttpcli_resp_free(resp);
 ```
@@ -867,13 +867,13 @@ Run requests: [chttpcli_do(3)](https://abunchofnerds-25.github.io/ccollections/m
 [chttpcli_do_pooled_streaming(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_do_pooled_streaming.3.html)
 
 Convenience calls on the default client:
-[chttp_do(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_do.3.html),
+[chttp_do_default(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_do_default.3.html),
 [chttp_get(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_get.3.html),
 [chttp_post(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_post.3.html),
 [chttp_put(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_put.3.html),
 [chttp_delete(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_delete.3.html),
 [chttp_patch(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_patch.3.html),
-[chttp_run_query(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_run_query.3.html)
+[chttp_perform(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_perform.3.html)
 
 Responses:
 [chttpcli_resp_header(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_resp_header.3.html),

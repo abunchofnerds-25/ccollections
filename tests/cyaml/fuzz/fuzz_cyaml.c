@@ -94,7 +94,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     abort();
   }
   if (stream[0] != '\0') assert_reparses("stream", stream);
-  if (cyaml_type(doc) == CYAML_LIST && cyaml_list_len(doc) >= 2 &&
+  if (cyaml_type(doc) == CYAML_LIST && cyaml_list_size(doc) >= 2 &&
       !cyaml_node_tag(doc)) {
     cyaml again = cyaml_parse(stream, NULL);
     char *again_flow = again ? cyaml_serialize_flow(again) : NULL;

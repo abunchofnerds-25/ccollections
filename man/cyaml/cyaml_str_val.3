@@ -19,7 +19,7 @@ The node owns the string, so the caller must not free the pointer.
 It is borrowed and stays valid until the node gets a new value or is
 destroyed, so any of these ends it: A cyaml_set(3) that reaches the
 node, a cyaml_list_remove(3), cyaml_dictionary_remove(3) or
-cyaml_delete(3) of the node, a cyaml_dictionary_set(3) that replaces
+cyaml_remove(3) of the node, a cyaml_dictionary_set(3) that replaces
 it, and a destroy of its tree.  Copy the text if you need it longer.
 .fi
 .SH PARAMETERS

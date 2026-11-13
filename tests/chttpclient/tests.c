@@ -2236,7 +2236,7 @@ TEST(http, request_headers_forwarded) {
   chttp_request_set_header(req, "X-Echo", "test-value-42");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -2718,7 +2718,7 @@ TEST(http, content_type_explicit_header_not_duplicated) {
   chttp_request_set_header(req, "Content-Type", "text/csv");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -3087,7 +3087,7 @@ TEST(http, put_with_content_type) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_STREQ(resp->body, "text/plain");
@@ -3107,7 +3107,7 @@ TEST(http, put_without_content_type_sends_none) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_EQ(resp->body_len, (size_t)0);
@@ -3127,7 +3127,7 @@ TEST(http, put_body_round_trip) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_EQ(resp->body_len, strlen(payload));
@@ -3145,7 +3145,7 @@ TEST(http, put_without_body) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_EQ(resp->body_len, (size_t)0);
@@ -3165,7 +3165,7 @@ TEST(http, patch_with_content_type) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_STREQ(resp->body, "application/json");
@@ -3185,7 +3185,7 @@ TEST(http, patch_without_content_type_sends_none) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_EQ(resp->body_len, (size_t)0);
@@ -3432,7 +3432,7 @@ TEST(http, run_query_null_headers) {
   make_url(url, sizeof(url), "/get");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_GET, url, NULL, NULL, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_GET, url, NULL, NULL, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -3446,7 +3446,7 @@ TEST(http, run_query_post_with_body) {
   const char *payload = "{\"run\":\"query\"}";
   chttp_request_body body = CHTTP_JSON_BODY(payload, strlen(payload));
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_POST, url, &body, NULL, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_POST, url, &body, NULL, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -3462,7 +3462,7 @@ TEST(http, run_query_headers_forwarded_and_not_consumed) {
   chmap_insert(hdrs, "x-echo", "hello-from-run-query");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_GET, url, NULL, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_GET, url, NULL, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -3477,9 +3477,9 @@ TEST(http, run_query_headers_forwarded_and_not_consumed) {
 
 TEST(http, run_query_invalid_args) {
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_run_query(CHTTP_GET, NULL, NULL, NULL, &resp),
+  REQUIRE_EQ(chttp_perform(CHTTP_GET, NULL, NULL, NULL, &resp),
              ccol_invalid_args);
-  REQUIRE_EQ(chttp_run_query(CHTTP_GET, "http://x/", NULL, NULL, NULL),
+  REQUIRE_EQ(chttp_perform(CHTTP_GET, "http://x/", NULL, NULL, NULL),
              ccol_invalid_args);
 }
 
@@ -3604,10 +3604,10 @@ TEST(error_codes, a_convenience_call_reports_a_refused_request_as_invalid) {
   bool cleared = resp == NULL;
   ccol_retval put = chttp_put(url, &no_data, &resp);
   ccol_retval patch = chttp_patch(url, &no_data, &resp);
-  ccol_retval any = chttp_run_query(CHTTP_ANY, url, NULL, NULL, &resp);
+  ccol_retval any = chttp_perform(CHTTP_ANY, url, NULL, NULL, &resp);
   ccol_retval out_of_range =
-      chttp_run_query((chttp_method)99, url, NULL, NULL, &resp);
-  ccol_retval body = chttp_run_query(CHTTP_POST, url, &no_data, NULL, &resp);
+      chttp_perform((chttp_method)99, url, NULL, NULL, &resp);
+  ccol_retval body = chttp_perform(CHTTP_POST, url, &no_data, NULL, &resp);
   REQUIRE_EQ(post, ccol_invalid_args);
   REQUIRE_TRUE(cleared);
   REQUIRE_EQ(put, ccol_invalid_args);
@@ -3686,12 +3686,12 @@ TEST(error_codes, resp_out_actively_reset_to_null_convenience_wrappers) {
   REQUIRE_EQ((void *)resp, NULL);
 
   resp = SENTINEL_RESP;
-  REQUIRE_EQ(chttp_do(NULL, &resp), ccol_invalid_args);
+  REQUIRE_EQ(chttp_do_default(NULL, &resp), ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
 
   resp = SENTINEL_RESP;
-  REQUIRE_EQ(chttp_run_query(CHTTP_GET, "ccol-not-a-scheme://example.com/",
-                             NULL, NULL, &resp),
+  REQUIRE_EQ(chttp_perform(CHTTP_GET, "ccol-not-a-scheme://example.com/", NULL,
+                           NULL, &resp),
              ccol_http_invalid_url);
   REQUIRE_EQ((void *)resp, NULL);
 
@@ -3700,7 +3700,7 @@ TEST(error_codes, resp_out_actively_reset_to_null_convenience_wrappers) {
   REQUIRE_EQ((void *)resp, NULL);
 
   resp = SENTINEL_RESP;
-  REQUIRE_EQ(chttp_run_query(CHTTP_GET, NULL, NULL, NULL, &resp),
+  REQUIRE_EQ(chttp_perform(CHTTP_GET, NULL, NULL, NULL, &resp),
              ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
 }
@@ -4030,7 +4030,7 @@ TEST(chunked_response, decoded_correctly) {
   chttp_request *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   chttp_request_free(req);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
@@ -4773,7 +4773,7 @@ TEST(credentials, explicit_authorization_header_wins) {
              ccol_success);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   chttp_request_free(req);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -4828,7 +4828,7 @@ TEST(redirect_policy, post_301_becomes_bodyless_get) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   chttp_request_free(req);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -4846,7 +4846,7 @@ TEST(redirect_policy, post_307_preserves_method_and_body) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   chttp_request_free(req);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -4876,7 +4876,7 @@ TEST(redirect_policy, stale_content_length_stripped_after_downgrade) {
              ccol_success);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   chttp_request_free(req);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -4898,7 +4898,7 @@ TEST(redirect_policy, stale_content_type_stripped_after_downgrade) {
              ccol_success);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   chttp_request_free(req);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -4920,7 +4920,7 @@ TEST(redirect_policy, stale_expect_stripped_after_downgrade) {
              ccol_success);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   chttp_request_free(req);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -4941,7 +4941,7 @@ TEST(redirect_policy, body_stays_dropped_across_a_later_preserving_hop) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   chttp_request_free(req);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -4962,7 +4962,7 @@ TEST(credentials, explicit_authorization_header_carried_same_origin_redirect) {
              ccol_success);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   chttp_request_free(req);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -4987,7 +4987,7 @@ TEST(credentials, explicit_authorization_header_dropped_cross_origin_redirect) {
              ccol_success);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   chttp_request_free(req);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5003,7 +5003,7 @@ TEST(redirect_policy, exceeding_max_redirects_reports_error) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_http_too_many_redirects);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_http_too_many_redirects);
   chttp_request_free(req);
   REQUIRE_EQ((void *)resp, NULL);
 }
@@ -5024,7 +5024,7 @@ TEST(redirect_transport, tcp_hop_cannot_redirect_to_a_unix_socket) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   chttp_request_free(req);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
   REQUIRE_EQ((void *)resp, NULL);
@@ -5038,7 +5038,7 @@ TEST(redirect_transport, a_mixed_case_unix_scheme_is_refused_too) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   chttp_request_free(req);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
   REQUIRE_EQ((void *)resp, NULL);
@@ -5052,7 +5052,7 @@ TEST(redirect_transport, a_second_hop_cannot_reach_a_unix_socket_either) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   chttp_request_free(req);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
   REQUIRE_EQ((void *)resp, NULL);
@@ -5109,7 +5109,7 @@ TEST(redirect_transport, a_unix_hop_still_follows_its_own_relative_redirect) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   chttp_request_free(req);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
@@ -5125,7 +5125,7 @@ TEST(redirect_transport, a_unix_hop_cannot_redirect_to_a_different_socket) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   chttp_request_free(req);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
   REQUIRE_EQ((void *)resp, NULL);
@@ -5239,7 +5239,7 @@ TEST(http, run_query_borrowed_map_mixed_case_ct_no_duplication) {
   chttp_request_body body = CHTTP_TEXT_BODY(payload, strlen(payload));
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_POST, url, &body, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_POST, url, &body, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5260,7 +5260,7 @@ TEST(http, run_query_borrowed_map_lowercase_ct_no_duplication) {
   chttp_request_body body = CHTTP_TEXT_BODY(payload, strlen(payload));
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_POST, url, &body, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_POST, url, &body, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5281,7 +5281,7 @@ TEST(http, patch_borrowed_map_mixed_case_ct_no_duplication) {
   chttp_request_body body = {.data = payload, .len = 5, .content_type = NULL};
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_PATCH, url, &body, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_PATCH, url, &body, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5303,7 +5303,7 @@ TEST(http, run_query_borrowed_map_mixed_case_accept_no_duplication) {
   chmap_insert(hdrs, "x-count-name", "accept");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_GET, url, NULL, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_GET, url, NULL, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5322,7 +5322,7 @@ TEST(http, run_query_borrowed_map_mixed_case_user_agent_no_duplication) {
   chmap_insert(hdrs, "x-count-name", "user-agent");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_GET, url, NULL, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_GET, url, NULL, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5344,7 +5344,7 @@ TEST(http, run_query_borrowed_map_mixed_case_content_length_no_duplication) {
   chttp_request_body body = CHTTP_TEXT_BODY(payload, strlen(payload));
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_POST, url, &body, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_POST, url, &body, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5367,7 +5367,7 @@ TEST(http, run_query_borrowed_map_mixed_case_authorization_no_duplication) {
   chmap_insert(hdrs, "x-count-name", "authorization");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_GET, url, NULL, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_GET, url, NULL, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5394,7 +5394,7 @@ TEST(http, run_query_borrowed_map_mixed_case_expect_no_duplication) {
   req->expect_continue = true;
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5416,7 +5416,7 @@ TEST(http, run_query_borrowed_map_case_variant_duplicate_keys_deduplicated) {
   chmap_insert(hdrs, "x-count-name", "host");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_GET, url, NULL, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_GET, url, NULL, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5434,7 +5434,7 @@ TEST(http, run_query_borrowed_map_crlf_in_value_rejected) {
   chmap_insert(hdrs, "x-evil", "1\r\nx-injected: evil");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_GET, url, NULL, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_GET, url, NULL, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
 
@@ -5449,7 +5449,7 @@ TEST(http, run_query_borrowed_map_crlf_in_name_rejected) {
   chmap_insert(hdrs, "x-evil\r\nx-injected", "1");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_GET, url, NULL, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_GET, url, NULL, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
 
@@ -5464,7 +5464,7 @@ TEST(http, run_query_borrowed_map_non_tchar_name_rejected) {
   chmap_insert(hdrs, "X Evil", "1");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_GET, url, NULL, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_GET, url, NULL, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
 
@@ -5482,7 +5482,7 @@ TEST(http, run_query_borrowed_map_transfer_encoding_rejected) {
   chttp_request_body body = CHTTP_TEXT_BODY(payload, strlen(payload));
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_POST, url, &body, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_POST, url, &body, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
 
@@ -5516,7 +5516,7 @@ TEST(request, set_header_mismatched_content_length_rejected) {
              ccol_success);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
 
@@ -5539,7 +5539,7 @@ TEST(request, set_header_content_length_leading_sign_rejected) {
              ccol_success);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
 
@@ -5562,7 +5562,7 @@ TEST(request, set_header_content_length_embedded_whitespace_rejected) {
              ccol_success);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
 
@@ -5585,7 +5585,7 @@ TEST(request, set_header_content_length_leading_zeros_still_accepted) {
              ccol_success);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5606,7 +5606,7 @@ TEST(http, run_query_borrowed_map_mismatched_content_length_rejected) {
   chttp_request_body body = CHTTP_TEXT_BODY(payload, strlen(payload));
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_POST, url, &body, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_POST, url, &body, hdrs, &resp);
   REQUIRE_EQ(rv, ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
 
@@ -5623,7 +5623,7 @@ TEST(http, set_header_host_reaches_the_wire) {
   chttp_request_set_header(req, "x-echo-name", "host");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5645,7 +5645,7 @@ TEST(request, zero_len_body_content_type_still_reaches_the_wire) {
   chttp_request_set_header(req, "x-echo-name", "content-type");
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5699,7 +5699,7 @@ TEST(http, delete_body_not_transmitted) {
   REQUIRE_EQ(req->body.len, (size_t)7);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_EQ(resp->body_len, (size_t)0);
@@ -5718,7 +5718,7 @@ TEST(http, delete_with_body_content_type_not_sent) {
   REQUIRE_NE((void *)req->body.content_type, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  REQUIRE_EQ(chttp_do_default(req, &resp), ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_EQ(resp->body_len, (size_t)0);
@@ -5952,7 +5952,7 @@ TEST(expect_continue, interim_100_then_body_sent) {
   req->expect_continue = true;
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5974,7 +5974,7 @@ TEST(expect_continue, server_rejects_without_100) {
   req->expect_continue = true;
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 417);
@@ -6116,7 +6116,7 @@ TEST(expect_continue, wait_times_out_body_sent_anyway) {
 
   unsigned long waits_before = chttp__tier1_continue_waits_for_tests();
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_GE(chttp__tier1_continue_waits_for_tests(), waits_before + 1);
   REQUIRE_NE((void *)resp, NULL);
@@ -6271,7 +6271,7 @@ TEST(expect_continue, explicit_expect_header_suppresses_the_wait) {
 
   unsigned long waits_before = chttp__tier1_continue_waits_for_tests();
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   unsigned long waits_after = chttp__tier1_continue_waits_for_tests();
   chttp_request_free(req);
 
@@ -6334,7 +6334,7 @@ TEST(expect_continue, early_hints_before_100_continue_still_waits) {
   req->expect_continue = true;
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   chttp_request_free(req);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
@@ -6355,7 +6355,7 @@ TEST(expect_continue,
   req->expect_continue = true;
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   chttp_request_free(req);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
@@ -6372,7 +6372,7 @@ TEST(expect_continue, ignored_for_bodyless_request) {
   req->expect_continue = true;
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -6390,7 +6390,7 @@ TEST(early_hints, discarded_and_real_response_delivered) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   chttp_request_free(req);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
@@ -6408,7 +6408,7 @@ TEST(early_hints,
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_do(req, &resp);
+  ccol_retval rv = chttp_do_default(req, &resp);
   chttp_request_free(req);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
@@ -17614,12 +17614,12 @@ TEST(http, run_query_borrowed_map_with_a_control_byte_is_refused) {
   chmap_construct(hdrs, char *, char *);
   chmap_insert(hdrs, "x-bad", "a\x01z");
   chttpcli_response *resp = NULL;
-  ccol_retval rv = chttp_run_query(CHTTP_GET, url, NULL, hdrs, &resp);
+  ccol_retval rv = chttp_perform(CHTTP_GET, url, NULL, hdrs, &resp);
   chmap_destroy(hdrs);
   chttpcli_resp_free(resp);
   chttp_request_body body = CHTTP_BODY("x", 1, "text/plain\x7f");
   resp = NULL;
-  ccol_retval ct_rv = chttp_run_query(CHTTP_POST, url, &body, NULL, &resp);
+  ccol_retval ct_rv = chttp_perform(CHTTP_POST, url, &body, NULL, &resp);
   chttpcli_resp_free(resp);
   REQUIRE_EQ(rv, ccol_invalid_args);
   REQUIRE_EQ(ct_rv, ccol_invalid_args);

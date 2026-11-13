@@ -59,5 +59,5 @@ clog clogger_consumer_open_rotating(const char *path, int64_t max_file_size,
       .max_rotated_files = max_rotated_files,
       .compress_rotated = false,
   };
-  return clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  return clog_create_from_file_path_mp(path, CLOG_INFO, &cfg, NULL, NULL);
 }

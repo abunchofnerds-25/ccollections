@@ -32,7 +32,7 @@ int main(void) {
     chmap_insert(ages, "alice", 32);          /* same key: updates the value */
 
     printf("alice is %d\n", chmap_get(ages, "alice"));
-    printf("%zu people\n", chashmap_elem_count(ages));
+    printf("%zu people\n", chashmap_size(ages));
 
     int *carol = chmap_get_ptr(ages, "carol"); /* NULL when the key is absent */
     printf("carol is %s\n", carol ? "known" : "unknown");
@@ -85,7 +85,7 @@ void handle_request(void) {
 | read a value you know is there | `chmap_get(m, key)` |
 | check for a key, or change its value in place | `chmap_get_ptr(m, key)` |
 | delete a key | `chmap_remove(m, key)` |
-| count the entries | `chashmap_elem_count(m)` |
+| count the entries | `chashmap_size(m)` |
 
 `chmap_insert` is an "upsert": A new key is added and a key that is already
 there gets its value replaced. `chmap_get` returns the value, but it stops
@@ -490,7 +490,7 @@ int main(void) {
         start = end + 1;
     }
 
-    printf("%zu distinct values\n", chashmap_elem_count(seen));
+    printf("%zu distinct values\n", chashmap_size(seen));
     cmap_pair red = {"red", 3};
     int n = 0;
     if (chashmap_get_elem_copy(seen, &red, &n, sizeof(n)) == ccol_success)
@@ -569,8 +569,8 @@ Raw functions:
 [chashmap_insert_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_insert_elem.3.html),
 [chashmap_get_elem_ref(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_get_elem_ref.3.html),
 [chashmap_get_elem_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_get_elem_copy.3.html),
-[chashmap_delete_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_delete_elem.3.html),
-[chashmap_elem_count(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_elem_count.3.html),
+[chashmap_remove_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_remove_elem.3.html),
+[chashmap_size(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_size.3.html),
 [chashmap_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_reset.3.html),
 [chashmap_destroy_with_dtor(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_destroy_with_dtor.3.html),
 [chashmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_begin_iter.3.html)

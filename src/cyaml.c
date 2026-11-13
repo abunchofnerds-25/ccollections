@@ -576,7 +576,7 @@ CYAML_PARSE_HOT void node_clear_value(cyaml_node *n, destroy_worklist *wl) {
       n->value.string = NULL;
       break;
     case CYAML_LIST: {
-      size_t cnt = cvector_elem_count(n->value.list);
+      size_t cnt = cvector_size(n->value.list);
       for (size_t i = 0; i < cnt; i++) {
         cyaml_node *child = *(cyaml_node **)cvector_at(n->value.list, i);
         destroy_worklist_push(wl, child);
@@ -1055,12 +1055,12 @@ const char *cyaml_str_val(cyaml node) {
 
 // Give the element count of a list and the key count of a dictionary, for
 // callers that walk them; each is fatal on a wrong type.
-size_t cyaml_list_len(cyaml node) {
+size_t cyaml_list_size(cyaml node) {
   cyaml_node *n = (cyaml_node *)node;
   if (!n || n->type != CYAML_LIST)
-    ccol__fatal_err("cyaml_list_len: node is %s, expected CYAML_LIST",
+    ccol__fatal_err("cyaml_list_size: node is %s, expected CYAML_LIST",
                     cyaml_type_str(node));
-  return cvector_elem_count(n->value.list);
+  return cvector_size(n->value.list);
 }
 
 size_t cyaml_dictionary_size(cyaml node) {
@@ -1069,7 +1069,7 @@ size_t cyaml_dictionary_size(cyaml node) {
     ccol__fatal_err(
         "cyaml_dictionary_size: node is %s, expected CYAML_DICTIONARY",
         cyaml_type_str(node));
-  return chashmap_elem_count(n->value.dictionary);
+  return chashmap_size(n->value.dictionary);
 }
 
 // Appends child to seq, which takes ownership of it. Every argument refusal is
@@ -1206,7 +1206,7 @@ ccol_retval cyaml_list_remove(cyaml seq, size_t index) {
   if (!seq) return ccol_invalid_args;
   cyaml_node *n = (cyaml_node *)seq;
   if (n->type != CYAML_LIST) return ccol_invalid_args;
-  size_t cnt = cvector_elem_count(n->value.list);
+  size_t cnt = cvector_size(n->value.list);
   if (index >= cnt) return ccol_invalid_args;
 
   cyaml_node *child = *(cyaml_node **)cvector_at(n->value.list, index);
@@ -1262,7 +1262,7 @@ ccol_retval cyaml_dictionary_remove(cyaml map, const char *key) {
   if (chashmap_get_elem_ref(n->value.dictionary, &kp, &vp) != ccol_success)
     return ccol_key_not_found;
   cyaml_node *child = cyaml_read_child(vp.ptr);
-  ccol_retval r = chashmap_delete_elem(n->value.dictionary, &kp);
+  ccol_retval r = chashmap_remove_elem(n->value.dictionary, &kp);
   if (r == ccol_success) cyaml__destroy((cyaml)child);
   return r;
 }
@@ -1375,7 +1375,7 @@ static void clone_frame_open(clone_frame *f, cyaml_node *src, cyaml_node *dst) {
   f->count = 0;
   f->next = NULL;
   if (src->type == CYAML_LIST)
-    f->count = cvector_elem_count(src->value.list);
+    f->count = cvector_size(src->value.list);
   else
     f->next = dict_first_entry(src);
 }
@@ -1836,7 +1836,7 @@ static size_t parse_tree_height(cyaml_node *n) {
     cyaml_node *child;
     if (stack[sp - 1].n->type == CYAML_LIST) {
       cvec list = stack[sp - 1].n->value.list;
-      if (stack[sp - 1].idx >= cvector_elem_count(list)) {
+      if (stack[sp - 1].idx >= cvector_size(list)) {
         sp--;
         continue;
       }
@@ -5374,7 +5374,7 @@ static pstep pfd_step(parse_ctx *ctx, pframe *f, preq *rq) {
       ccol__mem_free(ctx->mp, key_str);
       if (!merge_entry_push(ctx, &f->u.fd.merges, &f->u.fd.merge_count,
                             &f->u.fd.merge_cap, val,
-                            chashmap_elem_count(f->u.fd.map->value.dictionary)))
+                            chashmap_size(f->u.fd.map->value.dictionary)))
         return PSTEP_FAIL;
     } else {
       ccol_retval r =
@@ -6466,7 +6466,7 @@ static bool merge_move_to_end(parse_ctx *ctx, cyaml_node *map,
     memcpy(key, kp->ptr, key_size);
     cmap_pair key_pair = {.ptr = key, .size = key_size};
     cmap_pair val_pair = {.ptr = &child, .size = sizeof(child)};
-    ccol_retval r = chashmap_delete_elem(map->value.dictionary, &key_pair);
+    ccol_retval r = chashmap_remove_elem(map->value.dictionary, &key_pair);
     if (r == ccol_success)
       r = chashmap_insert_elem(map->value.dictionary, &key_pair, &val_pair);
     if (key != stack_key) ccol__mem_free(ctx->mp, key);
@@ -6484,7 +6484,7 @@ static bool merge_move_to_end(parse_ctx *ctx, cyaml_node *map,
 // Gives how many sources one merge entry names (the length of its sequence, or
 // 1 for a single mapping), so merge_apply() can treat both shapes alike.
 static size_t merge_source_count(const cyaml_node *val) {
-  return val->type == CYAML_LIST ? cvector_elem_count(val->value.list) : 1;
+  return val->type == CYAML_LIST ? cvector_size(val->value.list) : 1;
 }
 
 // Gives source i of one merge entry, the counterpart of merge_source_count().
@@ -6569,16 +6569,15 @@ static bool merge_apply(parse_ctx *ctx, cyaml_node *map,
       }
     }
   }
-  size_t explicit_count = chashmap_elem_count(map->value.dictionary);
+  size_t explicit_count = chashmap_size(map->value.dictionary);
 
   if (n == 1) {
     size_t cnt = merge_source_count(entries[0].val);
     for (size_t j = 0; j < cnt; j++)
       if (!merge_one_source_into(ctx, map, merge_source_at(entries[0].val, j)))
         return false;
-    cyaml_merge_seg seg = {.merged_count =
-                               chashmap_elem_count(map->value.dictionary) -
-                               explicit_count};
+    cyaml_merge_seg seg = {
+        .merged_count = chashmap_size(map->value.dictionary) - explicit_count};
     return merge_reorder(ctx, map, entries, &seg, 1, explicit_count);
   }
 
@@ -6618,7 +6617,7 @@ static bool merge_apply(parse_ctx *ctx, cyaml_node *map,
   for (size_t i = 0; ok && i < n; i++) {
     cyaml_node *val = entries[i].val;
     size_t cnt = merge_source_count(val);
-    size_t before = chashmap_elem_count(map->value.dictionary);
+    size_t before = chashmap_size(map->value.dictionary);
     for (size_t j = 0; ok && j < cnt; j++) {
       cyaml_node *src = merge_source_at(val, j);
       for (const ccol_chmap_entry_ref *e = dict_first_entry(src); e;) {
@@ -6645,8 +6644,7 @@ static bool merge_apply(parse_ctx *ctx, cyaml_node *map,
         }
       }
     }
-    if (ok)
-      seg[i].merged_count = chashmap_elem_count(map->value.dictionary) - before;
+    if (ok) seg[i].merged_count = chashmap_size(map->value.dictionary) - before;
   }
   if (ok) ok = merge_reorder(ctx, map, entries, seg, n, explicit_count);
   if (winners) chashmap__destroy(winners);
@@ -6808,7 +6806,7 @@ static pstep pbd_step(parse_ctx *ctx, pframe *f, preq *rq) {
     if (f->u.bd.entry_is_merge_candidate && strcmp(f->u.bd.key, "<<") == 0) {
       if (!merge_entry_push(ctx, &f->u.bd.merges, &f->u.bd.merge_count,
                             &f->u.bd.merge_cap, val,
-                            chashmap_elem_count(f->u.bd.map->value.dictionary)))
+                            chashmap_size(f->u.bd.map->value.dictionary)))
         return PSTEP_FAIL;
     } else if (dictionary_set_impl((cyaml)f->u.bd.map, f->u.bd.key,
                                    (cyaml)val) != ccol_success) {
@@ -8324,7 +8322,7 @@ serialize_block_head(ybuf *b, cyaml_node *n, int depth, size_t *count_out,
         b->oom = true;
         break;
       }
-      *count_out = cvector_elem_count(n->value.list);
+      *count_out = cvector_size(n->value.list);
       if (*count_out == 0) {
         yb_indent(b, depth);
         yb_append_cstr(b, "[]\n");
@@ -8337,7 +8335,7 @@ serialize_block_head(ybuf *b, cyaml_node *n, int depth, size_t *count_out,
         b->oom = true;
         break;
       }
-      *count_out = chashmap_elem_count(n->value.dictionary);
+      *count_out = chashmap_size(n->value.dictionary);
       if (*count_out == 0) {
         yb_indent(b, depth);
         yb_append_cstr(b, "{}\n");
@@ -8493,7 +8491,7 @@ char *cyaml_serialize_stream(cyaml node) {
   yb_init(&b, mp);
   ccol_c_locale_scope scope = ccol_c_locale_enter();
   if (n && n->type == CYAML_LIST) {
-    size_t count = cyaml_list_len(node);
+    size_t count = cyaml_list_size(node);
     for (size_t i = 0; i < count && !b.oom; i++)
       serialize_stream_document(&b, (cyaml_node *)cyaml_list_get(node, i),
                                 CYAML_MAX_NESTING_DEPTH - 1);
@@ -8595,7 +8593,7 @@ serialize_flow_head(ybuf *b, cyaml_node *n, int depth, size_t *count_out,
         b->oom = true;
         break;
       }
-      *count_out = cvector_elem_count(n->value.list);
+      *count_out = cvector_size(n->value.list);
       if (*count_out == 0) {
         yb_put(b, "[]", 2, limit);
         break;
@@ -8608,7 +8606,7 @@ serialize_flow_head(ybuf *b, cyaml_node *n, int depth, size_t *count_out,
         b->oom = true;
         break;
       }
-      *count_out = chashmap_elem_count(n->value.dictionary);
+      *count_out = chashmap_size(n->value.dictionary);
       if (*count_out == 0) {
         yb_put(b, "{}", 2, limit);
         break;
@@ -9089,7 +9087,7 @@ ccol_retval cyaml__set_typed(cyaml root, const char *path, cyaml_node_type type,
           memcpy(slot.ptr, &new_node, sizeof(new_node));
           new_node->attached = true;
         } else {
-          chashmap_delete_elem(pn->value.dictionary, &kp);
+          chashmap_remove_elem(pn->value.dictionary, &kp);
         }
       } else {
         ret = r;
@@ -9120,13 +9118,13 @@ ccol_retval cyaml__set_typed(cyaml root, const char *path, cyaml_node_type type,
   return ret;
 }
 
-// Removes and deep-frees the node at path, the body of cyaml_delete(). The path
+// Removes and deep-frees the node at path, the body of cyaml_remove(). The path
 // splits at its last unescaped dot (no dot: root is the parent), and the leaf
 // is unescaped. ccol_invalid_args for NULL or "" arguments, an empty or
 // non-UTF-8 leaf, a malformed component or a parent of the wrong type;
 // ccol_key_not_found for an absent key or index; ccol_not_enough_memory when a
 // copy fails.
-ccol_retval cyaml__delete(cyaml root, const char *path) {
+ccol_retval cyaml__remove(cyaml root, const char *path) {
   if (!root || !path || path[0] == '\0') return ccol_invalid_args;
 
   ccol_memmgmt_procs *mp = ((cyaml_node *)root)->m_procs;
@@ -9183,7 +9181,7 @@ ccol_retval cyaml__delete(cyaml root, const char *path) {
       size_t idx;
       if (!parse_list_index_component(leaf_comp + 1, &idx)) {
         ret = ccol_invalid_args;
-      } else if (idx >= cvector_elem_count(pn->value.list)) {
+      } else if (idx >= cvector_size(pn->value.list)) {
         ret = ccol_key_not_found;
       } else {
         ret = cyaml_list_remove(parent, idx);

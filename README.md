@@ -149,9 +149,11 @@ These steps build the version you have checked out. For the last release, run `g
 Five modules are optional, and each one is a switch on the `make` command line: `WITH_CJSON`, `WITH_CYAML`, `WITH_CLOGGER`, `WITH_CHTTPCLIENT` and `WITH_CHTTPSERVER`, all `1` by default. Setting one to `0` leaves the module out together with what it needs, OpenSSL for the HTTP modules and zlib for the logger:
 
 ```bash
-make WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0         # no HTTP sub-modules
+# no HTTP sub-modules:
+make WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0
 
-make WITH_CJSON=0 WITH_CYAML=0 WITH_CLOGGER=0 \    # no 'extra' sub-modules
+# no 'extra' sub-modules:
+make WITH_CJSON=0 WITH_CYAML=0 WITH_CLOGGER=0 \
      WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0
 ```
 
@@ -203,7 +205,7 @@ These guides are about the library as a whole:
 The guides are there to teach, and the man pages are the reference. Every public function and macro has its own page with each parameter, each return value and every edge case.
 
 ```bash
-man cvec_push                       # after make install
+man cvec_push                          # after make install
 cd man && man -l cvector/cvec_push.3   # directly from the source tree
 ```
 

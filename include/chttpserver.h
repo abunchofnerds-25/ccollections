@@ -579,9 +579,10 @@ chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix);
 // ccol_success, ccol_not_enough_memory, or ccol_invalid_args for a NULL router,
 // pattern or fn, a bad method or pattern, or a router whose server is
 // destroyed.
-ccol_retval chttpsvr_router_on(chttpsvr_router *router, chttp_method method,
-                               const char *pattern, chttpsvr_handler_fn fn,
-                               void *ctx);
+ccol_retval chttpsvr_router_register_handler(chttpsvr_router *router,
+                                             chttp_method method,
+                                             const char *pattern,
+                                             chttpsvr_handler_fn fn, void *ctx);
 
 // Registers a streaming route on a sub-router: fn(req, resp, ctx) runs on the
 // streaming pool right after the headers and reads the body with
@@ -592,9 +593,11 @@ ccol_retval chttpsvr_router_on(chttpsvr_router *router, chttp_method method,
 // double or trailing slash. Gives ccol_success, ccol_not_enough_memory, or
 // ccol_invalid_args for a NULL router, pattern or fn, a bad method or pattern,
 // or a router whose server is destroyed.
-ccol_retval chttpsvr_router_on_stream(chttpsvr_router *router,
-                                      chttp_method method, const char *pattern,
-                                      chttpsvr_handler_fn fn, void *ctx);
+ccol_retval chttpsvr_router_register_streaming_handler(chttpsvr_router *router,
+                                                       chttp_method method,
+                                                       const char *pattern,
+                                                       chttpsvr_handler_fn fn,
+                                                       void *ctx);
 
 // Adds middleware to a sub-router. It runs after the global middleware and
 // before the sub-router's handlers, in registration order. It also runs for the

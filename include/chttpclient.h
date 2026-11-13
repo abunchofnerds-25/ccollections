@@ -475,7 +475,8 @@ chttpcli chttp_default_client(void);
 // the response is yours to free with chttpcli_resp_free(). Gives the codes of
 // chttpcli_do(), such as ccol_invalid_args, ccol_timed_out,
 // ccol_http_invalid_url or ccol_http_connection_failed.
-ccol_retval chttp_do(const chttp_request *req, chttpcli_response **resp_out);
+ccol_retval chttp_do_default(const chttp_request *req,
+                             chttpcli_response **resp_out);
 
 // Builds a request from method, url, body and headers, runs it synchronously
 // with the default client and frees it, for a one-call request. headers (may
@@ -484,9 +485,9 @@ ccol_retval chttp_do(const chttp_request *req, chttpcli_response **resp_out);
 // chttpcli_do(); a NULL url or resp_out, a bad method, a body with NULL data
 // and a non-zero len, or a refused header is ccol_invalid_args, and a failed
 // allocation is ccol_not_enough_memory.
-ccol_retval chttp_run_query(chttp_method method, const char *url,
-                            const chttp_request_body *body, chmap headers,
-                            chttpcli_response **resp_out);
+ccol_retval chttp_perform(chttp_method method, const char *url,
+                          const chttp_request_body *body, chmap headers,
+                          chttpcli_response **resp_out);
 
 // Runs a GET of url with the default client, the shortest way to fetch a URL.
 // *resp_out is NULL until a success, and the response is yours to free with

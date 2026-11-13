@@ -248,7 +248,7 @@ static void _sync_auto_body(off_t extra) {
   char path[128];
   _log_path(path, sizeof(path), "sync");
   CHILD_CHECK(_sigxfsz_is(SIG_DFL));
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
   CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(SIG_IGN));
   clog_info(lg, "first record");
@@ -290,7 +290,7 @@ static void _scenario_async_auto(void) {
   char path[128];
   _log_path(path, sizeof(path), "async");
   CHILD_CHECK(_sigxfsz_is(SIG_DFL));
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, &_async_cfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, &_async_cfg);
   CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(SIG_IGN));
   clog_info(lg, "first record");
@@ -330,7 +330,7 @@ static void _scenario_writer_consumes_and_follows_policy(void) {
   char path[128];
   _log_path(path, sizeof(path), "consume");
   CHILD_CHECK(clog_set_signal_policy(CLOG_SIGNALS_UNTOUCHED) == ccol_success);
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, &_async_cfg);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, &_async_cfg);
   CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(SIG_DFL));
   sigset_t set;
@@ -388,7 +388,7 @@ static void _scenario_untouched(void) {
   char path[128];
   _log_path(path, sizeof(path), "untouched");
   CHILD_CHECK(clog_set_signal_policy(CLOG_SIGNALS_UNTOUCHED) == ccol_success);
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
   CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(SIG_DFL));
   clog_info(lg, "first record");
@@ -433,7 +433,7 @@ static void _scenario_application_handler_stays(void) {
   sa.sa_handler = _count_sigxfsz;
   sigemptyset(&sa.sa_mask);
   CHILD_CHECK(sigaction(SIGXFSZ, &sa, NULL) == 0);
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
   CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(_count_sigxfsz));
   clog_info(lg, "first record");
@@ -463,7 +463,7 @@ TEST(sigxfsz, auto_policy_keeps_a_handler_of_the_application) {
 static void _scenario_ignores_stay(void) {
   char path[128];
   _log_path(path, sizeof(path), "ignores");
-  clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
+  clog lg = clog_create_from_file_path(path, CLOG_INFO, NULL, NULL);
   CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(SIG_IGN));
   CHILD_CHECK(clog_set_signal_policy(CLOG_SIGNALS_UNTOUCHED) == ccol_success);

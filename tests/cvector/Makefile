@@ -10,10 +10,10 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror $(EXTRA_CFLAGS)
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
-# Wrapping cvector_elem_count lets a test count the calls that a macro's inline
+# Wrapping cvector_size lets a test count the calls that a macro's inline
 # expansion makes to it, while the wrapper in tests.c forwards every call to
 # the real function.
-LFLAGS = -lpthread $(call ccol_ld_wrap,cvector_elem_count) $(CCOL_PLATFORM_LIBS)
+LFLAGS = -lpthread $(call ccol_ld_wrap,cvector_size) $(CCOL_PLATFORM_LIBS)
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)

@@ -23,7 +23,7 @@
  */
 
 // INTERNAL ONLY. Entry points that the JSON and YAML parsers and a few other
-// modules need from chashmap: an insert that hands back the entry of a key
+// modules need from chashmap: An insert that hands back the entry of a key
 // that's already present (one hash and one probe, so the caller can free
 // what an old owning pointer owns), an ordered cursor, an allocation-free
 // walk, and a constructor for maps that mostly stay small.
@@ -36,10 +36,10 @@
 
 // Inserts key_pair with val_pair when the key is absent and leaves the map
 // alone when it's present, so a module that stores owning pointers can free
-// the old value without a second lookup: one hash, one probe, and the same
+// the old value without a second lookup: One hash, one probe, and the same
 // validation as chashmap_insert_elem(). On ccol_success (inserted) and on
 // ccol_key_already_present (unchanged) *val_slot describes the value the map
-// holds, with the contract of chashmap_get_elem_ref(): you may overwrite the
+// holds, with the contract of chashmap_get_elem_ref(): You may overwrite the
 // bytes within val_slot->size until the next change of the map. On any other
 // code the map is unchanged and *val_slot stays {NULL, 0}. A NULL val_slot
 // gives ccol_invalid_args.
@@ -91,7 +91,7 @@ typedef struct ccol_chmap_walk {
   bool started;
 } ccol_chmap_walk;
 
-// Gives the next live entry of a map of either backend: oldest first for
+// Gives the next live entry of a map of either backend: Oldest first for
 // separate chaining, slot order for open addressing. It allocates nothing and
 // can't fail, so teardowns that release what the values point to use it
 // instead of chashmap_begin_iter(). A NULL chm walks as an empty map. The map

@@ -31,7 +31,7 @@ SOFTWARE.
 // The size, alignment and member offsets of clog_rotation_cfg as one
 // translation unit sees it. consumer_view.c fills it without the
 // -D_FILE_OFFSET_BITS=64 the library uses, and the test compares it with the
-// library's own view: if the two differ, the library reads a caller's config
+// library's own view: If the two differ, the library reads a caller's config
 // from the wrong offsets.
 typedef struct {
   size_t struct_size;

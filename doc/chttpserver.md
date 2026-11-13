@@ -1,8 +1,8 @@
-# chttpserver: an embedded HTTP/1.1 server
+# chttpserver: An embedded HTTP/1.1 server
 
 `chttpserver` puts an HTTP/1.1 server inside your C program. You register a
 handler function for a method and a path pattern and start the server, and
-the library takes care of the rest: it accepts connections, parses the
+the library takes care of the rest: It accepts connections, parses the
 requests, runs your handlers on a pool of worker threads and writes the
 responses back. TLS, mutual TLS, middleware, sub-routers and streaming
 uploads are all part of the module.
@@ -111,7 +111,7 @@ you call `chttpsvr_engine_stop`. You never start it yourself.
 
 A shutdown doesn't wait for clients that keep sending. The moment
 `chttpsvr_destroy` or `chttpsvr_engine_stop` starts, the server takes no new
-request: idle keep-alive connections get closed, a request that arrives after
+request: Idle keep-alive connections get closed, a request that arrives after
 that gets `503` with `Connection: close` instead of a handler, and the
 response of a request that is already running carries `Connection: close`.
 So the shutdown is over once the running handlers return, and after 30
@@ -127,7 +127,7 @@ That means handlers run concurrently. Two requests can be inside your
 handlers at the same time on different threads, so shared state needs a
 lock. On an ordinary (buffered) route a handler never sees a partly read
 body, because the whole body is in memory before the handler runs. And the
-response goes out after the handler returns: the server buffers everything
+response goes out after the handler returns: The server buffers everything
 you write and sends it with the right `Content-Length` once you're done.
 
 The `req` and `resp` pointers, and every string you get from `req`, are only
@@ -209,7 +209,7 @@ is, so that's how you give the handler your application state.
 The server answers some requests on its own. A path that matches no pattern
 gets `404 Not Found`. A path that matches but with a method that no route
 accepts gets `405 Method Not Allowed` with an `Allow` header. A `GET` route
-also answers `HEAD`: your handler runs as it would for `GET` and the server
+also answers `HEAD`: Your handler runs as it would for `GET` and the server
 sends the headers without the body. And a method that isn't one of the
 seven methods of `chttp_method` (`TRACE`, for example) gets
 `501 Not Implemented`.
@@ -286,7 +286,7 @@ a header a single value, while `chttpsvr_resp_add_header` adds another line
 with the same name.
 
 The server sets `Date`, `Content-Length` and `Connection` itself. It adds no
-`Content-Type` though: a response has one only when your handler sets it,
+`Content-Type` though: A response has one only when your handler sets it,
 with `chttpsvr_resp_set_header` or `chttpsvr_resp_write_json`. It doesn't
 guess a type from the body the way Go's net/http does, and there is no
 default type like nginx's `default_type`. Set one on every response that
@@ -385,7 +385,7 @@ returned, so a middleware can also read, after `next` returns, a value that
 the handler stored. The library never frees a value, so a middleware that
 allocated one frees it after `next` returns.
 
-## Example: a small JSON service
+## Example: A small JSON service
 
 This is a complete REST service. It keeps JSON documents in memory in a
 [cjson](cjson.md) dictionary, behind a mutex because handlers run on more
@@ -590,7 +590,7 @@ over the document on success and on most failures, but when it returns
 A buffered route holds the whole body in memory, up to `max_body_size`,
 before the handler runs. For large uploads you register a **streaming**
 route instead. Its handler starts as soon as the headers arrive and reads the
-body in pieces with `chttpsvr_req_read`, which works like `read(2)`: it
+body in pieces with `chttpsvr_req_read`, which works like `read(2)`: It
 returns the number of bytes, `0` at the end of the body, or `-1` after an
 error.
 
@@ -765,7 +765,7 @@ cfg.tls = &tls;
 
 `chttpsvr_start` fails if a file is missing, if the server can't read a
 file, or if the certificate doesn't match the key. It never falls back to
-plain HTTP, on purpose: a server that quietly drops TLS when its certificate
+plain HTTP, on purpose: A server that quietly drops TLS when its certificate
 is broken would send its clients' data in the clear.
 
 To require **client certificates** (mutual TLS), set `ca_bundle_path` too.
@@ -893,7 +893,7 @@ the handlers that are running, then frees the server and sets the handle to
 `chttpsvr_engine_stop()` stops every server in the process. It doesn't
 block and it's async-signal-safe, so it belongs in a `SIGTERM` handler, and
 it's also safe to call from a handler, as the shutdown endpoint above does.
-It only stops the engine that is running at the moment of the call: a call
+It only stops the engine that is running at the moment of the call: A call
 while no engine runs does nothing, and it never stops an engine that a later
 `chttpsvr_start` brings up. If it lands while `chttpsvr_destroy` is draining
 a server, `chttpsvr_engine_wait()` returns only after that drain.

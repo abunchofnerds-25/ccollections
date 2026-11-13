@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal: the test-only hooks of cmempool. src/cmempool.c defines them, and
+// Internal: The test-only hooks of cmempool. src/cmempool.c defines them, and
 // the tests use them to read the thread caches and to put an entry into a
 // state no correct sequence of calls produces. Only under RUNNING_UNIT_TESTS.
 

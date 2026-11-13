@@ -18,7 +18,7 @@ other time it is unspecified.
 It reports only the real transfer errors of chttpsvr_req_read, the
 ones that depend on the data (see chttpsvr_req_read(3)).  When the -1
 came from misuse by the caller, it reports ccol_success, which you
-can't tell apart from "no error".  There are two such misuses: a NULL
+can't tell apart from "no error".  There are two such misuses: A NULL
 buf with a buflen above 0, and a request whose route was not
 registered with chttpsvr_register_streaming_handler.  Both are plain
 programming errors that happen on every call of the faulty code, so

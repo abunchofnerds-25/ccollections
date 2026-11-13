@@ -184,7 +184,7 @@ enum {
 static ccol_memmgmt_procs ccol_procs_slots[CCOL_PROCS_INTERN_CAPACITY];
 static atomic_uchar ccol_procs_slot_state[CCOL_PROCS_INTERN_CAPACITY];
 #ifdef RUNNING_UNIT_TESTS
-// Test hooks: a delay between the claim and the publish of a slot (or, with
+// Test hooks: A delay between the claim and the publish of a slot (or, with
 // claim_wait_sightings set, the bound of a wait for that many sightings of a
 // slot being written), and the count of such sightings.
 _Atomic unsigned ccol__procs_intern_claim_delay_us_for_tests;
@@ -297,7 +297,7 @@ ccol_retval ccol_procs_intern(ccol_memmgmt_procs *mp,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hooks for the intern table: the first one counts the claimed slots, the
+// Test hooks for the intern table: The first one counts the claimed slots, the
 // second empties every slot from keep on, so a test can fill the table and put
 // it back.
 size_t ccol__procs_intern_used_for_tests(void) {
@@ -343,7 +343,7 @@ extern bool ccol__cloexec_gate_prepared_for_tests;
 // in opposite orders in two forks (a real lock cycle) and that none runs after
 // the close-on-exec gate; either case ends the process. It reads
 // ccol__cloexec_gate_prepared_for_tests and updates ccol_atfork_seq and
-// ccol_atfork_ran_before. It takes no lock: prepare handlers run one sequence
+// ccol_atfork_ran_before. It takes no lock: Prepare handlers run one sequence
 // at a time under the C library's atfork lock, and a lock here would nest
 // inside the very handlers it checks. A handler already in the sequence was
 // registered twice and adds nothing.
@@ -447,7 +447,7 @@ void ccol__cloexec_gate_leave(void) {
   if (ccol_cloexec_gate_ok) ccol__rw_lock_unlock(ccol_cloexec_gate);
 }
 
-// Fork-prepare handler of the gate: takes the write side, so fork() waits for
+// Fork-prepare handler of the gate: Takes the write side, so fork() waits for
 // every thread between the two steps of a descriptor creation. It sets
 // ccol__cloexec_gate_prepared_for_tests in a test build.
 static void ccol_cloexec_gate_prepare(void) {
@@ -461,7 +461,7 @@ static void ccol_cloexec_gate_prepare(void) {
 #endif
 }
 
-// Fork parent handler of the gate: clears the prepared flag and releases the
+// Fork parent handler of the gate: Clears the prepared flag and releases the
 // write side, so the parent's threads can make descriptors again.
 static void ccol_cloexec_gate_parent(void) {
 #ifdef RUNNING_UNIT_TESTS
@@ -470,7 +470,7 @@ static void ccol_cloexec_gate_parent(void) {
   if (ccol_cloexec_gate_ok) ccol__rw_lock_unlock(ccol_cloexec_gate);
 }
 
-// Fork child handler of the gate: clears the prepared flag and initializes the
+// Fork child handler of the gate: Clears the prepared flag and initializes the
 // gate lock again, since in the child a plain unlock doesn't release a lock
 // that the forking thread took (see ccol__rw_lock_reinit_in_child). A failure
 // sets ccol_cloexec_gate_ok to false, which turns the gate off.

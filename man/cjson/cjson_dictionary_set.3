@@ -17,7 +17,7 @@ child in its place in one step that cannot fail, so a failed insert
 never leaves the slot dangling.  On success the object owns child and
 the caller must not free it.
 
-Members stay in insertion order: a new key goes after every other
+Members stay in insertion order: A new key goes after every other
 member, and a replaced key keeps its place.  See
 cjson_dictionary_first(3).
 
@@ -35,7 +35,7 @@ cjson_list_push:
   a double free.
 
 child must not be attached to a list or dictionary parent, with one
-exception: you can pass back the exact node that is stored under key,
+exception: You can pass back the exact node that is stored under key,
 as in cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k)).
 That call does nothing, returns ccol_success and leaves obj as it is.
 
@@ -48,7 +48,7 @@ child would then make obj a new ancestor of child while obj is also a
 descendant of child, which is a cycle.
 
 When memory is low the library cannot always finish that last check.
-It doesn't risk an undetected cycle in that case: it returns
+It doesn't risk an undetected cycle in that case: It returns
 ccol_not_enough_memory, and the call deep-frees child just as it does
 when the insert itself runs out of memory.
 

@@ -410,7 +410,7 @@ TEST(bmap_of_bmaps, nested_sorted_maps) {
   cbmap_destroy(outer);
 }
 
-// Vector of vectors: a jagged 2D array whose rows differ in length
+// Vector of vectors: A jagged 2D array whose rows differ in length
 TEST(vec_of_vecs, jagged_2d_array) {
   cvec_construct(rows, cvec);
 

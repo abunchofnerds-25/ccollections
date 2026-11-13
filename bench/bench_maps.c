@@ -26,7 +26,7 @@
  * @file bench_maps.c
  * @brief Benchmarks for chashmap and cbstmap.
  *
- * chashmap picks its implementation from the key and value types: an
+ * chashmap picks its implementation from the key and value types: An
  * integral key with an integral value of eight bytes or fewer gets open
  * addressing, and everything else, every string key included, gets separate
  * chaining. These benchmarks measure both paths, because a single change can
@@ -160,7 +160,7 @@ static void *hmap_int_filled_setup(size_t n) {
    speed-up under a name that promises the opposite, and nobody questions a
    result of that shape. The keys are random and not in order, so the set has
    duplicates, and that's why we measure the expected sum instead of computing
-   it from a formula: for a duplicated key the map only keeps the value of the
+   it from a formula: For a duplicated key the map only keeps the value of the
    last insert. */
 static void hmap_int_lookup_run(void *state, size_t n) {
   hmap_state_t *st = state;
@@ -489,7 +489,7 @@ static void uth_teardown(void *state) {
 
 /* The setup allocates the entry storage as one block, so the measured loop
  * holds uthash's own work and not one malloc per insert. On the integer-key
- * rows neither side pays a per-entry allocation: both grow their table a few
+ * rows neither side pays a per-entry allocation: Both grow their table a few
  * times inside the timed loop and copy the entries into it, a cost that
  * follows the number of GROWTHS and not the number of inserts. On the
  * string-key rows the two sides do differ; see the comment on

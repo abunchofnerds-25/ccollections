@@ -5,7 +5,7 @@ page, calling a JSON API, uploading a file or downloading a big one. It
 handles plain HTTP, HTTPS (through OpenSSL) and HTTP over a Unix domain
 socket. Connections are kept open and reused, redirects are followed, and
 certificates are verified unless you say otherwise. You can run a request in
-three ways: blocking, asynchronous with futures, or blocking on a shared
+three ways: Blocking, asynchronous with futures, or blocking on a shared
 event loop.
 
 It's meant for programs that need to call web services through a small C
@@ -88,7 +88,7 @@ the call sets your response pointer to `NULL`, and
 `chttpcli_resp_free(resp)` after every request is always correct.
 
 A status outside 2xx is **not** an error. A 404 is a successful HTTP
-exchange whose answer happens to be "not found": the call returns
+exchange whose answer happens to be "not found": The call returns
 `ccol_success` and you look at `status_code`, preferably comparing it with
 the named constants of `chttp.h` such as `CHTTP_STATUS_OK`,
 `CHTTP_STATUS_CREATED` or `CHTTP_STATUS_NOT_FOUND`.
@@ -209,7 +209,7 @@ Timeouts and sizes are plain numbers, the timeouts in microseconds and the
 body limit in bytes, and 0 turns any of them off. Every client starts with
 a 30 s connect timeout and a 60 s inactivity timeout, and with no request
 timeout and no body limit. The inactivity timeout ends a request whose
-connection has gone silent: no byte in either direction for that long. A
+connection has gone silent: No byte in either direction for that long. A
 download that keeps moving is never cut off by it, however long it takes,
 so it's a safe default where a total limit wouldn't be. If a server of
 yours takes longer than a minute to start answering, a long poll for
@@ -219,7 +219,7 @@ free it after the call.
 
 `chttpcli_destroy()` waits for requests that are running on other
 threads, then frees the client and sets `cli` to `CHTTPCLI_NULL`. Never
-call it from the write callback of a request of the same client: it would be
+call it from the write callback of a request of the same client: It would be
 waiting for itself, so the library stops the process instead. The write
 callback of an asynchronous request (Tiers 2 and 3) runs on a thread of the
 engine, and destroying any client from there stops the process too, because
@@ -262,7 +262,7 @@ The codes you'll see most and what usually causes them:
 The full list, with every cause of each code, is in
 [chttpcli_do(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_do.3.html).
 
-## Large downloads: stream the body
+## Large downloads: Stream the body
 
 A buffered response keeps the whole body in memory. For a big file you can
 ask the client to hand you the body in pieces instead. Your callback gets
@@ -357,7 +357,7 @@ system CA store and checks that the certificate names the host you asked
 for. You change that by passing a `chttp_tls_config` to
 `chttpcli_set_tls()`.
 
-The system CA store is OpenSSL's default CA file: the file named by the
+The system CA store is OpenSSL's default CA file: The file named by the
 `SSL_CERT_FILE` environment variable, or otherwise the file OpenSSL was
 built with (a set-user-ID or set-group-ID process ignores the variable). The
 library reads and parses that file once per process, the first time a
@@ -425,7 +425,7 @@ left. The stop runs on a thread of its own after the last client lets go of
 the engine, and `chttpcli_engine_wait()` blocks until it's complete. If you
 installed an engine allocator with `chttpcli_set_engine_mem_mgmt_procs()` or
 an engine logger with `chttpcli_set_engine_logger()` and want to release
-them, call it after you destroy your clients: once it returns, the engine
+them, call it after you destroy your clients: Once it returns, the engine
 uses neither of them. `chttpcli_set_engine_logger(CLOG_NULL)` then
 releases the logger. Passing a logger handle that's already closed gives
 `ccol_invalid_args` and the engine keeps the logger it had.
@@ -825,7 +825,7 @@ Create clients after `fork()`, or call `exec()` right after `fork()`. A
 child that keeps running with a client created before the fork is not
 supported. See [Concurrency](concurrency.md).
 
-SIGPIPE is not a concern: the client never raises it and never changes your
+SIGPIPE is not a concern: The client never raises it and never changes your
 signal settings.
 
 ## Reference

@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal only: the test hooks of cyaml. src/cyaml.c defines them and the
+// Internal only: The test hooks of cyaml. src/cyaml.c defines them and the
 // cyaml tests use them to read the node pool, the parse budgets and the peak
 // sizes of internal buffers, and to lower the budget floors or force the
 // degraded line-start path. They exist only when RUNNING_UNIT_TESTS is defined,

@@ -1,6 +1,6 @@
 .TH CCOLLECTIONS 7 "2026-11-09" "c_collections" "C Collections Library - Overview"
 .SH NAME
-ccollections \- library-wide conventions of c_collections: return codes, fatal
+ccollections \- library-wide conventions of c_collections: Return codes, fatal
 errors, custom allocators, timeouts, thread safety and fork()
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
@@ -24,7 +24,7 @@ rules that all modules of the library share. This page states those
 rules once, and the page of each function only describes where that
 function differs from them.
 .fi
-.SS "Two layers: typed macros and raw functions"
+.SS "Two layers: Typed macros and raw functions"
 .nf
 Each container module comes in two layers. The type-inferred macros,
 such as chmap_insert(3) and cvec_push(3), take values of the declared
@@ -88,7 +88,7 @@ names the function that frees it.
 .fi
 .SS "Fatal errors"
 .nf
-A programming error is fatal: a NULL where the call needs a valid
+A programming error is fatal: A NULL where the call needs a valid
 handle, an index out of bounds, a stale handle, or a missing key given
 to a _get macro. So is a failure inside a typed macro, such as a failed
 allocation in chmap_insert(3). In all of these cases the library calls
@@ -147,7 +147,7 @@ doesn't have to match the width in the library.
 
 A timeout is turned into an absolute deadline on CLOCK_MONOTONIC, so a
 change of the wall clock never makes a wait longer or shorter. The
-arithmetic is 64 bits on every target and saturates: a value too large
+arithmetic is 64 bits on every target and saturates: A value too large
 for a deadline, UINT64_MAX for example, becomes the latest deadline the
 clock can hold and never wraps into one in the past. Where a system call
 takes a coarser unit of time, the remaining time is rounded up, so a
@@ -157,7 +157,7 @@ For the timed calls of cthreadcomm and cthreadpool, a timeout of 0 does
 not wait. The call does exactly what its try_ variant does and returns
 that variant's result, ccol_container_full or ccol_container_empty for
 example, and never ccol_timed_out. The untimed call waits without a
-limit. For every other field, the field's page says what 0 means: no
+limit. For every other field, the field's page says what 0 means: No
 limit, or the default.
 .fi
 .SH NOTES

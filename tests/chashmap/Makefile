@@ -15,7 +15,7 @@ build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
 # compile_probe.sh checks a guarantee that comes from the type system, which no
-# run-time test can see: you can't assign through an accessor the map hands out
+# run-time test can see: You can't assign through an accessor the map hands out
 # (a destructor argument, an iterator pair, the stored char* that
 # chmap_get_ptr() reaches), and chashmap_get_elem_ref() fills a cmap_pair that
 # belongs to the caller. The probe runs under both gcc and clang, since a

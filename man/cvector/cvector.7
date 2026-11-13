@@ -29,7 +29,7 @@ ccol__fatal_err(). The raw functions, such as cvector_create_full(3),
 cvector_push_back(3), cvector_pop_back(3) and cvector_reserve(3), take
 elements by pointer and report a failure in their return value.
 
-The element type can be any type: an arithmetic type, a pointer, a
+The element type can be any type: An arithmetic type, a pointer, a
 struct, a union, a function pointer type such as void (*)(int), or an
 array type such as char[32].
 .fi
@@ -45,7 +45,7 @@ them first.
 .nf
 cvec_data_ptr(3), cvec_at_ptr(3) and the address of a cvec_at(3) element
 all point into the backing store, and any operation that can grow or
-shrink that store moves it: a push, an append, a reserve, a pop, a reset
+shrink that store moves it: A push, an append, a reserve, a pop, a reset
 and the destruction. Get such a pointer again after each of them.
 
 You can pass a value read from the vector to cvec_push(3), and a pointer

@@ -49,7 +49,7 @@ the Go net/http client does.
 
 Set chttp_request.prevent_tls_downgrade_on_redirect to refuse such a
 redirect instead. The client then reports ccol_http_invalid_url and
-opens no plaintext connection. Weigh that against the default: the
+opens no plaintext connection. Weigh that against the default: The
 peer that sent the Location picks the downgrade, and once a chain
 leaves TLS, that hop and every later hop travel in clear text.
 
@@ -141,7 +141,7 @@ net/http client do.
 The client builds the request-target of the request line from the
 path and query of the URL, and from those of every Location it
 follows. It percent-encodes as "%XX" every byte that RFC 3986 does not
-allow there literally: the space, the control bytes, DEL, every byte
+allow there literally: The space, the control bytes, DEL, every byte
 of 0x80 and above, and the characters '"', '<', '>', '\\', '^', '`',
 \&'{', '|', '}', '[' and ']'. An existing "%XX" escape is kept as it is
 and never encoded twice. A '%' that is not followed by two hex digits
@@ -235,7 +235,7 @@ framing.
 
 If req->expect_continue is true and the request has a body, the client
 first sends only the request headers, then waits up to one second for
-the first byte of a response. That second bounds only this wait: a
+the first byte of a response. That second bounds only this wait: A
 response that starts inside it is read to the end, bounded by the
 request timeout and the inactivity timeout, however long the rest of
 it takes. The wait ends in
@@ -245,7 +245,7 @@ one of these ways:
     then sends the body and reads the final response normally. A
     response that arrives together with the "100 Continue" is read
     before the body goes out, under the rules for an answer that
-    arrives while the request is being sent (see above): a final
+    arrives while the request is being sent (see above): A final
     response of 300 or above, or a complete one, ends the request
     without a byte of the body sent.
   - The server sends some OTHER interim 1xx status during the wait,
@@ -279,7 +279,7 @@ A connection from the keep-alive idle pool can turn out to be dead only
 after the client has written the request on it. When nothing came back,
 the client sends the request once more on a new connection, but only
 when the connection did not take the whole request, or when the
-request is idempotent: a GET, HEAD, OPTIONS, PUT or DELETE, or any
+request is idempotent: A GET, HEAD, OPTIONS, PUT or DELETE, or any
 request with an Idempotency-Key or X-Idempotency-Key header. A POST or
 PATCH without either header that went out in full may have run on the
 server already, so the call fails with ccol_http_transfer_aborted
@@ -385,7 +385,7 @@ ccol_http_host_resolution_failed
        returns this code for http+unix://, which has no DNS step.
 
 ccol_http_connection_failed
-       The client could not connect: every address of the host
+       The client could not connect: Every address of the host
        refused or failed, or an http+unix:// socket path does not
        exist. A socket error on a connection that is already
        established is ccol_http_transfer_aborted instead.

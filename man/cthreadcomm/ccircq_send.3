@@ -12,7 +12,7 @@ ccol_retval ccircq_send(ccircq *cq, cmessage *msg);
 .SH DESCRIPTION
 .nf
 Waits until the queue has free space and then puts the message in it.
-The data is not copied: its ownership moves to the queue, and on
+The data is not copied: Its ownership moves to the queue, and on
 success msg->data is set to NULL.
 .fi
 .SH PARAMETERS

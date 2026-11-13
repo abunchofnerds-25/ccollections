@@ -1,7 +1,7 @@
 name: macOS
 
 # macOS is a supported platform, so this workflow has the same triggers as
-# ci.yml: every push to any branch and every pull request. It's a workflow
+# ci.yml: Every push to any branch and every pull request. It's a workflow
 # of its own because its jobs run on macOS runners, and you can also start
 # it by hand (Actions -> macOS -> Run workflow).
 on:
@@ -127,7 +127,7 @@ jobs:
           gmake check_layout
           gmake check_dso_unload
       - name: Build the benchmarks and list their cases
-        # The harness is only built and listed, never timed: a shared runner has
+        # The harness is only built and listed, never timed: A shared runner has
         # far more noise than the changes the benchmarks are there to find.
         if: matrix.mode == 'plain'
         run: |

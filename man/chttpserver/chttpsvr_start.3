@@ -95,7 +95,7 @@ cfg->streaming_thread_count set to CHTTPSVR_STREAMING_POOL_OFF they
 run on the worker pool instead.  Both pools belong to the server and
 are destroyed with it.
 
-Rejection of a route: a route that does not match, or that is
+Rejection of a route: A route that does not match, or that is
 malformed, is refused with 404, 405 or 500, and the server decides
 this before it reads any body byte.  A matched route whose cthrpool is
 full is refused with 503 and a "Retry-After: 5" header.  Both get a
@@ -110,7 +110,7 @@ any other, unrelated connection.  The interim "100 Continue" line of
 a buffered route parks in the same way, and the body is read once the
 line is out.
 
-Lingering close: when the server closes a connection after a
+Lingering close: When the server closes a connection after a
 complete response while the client may still be sending (the unread
 body of a refused request, a body that a handler left unread, or
 pipelined bytes), a plain close would make the kernel answer with a
@@ -139,7 +139,7 @@ a lingering close; see "Lingering close" above.
 A buffered route whose declared Content-Length is already above
 max_body_size is refused with 413 at once, without waiting for a
 first body byte, since a stalled or malicious peer may never send
-one.  A streaming route is different: its handler is always called,
+one.  A streaming route is different: Its handler is always called,
 whatever the declared Content-Length, as the contract above says.
 One more check applies to both kinds of route.  The server refuses
 any single chunk of a chunked Transfer-Encoding whose declared size
@@ -183,7 +183,7 @@ gets 408 Request Timeout and a close, and an expired response is cut
 off and closed.  A streaming handler waits on its own thread inside
 chttpsvr_req_read(), where the limits bound that wait directly.
 
-Slow clients: on a buffered route a worker thread never waits on the
+Slow clients: On a buffered route a worker thread never waits on the
 socket of a client.  When the body of a request stops arriving, the
 worker parks the connection, which then holds no thread, and goes
 back to the pool.  When more of the body is ready, the reactor hands
@@ -270,13 +270,13 @@ only through its own named constant from
                                no limit on body memory, so no request
                                waits for it.
   CHTTPSVR_NO_DEADLINE         UINT64_MAX, for body_memory_wait_timeout_us
-                               and streaming_queue_timeout_us: the wait
+                               and streaming_queue_timeout_us: The wait
                                lasts as long as it takes.  It holds no
                                thread, and a destroy of the server still
                                ends it.  Every other value, however
                                large, is a finite deadline.
   CHTTPSVR_QUEUE_UNBOUNDED     ((size_t)-1), for worker_queue_capacity and
-                               streaming_queue_capacity: no limit on the
+                               streaming_queue_capacity: No limit on the
                                queue, so no request gets a 503 because the
                                queue is full.
   CHTTPSVR_STREAMING_POOL_OFF  (-1), for streaming_thread_count:
@@ -332,7 +332,7 @@ it reads anything.  Whatever this value is, the request line and each
 header line must end within 8 KiB, CRLF included, and a request holds
 at most 100 header lines.
 
-Request validation: the server refuses the following requests before
+Request validation: The server refuses the following requests before
 any route, middleware or handler sees them, and it closes the
 connection after the answer.  A request line whose HTTP version is
 not 1.x, such as HTTP/0.9, HTTP/2.0 or HTTP/3.0, gets 505 HTTP
@@ -353,7 +353,7 @@ ccol_http_transfer_aborted.  An HTTP/1.0 request that carries
 "Expect: 100-continue" gets no interim 100 response (RFC 9110 section
 10.1.1).
 
-Request target: the server accepts an origin-form target, which is a
+Request target: The server accepts an origin-form target, which is a
 path that starts with "/", and an absolute-form target with the
 scheme http or https, whose path it serves and whose authority it
 ignores.  An absolute-form target with an empty path stands for "/".
@@ -375,7 +375,7 @@ a method outside the seven chttp_method names such as
 "PROPFIND *", gets 400 Bad Request and a close.  A method outside
 those seven names with any other target gets 501 Not Implemented.
 
-Date: unless a handler set its own Date with
+Date: Unless a handler set its own Date with
 chttpsvr_resp_set_header(3), every final response has a Date header
 with the current time in UTC, in the IMF-fixdate form of RFC 9110
 section 5.6.7.  That covers handler responses, HEAD, every rejection
@@ -390,7 +390,7 @@ itself are:
   - allow on a 405, and retry-after on a 503 that the server writes
     itself.
 
-Host: a request with more than one Host header gets 400 Bad Request
+Host: A request with more than one Host header gets 400 Bad Request
 for every version, and so does an HTTP/1.1 request with no Host
 header, while an HTTP/1.0 request doesn't need one.  With two Host
 lines a front-end could forward one authority while this server reads
@@ -401,7 +401,7 @@ horizontal tab), other control characters or DEL.  A request line
 that breaks this rule gets 400 Bad Request and a close, before
 routing.
 
-Framing: the server reads Transfer-Encoding as one list, merged from
+Framing: The server reads Transfer-Encoding as one list, merged from
 all the Transfer-Encoding lines, and applies these rules:
   - chunked must be the last coding of that list.
   - chunked must occur in the list at most once.
@@ -444,7 +444,7 @@ of one second.  That way a temporary shortage on one listener doesn't
 delay any other, unrelated connection on another chttpsvr instance
 that shares the same reactor thread.
 
-Socket options: the server sets TCP_NODELAY on every TCP connection
+Socket options: The server sets TCP_NODELAY on every TCP connection
 that it accepts and leaves the socket buffer sizes of such a
 connection to the kernel, so the buffer autotuning of Linux (tcp(7))
 stays on.  On a connection of a Unix domain socket listener, which
@@ -458,7 +458,7 @@ same host and port so that the kernel spreads the accepts over them.
 cfg->ipv6_only sets IPV6_V6ONLY on an AF_INET6 listener, so that it
 doesn't also accept IPv4-mapped connections.
 
-Restart: after chttpsvr_stop you can call chttpsvr_start again on the
+Restart: After chttpsvr_stop you can call chttpsvr_start again on the
 same handle, and the new call registers a new listener with the new
 configuration.  The call returns at once.  New pools take the place
 of the pools of the previous run immediately, and the old pools drain
@@ -474,12 +474,12 @@ Do not call chttpsvr_start from a request handler or a middleware of
 srv to restart the very server that the handler runs on (such a
 handler usually calls chttpsvr_stop first).  The library refuses that
 call with ccol_not_permitted instead of attempting it, and srv is
-left in a safe state that you can recover from: the configuration
+left in a safe state that you can recover from: The configuration
 that srv had before, or a stopped server if chttpsvr_stop has already
 run.  A later, legitimate call to chttpsvr_start from another thread
 restarts it normally.
 
-TLS: when cfg->tls is not NULL, it must have both cert_path and
+TLS: When cfg->tls is not NULL, it must have both cert_path and
 key_path set.  Any other shape is refused with ccol_invalid_args
 before any other work, instead of quietly starting the server as
 plain, unencrypted HTTP.  Those other shapes are exactly one of the
@@ -533,7 +533,7 @@ for one that does not.  Each chttpsvr_start builds a new TLS
 configuration with a new session cache, so a session from an earlier
 cycle ends in a full handshake and never in a failure.
 
-Pipelining: a client can write its next request before it reads the
+Pipelining: A client can write its next request before it reads the
 previous response, and a keep-alive connection serves such a client
 on buffered and streaming routes alike.  Bytes of a later request can
 arrive in the same read as the headers or the body of the current

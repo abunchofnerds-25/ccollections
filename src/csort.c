@@ -171,7 +171,7 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
   }
 }
 
-// What csort_check_sort_shape() tells a driver: allocate and sort, return true
+// What csort_check_sort_shape() tells a driver: Allocate and sort, return true
 // with nothing to do, or return false.
 typedef enum {
   csort_buffer_ready,

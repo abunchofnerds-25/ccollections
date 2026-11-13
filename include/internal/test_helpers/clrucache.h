@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// INTERNAL ONLY: the test hooks of clrucache. src/clrucache.c defines them so a
+// INTERNAL ONLY: The test hooks of clrucache. src/clrucache.c defines them so a
 // test can force a failure in the handle table, read the segments and waiters
 // of a cache and hold a publishing thread at a chosen point. They exist only
 // when RUNNING_UNIT_TESTS is defined, which the shipped library never does.

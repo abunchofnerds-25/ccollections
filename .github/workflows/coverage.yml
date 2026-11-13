@@ -1,12 +1,12 @@
 name: Coverage
 
 # Runs on every push to main, which is what a merged pull request makes, and
-# publishes the GitHub Pages site: the rendered man pages under man/, which
+# publishes the GitHub Pages site: The rendered man pages under man/, which
 # the guides under doc/ link to, the merged coverage report under coverage/,
 # a front page, a 404 page, the sitemap and the Google Search Console
 # verification file. A repository has one Pages site and a deployment
 # replaces all of it, so every part is built here and goes out together.
-# Pushes to other branches and pull requests don't start it on purpose: a
+# Pushes to other branches and pull requests don't start it on purpose: A
 # full run builds and runs every module suite again under gcov
 # instrumentation, and only the state of main is worth publishing.
 on:

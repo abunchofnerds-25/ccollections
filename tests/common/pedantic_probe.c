@@ -22,7 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-// A compile-time probe: a caller that only includes these headers must build
+// A compile-time probe: A caller that only includes these headers must build
 // under a strict -std=c11 -pedantic-errors, with no GNU mode. The inline
 // functions of the headers expand ccol__fatal_err(), so that macro can't use a
 // GNU extension like the comma swallow of , ##__VA_ARGS__. Only code that uses

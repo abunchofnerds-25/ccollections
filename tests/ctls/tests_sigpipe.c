@@ -126,7 +126,7 @@ typedef struct {
   int fds[2];
 } tls_pair;
 
-// Builds a tls_pair in *p: a server context with a self-signed certificate,
+// Builds a tls_pair in *p: A server context with a self-signed certificate,
 // a client context, the socketpair and both connections, then the handshake.
 // Gives false on any failure; the caller closes the pair either way.
 static bool _tls_pair_open(tls_pair *p) {

@@ -15,7 +15,7 @@ When node is not NULL, the macro frees the whole DOM subtree under
 node, each node with the allocator that it stores, and then sets
 node to NULL.
 
-Everything below node goes: the children of each list, the values of
+Everything below node goes: The children of each list, the values of
 each dictionary and the string copies.  Destroying the same handle a
 second time is safe, because the variable is NULL after the first
 destroy.

@@ -39,7 +39,7 @@ SOFTWARE.
 // One entry of a segment. It sits in the segment's map (key -> entry pointer)
 // and, while it has a value, in the segment's LRU list. A placeholder has no
 // value and isn't in the list (a fetch or set is in flight), a live entry has a
-// value and can be evicted (also while a remote setter runs for it: eviction
+// value and can be evicted (also while a remote setter runs for it: Eviction
 // turns it back into a placeholder that the set fills or removes), and a dead
 // entry has left the map and the list (evicted) and lives only while waiters
 // hold it.
@@ -143,7 +143,7 @@ typedef struct ccache_shard {
   ccol_memmgmt_procs *m_procs;
 } ccache_shard;
 
-// The cache itself: the router that picks a segment for each key. key_type and
+// The cache itself: The router that picks a segment for each key. key_type and
 // key_fixed_width keep the segment choice in agreement with the maps about
 // which keys are equal, and let a wrongly sized hand-built key be refused
 // before it's read. capacity is the sum of the segment capacities. self_handle
@@ -166,7 +166,7 @@ struct clrucache {
   ccol_memmgmt_procs m_procs_copy;
 };
 
-// The hot half of the handle table: handle to pointer, plus the pin that keeps
+// The hot half of the handle table: Handle to pointer, plus the pin that keeps
 // a cache alive during a call. A resolve writes nothing that another thread
 // reads, so cache operations from many threads don't contend on it.
 static ccol_pintable clrucache_pintable;
@@ -181,14 +181,14 @@ static struct clrucache *clrucache_resolve(ccache h) {
 }
 
 // Drops the pin that clrucache_resolve took, when a public call is done with
-// the cache. It touches nothing else: the cache can be freed right after, so
+// the cache. It touches nothing else: The cache can be freed right after, so
 // nothing may read raw once the pin is gone.
 static void clrucache_resolve_unpin(struct clrucache *raw) {
   ccol_pintable_unpin(&clrucache_pintable, raw->self_handle);
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test only: makes the next free list push fail like an allocation.
+// Test only: Makes the next free list push fail like an allocation.
 static _Atomic bool g_ccache_fail_next_free_index_push = false;
 
 // Arms g_ccache_fail_next_free_index_push, so a test reaches the recovery of a
@@ -335,7 +335,7 @@ static ccache_entry *entry_alloc(ccache_shard *cache) {
 }
 
 // Frees an entry with its key, value and condition variable, when nobody can
-// reach it any more: it was never published, or it is evicted and has no
+// reach it any more: It was never published, or it is evicted and has no
 // waiters. The segment's mutex isn't needed for either case.
 static void entry_free(ccache_shard *cache, ccache_entry *e) {
   ccol__mem_free(cache->m_procs, e->key);
@@ -477,7 +477,7 @@ static void router_free_self(struct clrucache *router) {
   }
 }
 
-// Builds one segment with its share of the capacity: its map, its LRU ring and
+// Builds one segment with its share of the capacity: Its map, its LRU ring and
 // its mutex, plus copies of the callbacks; mprocs is the router's procs, which
 // the segment borrows. Gives NULL with *err set on failure. A failed mutex init
 // is checked, since a lock on it would be undefined.
@@ -628,7 +628,7 @@ ccache clrucache_create_full(size_t capacity, ccol_data_type key_type,
 // Destroys the cache behind a live handle and releases its slot; CCACHE_NULL is
 // a no-op and a stale handle is fatal. It looks the handle up and retires it in
 // one write lock section, so a second destroy fails the lookup. Then it waits
-// for the pins to drain before any teardown: no blocked caller here depends on
+// for the pins to drain before any teardown: No blocked caller here depends on
 // the destroy to wake it (they wait for remote calls of other threads). It
 // evicts every entry through the callback, frees the segments and the router,
 // and releases the slot last, fetched again by index because a concurrent
@@ -783,7 +783,7 @@ size_t clrucache__slot_table_capacity_for_tests(void) {
   return n;
 }
 
-// Test hook: a publisher of a fetched or set value holds its segment's mutex
+// Test hook: A publisher of a fetched or set value holds its segment's mutex
 // this much longer before it wakes the waiters, so an unrelated thread (an
 // evictor) can queue for the mutex first and the test reaches the path where a
 // waiter survives a racing eviction. The flag tells that a publisher is in the
@@ -816,7 +816,7 @@ static void ccache_test_maybe_delay_post_publish(void) {
 
 // Tells whether any slot names a cache, so the table is never freed while a
 // cache or its destroy may still use it; the caller holds the write lock. It
-// reads ptr, not in_use: a destroy clears in_use first but still uses the table
+// reads ptr, not in_use: A destroy clears in_use first but still uses the table
 // until its last step.
 static bool clrucache_any_slot_live_locked(void) {
   size_t slot_count = cvector_elem_count(clrucache_slot_table.slots);
@@ -877,7 +877,7 @@ static ccol_retval clrucache_get_full_retry(struct clrucache *raw,
 // reference held (so other getters of the key join this fetch) and stores the
 // value; a failed fetch removes the placeholder with fetch_failed set. On a hit
 // it waits for a fetch or set in flight. A waiter that finds a failed set looks
-// the key up again, since nobody asked the getter: with again == NULL (the hot
+// the key up again, since nobody asked the getter: With again == NULL (the hot
 // instantiation) through clrucache_get_full_retry, otherwise by setting *again.
 // A waiter that finds a value keeps it even when an eviction removed the entry
 // meanwhile; its waiter reference keeps the entry alive. Gives a heap copy in
@@ -1024,7 +1024,7 @@ clrucache_get_full_locked(struct clrucache *raw, ccache_shard *shard,
   return ccol_success;
 }
 
-// The cold instantiation of clrucache_get_full_locked(): repeats the lookup as
+// The cold instantiation of clrucache_get_full_locked(): Repeats the lookup as
 // long as a waiter keeps finding a failed set. Keeping the loop here spares the
 // hit path a register spill.
 static __attribute__((noinline)) ccol_retval
@@ -1238,7 +1238,7 @@ static ccol_retval clrucache_get_into_retry(struct clrucache *raw,
 // The body of clrucache__get_into(), entered with the segment's mutex held;
 // every path that returns releases the mutex and the pin. It follows
 // clrucache_get_full_locked, but copies into buf. A fetched or stored value
-// whose size isn't exactly buf_size gives ccol_unexpected_failure: a larger one
+// whose size isn't exactly buf_size gives ccol_unexpected_failure: A larger one
 // would overflow buf and a smaller one leave part of it stale. A fetched value
 // of the wrong size is a failed fetch (fetch_size_mismatch, nothing cached) so
 // every waiter gets the same answer, and a stored one is refused before the
@@ -1388,7 +1388,7 @@ clrucache_get_into_locked(struct clrucache *raw, ccache_shard *shard,
   return ccol_success;
 }
 
-// The cold instantiation of clrucache_get_into_locked(): repeats the lookup as
+// The cold instantiation of clrucache_get_into_locked(): Repeats the lookup as
 // long as a waiter keeps finding a failed set.
 static __attribute__((noinline)) ccol_retval clrucache_get_into_retry(
     struct clrucache *raw, ccache_shard *shard, const cmap_pair *key_pair,

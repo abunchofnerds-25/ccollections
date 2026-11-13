@@ -1,4 +1,4 @@
-# cbstmap: an ordered map
+# cbstmap: An ordered map
 
 `cbstmap` maps keys to values like [chashmap](chashmap.md) does, but it
 also keeps the keys in sorted order, so iterating over the map gives you the
@@ -114,7 +114,7 @@ cbmap_insert(env, "EDITOR", "vi");
 
 For any other key type, a struct for example, the map compares the raw
 bytes unless you give it a comparison function. That is almost never the
-order you want: it compares the padding bytes and compares pointer members
+order you want: It compares the padding bytes and compares pointer members
 by address, and on a little-endian machine it puts `{1, 256}` before
 `{1, 2}`. So give every struct key a comparison function.
 
@@ -178,7 +178,7 @@ past the next insert, remove or reset. A pointer value of any other type is
 stored as the pointer itself and the map never frees what it points to. All
 of these rules are listed in [cbstmap(7)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap.7.html).
 
-## Example: a leaderboard
+## Example: A leaderboard
 
 This program ranks players by their best score, highest first, with the
 name breaking a tie. The rank key is a struct with a custom order, so two
@@ -272,7 +272,7 @@ Output:
 #3  cem       1200
 ```
 
-## Example: a timer queue
+## Example: A timer queue
 
 Iteration over an ordered map always starts at the smallest key, so for a
 small priority queue the map is a good fit. Here each event is keyed by

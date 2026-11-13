@@ -63,7 +63,7 @@ It copies min(old_user_size, new_user_size) bytes
 It frees the old entry when the reallocation succeeds
 Thread-safe if the pool was created with single_threaded=false
 It returns NULL if size is 0 or above largest_size, and it does NOT
-  touch addr: when size itself is invalid, an addr that is not NULL is
+  touch addr: When size itself is invalid, an addr that is not NULL is
   neither freed nor moved, so the state is the same as if you had
   never made the call
 It asserts if addr is not NULL and did not come from this

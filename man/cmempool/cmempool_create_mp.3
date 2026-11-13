@@ -48,7 +48,7 @@ tree). Either way every element, not only the first one, is aligned
 for any object type, as malloc() guarantees, so any object that you
 can keep in heap memory can go into an entry
 An elem_size below sizeof(uintptr_t) is rounded up to it
-The call returns NULL with an error in two cases: an elem_size that
+The call returns NULL with an error in two cases: An elem_size that
 would overflow size_t after the stride rounding, and an elem_count and
 a stride that together would overflow size_t. A pool holds one stride
 for each element and then one status byte for each element, all in one
@@ -59,7 +59,7 @@ The caller must destroy the pool with cmempool_destroy()
 The pool calls the functions of mmgmt_procs for its dynamic fallback
 entries, and for its own bookkeeping of them, in the middle of an
 update of its own state and with its lock held when it has one. Those
-functions must not call back into the same pool: with a lock the call
+functions must not call back into the same pool: With a lock the call
 deadlocks, and without one it corrupts that state. An allocator built
 on a pool must draw from a different pool
 
@@ -68,7 +68,7 @@ Sizing for performance:
 Give a thread-safe pool at least 8 elements. Below that there is no
 room for a cache for each thread, so every allocation and every free
 takes the pool's lock and concurrent callers serialise against each
-other. 8 is only the floor and not a good size: the cache grows with
+other. 8 is only the floor and not a good size: The cache grows with
 the pool, so a pool sized for real use does much better than one of
 exactly 8.
 
@@ -81,7 +81,7 @@ each of them gets a cache.
 
 A pool that hands out caches allocates a reserve above elem_count, so
 that elem_count stays available to any thread however many entries
-other threads keep in their own caches. The reserve costs memory: at
+other threads keep in their own caches. The reserve costs memory: At
 most half of elem_count, a quarter at 8192 elements, an eighth at
 16384, and a few percent or less from about 65536 upward. It stops
 growing once a cache reaches its maximum depth, so a large pool pays

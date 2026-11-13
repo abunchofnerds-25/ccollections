@@ -38,7 +38,7 @@ restriction. You can make any number of ceventloop_add() calls for
 the same queue and the same direction, in one ceventloop or in
 several, and mix them with a cselect() call that runs at the same
 time on the same queue and direction. All of them are live together,
-and each one gets its turn. cselect() gives the same guarantee: any
+and each one gets its turn. cselect() gives the same guarantee: Any
 number of threads can watch one queue at the same time.
 
 When a message arrives while more than one such listener is registered,
@@ -104,7 +104,7 @@ and a callback can pass it to ceventloop_remove(3),
 ceventloop_pause(3), ceventloop_resume(3),
 ceventloop_modify(3) and ceventloop_reg_generation(3). The
 registration is live, and a callback of it can run, before
-ceventloop_add() returns: with num_reactor_threads > 1 a callback
+ceventloop_add() returns: With num_reactor_threads > 1 a callback
 can run on a dispatch worker while the calling thread is inside this
 function, for example when the fd is ready already at the time of the
 call. reg is valid in that callback too, so a callback never has to
@@ -118,12 +118,12 @@ sel->fd. For a queue selectable or a cchan selectable, the
 callback makes its own ccircq_try_recv() or
 cdynmq_try_recv() call on sel->cq or sel->dq. For a cchan
 selectable that call is ccircq_try_recv() on sel->cq, and never
-cchan_try_recv(): the callback runs on a thread of the loop,
+cchan_try_recv(): The callback runs on a thread of the loop,
 which the channel counts as a worker, so a cchan_* call there can
 reach the other queue of the channel (see cchan_selectable(3)).
 In both cases another consumer can get to the data first. That TOCTOU
 race is part of the design and is the same contract as the write
-direction of cselect(): the receive call of the callback can find
+direction of cselect(): The receive call of the callback can find
 nothing, and the callback must handle that well.
 
 For a queue selectable one notification does not always mean exactly
@@ -156,7 +156,7 @@ on_readable and not on_error: EPOLLIN and EPOLLRDHUP are not mutually
 exclusive with EPOLLERR and EPOLLHUP, and the loop delivers the bytes
 that arrived before the peer went away. For the same reason a write
 registration with on_writable set gets on_writable, since EPOLLOUT is
-not mutually exclusive with EPOLLERR and EPOLLHUP either: a socket in
+not mutually exclusive with EPOLLERR and EPOLLHUP either: A socket in
 an error state is writable too, because a write(2) call on it returns
 an error at once and does not block. A queue selectable never produces
 an error condition.
@@ -186,7 +186,7 @@ direction of a healthy socket, which is writable from the moment it is
 registered, and one on either end of a pipe, where the close of the
 other end is the error that it reports.
 
-Every condition here, an error included, is level-triggered: the loop
+Every condition here, an error included, is level-triggered: The loop
 reports it, and calls the handler, again and again until a call removes
 or pauses the registration or the condition clears. A hang-up stays
 true, so a pipe whose writer closed, or a socket whose peer is gone,
@@ -221,7 +221,7 @@ of ceventloop_remove(3) give the exact guarantee and explain why
 ceventloop_remove() itself cannot always give it synchronously.
 You can leave on_removed NULL for a registration whose arg needs no
 notice before a free. Calling ceventloop_destroy(3) on the owning
-loop from on_removed is fatal: on an ordinary removal on_removed runs
+loop from on_removed is fatal: On an ordinary removal on_removed runs
 on the reactor thread, where a destroy of its own loop is refused, and
 during a destroy the handle is already destroyed.
 
@@ -241,7 +241,7 @@ and ceventloop_remove(3). Those calls keep working while
 ceventloop_shutdown(3) or ceventloop_destroy(3) drains the
 loop, because loop stays a live handle until that drain ends. So a
 callback that removes every registration of its fd and then frees arg
-is safe during a destroy on another thread: no callback of those
+is safe during a destroy on another thread: No callback of those
 registrations runs after the removals return.
 
 With more than one reactor thread, the loop never runs the callback of
@@ -250,7 +250,7 @@ ceventloop_create_mp(3)). A read registration and a write
 registration that share one fd never run at the same time as each other
 either, so a pair of callbacks that shares state across both directions
 of one fd (such as one TLS connection object) needs no lock of its own
-for that. This rule does not extend to two different fds: the callbacks
+for that. This rule does not extend to two different fds: The callbacks
 of different registrations can run at the same time on different
 reactor threads.
 .fi

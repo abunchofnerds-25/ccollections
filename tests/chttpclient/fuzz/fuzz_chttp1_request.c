@@ -88,7 +88,7 @@ static const chttp1_settings g_settings = {
     .on_message_complete = on_message_complete,
 };
 
-// The libFuzzer entry point: parses data[0..size) as a request, fed in random
+// The libFuzzer entry point: Parses data[0..size) as a request, fed in random
 // fragments, to find crashes and leaks. Always gives 0.
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   chttp1_parser parser;

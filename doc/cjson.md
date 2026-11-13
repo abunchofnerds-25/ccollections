@@ -1,4 +1,4 @@
-# cjson: read, change and write JSON
+# cjson: Read, change and write JSON
 
 `cjson` turns JSON text into a tree of nodes in memory. You can read and
 change any part of that tree, and when you're done `cjson` writes it back as
@@ -6,7 +6,7 @@ JSON. The parser is strict and refuses everything RFC 8259 doesn't allow,
 the tree (the DOM) can be changed in place, and there are two serializers,
 one for compact text and one for indented text.
 
-`cjson` fits wherever a whole document sits comfortably in memory: a
+`cjson` fits wherever a whole document sits comfortably in memory: A
 configuration file, the body of an HTTP request or response, a message on a
 queue, a test fixture. Two short path macros, `cjson_get` and `cjson_set`,
 reach deep into a document in one call, so most programs never walk the
@@ -282,7 +282,7 @@ when a peer picks keys that are meant to collide. If you want to limit the
 memory a hostile peer can make you use, limit the length of the input you
 accept.
 
-## Example: a configuration loader
+## Example: A configuration loader
 
 The loader sets the defaults first and then lets the document replace the
 values it names. A field with the wrong type gives an error that names the
@@ -422,7 +422,7 @@ int main(void) {
 }
 ```
 
-## Example: a word counter that reports in JSON
+## Example: A word counter that reports in JSON
 
 Here the whole document is built in code. The `put` and `push` helpers hold
 the ownership rule from above, so the rest of the program doesn't have to
@@ -529,7 +529,7 @@ Part of the output:
     ...
 ```
 
-## Example: clean an event before you log it
+## Example: Clean an event before you log it
 
 This example walks a parsed document whose shape isn't known in advance. It
 removes the null members, masks secrets at every level, copies a sub-object

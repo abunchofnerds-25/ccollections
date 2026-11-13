@@ -190,7 +190,7 @@ TEST(base64_decode, nonzero_padding_bits_fail) {
   REQUIRE_EQ((void *)chttp_base64_decode("Zm9vYh==", NULL), NULL);
 }
 
-// Sweeps every "XY==" and "XYZ=": a group decodes exactly when its unused bits
+// Sweeps every "XY==" and "XYZ=": A group decodes exactly when its unused bits
 // are zero, and what it decodes to encodes back to the same text.
 TEST(base64_decode, only_the_canonical_final_group_decodes) {
   static const char alphabet[] =
@@ -477,13 +477,13 @@ TEST(chttp_method_str, an_out_of_range_method_reports_unknown) {
 // whole message in one call and one byte per call, so no rule depends on where
 // a read boundary falls.
 //
-// The parser's user data: the body bytes it has delivered so far.
+// The parser's user data: The body bytes it has delivered so far.
 typedef struct {
   char body[256];
   size_t body_len;
 } _p1_ctx_t;
 
-// The on_body callback of the parser tests: appends a body piece to the
+// The on_body callback of the parser tests: Appends a body piece to the
 // _p1_ctx_t in p->data, so a test can compare the delivered body. It fails
 // the parse when the piece would overflow the buffer.
 static int _p1_on_body(chttp1_parser *p, const char *at, size_t len) {
@@ -533,7 +533,7 @@ static chttp1_errno _p1_run(chttp1_parser *p, chttp1_settings *st, _p1_ctx_t *c,
 // literals with embedded bytes to the parser.
 #define P1_LEN(s) (sizeof(s) - 1)
 
-// A chunked HTTP/1.0 body followed by a second request: a recipient that
+// A chunked HTTP/1.0 body followed by a second request: A recipient that
 // de-chunks and keeps the connection would read the second request as one of
 // its own.
 TEST(chttp1_framing, http_1_0_request_with_chunked_te_is_refused) {
@@ -603,7 +603,7 @@ TEST(chttp1_framing, http_1_1_response_with_chunked_te_keeps_alive) {
   }
 }
 
-// One row of the Connection table: the version, the header lines, and whether
+// One row of the Connection table: The version, the header lines, and whether
 // the message keeps the connection alive.
 typedef struct {
   const char *version;
@@ -730,7 +730,7 @@ TEST(chttp1_framing, chunk_extension_follows_the_rfc_9112_grammar) {
   }
 }
 
-// chttp1_parser: what a body still owes
+// chttp1_parser: What a body still owes
 //
 // A server asks the kernel to wake it once this many bytes are queued, so the
 // answer must never be more than the framing guarantees.
@@ -819,7 +819,7 @@ TEST(chttp1_framing, request_bytes_may_remain_follows_the_framing) {
   REQUIRE_FALSE(chttp1_request_bytes_may_remain(NULL));
 }
 
-// With write_nonblocking every write is now or never: a full socket gives -1
+// With write_nonblocking every write is now or never: A full socket gives -1
 // and chttp1_stream_timed_out() at once, whatever the timeout. The fd is
 // blocking and each chunk is bigger than the socket buffer, so the send after
 // a successful poll must not block either. Without the flag the last call

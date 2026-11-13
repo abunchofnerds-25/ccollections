@@ -763,7 +763,7 @@ TEST(chash_maps, insertions_with_a_variety_of_key_sizes) {
 
 // chashmap_destroy_with_dtor
 
-// What a destructor saw: how often it ran and the sum of the values.
+// What a destructor saw: How often it ran and the sum of the values.
 typedef struct {
   int call_count;
   int sum_of_values;
@@ -3450,7 +3450,7 @@ TEST(chash_maps, sc_string_to_string) {
   chmap_destroy(hm);
 }
 
-// Breaking out of a loop must not leak the iterator: the chaining map relies
+// Breaking out of a loop must not leak the iterator: The chaining map relies
 // on the scope cleanup, the open-addressing one calls ccol_iter_destroy().
 TEST(chash_maps, ccol_iter_early_exit) {
   {
@@ -3918,7 +3918,7 @@ TEST(chash_maps, oa_size_mismatch_returns_invalid_args) {
   chmap_destroy(hm);
 }
 
-// A 2-byte heap buffer for an int key: the size check must apply to
+// A 2-byte heap buffer for an int key: The size check must apply to
 // separate chaining too, or the hash reads past the buffer (valgrind and ASan
 // catch it).
 TEST(chash_maps, sc_integral_key_size_mismatch_returns_invalid_args) {
@@ -3949,7 +3949,7 @@ TEST(chash_maps, sc_integral_key_size_mismatch_returns_invalid_args) {
   chmap_destroy(hm);
 }
 
-// A float key claiming 8 bytes backed by 4: the canonical form must check
+// A float key claiming 8 bytes backed by 4: The canonical form must check
 // the exact size or it reads past the buffer.
 TEST(chash_maps, sc_float_key_size_mismatch_returns_invalid_args) {
   chmap_construct(hm, float, char *);
@@ -4362,7 +4362,7 @@ TEST(chashmap_hash, packed_pair_64_bit_keys_spread_over_the_chains) {
   REQUIRE_LE(longest, (size_t)16);
 }
 
-// An identity custom hash over dense keys: without the finalizer every key
+// An identity custom hash over dense keys: Without the finalizer every key
 // lands in one slot and the probe count goes quadratic.
 static unsigned long low_bit_entropy_hasher(const void *key_ptr,
                                             size_t key_size) {
@@ -4673,7 +4673,7 @@ typedef struct {
 } elem_ref_outcome;
 
 // Checks chashmap_get_elem_ref()'s contract on m, whose keys 0 to 99 get the
-// value key * 3: a hit fills the pair with the value's address and size, a
+// value key * 3: A hit fills the pair with the value's address and size, a
 // write through it shows in chmap_get(), two results held at once stay apart,
 // and a miss gives {NULL, 0} over a poison value. Gives the outcomes, so the
 // caller destroys the map before it asserts.
@@ -4815,7 +4815,7 @@ TEST(chmap_elem_ref_accessor, get_ptr_of_a_string_value_points_into_the_node) {
 
 // An iterator that outlives its container until scope exit
 
-// The header of poisoning allocator blocks: the poison allocator fills a
+// The header of poisoning allocator blocks: The poison allocator fills a
 // block before freeing it, so a read through a stale pointer faults without a
 // sanitizer.
 typedef union {
@@ -4823,7 +4823,7 @@ typedef union {
   max_align_t align;
 } chmap_life_poison_hdr;
 
-// The poisoning allocator: each block keeps its size in a header and is filled
+// The poisoning allocator: Each block keeps its size in a header and is filled
 // with a pattern before it's freed.
 static void *chmap_life_poison_malloc(size_t size) {
   chmap_life_poison_hdr *h = malloc(sizeof(chmap_life_poison_hdr) + size);
@@ -4914,9 +4914,9 @@ TEST(iterator_lifetime, break_then_destroy_then_scope_exit_default_allocator) {
   REQUIRE_EQ(seen, 1);
 }
 
-// Open addressing: churn without rebuilding
+// Open addressing: Churn without rebuilding
 
-// What a churn window saw: rehashes, capacity changes and range, and whether
+// What a churn window saw: Rehashes, capacity changes and range, and whether
 // every live key was found.
 typedef struct {
   unsigned long long rehashes;
@@ -5237,7 +5237,7 @@ TEST(key_equality, the_macros_clear_the_padding_of_their_key_copy) {
 #endif
 }
 
-// Internal: insert, or get the entry that is present
+// Internal: Insert, or get the entry that is present
 
 #include <internal/chashinsert.h>
 
@@ -5461,7 +5461,7 @@ TEST(insert_or_get, the_slot_of_a_new_key_is_writable_on_separate_chaining) {
   REQUIRE_EQ(n, (size_t)5000);
 }
 
-// Open addressing: backward-shift deletion
+// Open addressing: Backward-shift deletion
 
 // Gives the first n keys from start upward whose home slot in m is home, so a
 // test can build clusters at chosen places.
@@ -5653,7 +5653,7 @@ TEST(backward_shift, a_delete_in_a_cluster_moves_entries_and_one_alone_none) {
   REQUIRE_TRUE(ok);
 }
 
-// Hash flooding: secret seeds, and the keyed mode that a flood selects
+// Hash flooding: Secret seeds, and the keyed mode that a flood selects
 
 // The size of a string flood, the length of each key, and how many top hash
 // bits the keys share.
@@ -5916,7 +5916,7 @@ TEST(hash_seed, the_byte_hash_is_siphash_1_3) {
 
 // Inverts XXH64's round function, so a test can pick words that make the
 // round give a chosen value. With it, two 24-byte keys collide under XXH64 for
-// every seed: a flipped bit 36 rotates to bit 63, which an odd multiply keeps
+// every seed: A flipped bit 36 rotates to bit 63, which an odd multiply keeps
 // and the next word cancels.
 static uint64_t xxh_pair_inv(uint64_t a) {
   uint64_t x = a;
@@ -6003,7 +6003,7 @@ TEST(hash_seed, a_seed_independent_xxh64_collision_is_split_by_the_keyed_mode) {
   REQUIRE_EQ(collisions, (size_t)0);
 }
 
-// The integer flood families: what someone who knows the Fibonacci
+// The integer flood families: What someone who knows the Fibonacci
 // multiplier M computes offline. i * M^-1 all hash to small numbers and share
 // slot 0, multiples of a large Fibonacci number pile into a few clusters, and
 // i * 32 varies only in fixed bits, which a seed xor merely translates. Each
@@ -6143,7 +6143,7 @@ TEST(hash_seed, a_custom_hash_is_finalized_with_the_secret) {
   REQUIRE_LT((long long)ins, (long long)INT_FLOOD_KEYS * 6);
 }
 
-// Internal: the stored key of an entry, and the insertion order
+// Internal: The stored key of an entry, and the insertion order
 
 TEST(insert_or_get_entry, gives_the_stored_key_and_it_survives_resizes) {
   chmap m = chashmap_create(16, ccol_string, ccol_long, NULL);
@@ -6308,7 +6308,7 @@ TEST(ordered_entries, the_successor_survives_a_delete_of_the_current_entry) {
 // way a NULL char * reaches the macros.
 #define CHMAP_NULL_TEST_UNSET_VAR "CCOL_CHMAP_TEST_SURELY_UNSET_VARIABLE"
 
-// How a probe child ended, reported through a pipe: the byte the probe
+// How a probe child ended, reported through a pipe: The byte the probe
 // returned, or one of these codes. The exit status alone won't do, because
 // valgrind overrides it.
 enum { chmap_null_probe_crashed = 250, chmap_null_probe_aborted = 251 };
@@ -6350,7 +6350,7 @@ static int chmap_null_run_probe(int (*probe)(void)) {
   return chmap_null_probe_crashed;
 }
 
-// The probes: each passes a NULL char * from getenv() to one typed macro and
+// The probes: Each passes a NULL char * from getenv() to one typed macro and
 // gives 1 when the macro answers as documented.
 static int chmap_null_probe_get_ptr_key(void) {
   unsetenv(CHMAP_NULL_TEST_UNSET_VAR);
@@ -6438,7 +6438,7 @@ TEST(chmap_null_char_ptr, get_of_a_null_key_is_fatal) {
 
 // Binary keys
 
-// A 32-byte digest in a struct is a binary key for the typed macros: all its
+// A 32-byte digest in a struct is a binary key for the typed macros: All its
 // bytes count, zero bytes included.
 typedef struct {
   unsigned char b[32];
@@ -6543,7 +6543,7 @@ typedef union {
   max_align_t align;
 } fp_header_t;
 
-// The footprint allocator: counts blocks and bytes in g_fp and fails the
+// The footprint allocator: Counts blocks and bytes in g_fp and fails the
 // allocation numbered g_fp.fail_at.
 static void *fp_malloc(size_t n) {
   g_fp.calls++;
@@ -7075,7 +7075,7 @@ TEST(footprint, a_value_moves_between_inline_and_heap_storage) {
   REQUIRE_EQ(left, 0L);
 }
 
-// The arena allocator: adjacent blocks from one arena with no headers, each
+// The arena allocator: Adjacent blocks from one arena with no headers, each
 // live block in a table, nothing reused. A pointer array from calloc can start
 // right where the block before it ends.
 enum { ARENA_BYTES = 1 << 16, ARENA_BLOCKS = 256 };
@@ -7186,7 +7186,7 @@ TEST(footprint, a_bucket_array_right_after_the_block_is_still_freed) {
   REQUIRE_EQ(left, 0L);
 }
 
-// Adaptive hashing: fast until a writer sees a flood, then keyed
+// Adaptive hashing: Fast until a writer sees a flood, then keyed
 
 // The Fibonacci multiplier of the fast hash, for building keys by home slot.
 static const uint64_t ah_fib = 0x9E3779B97F4A7C15ULL;
@@ -7756,7 +7756,7 @@ enum { AH_FLOOD_KEYS = 20000 };
 // A generator of flood keys, giving key i of its family.
 typedef unsigned long long (*ah_gen_t)(uint64_t i);
 
-// The result of a flood: where the map switched, the cost per lookup, and
+// The result of a flood: Where the map switched, the cost per lookup, and
 // whether every call worked.
 typedef struct {
   size_t switched_at;
@@ -7913,7 +7913,7 @@ typedef struct {
   uint64_t w[16];
 } ah_xxh_key;
 
-// Builds key number index of the XXH64 multicollision family: digit d of index
+// Builds key number index of the XXH64 multicollision family: Digit d of index
 // in base 3 picks the choice of lane d.
 static void ah_xxh_multicollision_key(unsigned index, ah_xxh_key *key) {
   const uint64_t p1 = 0x9E3779B185EBCA87ULL, p2 = 0xC2B2AE3D27D4EB4FULL;
@@ -9091,7 +9091,7 @@ static void ah_grow_with_random(chmap m, bool sc, uint64_t *next, bool *ok) {
 }
 
 // Runs the open-addressing churn attack of displacement `run` across
-// `rounds` growths: at each size a run of keys and a churning key until the
+// `rounds` growths: At each size a run of keys and a churning key until the
 // map switches, then random keys grow it. Reports the most attack inserts a
 // round needed, how many rounds started fast, and whether the map ended
 // keyed.
@@ -9526,7 +9526,7 @@ TEST(chmap_walk, every_live_entry_once_on_both_backends) {
   REQUIRE_FALSE(null_gives);
 }
 
-// The poisoning allocator: each block has a header of this size and is filled
+// The poisoning allocator: Each block has a header of this size and is filled
 // with 0xA5 when freed, so a read of freed memory gives a wrong value without
 // a sanitizer.
 #define CHMAP_POISON_HDR ((size_t)16)

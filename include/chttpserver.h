@@ -64,7 +64,7 @@ SOFTWARE.
 //
 // Routers are tried from the most specific mount prefix to the least, and the
 // root router last. A mount owns every path under its prefix (judged on the
-// decoded path): its routes answer, or it answers 404 or 405 itself, and its
+// decoded path): Its routes answer, or it answers 404 or 405 itself, and its
 // middleware runs either way, so a guard on a mount covers all of its paths
 // (a nested mount owns its own paths and needs its own guard).
 // Inside one router, routes are tried in registration order. A CHTTP_GET route
@@ -154,7 +154,7 @@ typedef struct chttpsvr_config {
   // IPv6). A literal address listens on that address alone, and an address in
   // brackets means the address inside. A host name listens on its first IPv4
   // address, else its first IPv6 address (the other way round with ipv6_only),
-  // and on that one only: a failed lookup or bind fails the start.
+  // and on that one only: A failed lookup or bind fails the start.
   // "unix://path" binds a Unix domain socket instead and ignores port. A stale
   // socket file there is replaced, but any other file, or a socket that a live
   // server listens on, fails the start, and stop and destroy remove only the
@@ -182,7 +182,7 @@ typedef struct chttpsvr_config {
   // (default 30 s); 0 means no limit. When it passes, a buffered route answers
   // 408 and chttpsvr_req_read() fails with ccol_timed_out. A 0 here or in
   // max_body_read_duration_us doesn't make chttpsvr_destroy() or
-  // chttpsvr_engine_stop() wait for ever: the shutdown force-closes such a
+  // chttpsvr_engine_stop() wait for ever: The shutdown force-closes such a
   // connection once its graceful wait is over.
   uint64_t stream_read_timeout_us;
   // Total time one request body may take to arrive (default 5 minutes); 0 means
@@ -276,7 +276,7 @@ typedef struct chttpsvr_config {
   uint64_t streaming_queue_timeout_us;
 } chttpsvr_config;
 
-// The default configuration as a compound literal: port 8080 on every
+// The default configuration as a compound literal: Port 8080 on every
 // interface, a 4 MiB body limit, no TLS, one worker per CPU and a finite value
 // for every timeout and resource limit, so a server started from it is already
 // bounded against peers that stall or trickle. The fields from
@@ -318,7 +318,7 @@ typedef struct chttpsvr_config {
 // component=http-server-engine and closes the one an earlier call derived; you
 // keep cl. The derived logger serves the running engine and every later one
 // until another call replaces it. CLOG_NULL releases it, which is refused while
-// an engine runs: release it after chttpsvr_engine_wait() and before you
+// an engine runs: Release it after chttpsvr_engine_wait() and before you
 // destroy the allocator of cl or close its file descriptor. Gives ccol_success,
 // ccol_not_permitted for that refused release, ccol_invalid_args for a closed
 // or stale cl (the installed logger stays), or ccol_not_enough_memory.
@@ -333,20 +333,20 @@ ccol_retval chttpsvr_set_engine_logger(clog cl);
 // NULL function pointer, or ccol_not_permitted while an engine runs.
 ccol_retval chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs *mp);
 
-// Sets how many threads the shared reactor uses; 0 means the default of 1. One
-// thread polls and runs every dispatch itself; with more, the reactor follows
-// the num_reactor_threads rule of ceventloop_create_mp(), one poller plus
-// num_threads - 1 dispatch workers. One thread is faster for reused
-// connections, plain or TLS. Raise it for TLS traffic where many clients
-// connect for one request each, so their handshakes spread over the cores. You
-// may call it when chttpsvr_set_engine_mem_mgmt_procs() may be called. Gives
+// Sets how many threads the shared reactor of every server uses; 0 means the
+// default of 1. One thread polls and runs every dispatch itself; with more,
+// one thread polls and num_threads - 1 dispatch workers run the dispatches.
+// One thread is faster for reused connections, plain or TLS. Raise it for TLS
+// traffic where many clients connect for one request each, so their handshakes
+// spread over the cores. Call it only while no engine exists (before the first
+// chttpsvr_start(), or after chttpsvr_engine_wait() returns). Gives
 // ccol_success, or ccol_not_permitted while an engine runs.
 ccol_retval chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
 
 // Blocks until the threads of the shared engine have exited, and returns at
 // once when no engine runs. Use it to keep main() alive until a signal stops
 // the engine, and after the last chttpsvr_destroy(), which only starts the
-// engine teardown on a reaper thread: wait before you return from main(),
+// engine teardown on a reaper thread: Wait before you return from main(),
 // unload the library or free the engine allocator. A call from a handler or
 // middleware of any server is fatal, because that request would wait for a
 // drain that waits for it.
@@ -354,7 +354,7 @@ void chttpsvr_engine_wait(void);
 
 // Asks the shared engine to stop and returns at once. It's async-signal-safe,
 // so a SIGTERM handler can call it, and a handler may call it to shut its own
-// server down. Every running server stops taking requests: idle connections
+// server down. Every running server stops taking requests: Idle connections
 // close, later requests get 503, and responses already running carry
 // Connection: close. chttpsvr_engine_wait() waits for the drain, a destroy that
 // is draining included. A repeated or overlapping call does nothing more, a
@@ -372,17 +372,24 @@ void chttpsvr_engine_stop(void);
 chttpsvr chttpsvr_create_mp(ccol_memmgmt_procs *mprocs, clog cl,
                             char **err_str);
 
-// chttpsvr_create_mp() with the default allocator, for the common case.
+// Creates a server that allocates with malloc. It stays idle until
+// chttpsvr_start(), and routes and middleware can be added before or after
+// that. The server logs through a logger derived from cl with
+// component=http-server, or a FATAL-only stderr logger for CLOG_NULL, and
+// closes it at destroy; you keep cl. Gives the handle, which you free with
+// chttpsvr_destroy(), or CHTTPSVR_NULL with a static string in *err_str (when
+// err_str isn't NULL), for example for a closed or stale cl or a call after the
+// library's exit-time cleanup has run.
 static inline __attribute__((always_inline)) chttpsvr
 chttpsvr_create(clog cl, char **err_str) {
   return chttpsvr_create_mp(NULL, cl, err_str);
 }
 
-// Internal: destroys the server; it's the body of chttpsvr_destroy(), which
+// Internal: Destroys the server; it's the body of chttpsvr_destroy(), which
 // also clears your handle. Use the macro instead.
 void chttpsvr__destroy(chttpsvr srv);
 
-// Internal: destroys *pp and sets it to CHTTPSVR_NULL. The _scoped macros
+// Internal: Destroys *pp and sets it to CHTTPSVR_NULL. The _scoped macros
 // attach it with ccol__destructor, so the server goes away at the end of its
 // scope.
 static inline __attribute__((always_inline)) void chttpsvr__destroy_cleanup(
@@ -407,7 +414,7 @@ static inline __attribute__((always_inline)) void chttpsvr__destroy_cleanup(
   ccol__chttpsvr_destroy_impl( \
       name, ccol__uniq(ccol__chttpsvr_destroy_slot, __COUNTER__))
 
-// Internal: the body of chttpsvr_destroy(). It takes the address of name once
+// Internal: The body of chttpsvr_destroy(). It takes the address of name once
 // into slot, which comes from ccol__uniq() so destroy macros can nest without
 // -Wshadow warnings.
 #define ccol__chttpsvr_destroy_impl(name, slot) \
@@ -417,20 +424,24 @@ static inline __attribute__((always_inline)) void chttpsvr__destroy_cleanup(
     *slot = CHTTPSVR_NULL;                      \
   } while (0)
 
-// Declares an uninitialized server handle; create the server with
-// chttpsvr_create() later.
+// Declares a server handle variable called name with no value; create the
+// server with chttpsvr_create() later and free it with chttpsvr_destroy().
 #define chttpsvr_declare(name) chttpsvr name
 
-// Declares a server handle set to CHTTPSVR_NULL that is destroyed at the end of
-// its scope.
+// Declares a server handle variable called name, set to CHTTPSVR_NULL, that is
+// destroyed when it goes out of scope if it then holds a server. Create the
+// server with chttpsvr_create(). The scope-end destroy stops and drains the
+// server like chttpsvr_destroy(), and is a fatal error for a stale handle or
+// when it runs in a handler or middleware of that server.
 #define chttpsvr_declare_scoped(name) \
   chttpsvr name ccol__destructor(chttpsvr__destroy_cleanup) = CHTTPSVR_NULL
 
-// These declare name and create a server whose logger derives from cl (or is
-// the FATAL-only stderr logger for CLOG_NULL; see chttpsvr_create_mp()), so a
-// program that can't run without its server needs no error handling. They stop
-// the program with ccol__fatal_err() when the create fails. The _scoped form
-// also destroys the server at the end of the scope.
+// Declares a server handle variable called name and creates the server in one
+// step, with the default allocator and a logger derived from cl (a FATAL-only
+// stderr logger for CLOG_NULL; you keep cl). A program that can't run without
+// its server needs no error handling: A failed create stops the program with a
+// fatal error that names the variable and the reason. Start it with
+// chttpsvr_start() and free it with chttpsvr_destroy().
 #define chttpsvr_construct(name, cl)                                    \
   chttpsvr name = CHTTPSVR_NULL;                                        \
   do {                                                                  \
@@ -442,6 +453,11 @@ static inline __attribute__((always_inline)) void chttpsvr__destroy_cleanup(
     }                                                                   \
   } while (0)
 
+// Declares a server handle variable called name and creates the server in one
+// step, with the default allocator and a logger derived from cl (a FATAL-only
+// stderr logger for CLOG_NULL; you keep cl). The server is stopped, drained and
+// destroyed when name goes out of scope. A failed create stops the program with
+// a fatal error that names the variable and the reason.
 #define chttpsvr_construct_scoped(name, cl)                                  \
   chttpsvr name ccol__destructor(chttpsvr__destroy_cleanup) = CHTTPSVR_NULL; \
   do {                                                                       \
@@ -496,7 +512,7 @@ ccol_retval chttpsvr_is_running(chttpsvr srv, bool *running_out);
 // socket; *port_out is 0 on failure.
 ccol_retval chttpsvr_bound_port(chttpsvr srv, uint16_t *port_out);
 
-// Writes the address the listener bound into buf: the numeric address without
+// Writes the address the listener bound into buf: The numeric address without
 // port or brackets for TCP, or "unix://path" for a Unix socket, so the text can
 // be the host of another configuration. Gives ccol_success, ccol_invalid_args
 // for a bad handle, a NULL buf or a buflen of 0, ccol_not_permitted when the
@@ -504,7 +520,7 @@ ccol_retval chttpsvr_bound_port(chttpsvr srv, uint16_t *port_out);
 // holds "" on failure.
 ccol_retval chttpsvr_bound_address(chttpsvr srv, char *buf, size_t buflen);
 
-// Registers a buffered route on the root router: the server reads the whole
+// Registers a buffered route on the root router: The server reads the whole
 // body, then runs fn(req, resp, ctx) on a worker thread. method is one of the
 // seven methods, or CHTTP_ANY for all of them; a route registered earlier for
 // one method wins over a later CHTTP_ANY on the same pattern. pattern starts
@@ -515,11 +531,15 @@ ccol_retval chttpsvr_register_handler(chttpsvr srv, chttp_method method,
                                       const char *pattern,
                                       chttpsvr_handler_fn fn, void *ctx);
 
-// Registers a streaming route on the root router: fn runs on the streaming pool
-// right after the headers and reads the body with chttpsvr_req_read() as it
-// arrives. A request that finds no free streaming thread waits in the streaming
-// queue, and gets 503 when the queue is full or its wait runs out. The
-// arguments and results are those of chttpsvr_register_handler().
+// Registers a streaming route on the root router: fn(req, resp, ctx) runs on
+// the streaming pool right after the headers and reads the body with
+// chttpsvr_req_read() as it arrives. A request that finds no free streaming
+// thread waits in the streaming queue, and gets 503 when the queue is full or
+// its wait runs out. method is one of the seven methods, or CHTTP_ANY for all
+// of them. pattern starts with '/' and may hold {name} parameters of
+// [A-Za-z0-9_], each name once, with no double or trailing slash. Gives
+// ccol_success, ccol_not_enough_memory, or ccol_invalid_args for a bad handle,
+// method or pattern, or a NULL fn.
 ccol_retval chttpsvr_register_streaming_handler(chttpsvr srv,
                                                 chttp_method method,
                                                 const char *pattern,
@@ -539,7 +559,7 @@ ccol_retval chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx);
 
 // Creates a sub-router for prefix, so a group of routes can share a prefix and
 // middleware. It owns every path equal to prefix or continuing it with '/'
-// (unless a more specific mount does): such a request reaches its routes or
+// (unless a more specific mount does): Such a request reaches its routes or
 // gets its 404 or 405, never a root-level route, and its middleware runs after
 // the global middleware. prefix starts with '/', has no double slash, and loses
 // a trailing slash. The prefix "/" owns the exact path "/" only, so it's the
@@ -550,22 +570,36 @@ ccol_retval chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx);
 // exits. Gives NULL for a bad handle or prefix, or when memory runs out.
 chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix);
 
-// chttpsvr_register_handler() for a sub-router: the route matches prefix plus
-// pattern, so "/api/v1" plus "/users/{id}" matches "/api/v1/users/42". It also
-// gives ccol_invalid_args when router is NULL or its server is destroyed.
+// Registers a buffered route on a sub-router: The server reads the whole body,
+// then runs fn(req, resp, ctx) on a worker thread. The route matches the
+// router's prefix plus pattern, so "/api/v1" plus "/users/{id}" matches
+// "/api/v1/users/42". method is one of the seven methods, or CHTTP_ANY for all
+// of them. pattern starts with '/' and may hold {name} parameters of
+// [A-Za-z0-9_], each name once, with no double or trailing slash. Gives
+// ccol_success, ccol_not_enough_memory, or ccol_invalid_args for a NULL router,
+// pattern or fn, a bad method or pattern, or a router whose server is
+// destroyed.
 ccol_retval chttpsvr_router_on(chttpsvr_router *router, chttp_method method,
                                const char *pattern, chttpsvr_handler_fn fn,
                                void *ctx);
 
-// chttpsvr_register_streaming_handler() for a sub-router, with the rules of
-// chttpsvr_router_on().
+// Registers a streaming route on a sub-router: fn(req, resp, ctx) runs on the
+// streaming pool right after the headers and reads the body with
+// chttpsvr_req_read() as it arrives. The route matches the router's prefix
+// plus pattern, so "/api" plus "/upload" matches "/api/upload". method is one
+// of the seven methods, or CHTTP_ANY for all of them. pattern starts with '/'
+// and may hold {name} parameters of [A-Za-z0-9_], each name once, with no
+// double or trailing slash. Gives ccol_success, ccol_not_enough_memory, or
+// ccol_invalid_args for a NULL router, pattern or fn, a bad method or pattern,
+// or a router whose server is destroyed.
 ccol_retval chttpsvr_router_on_stream(chttpsvr_router *router,
                                       chttp_method method, const char *pattern,
                                       chttpsvr_handler_fn fn, void *ctx);
 
 // Adds middleware to a sub-router. It runs after the global middleware and
-// before the sub-router's handlers, and for the 404, 405 and 413 rejections of
-// its paths (see chttpsvr_use()). Gives ccol_success, ccol_not_enough_memory,
+// before the sub-router's handlers, in registration order. It also runs for the
+// 404, 405 and 413 rejections of the router's paths; such a request has no
+// path parameters and no body. Gives ccol_success, ccol_not_enough_memory,
 // ccol_invalid_args for a NULL router or fn or a destroyed server, or
 // ccol_not_permitted when the chain holds 32 entries.
 ccol_retval chttpsvr_router_use(chttpsvr_router *router,
@@ -579,7 +613,7 @@ chttp_method chttpsvr_req_method(const chttpsvr_req *req);
 // Gives the decoded request path that the routes matched. It always begins with
 // '/', and an absolute-form target gives the path of its URL. A rejected
 // request whose percent-encoding is malformed has no decoded form, so a
-// middleware gets that path as it arrived. "OPTIONS *" never reaches you: the
+// middleware gets that path as it arrived. "OPTIONS *" never reaches you: The
 // server answers it with 200 itself. The string lives as long as the request.
 const char *chttpsvr_req_path(const chttpsvr_req *req);
 
@@ -712,7 +746,7 @@ void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
 // the server adds no Content-Type of its own. name must be a non-empty RFC 7230
 // token and value must hold no control byte other than the tab, so reflected
 // data can't inject header lines. Connection is stored but never sent, because
-// the server writes its own. Content-Length must be digits: a response with a
+// the server writes its own. Content-Length must be digits: A response with a
 // body carries the real body length instead, a 304 or a HEAD without a body
 // carries yours, a 205 carries 0 and a 204 none. A Date you set replaces the
 // server's. Transfer-Encoding is refused. Gives ccol_success,
@@ -722,26 +756,33 @@ ccol_retval chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
                                      const char *value);
 
 // Adds one more header field after the existing ones and keeps fields of the
-// same name, so a response can carry two Set-Cookie lines. name and value are
-// checked as by chttpsvr_resp_set_header(), with the same results; Connection,
-// Content-Length and Date stay single and get replaced instead.
+// same name, so a response can carry two Set-Cookie lines. name must be a
+// non-empty RFC 7230 token and value must hold no control byte other than the
+// tab; Transfer-Encoding is refused. Connection, Content-Length and Date stay
+// single: Adding one replaces the earlier field. Gives ccol_success,
+// ccol_not_enough_memory, or ccol_invalid_args for a NULL argument or a refused
+// name or value; a failed call changes nothing.
 ccol_retval chttpsvr_resp_add_header(chttpsvr_resp *resp, const char *name,
                                      const char *value);
 
 // Appends len bytes of data to the response body, which the server sends after
 // the handler returns. A final status of 204, 205 or 304 drops the body
-// silently, with no error anywhere. Gives ccol_success, ccol_invalid_args or
-// ccol_not_enough_memory.
+// silently, with no error anywhere. Gives ccol_success, ccol_invalid_args for a
+// NULL resp or a NULL data with len above 0, or ccol_not_enough_memory.
 ccol_retval chttpsvr_resp_write(chttpsvr_resp *resp, const void *data,
                                 size_t len);
 
-// Appends a NUL-terminated string to the body, as chttpsvr_resp_write() does.
+// Appends the NUL-terminated string str, without its NUL, to the response body,
+// which the server sends after the handler returns. A final status of 204, 205
+// or 304 drops the body. Gives ccol_success, ccol_invalid_args for a NULL resp
+// or str, or ccol_not_enough_memory.
 ccol_retval chttpsvr_resp_write_str(chttpsvr_resp *resp, const char *str);
 
-// Formats fmt and its arguments as printf() does and appends the result to the
-// body, as chttpsvr_resp_write_str() does. Gives ccol_invalid_args for a NULL
-// resp or fmt, or when the formatting fails, and otherwise what
-// chttpsvr_resp_write() gives.
+// Formats fmt and its arguments with the rules of printf() and appends the
+// result to the response body, which the server sends after the handler
+// returns. A final status of 204, 205 or 304 drops the body. Gives
+// ccol_success, ccol_invalid_args for a NULL resp or fmt or when the formatting
+// fails, or ccol_not_enough_memory.
 ccol_retval chttpsvr_resp_printf(chttpsvr_resp *resp, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 

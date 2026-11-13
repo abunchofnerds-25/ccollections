@@ -28,11 +28,11 @@ owns child and must destroy it itself.  Every other failure takes
 child and deep-frees it before the function returns, so the caller
 must not destroy child after any of them.
 
-These give ccol_invalid_args: a NULL child, a NULL map, a NULL key, a
+These give ccol_invalid_args: A NULL child, a NULL map, a NULL key, a
 key that is not well-formed UTF-8, a map that is not a
 CYAML_DICTIONARY, a child that is attached to a list or dictionary
 parent, and a child that is map itself.  There is one exception to
-the attachment rule: you can set key to the value it already holds.
+the attachment rule: You can set key to the value it already holds.
 The function then accepts the borrowed reference that this same slot
 owns, does nothing and returns ccol_success.
 

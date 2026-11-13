@@ -26,7 +26,7 @@
  * @file bench.h
  * @brief Measurement harness shared by every benchmark group.
  *
- * A benchmark is a bench_case_t: a setup that builds the state the measured
+ * A benchmark is a bench_case_t: A setup that builds the state the measured
  * work needs, a run that does exactly n operations, and a teardown. The
  * harness only times the run, and it repeats the setup and the teardown for
  * every repetition, so a case that changes its own state, like one that fills
@@ -35,7 +35,7 @@
  *
  * Results are in nanoseconds per operation. The harness takes the median
  * across the repetitions and not the mean, because the distribution has one
- * long side: the scheduler can stop a repetition or move it to another CPU
+ * long side: The scheduler can stop a repetition or move it to another CPU
  * for any length of time, but nothing can make a repetition faster than the
  * work it does, so one outlier moves a mean and leaves a median alone.
  *

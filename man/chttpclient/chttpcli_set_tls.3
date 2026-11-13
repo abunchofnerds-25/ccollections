@@ -13,7 +13,7 @@ ccol_retval chttpcli_set_tls(chttpcli cli,
 .SH DESCRIPTION
 .nf
 This function copies the TLS configuration you pass into the client.
-A tls of NULL brings the defaults back: chain and hostname
+A tls of NULL brings the defaults back: Chain and hostname
 verification, the system CA bundle and no client certificate.
 
 The strings of chttp_tls_config (cert_path, key_path and
@@ -28,7 +28,7 @@ a directory or anything else that is not a file, is accepted here
 without an error and then gives ccol_http_tls_cert_load_failed from
 chttpcli_do or chttpcli_do_streaming once a request needs it.
 
-The system CA bundle is OpenSSL's default CA file: the file that the
+The system CA bundle is OpenSSL's default CA file: The file that the
 SSL_CERT_FILE environment variable names, or otherwise the file that
 OpenSSL was built with (the variable is ignored in a set-user-ID or
 set-group-ID process). The library reads it through a close-on-exec
@@ -52,7 +52,7 @@ kilobytes), so only a path that points at something other than a PEM
 file can hit the limit.
 
 ca_bundle_path must also yield at least one certificate. A readable
-file can still parse to no certificate at all: an empty file, a key on
+file can still parse to no certificate at all: An empty file, a key on
 its own, or a file that isn't PEM. The client reports
 ccol_http_tls_cert_load_failed for such a file, because it won't
 accept a trust store that trusts no issuer.
@@ -73,7 +73,7 @@ would leave an mTLS deployment believing it presents a client
 certificate when it never does.
 
 A chttp_tls_config whose bytes are all zero is the SAFE
-configuration: it verifies the server's certificate chain and matches
+configuration: It verifies the server's certificate chain and matches
 its hostname. Both verification fields are named for what you give up
 by turning them ON, so a struct built with = {0}, or with a designated
 initializer that names only some of its fields, can never end up

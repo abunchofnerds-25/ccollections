@@ -35,7 +35,7 @@ TAU_MAIN()
 
 // chttpsvr_set_engine_mem_mgmt_procs() may be called only before the first
 // chttpsvr_start() of the process, and tests.c starts a server in its _setup().
-// So this file is a binary of its own: it installs counting procs and starts
+// So this file is a binary of its own: It installs counting procs and starts
 // the shared engine exactly once, before anything else in the process can.
 
 // The fixed port of this binary's server and its base URL, so the client in
@@ -54,7 +54,7 @@ static size_t g_mm_free_count = 0;
 static size_t g_mm_calloc_count = 0;
 static size_t g_mm_realloc_count = 0;
 
-// Counting wrappers: each passes the call on to the C library and bumps its
+// Counting wrappers: Each passes the call on to the C library and bumps its
 // g_mm_*_count, so the tests can show that the engine allocates through the
 // installed procs. They don't change how the allocator behaves, so the engine
 // works normally while we count.
@@ -232,7 +232,7 @@ TEST(chttpserver_mem_mgmt, num_reactor_threads_rejected_while_running) {
 
 // The procs may be installed again after chttpsvr_engine_wait() and before the
 // next start. A sticky "engine runs" latch fails this test alone. It must be
-// the last test of the file: it stops the engine, installs the procs and a
+// the last test of the file: It stops the engine, installs the procs and a
 // reactor thread count again, starts a fresh server on the same port as g_srv
 // (so _teardown() cleans up normally) and requires the counters to move past a
 // snapshot taken before the restart, because a reinstall that did nothing would

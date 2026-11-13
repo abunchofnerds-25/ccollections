@@ -108,7 +108,7 @@ static lru_state_t *lru_make(size_t n, size_t key_span, bool prefill) {
 
 /* We use half the capacity and not all of it, so this case really does hit
    every time. A segmented cache doesn't keep every key when you fill it to
-   exactly its capacity: the keys spread across segments, each segment has its
+   exactly its capacity: The keys spread across segments, each segment has its
    own bound, and a segment that gets more than its share evicts while the
    whole cache is still below its capacity. Measured with a span equal to the
    capacity, 4009 of 4096 keys stay and 2.16 percent of the lookups miss,

@@ -22,7 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-// A compile-time probe: every public macro of chashmap.h must nest inside
+// A compile-time probe: Every public macro of chashmap.h must nest inside
 // another public macro and inside itself under -Wshadow -Werror. The Makefile
 // compiles this file with -fsyntax-only; nothing here runs.
 

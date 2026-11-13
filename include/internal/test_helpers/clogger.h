@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal: the test hooks of clogger. src/clogger.c defines them and the
+// Internal: The test hooks of clogger. src/clogger.c defines them and the
 // clogger tests call them to force failures, hold a thread at a chosen point
 // and read state the public API doesn't show. They exist only when
 // RUNNING_UNIT_TESTS is defined, so nothing here is installed or exported.

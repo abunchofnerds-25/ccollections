@@ -26,7 +26,7 @@ SOFTWARE.
 // cyaml__delete() read, the counterpart of fuzz_cjson_path.c. The path walker
 // is a second parser that mutates the DOM the first one built, and aliases,
 // merge keys and tags give it shapes a plain parse never exercises. The input
-// splits at its first NUL: the bytes before it are parsed as YAML and the bytes
+// splits at its first NUL: The bytes before it are parsed as YAML and the bytes
 // after it are the path. An input with no NUL or an empty path is skipped,
 // since fuzz_cyaml covers it already.
 #include <cyaml.h>
@@ -34,7 +34,7 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-// Runs one input: parses the document, then gets, sets and deletes the path,
+// Runs one input: Parses the document, then gets, sets and deletes the path,
 // and serializes the mutated tree. The last byte of the input picks which C
 // type cyaml_set() writes, so every accepted type is driven and a saved crash
 // replays the same branch.

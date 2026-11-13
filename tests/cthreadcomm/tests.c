@@ -510,7 +510,7 @@ TEST(circular_queues, timed_calls_with_a_zero_timeout_are_the_try_variants) {
 }
 
 // A forced wait error with the queue still full gives ccol_unexpected_failure
-// quickly: the loop must neither hide the error nor retry for ever.
+// quickly: The loop must neither hide the error nor retry for ever.
 TEST(circular_queues, timed_send_reports_unexpected_failure_on_condvar_error) {
   ccircq *cq = ccircq_create(1, NULL);
   cmessage filler = {.data = malloc(1), .size = 1};
@@ -567,7 +567,7 @@ TEST(circular_queues, timed_send_condvar_error_racing_freed_slot_still_sends) {
   ccircq_destroy(cq);
 }
 
-// The receive-side mirror: a forced error on an empty queue with no race gives
+// The receive-side mirror: A forced error on an empty queue with no race gives
 // ccol_unexpected_failure quickly.
 TEST(circular_queues, timed_recv_reports_unexpected_failure_on_condvar_error) {
   ccircq *cq = ccircq_create(1, NULL);
@@ -627,7 +627,7 @@ typedef struct {
   atomic_bool finished;
 } ccol_wake_args;
 
-// Thread bodies of the wake tests: each makes one long timed call on a->cq or
+// Thread bodies of the wake tests: Each makes one long timed call on a->cq or
 // a->dq, so the test has a waiter to park and release. They store the result in
 // a->retval and then set a->finished.
 static void *_wake_circq_timed_recv(void *arg) {
@@ -1760,7 +1760,7 @@ TEST(channels, create_and_destroy_with_mp) {
   REQUIRE_EQ((void *)ch, NULL);
 }
 
-// The worker side of the basic channel test: receives "A" and sends it back to
+// The worker side of the basic channel test: Receives "A" and sends it back to
 // the owner. Helper threads check with assert(), since tau's assertions aren't
 // thread-safe.
 void *thr_for_channels_basic_send_and_receive(void *args) {
@@ -1831,7 +1831,7 @@ TEST(channels, basic_send_and_receive_with_mp) {
   cchan_destroy(ch);
 }
 
-// The worker side of the channel msg_count test: takes the three queued
+// The worker side of the channel msg_count test: Takes the three queued
 // messages and sends three back, checking the count of each direction after
 // every step.
 void *thr_for_channels_msg_count(void *args) {
@@ -1912,7 +1912,7 @@ static bool chan_wait_phase(chan_turns_t *t, int want) {
   return false;
 }
 
-// The worker side of the channel try test: once t->phase allows it, it checks
+// The worker side of the channel try test: Once t->phase allows it, it checks
 // try_recv and try_send against the states the main thread set up, recording a
 // failed check through CHAN_CHECK.
 void *thr_for_channels_try_send_and_try_receive(void *args) {
@@ -2001,7 +2001,7 @@ TEST(channels, try_send_and_try_receive) {
 #define CHAN_LONG_US 1000000
 #define CHAN_AT_ONCE_US 500000
 
-// The worker side of the timed channel test: once t->phase allows it, it checks
+// The worker side of the timed channel test: Once t->phase allows it, it checks
 // each timed call against the states the main thread set up, timing it with the
 // CHAN_*_US bounds.
 void *thr_for_channels_timed_send_and_timed_receive(void *args) {
@@ -2117,7 +2117,7 @@ TEST(channels, timed_send_and_timed_receive) {
   REQUIRE_TRUE(empty_left_null);
 }
 
-// The worker side of the channel enable/disable test: receives "A", then checks
+// The worker side of the channel enable/disable test: Receives "A", then checks
 // that a send is refused while sends toward the owner are off and goes through
 // once they are back on.
 void *thr_for_enable_disable_sending(void *args) {
@@ -2408,7 +2408,7 @@ TEST(cselect, blocks_until_message_arrives_on_circq) {
   ccircq_destroy(q1);
 }
 
-// Sends off doesn't affect a read wait: the call waits out its timeout instead
+// Sends off doesn't affect a read wait: The call waits out its timeout instead
 // of returning ccol_not_permitted.
 TEST(cselect, timed_returns_timed_out_when_all_queues_disabled) {
   ccircq *q0 = ccircq_create(4, NULL);
@@ -3738,7 +3738,7 @@ static void evl_sync_ctx_destroy(evl_sync_ctx *c) {
   pthread_cond_destroy(&c->cond);
 }
 
-// The generic read callback of the loop tests: counts the dispatch in
+// The generic read callback of the loop tests: Counts the dispatch in
 // c->readable_count and records its direction, under c->mtx. The loop never
 // receives for the caller, so for a queue it does the try_recv here, as a real
 // caller does, and keeps the message in c->last_msg. A failed try_recv (another
@@ -3771,7 +3771,7 @@ static void evl_on_readable(ceventloop loop, ceventloop_reg reg,
   pthread_mutex_unlock(&c->mtx);
 }
 
-// The generic write callback of the loop tests: counts the dispatch in
+// The generic write callback of the loop tests: Counts the dispatch in
 // c->writable_count and records its direction, under c->mtx.
 static void evl_on_writable(ceventloop loop, ceventloop_reg reg,
                             cselectable *sel, void *arg) {
@@ -3785,7 +3785,7 @@ static void evl_on_writable(ceventloop loop, ceventloop_reg reg,
   pthread_mutex_unlock(&c->mtx);
 }
 
-// The generic error callback of the loop tests: counts the dispatch in
+// The generic error callback of the loop tests: Counts the dispatch in
 // c->error_count under c->mtx.
 static void evl_on_error(ceventloop loop, ceventloop_reg reg, cselectable *sel,
                          void *arg) {
@@ -3801,7 +3801,7 @@ static void evl_on_error(ceventloop loop, ceventloop_reg reg, cselectable *sel,
 
 // Removes its own registration (c->self_loop, c->self_reg) from inside the
 // callback, then acts like evl_on_readable(); the remove-from-callback test
-// uses it. It checks with assert(): it runs on a reactor thread, and tau's
+// uses it. It checks with assert(): It runs on a reactor thread, and tau's
 // assertions aren't thread-safe. Every background helper of this file does the
 // same.
 static void evl_on_readable_self_remove(ceventloop loop, ceventloop_reg reg,
@@ -3828,7 +3828,7 @@ static bool evl_wait_for(evl_sync_ctx *c, int *counter_field, int target,
   }
 }
 
-// Sets O_NONBLOCK on fd. Callbacks that read the fd themselves need it: under
+// Sets O_NONBLOCK on fd. Callbacks that read the fd themselves need it: Under
 // concurrent dispatch a callback may find nothing to read, and a blocking
 // read() then hangs the reactor thread and the shutdown that joins it.
 static void evl_set_nonblocking(int fd) {
@@ -3925,7 +3925,7 @@ TEST(ceventloop, fd_on_writable_fires) {
   close(pfd[1]);
 }
 
-// One socket fd with both directions: an add, a combine with MOD, and the MOD
+// One socket fd with both directions: An add, a combine with MOD, and the MOD
 // back down when one direction is removed.
 TEST(ceventloop, fd_both_directions_combine_and_recombine) {
   int sv[2];
@@ -4146,7 +4146,7 @@ TEST(
 static atomic_bool evl_readd_gate_closed;
 static atomic_bool evl_readd_in_callback;
 
-// The callback of the re-add tests: waits (bounded) while
+// The callback of the re-add tests: Waits (bounded) while
 // evl_readd_gate_closed is set, after setting evl_readd_in_callback, then
 // drains the fd without blocking and counts a readable dispatch in the
 // evl_sync_ctx at arg.
@@ -4289,7 +4289,7 @@ TEST(ceventloop, fd_readded_after_remove_fires_after_old_entry_reclaim) {
   for (int i = 0; i < k; i++) REQUIRE_EQ(fails[i], 0);
 }
 
-// Runs the in-flight re-add case: removes a registration while its callback is
+// Runs the in-flight re-add case: Removes a registration while its callback is
 // held by the gate and registers the fd again meanwhile. Neither the re-arm
 // after that callback nor the reclaim of the old entry may touch the new
 // registration's interest. Returns a bit set of failures (0 on success).
@@ -4701,7 +4701,7 @@ typedef struct evl_two_readers_ctx {
   _Atomic size_t calls;
 } evl_two_readers_ctx;
 
-// The slow head of the starvation test: takes one message, sleeps 0.5 ms and
+// The slow head of the starvation test: Takes one message, sleeps 0.5 ms and
 // counts the call. It is slower than the feeder on purpose, so a backlog builds
 // behind it and the cascade has something to forward.
 static void evl_two_readers_slow_on_readable(ceventloop loop,
@@ -5136,7 +5136,7 @@ static bool evl_wait_bool(pthread_mutex_t *mtx, pthread_cond_t *cond,
   }
 }
 
-// A callback the test holds in flight: drains the fd, sets callback_started,
+// A callback the test holds in flight: Drains the fd, sets callback_started,
 // blocks until the test sets release_callback and sets callback_finished. The
 // 20 s bound only stops a hang; a shorter one could release a correct build
 // early.
@@ -5162,7 +5162,7 @@ static void evl_on_readable_slow(ceventloop loop, ceventloop_reg reg,
   pthread_mutex_unlock(&c->mtx);
 }
 
-// The on_removed of the slow-callback tests: records that it ran, its argument
+// The on_removed of the slow-callback tests: Records that it ran, its argument
 // and whether the callback had finished by then, so the test can check the
 // order.
 static void evl_on_removed_slow(void *arg) {
@@ -5547,7 +5547,7 @@ TEST(ceventloop, reg_count_tracks_add_remove) {
 // into a registry. Otherwise a failed slot allocation returns
 // CEVENTLOOP_REG_NULL for a registration that can already dispatch with an arg
 // the caller then frees. The reg count snapshot taken at the forced failure
-// proves the order: it would read 1 if the wiring came first.
+// proves the order: It would read 1 if the wiring came first.
 TEST(ceventloop, add_slot_acquire_failure_leaves_nothing_wired_or_dispatched) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -5831,7 +5831,7 @@ TEST(ceventloop, fd_modify_after_remove_returns_invalid_args_multi_stripe) {
 
 // Pause and resume
 //
-// The test pauses before anything makes the fd ready: a pause that races a
+// The test pauses before anything makes the fd ready: A pause that races a
 // delivery can't be ordered against the re-arm of a dispatch thread. A bounded
 // wait stands in for "never".
 TEST(ceventloop, pause_stops_delivery_then_resume_restores_it) {
@@ -6057,7 +6057,7 @@ TEST(ceventloop, pause_resume_preserve_reg_count_and_generation) {
 // The write direction of a socket hears nothing about the end of its receive
 // direction; epoll reports no event for OUT|ERR|HUP when the peer only shuts
 // down its sending side. On kqueue a write interest that arms the read filter
-// fails both tests: the select asserts and the loop's poller spins.
+// fails both tests: The select asserts and the loop's poller spins.
 TEST(fd_half_close, a_write_select_on_a_half_closed_socket_reports_writable) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
@@ -6248,7 +6248,7 @@ static void evl_on_readable_pause_self(ceventloop loop, ceventloop_reg reg,
   evl_on_readable(loop, reg, sel, a->ctx);
 }
 
-// The pattern chttpserver depends on: a callback pauses its own registration,
+// The pattern chttpserver depends on: A callback pauses its own registration,
 // and a thread that isn't one of the loop's resumes it later.
 TEST(ceventloop, pause_from_within_callback_then_resume_from_another_thread) {
   int pfd[2];
@@ -6322,7 +6322,7 @@ static void evl_early_reg_on_removed(void *arg) {
   atomic_fetch_add(&c->removed_count, 1);
 }
 
-// The add hook of the early-callback test: runs inside ceventloop_add() and
+// The add hook of the early-callback test: Runs inside ceventloop_add() and
 // waits, for at most 10 s, until the first dispatch of the new registration has
 // finished. It does nothing while g_evl_early_reg_ctx is NULL.
 static void evl_early_reg_add_hook(void) {
@@ -6396,7 +6396,7 @@ typedef struct {
   ccircq **cq_log;
 } evl_stripe_stress_args;
 
-// One worker of the fd stripe stress test: registers its pipe, writes to it,
+// One worker of the fd stripe stress test: Registers its pipe, writes to it,
 // waits for the dispatch and removes the registration, iterations times. Each
 // context goes into a->ctx_log to be freed after the loop is joined.
 static void *evl_stripe_stress_fd_worker(void *arg) {
@@ -6475,7 +6475,7 @@ TEST(ceventloop, multi_threaded_multi_fd_stress_with_stripes) {
   REQUIRE_EQ(residual_regs, (size_t)0);
 }
 
-// One worker of the queue stripe stress test: registers a new circular queue,
+// One worker of the queue stripe stress test: Registers a new circular queue,
 // sends to it, waits for the dispatch and removes the registration, iterations
 // times. Each queue goes into a->cq_log beside its context.
 static void *evl_stripe_stress_queue_worker(void *arg) {
@@ -6688,7 +6688,7 @@ static void *evl_feeder_thread(void *arg) {
   return NULL;
 }
 
-// The thundering-herd case: many reactor threads and one hot fd. The entry's
+// The thundering-herd case: Many reactor threads and one hot fd. The entry's
 // dispatch lock must keep active at 1.
 TEST(ceventloop, multi_thread_no_double_dispatch_same_fd) {
   int pfd[2];
@@ -6760,7 +6760,7 @@ static void evl_cross_dir_on_readable(ceventloop loop, ceventloop_reg reg,
   atomic_fetch_add(&c->total_calls, 1);
 }
 
-// The write-direction twin of evl_cross_dir_on_readable(): holds the same
+// The write-direction twin of evl_cross_dir_on_readable(): Holds the same
 // window under the same active count.
 static void evl_cross_dir_on_writable(ceventloop loop, ceventloop_reg reg,
                                       cselectable *sel, void *arg) {
@@ -6874,7 +6874,7 @@ typedef struct evl_reuse_driver_args {
   int pfd[2];
 } evl_reuse_driver_args;
 
-// One driver of the generation test: registers its fd, writes, waits for the
+// One driver of the generation test: Registers its fd, writes, waits for the
 // dispatch and removes it, iterations times, adding the mismatches to
 // a->mismatch_total. The remove waits for the dispatch, because a callback that
 // reads the generation after the remove gets 0 and counts a false mismatch.
@@ -6984,7 +6984,7 @@ TEST(ceventloop, multi_thread_shutdown_joins_poller_promptly) {
   ceventloop_destroy(loop);
 }
 
-// The other half of a shutdown: the drain of a large idle dispatch pool must
+// The other half of a shutdown: The drain of a large idle dispatch pool must
 // wake every worker within the bound.
 TEST(ceventloop, multi_thread_shutdown_drains_idle_dispatch_pool_promptly) {
   char *err = NULL;
@@ -7770,7 +7770,7 @@ static void *evl_reg_count_thread(void *arg) {
   return NULL;
 }
 
-// The fast counterpart of the test above: a resolve, read and unpin with no
+// The fast counterpart of the test above: A resolve, read and unpin with no
 // sleep races a destroy, on a fresh loop each round, many times. The window of
 // a lock-free pin is a few instructions wide.
 TEST(ceventloop_handle_lifecycle, resolve_unpin_race_stress) {
@@ -7958,7 +7958,7 @@ typedef struct {
 
 // Locks a->cq's mutex, sets a->locked, holds it for a->hold_ms, sets
 // a->released and unlocks, so the test can fork while another thread holds the
-// mutex. It releases on its own schedule: the fork's prepare handler waits for
+// mutex. It releases on its own schedule: The fork's prepare handler waits for
 // this unlock, so a release that waited for the forking thread would deadlock.
 // released is stored before the unlock, so fork() can't return before it is
 // visible.
@@ -8872,7 +8872,7 @@ TEST(ceventloop, queue_destroy_waits_for_an_already_collected_dispatch) {
 
 // A cselect() waiter that gives up its wait must not swallow the wake
 //
-// One waiter thread: its queue and timeout, and what its select returned.
+// One waiter thread: Its queue and timeout, and what its select returned.
 typedef struct sel_forward_ctx {
   ccircq *cq;
   int timeout_ms;
@@ -9177,7 +9177,7 @@ TEST(ceventloop, fd_error_only_write_registration_does_not_spin_multi_thread) {
   REQUIRE_EQ(errors_seen, 0);
 }
 
-// Timed waits: the deadline and the condition variable share one clock
+// Timed waits: The deadline and the condition variable share one clock
 //
 // One timed call on its own thread. It stores its result and elapsed time under
 // mtx and sets returned.
@@ -9223,7 +9223,7 @@ static void timed_clock_ctx_finish(timed_clock_ctx *c, ccol_retval rv,
   pthread_mutex_unlock(&c->mtx);
 }
 
-// The threads of the clock tests: each makes one timed call with a 100 ms
+// The threads of the clock tests: Each makes one timed call with a 100 ms
 // timeout on c->cq or c->dq and reports it through timed_clock_ctx_finish(), so
 // the test can see a call that returns too soon or never.
 static void *timed_clock_circq_recv_thread(void *arg) {
@@ -9423,7 +9423,7 @@ TEST(dynamic_queues, timed_recv_deadline_matches_its_condition_variable) {
 // The kinds of selectable the victim of the teardown can be.
 enum { XQD_CIRCQ = 0, XQD_DYNQ = 1, XQD_CHAN = 2 };
 
-// One worker's part of the scenario: a trigger queue whose callback tears down
+// One worker's part of the scenario: A trigger queue whose callback tears down
 // the victim selectable, and pointers to the counters and the gate the whole
 // scenario shares.
 typedef struct xqd_slot {
@@ -9488,7 +9488,7 @@ static void xqd_victim_on_readable(ceventloop loop, ceventloop_reg reg,
   (void)arg;
 }
 
-// The callback that tears another queue down: takes the trigger message, counts
+// The callback that tears another queue down: Takes the trigger message, counts
 // itself in s->entered and parks until s->gate opens (at most 20 s, which sets
 // s->gate_timed_out). Then it runs the documented teardown of its victim
 // (remove, drain, destroy) and counts itself in s->done.
@@ -9530,7 +9530,7 @@ static bool xqd_send_one(ccircq *cq, cdynmq *dq) {
 // The most dispatch workers a scenario uses.
 enum { XQD_MAX_WORKERS = 8 };
 
-// One run: the loop, its slots and the counters and gate they share.
+// One run: The loop, its slots and the counters and gate they share.
 typedef struct xqd_scenario {
   ceventloop loop;
   size_t workers;
@@ -9552,7 +9552,7 @@ static bool xqd_wait_count(_Atomic int *counter, int target) {
   return true;
 }
 
-// Tears a scenario down on every path: opens the gate, waits for every running
+// Tears a scenario down on every path: Opens the gate, waits for every running
 // trigger callback to finish its teardown and destroys what is left. When the
 // callbacks never finish the workers are deadlocked and destroying the loop
 // would hang, so it leaves the loop behind on purpose and returns false.
@@ -9610,7 +9610,7 @@ static bool xqd_build_slot(xqd_scenario *sc, size_t i, int kind) {
 }
 
 // Runs one cross-queue scenario with num_reactor_threads threads and a victim
-// of the given kind: keeps every dispatch worker busy in a trigger callback,
+// of the given kind: Keeps every dispatch worker busy in a trigger callback,
 // queues one victim dispatch behind them, then opens the gate. Returns 0 on
 // success, or the number of the step that failed; 18 is the deadlock under
 // test.
@@ -9689,7 +9689,7 @@ TEST(ceventloop, cross_queue_teardown_from_a_callback_on_the_pool) {
     for (size_t k = 0; k < 3; k++) REQUIRE_EQ(results[t][k], 0);
 }
 
-// Queue wakes: one eventfd write covers every send until the next dispatch
+// Queue wakes: One eventfd write covers every send until the next dispatch
 //
 // The queue of one wake scenario (kind is an XQD_* value, sel the read
 // selectable the listener watches) and the counters its callbacks and waiters
@@ -9731,7 +9731,7 @@ static bool nwk_send(nwk_ctx *c) {
   }
 }
 
-// The listener callback of the wake tests: counts the call in c->callbacks and
+// The listener callback of the wake tests: Counts the call in c->callbacks and
 // drains the queue into c->received. The first call sets c->first_entered and
 // parks (at most 20 s) until c->gate opens, so a burst can be sent while a
 // dispatch is running.
@@ -9922,7 +9922,7 @@ TEST(ceventloop, no_queue_wake_is_lost_while_a_dispatch_clears_it) {
     for (size_t k = 0; k < 3; k++) REQUIRE_TRUE(ok[t][k]);
 }
 
-// One cselect() consumer of the stress test: its target count, the idle fd that
+// One cselect() consumer of the stress test: Its target count, the idle fd that
 // selects epoll mode (-1 for the condvar mode) and whether it timed out with
 // messages still owed.
 typedef struct nwk_select_arg {
@@ -10062,7 +10062,7 @@ static bool nwk_waiter_linked(nwk_ctx *c) {
   return ccircq__test_sel_read_waiter_count_for_tests(c->sel.cq) >= 1;
 }
 
-// Runs the empty-queue rounds: the producer wakes the waiter and takes the
+// Runs the empty-queue rounds: The producer wakes the waiter and takes the
 // message back first, so the waiter finds the queue empty and waits again in
 // the same call, and the next message must wake it. In epoll mode only the wait
 // loop clears the recorded wake. Returns true when no round failed.
@@ -10124,7 +10124,7 @@ TEST(cselect, a_woken_waiter_that_finds_the_queue_empty_waits_again) {
     for (size_t k = 0; k < 3; k++) REQUIRE_TRUE(ok[m][k]);
 }
 
-// Timeout arithmetic: saturation and negative tv_nsec
+// Timeout arithmetic: Saturation and negative tv_nsec
 //
 // Gives the largest time_t, worked out from the width of the type and not from
 // any constant of the library, so the saturation tests check the library
@@ -10218,7 +10218,7 @@ typedef enum {
   HUGE_KIND_COUNT
 } huge_kind;
 
-// One huge-timeout call: which call, its objects and its result.
+// One huge-timeout call: Which call, its objects and its result.
 typedef struct huge_arg {
   huge_kind kind;
   ccircq *cq;
@@ -10383,7 +10383,7 @@ TEST(timed_calls, a_huge_timeout_waits_for_the_event) {
   }
 }
 
-// cselect_timed on an fd: a short or zero timeout still takes a look
+// cselect_timed on an fd: A short or zero timeout still takes a look
 //
 // A wait loop that reports a timeout once the remaining time rounds down to
 // 0 ms, without one kernel wait, makes both calls return ccol_timed_out.
@@ -10438,9 +10438,9 @@ TEST(cselect, timed_fd_wait_never_ends_before_its_deadline) {
   REQUIRE_EQ(early, 0);
 }
 
-// ceventloop_add: an allocation failure after the entry is built
+// ceventloop_add: An allocation failure after the entry is built
 //
-// The state of the refusing allocator below: the loop it watches, whether it is
+// The state of the refusing allocator below: The loop it watches, whether it is
 // armed, how many allocations it refused, how far the poller moved during the
 // refusals, and the pipe end it writes to make the added fd readable.
 static ceventloop g_afi_loop = CEVENTLOOP_NULL;
@@ -10449,7 +10449,7 @@ static _Atomic int g_afi_refusals = 0;
 static _Atomic uint64_t g_afi_poller_delta = 0;
 static int g_afi_signal_fd = -1;
 
-// The allocator of the fd-index test. Only calloc misbehaves: while armed it
+// The allocator of the fd-index test. Only calloc misbehaves: While armed it
 // refuses one allocation of 500 bytes or more (the size of a stripe's index
 // growth), makes the fd being added readable, and adds to g_afi_poller_delta
 // how far the poller moved in the next 50 ms. An entry already published to
@@ -10574,7 +10574,7 @@ TEST(ceventloop, an_fd_index_allocation_failure_publishes_nothing) {
   REQUIRE_TRUE(dispatched_after_retry);
 }
 
-// ceventloop_add: a direction that is already in use is told apart
+// ceventloop_add: A direction that is already in use is told apart
 TEST(ceventloop, add_reports_a_direction_already_in_use_by_its_err_str) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -10600,9 +10600,9 @@ TEST(ceventloop, add_reports_a_direction_already_in_use_by_its_err_str) {
   REQUIRE_TRUE(in_use);
 }
 
-// ceventloop: an event that no handler can take doesn't spin
+// ceventloop: An event that no handler can take doesn't spin
 //
-// A registration whose on_error removes it: the error count and the handle it
+// A registration whose on_error removes it: The error count and the handle it
 // removes.
 typedef struct {
   _Atomic int error_count;
@@ -10814,9 +10814,9 @@ TEST(ceventloop, an_event_with_no_handler_does_not_spin_multi_thread) {
   REQUIRE_EQ(r.sibling_errors, 1);
 }
 
-// ceventloop: an error with no on_error reaches the direction handler
+// ceventloop: An error with no on_error reaches the direction handler
 //
-// What the UDP reader saw: its calls, the ECONNREFUSED errors and the
+// What the UDP reader saw: Its calls, the ECONNREFUSED errors and the
 // datagrams.
 typedef struct {
   _Atomic int readable_count;
@@ -11161,7 +11161,7 @@ TEST(fd_stale_report, a_data_report_after_a_pause_is_no_error) {
 // registration of the listener sees nothing and the poller stays idle. On
 // kqueue a listener ignores the low-water mark of an error-only read filter.
 //
-// The state of derr_late_listen_cb(): the socket, the error counter, the new
+// The state of derr_late_listen_cb(): The socket, the error counter, the new
 // registration and two flags.
 typedef struct {
   ceventloop loop;
@@ -11189,7 +11189,7 @@ static void derr_late_listen_cb(ceventloop loop, ceventloop_reg self,
 }
 
 // Runs an error-only registration on a listening socket with pending
-// connections (listen_late: registered before it listens). Gives the error
+// connections (listen_late: Registered before it listens). Gives the error
 // count and the poller iterations of a window.
 static void derr_run_listener_case(size_t threads, bool listen_late,
                                    int *errors, uint64_t *iterations) {
@@ -11604,7 +11604,7 @@ TEST(ceventloop, error_without_on_error_reaches_on_writable) {
   REQUIRE_LT(it3, (uint64_t)20);
 }
 
-// ceventloop: the reclaim epoch crosses a 32-bit boundary
+// ceventloop: The reclaim epoch crosses a 32-bit boundary
 //
 // Counts the on_removed calls in the _Atomic int at arg.
 static void bgen_on_removed(void *arg) {
@@ -11731,7 +11731,7 @@ static void ddrain_run(size_t threads, ddrain_conn *c, bool *entered) {
 }
 
 // A callback that runs during the drain of a destroy calls into the loop as it
-// would during a shutdown: its removes succeed and no callback runs after its
+// would during a shutdown: Its removes succeed and no callback runs after its
 // close. A destroy that stops resolving the handle before its drain fails both
 // removes with ccol_invalid_args.
 TEST(ceventloop, destroy_drain_callback_removes_its_registrations_1) {
@@ -11754,10 +11754,10 @@ TEST(ceventloop, destroy_drain_callback_removes_its_registrations_4) {
   REQUIRE_EQ(atomic_load(&c.callbacks_after_close), 0);
 }
 
-// Allocation failure: create never returns a dead loop, and a failing dispatch
+// Allocation failure: Create never returns a dead loop, and a failing dispatch
 // never spins the poller
 //
-// The settings of the failing allocator: the allocation count, the Nth
+// The settings of the failing allocator: The allocation count, the Nth
 // allocation to fail (1-based), a size whose every allocation fails, and a
 // switch that fails them all.
 static _Atomic long fa_count;
@@ -11775,7 +11775,7 @@ static bool fa_should_fail(size_t n) {
   size_t sz = atomic_load(&fa_fail_size);
   return sz != 0 && n == sz;
 }
-// The allocator of fa_procs: each call fails when fa_should_fail() says so.
+// The allocator of fa_procs: Each call fails when fa_should_fail() says so.
 static void *fa_malloc(size_t n) {
   return fa_should_fail(n) ? NULL : malloc(n);
 }
@@ -12078,7 +12078,7 @@ TEST(ceventloop, failed_dispatch_submit_backs_off_instead_of_spinning) {
   REQUIRE_TRUE(recovered);
 }
 
-// ceventloop: the self-call guards identify the poller by a thread-local mark,
+// ceventloop: The self-call guards identify the poller by a thread-local mark,
 // never by its thread ID
 //
 // The loop, the ID of its joined poller and what the matching thread saw.
@@ -12145,7 +12145,7 @@ static void tidr_run(size_t threads, tidr_ctx *c) {
 #endif
 }
 
-// The loop of tidr_run(): up to 8 loops, 64 rounds of 16 threads each, every
+// The loop of tidr_run(): Up to 8 loops, 64 rounds of 16 threads each, every
 // thread joined before the next batch. On macOS a pthread_t is the address of
 // the thread's stack mapping, so once another mapping takes that address a new
 // loop is tried.
@@ -12244,7 +12244,7 @@ TEST(ceventloop, shutdown_from_on_removed_on_the_poller_is_refused) {
   REQUIRE_EQ(atomic_load(&c4.rv), (int)ccol_not_permitted);
 }
 
-// ceventloop: a queue listener that moves one message per callback drains a
+// ceventloop: A queue listener that moves one message per callback drains a
 // backlog, and one that moves nothing doesn't spin
 //
 // What a backlog listener does on each callback.
@@ -12253,7 +12253,7 @@ enum { BKL_RECV_ONE = 0, BKL_NOTHING = 1, BKL_SEND_ONE = 2 };
 // The static message data the writing listeners send.
 static char bkl_token;
 
-// One backlog listener: its mode and its dispatch and moved counts.
+// One backlog listener: Its mode and its dispatch and moved counts.
 typedef struct {
   int mode;
   _Atomic long dispatches;
@@ -12396,7 +12396,7 @@ TEST(ceventloop, a_one_message_listener_drains_a_backlog) {
 }
 
 // A listener that ignores a ready queue isn't dispatched again for the same
-// wake: one dispatch with one listener, at most two each with two.
+// wake: One dispatch with one listener, at most two each with two.
 TEST(ceventloop, a_listener_that_moves_nothing_does_not_spin) {
   static const size_t thread_counts[] = {1, 4};
   bkl_result one[2], two[2];
@@ -12571,7 +12571,7 @@ TEST(ceventloop, a_write_registration_hears_once_that_sends_are_off) {
   }
 }
 
-// ceventloop_add and ceventloop_modify: the documented outputs
+// ceventloop_add and ceventloop_modify: The documented outputs
 TEST(ceventloop, add_sets_err_str_to_null_on_success) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -12703,10 +12703,10 @@ TEST(queue_mutex_registry, a_remove_is_constant_time_and_keeps_every_index) {
 }
 #endif
 
-// ceventloop: a queue listener that moves messages keeps its own dispatches
+// ceventloop: A queue listener that moves messages keeps its own dispatches
 // going wherever an idle sibling sits in the list
 //
-// One listener: whether it moves messages, a writer's budget of messages left,
+// One listener: Whether it moves messages, a writer's budget of messages left,
 // and its dispatch and moved counts.
 typedef struct {
   bool active;
@@ -12872,7 +12872,7 @@ TEST(ceventloop, three_listeners_that_move_nothing_do_not_spin) {
   }
 }
 
-// ceventloop: a listener that leaves a queue hands on the wake it holds
+// ceventloop: A listener that leaves a queue hands on the wake it holds
 //
 // The pipe that holds L1's poller, the queue, the two counts and the result of
 // the select waiter.
@@ -13093,7 +13093,7 @@ static void *ifs_open_gate(void *arg) {
   return NULL;
 }
 
-// Runs in a forked child: removes the registration while its write callback
+// Runs in a forked child: Removes the registration while its write callback
 // runs and destroys the queue, which must wait for the callback and then count
 // its message. It exits 0 when the destroy didn't assert.
 static __attribute__((noreturn)) void ifs_child(bool dynq) {

@@ -52,7 +52,7 @@ __attribute__((constructor)) static void _reset_inherited_signals(void) {
   test_reset_inherited_signals();
 }
 
-// A counting allocator: the counts let a test see exactly how many allocations
+// A counting allocator: The counts let a test see exactly how many allocations
 // and frees went through a procs struct.
 static size_t g_malloc_count = 0;
 static size_t g_free_count = 0;
@@ -685,7 +685,7 @@ TEST(dump_key, unprintable_bytes_render_as_dots) {
 // Every module holds its locks from its fork-prepare handler until after the
 // fork, so the locks nest in the order the handlers run, and that order must be
 // the same across every fork. The recorder aborts on an inversion, so the test
-// runs in a forked child: the same pair recorded in one order and then the
+// runs in a forked child: The same pair recorded in one order and then the
 // other must end the child with SIGABRT.
 TEST(atfork_order, an_inverted_prepare_handler_order_is_fatal) {
   pid_t pid = fork();
@@ -709,7 +709,7 @@ TEST(atfork_order, an_inverted_prepare_handler_order_is_fatal) {
 }
 
 // The ordinary case, so the check above can't pass by refusing everything. Only
-// WIFEXITED is checked: under valgrind --error-exitcode overrides the exit
+// WIFEXITED is checked: Under valgrind --error-exitcode overrides the exit
 // status of a forked child, while a recorder that refused would abort.
 TEST(atfork_order, a_repeated_consistent_order_is_accepted) {
   pid_t pid = fork();
@@ -817,7 +817,7 @@ static void ccol_hyg_free(void *ptr) { (void)ptr; }
 // If an allocation macro body isn't fully parenthesised, a cast or an addition
 // outside it binds to one arm of its conditional only, the offset silently
 // disappears and the pointer compares equal to the base. The final free goes
-// through the procs directly: through ccol__mem_free, Clang sees the default
+// through the procs directly: Through ccol__mem_free, Clang sees the default
 // free() arm applied to a static buffer and raises -Wfree-nonheap-object.
 TEST(macro_hygiene, an_allocation_macro_composes_with_a_surrounding_operator) {
   ccol_memmgmt_procs procs = {.malloc = ccol_hyg_malloc,
@@ -851,7 +851,7 @@ TEST(macro_hygiene, ccol_typed_cmp_does_not_capture_caller_identifiers) {
 }
 
 // The same capture, through the _Generic helpers of every container creation
-// macro: a caller variable named like a temporary picks the default arm and an
+// macro: A caller variable named like a temporary picks the default arm and an
 // integral value reports as not integral.
 TEST(macro_hygiene, type_introspection_does_not_capture_caller_identifiers) {
   int result = 42;
@@ -950,7 +950,7 @@ TEST(char_classification, populate_pair_reads_the_string_of_a_const_pointer) {
 }
 
 // Gives the size that ccol__populate_cmap_pair() computes for x. The nesting
-// test uses it as a stand-in with the shape of every public value macro: the
+// test uses it as a stand-in with the shape of every public value macro: The
 // outer macro passes its argument in parentheses to an implementation macro,
 // which copies x into a temporary named k, fills a cmap_pair named p from it
 // and evaluates to p.size. k and p are names chosen by the caller, so two
@@ -1091,7 +1091,7 @@ TEST(fatal_err, prints_the_message_of_the_caller_and_aborts) {
 #include <sys/socket.h>
 #include <time.h>
 
-// What gate_forker reports: whether fork() returned, and the child pid.
+// What gate_forker reports: Whether fork() returned, and the child pid.
 typedef struct {
   _Atomic int forked;
   pid_t pid;
@@ -1364,7 +1364,7 @@ TEST(fork, a_child_of_a_threaded_process_can_call_libc_functions_that_lock) {
 }
 #endif
 
-// State of the iterator probe: the iterator the next callback got, the two
+// State of the iterator probe: The iterator the next callback got, the two
 // iterators to hand out, and how many were handed out.
 static cmap_iterator *iter_probe_seen;
 static cmap_iterator *iter_probe_its[2];
@@ -1483,7 +1483,7 @@ TEST(semaphore, posts_without_a_waiter_never_block) {
 // threads to meet one slot at the same moment.
 #define INTERN_RACE_THREADS 16
 
-// One worker of an intern burst: its procs, the shared arrival count and go
+// One worker of an intern burst: Its procs, the shared arrival count and go
 // flag, and the pointer and code it got back.
 typedef struct {
   ccol_memmgmt_procs *procs;

@@ -48,7 +48,7 @@ time. They are only there so that typeof and the type-introspection
 macros can read the types from them, and they cost nothing in the
 generated code
 Since it only declares variables, it is also how you use a handle that
-lives in a struct field or in a global: name it in each function that
+lives in a struct field or in a global: Name it in each function that
 works on that handle
 An array key or value type, such as int[2] or char[16], is a compile
 error, and the message says to wrap the array in a struct. The macros copy

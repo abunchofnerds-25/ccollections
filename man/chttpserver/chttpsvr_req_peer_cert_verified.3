@@ -11,7 +11,7 @@ bool chttpsvr_req_peer_cert_verified(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Returns true only when three things hold: the request arrived over
+Returns true only when three things hold: The request arrived over
 TLS, the client presented a certificate in the handshake, and that
 certificate verified against the ca_bundle_path of the server.
 

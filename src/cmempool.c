@@ -31,7 +31,7 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-// The library half of the link-time layout check in cmempool.h: only the tag of
+// The library half of the link-time layout check in cmempool.h: Only the tag of
 // this build's layout exists. It's a scalar and not an array, so its debug
 // info is the same under GCC and Clang and the ABI corpus doesn't differ.
 #if CMEMPOOL_COMPACT_LAYOUT
@@ -49,12 +49,12 @@ typedef uintptr_t *mp_addr;
 
 struct ccol_mp_magazine;
 
-// A pool entry has no header: its state is one byte of the status array at
+// A pool entry has no header: Its state is one byte of the status array at
 // upper_addr_limit, and a free entry keeps the free-list link in its first
 // bytes. The bytes of the whole stride belong to the holder of the entry.
 // MP_HAS_CACHE(mp) evaluates to true when mp has a thread cache, the test every
 // allocation and free starts with. MP_ENTRY_INDEX(mp, c_entry) evaluates to
-// the index of the entry at address c_entry, which the status lookups need: a
+// the index of the entry at address c_entry, which the status lookups need: A
 // shift in the default layout, a multiply by a reciprocal in the compact one,
 // whose product needs twice the address width (__uint128_t on 64-bit
 // targets).
@@ -148,7 +148,7 @@ struct cmempool {
 #if CMEMPOOL_COMPACT_LAYOUT
   size_t max_magazines;
 #endif
-  // Cold fields: construction, teardown and introspection.
+  // Cold fields: Construction, teardown and introspection.
   size_t magazine_capacity;
   // What the caller asked for. total_elem_count adds the thread-cache reserve,
   // which keeps the advertised count available to every thread; concurrent
@@ -422,7 +422,7 @@ static ccol__thread_ls_key mp_tls_key;
 // locks a freed pool. Taken before any pool lock.
 static ccol__mutex mp_registry_lock;
 // Serializes arming a thread against the deletion of the key at unload. A leaf
-// that may be taken with a pool lock held. It can't be the registry lock: a
+// that may be taken with a pool lock held. It can't be the registry lock: A
 // pool's allocator may be another pool that arms the thread, and arming under
 // the registry lock would deadlock with an exit drain.
 static ccol__mutex mp_arm_lock;
@@ -495,7 +495,7 @@ static void mempool_cache_geometry(size_t elem_count, size_t *max_magazines,
   *reserve = r;
 }
 
-// Gives the entries of mp handed out to callers right now: what left the
+// Gives the entries of mp handed out to callers right now: What left the
 // shared free list minus what sits in the magazines. The allocation limit and
 // cmempool_used_count() need it. Needs mp->lock; the magazine counts are read
 // relaxed.
@@ -512,7 +512,7 @@ static size_t mempool_live_count_locked(cmempool *mp) {
 // allocations of that thread take no lock. List corruption is reported through
 // *corrupt so the caller can unlock before asserting. Needs mp->lock, and
 // changes the free list, free_elem_count and mag's count.
-// The budget is free_elem_count minus the reserve: an entry in another
+// The budget is free_elem_count minus the reserve: An entry in another
 // thread's magazine counts as handed out, because nothing checks the budget
 // again before it's popped. Charging only this magazine would let several
 // magazines each overshoot together. The bound can't be exact, because the
@@ -568,7 +568,7 @@ static void mempool_magazine_free(ccol_mp_magazine *mag) {
 
 // Drops an orphaned magazine (its pool was destroyed) from this thread's list
 // at *link, clears the direct-map slots that point at it and frees it, so
-// dead magazines don't pile up. No lock: an orphan is unlinked from its pool
+// dead magazines don't pile up. No lock: An orphan is unlinked from its pool
 // before its pool pointer is cleared, so this thread is its only owner, and
 // the destroy has already taken it off live_magazines.
 static void mempool_tls_reap(mp_tls_state *tls, ccol_mp_magazine **link,
@@ -786,10 +786,10 @@ __attribute__((destructor)) static void mp_cache_fini(void) {
 static void *mempool_alloc_locked(cmempool *mp);
 static void mempool_free_locked(cmempool *mp, void *entry);
 
-// Allocates an entry for a thread whose inlined pop failed: no magazine in the
+// Allocates an entry for a thread whose inlined pop failed: No magazine in the
 // direct map, or an empty one (mag, possibly NULL). The pool has a cache and
 // no lock is held. Gives the entry, or NULL for an exhausted pool. Apart from
-// creating a magazine once, it costs at most one critical section: a thread
+// creating a magazine once, it costs at most one critical section: A thread
 // the pool refuses a magazine is served under the same lock, and an empty
 // magazine whose refill yields nothing is served under the refill's lock. That
 // answer is final. Kept out of line, because inlining it slows pools without a
@@ -911,7 +911,7 @@ static __attribute__((noinline)) void mempool_free_to_cache_slow(
 
 // Frees an entry for cmempool__free_entry() on a cached pool by pushing it onto
 // this thread's magazine, or through the slow or locked path. The tests run in
-// the order of the locked path: the bounds check first (it also sends dynamic
+// the order of the locked path: The bounds check first (it also sends dynamic
 // entries to the locked path), then the status byte. The bounds are immutable,
 // but the status byte is read with no lock, so two threads freeing one entry at
 // the same instant can slip past; that's a data race in the caller anyway.
@@ -942,7 +942,7 @@ static inline __attribute__((always_inline)) void mempool_free_to_cache(
 
 #ifdef RUNNING_UNIT_TESTS
 
-// Test hook: overwrites the status byte of entry in mp, so a corruption test
+// Test hook: Overwrites the status byte of entry in mp, so a corruption test
 // can prove the pool catches a state no correct call sequence produces.
 void cmempool__corrupt_entry_status_for_tests(cmempool *mp, void *entry,
                                               unsigned char value) {
@@ -951,7 +951,7 @@ void cmempool__corrupt_entry_status_for_tests(cmempool *mp, void *entry,
   MP_ENTRY_STATUS(mp, MP_ENTRY_INDEX(mp, (uintptr_t)entry)) = value;
 }
 
-// Test hook: gives the magazines mp has handed out (under its lock), so a test
+// Test hook: Gives the magazines mp has handed out (under its lock), so a test
 // can see that a thread's exit gives its slot back.
 size_t cmempool__live_magazines_for_tests(cmempool *mp) {
   if (!mp) return 0;
@@ -962,7 +962,7 @@ size_t cmempool__live_magazines_for_tests(cmempool *mp) {
   return n;
 }
 
-// Test hook: gives the magazines the calling thread holds, so a test can see
+// Test hook: Gives the magazines the calling thread holds, so a test can see
 // that orphans get reaped.
 size_t cmempool__thread_magazines_for_tests(void) {
   size_t n = 0;
@@ -973,10 +973,10 @@ size_t cmempool__thread_magazines_for_tests(void) {
   return n;
 }
 
-// Test hook: runs the unload handler while the code stays mapped.
+// Test hook: Runs the unload handler while the code stays mapped.
 void cmempool__unload_cache_for_tests(void) { mp_cache_fini(); }
 
-// Test hook: gives the slots above mp's advertised count; 0 without a cache.
+// Test hook: Gives the slots above mp's advertised count; 0 without a cache.
 size_t cmempool__reserve_for_tests(cmempool *mp) {
   if (!mp) return 0;
   return mp->total_elem_count - mp->advertised_elem_count;
@@ -1034,7 +1034,7 @@ void cmempool__destroy(cmempool *mp) {
 
 // Gives the stride for elem_size at run time, the same value as
 // cmempool__stride() (which exists separately because an array size must be a
-// constant expression): raised to sizeof(mp_addr), aligned and, in the default
+// constant expression): Raised to sizeof(mp_addr), aligned and, in the default
 // layout, rounded to a power of two. Gives 0 when no stride fits, which
 // callers treat as a bad elem_size.
 static size_t mp_stride_for(size_t elem_size) {
@@ -1068,7 +1068,7 @@ static bool mp_block_bytes(size_t count, size_t stride, size_t *out) {
 // by a compact stride into a multiply and a shift, so the compact layout can
 // index entries without dividing. A slightly wrong reciprocal gives a
 // neighbouring index and corrupts another entry's status, so the result is
-// proved exhaustively: both functions never go down, so agreeing at every
+// proved exhaustively: Both functions never go down, so agreeing at every
 // multiple of the stride and the byte below it means agreeing everywhere, which
 // also makes the bounds test reject an address between entries. Gives false
 // when no shift works, and the pool isn't built.
@@ -1389,7 +1389,7 @@ cmempool *cmempool_create_from_preallocated_buffer_mp(
   return mp;
 }
 
-// Allocates from mp's shared state: pops the head of the free list, or makes a
+// Allocates from mp's shared state: Pops the head of the free list, or makes a
 // dynamic fallback entry when the pool is empty and the fallback is on. Every
 // allocation path that misses the thread cache ends here. locked tells whether
 // the caller holds mp->lock (a constant at every call), so a corruption assert
@@ -1459,7 +1459,7 @@ static __attribute__((noinline, aligned(64))) void *mempool_alloc_locked(
   return result;
 }
 
-// Allocates an entry from mp: from the thread cache, the free list or the
+// Allocates an entry from mp: From the thread cache, the free list or the
 // dynamic fallback. Gives NULL when nothing can serve it; asserts on a NULL mp.
 // It starts on a 64-byte boundary with the thread-cache hit as its
 // fall-through. The cache test sits inside the lock test, since a
@@ -1494,7 +1494,7 @@ void *cmempool_calloc_entry(cmempool *mp) {
 // Tells whether c_entry is the start of one of mp's entries. Every free and
 // the corruption checks use it to tell a pool entry from anything else. An
 // address partway into an entry is rejected too, since its index names a
-// neighbour: the offset must be a multiple of the stride (one mask in the
+// neighbour: The offset must be a multiple of the stride (one mask in the
 // default layout, a multiply back in the compact one). Both bounds are compared
 // explicitly; the pseudo pool has an empty range.
 static inline bool valid_mempool_addr(cmempool *mp, uintptr_t c_entry) {
@@ -1541,7 +1541,7 @@ static __attribute__((noinline)) bool mempool_free_dynamic_locked(cmempool *mp,
 }
 
 // Frees entry to mp's shared state; every free that misses the thread cache
-// ends here. Ownership comes from the address: inside the buffer it's a pool
+// ends here. Ownership comes from the address: Inside the buffer it's a pool
 // entry (a status other than taken is a double free or corruption and
 // asserts); outside it can only be a live dynamic entry, which the registry
 // decides before anything is read through the address. locked means the caller
@@ -1721,7 +1721,7 @@ size_t cmempool_dynamic_allocs_count(cmempool *mp) {
 static const size_t min_allowed_smallest_size = 16;
 static const size_t max_allowed_largest_size = ccol__max_power_of_two_size;
 
-// A ranged pool: one cmempool per tier, plus a pseudo pool with an empty
+// A ranged pool: One cmempool per tier, plus a pseudo pool with an empty
 // range that owns the shared fallback of
 // crmempool_fallback_at_last_exhaustion.
 struct crmempool {
@@ -1864,7 +1864,7 @@ static bool init_r_mempool_pseudo_pool(crmempool *rmp) {
   return true;
 }
 
-// Builds the tiers of a heap-backed ranged pool: the pseudo pool and one
+// Builds the tiers of a heap-backed ranged pool: The pseudo pool and one
 // cmempool per tier, the size doubling and the count halving each step. A tier
 // falls back on its own only under crmempool_fallback_at_first_exhaustion.
 // Gives false with *err set; the caller cleans up.
@@ -1916,7 +1916,7 @@ static inline size_t crmempool_pool_index_for_size(crmempool *rmp,
 }
 
 // Creates a heap-backed ranged pool, the constructor behind
-// crmempool_create(): it validates the parameters, then builds the tiers.
+// crmempool_create(): It validates the parameters, then builds the tiers.
 // Gives the pool, or NULL with *err set; a partial pool is destroyed.
 crmempool *crmempool_create_mp(uint8_t smallest_size_power_of_two,
                                uint8_t largest_size_power_of_two,
@@ -1962,7 +1962,7 @@ crmempool *crmempool_create_mp(uint8_t smallest_size_power_of_two,
   return rmp;
 }
 
-// Builds the tiers of a ranged pool on the caller's buffer: sets up the pseudo
+// Builds the tiers of a ranged pool on the caller's buffer: Sets up the pseudo
 // pool and carves one segment per tier, with the progression of
 // init_r_mempool_internal_pools(). The whole expected size is computed first,
 // each term and partial sum checked for overflow, and must equal
@@ -2119,7 +2119,7 @@ crmempool *crmempool_create_from_preallocated_buffer_mp(
 // Allocates a shared fallback entry of exactly elem_size bytes through the
 // pseudo pool mp, once every tier is empty under
 // crmempool_fallback_at_last_exhaustion. Takes mp's lock when it has one.
-// The size isn't raised to sizeof(mp_addr): the entry is never on a free list,
+// The size isn't raised to sizeof(mp_addr): The entry is never on a free list,
 // and the exact recorded size keeps the same-size shortcut of
 // crmempool_realloc_entry() working. Gives NULL when the prefix would overflow
 // or the allocator refuses.
@@ -2143,7 +2143,7 @@ static void *cmempool_pseudo_alloc_entry(cmempool *mp, size_t elem_size) {
   return result;
 }
 
-// Allocates at least size bytes from rmp: from the smallest tier that fits,
+// Allocates at least size bytes from rmp: From the smallest tier that fits,
 // then from larger tiers, and last from the shared fallback under
 // crmempool_fallback_at_last_exhaustion. Gives NULL for an invalid size or when
 // nothing serves it. Asserts on a NULL rmp.
@@ -2186,7 +2186,7 @@ void *crmempool_calloc_entry(crmempool *rmp, size_t size) {
   return result;
 }
 
-// Gives the bytes an entry of mp holds: the whole stride for a pool entry,
+// Gives the bytes an entry of mp holds: The whole stride for a pool entry,
 // the recorded size for a dynamic one. Realloc needs it to know how much to
 // copy.
 static inline size_t entry_user_size(cmempool *mp, void *entry) {
@@ -2279,7 +2279,7 @@ static cmempool *rmp_owner_of(crmempool *rmp, void *entry, bool *is_dynamic) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: overwrites the status byte of entry in the tier that owns it, the
+// Test hook: Overwrites the status byte of entry in the tier that owns it, the
 // ranged form of cmempool__corrupt_entry_status_for_tests().
 void crmempool__corrupt_entry_status_for_tests(crmempool *rmp, void *entry,
                                                unsigned char value) {
@@ -2294,7 +2294,7 @@ void crmempool__corrupt_entry_status_for_tests(crmempool *rmp, void *entry,
 }
 #endif
 
-// Frees entry back to rmp, the body of crmempool_free_entry(): to the tier
+// Frees entry back to rmp, the body of crmempool_free_entry(): To the tier
 // that owns it, or as a live dynamic entry of one of rmp's pools. NULL does
 // nothing; a NULL rmp or a foreign address asserts.
 void crmempool__free_entry(crmempool *rmp, void *entry) {
@@ -2452,7 +2452,7 @@ size_t crmempool_total_capacity(crmempool *rmp, size_t size) {
       rmp->mem_pools[crmempool_pool_index_for_size(rmp, size)]);
 }
 
-// Gives the live fallback entries for size: the tier's count under
+// Gives the live fallback entries for size: The tier's count under
 // crmempool_fallback_at_first_exhaustion, the pseudo pool's count under
 // crmempool_fallback_at_last_exhaustion, and 0 when the fallback is off or the
 // size is invalid.

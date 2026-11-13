@@ -67,7 +67,7 @@ typedef struct chmap_hash_secret {
   uint64_t byte_seed;
 } chmap_hash_secret;
 
-// An open-addressing slot: an 8-byte key and an 8-byte value, 16 bytes with no
+// An open-addressing slot: An 8-byte key and an 8-byte value, 16 bytes with no
 // padding. The occupied bit lives in the metadata array instead, because a
 // third member would pad the slot to 24 bytes and spread the bits a probe
 // tests. The natural alignment lets chmap_get_ptr() hand out an aligned
@@ -176,7 +176,7 @@ typedef struct sep_chain_map {
 // The two backends.
 typedef enum { IMPL_OPEN_ADDRESSING, IMPL_SEPARATE_CHAINING } hashmap_impl_type;
 
-// A map is one allocation: this struct with its backend in state, then the
+// A map is one allocation: This struct with its backend in state, then the
 // first bucket array of a small separate-chaining map (see
 // sc_inline_bucket_arr()), then the map's own procs copy when it needs one.
 // Operations reach the backend through impl, which measured cheaper than
@@ -209,7 +209,7 @@ struct chashmap {
 //
 // The fast hashes are cheap and spread ordinary keys well, but they're public
 // bijections (or, for XXH64, have collisions under every seed), so only the
-// writers watch: every insert of a new key adds to the insert window, and a
+// writers watch: Every insert of a new key adds to the insert window, and a
 // window of 256 whose walks pass oa_window_bound() or sc_window_bound(), or one
 // insert past its cap, switches the map. A lookup never writes. The switch
 // rebuilds an open-addressing table into a new block and rehashes chaining
@@ -352,7 +352,7 @@ static inline bool should_use_open_addressing(ccol_data_type key_type,
          get_type_size(key_type) <= 8 && get_type_size(val_type) <= 8;
 }
 
-// Hashes a fixed-width key or a custom hash result in the keyed mode: an xor
+// Hashes a fixed-width key or a custom hash result in the keyed mode: An xor
 // with the secret seed, a multiply, a xorshift and a second multiply. It's
 // what a map switches to when its keys collide under the fast hash.
 // hash_index_for() reads the top bits, which the last multiply mixes best.
@@ -388,7 +388,7 @@ static inline size_t hash_u64_seeded(uint64_t x, uint64_t seed) {
 }
 
 // Hashes a fixed-width key no wider than size_t in the fast mode, where every
-// map starts: a Fibonacci multiply, read from the top bits. Sequential keys,
+// map starts: A Fibonacci multiply, read from the top bits. Sequential keys,
 // scaled keys and aligned addresses spread perfectly. Nothing keys it, so
 // whoever controls the keys can make them collide; the detection notices and
 // switches the map.
@@ -434,7 +434,7 @@ static inline size_t hash_custom_fast(size_t h) {
 }
 
 // Rotates a word left by b bits, for SipHash-1-3. SipHash-1-3 is the keyed
-// byte hash of every key with no fixed width: a pseudorandom function of its
+// byte hash of every key with no fixed width: A pseudorandom function of its
 // 128-bit key, so without the key nobody finds colliding inputs better than by
 // chance. Rust and Python use the same variant for their hash tables.
 static inline uint64_t sip_rotl(uint64_t x, unsigned b) {
@@ -481,7 +481,7 @@ static inline uint64_t sip_load32(const unsigned char* p) {
   return v;
 }
 
-// Reads the last 0 to 7 bytes of a SipHash input as a little-endian word: two
+// Reads the last 0 to 7 bytes of a SipHash input as a little-endian word: Two
 // overlapping 4-byte reads for 4 to 7 bytes, the first, middle and last byte
 // for 1 to 3. Bytes that two reads share are equal, so or-ing them is safe.
 static inline uint64_t sip_load_tail(const unsigned char* p, size_t left) {
@@ -546,7 +546,7 @@ static inline size_t hash_bytes_keyed(const uint64_t sip_v[4],
 #define XXH_P4 0x85EBCA77C2B2AE63ULL
 #define XXH_P5 0x27D4EB2F165667C5ULL
 
-// One XXH64 lane round: mixes an 8-byte input word into a lane accumulator.
+// One XXH64 lane round: Mixes an 8-byte input word into a lane accumulator.
 static inline uint64_t xxh_round(uint64_t acc, uint64_t input) {
   acc += input * XXH_P2;
   acc = sip_rotl(acc, 31);
@@ -629,7 +629,7 @@ static inline size_t hash_index_for(size_t hash_val, size_t capacity) {
 // padding bits are unspecified (often never written) and differ between two
 // copies of one number, so a byte hash would miss equal keys. frexpl() takes
 // the value apart, and {scaled mantissa, exponent} goes through SipHash-1-3.
-// NaN, +-0.0 and +-infinity never reach frexpl(): each class is the pair
+// NaN, +-0.0 and +-infinity never reach frexpl(): Each class is the pair
 // {0, class}, which no number produces. Every NaN is one key, because reading
 // a NaN's padding is a read of uninitialized memory (long_double_keys_equal()
 // matches); +-0.0 is merged up front, since frexpl() needn't keep the sign of
@@ -672,7 +672,7 @@ static uint64_t chmap_seed_mix(uint64_t x) {
 }
 
 // Derives the four key words of the secret when getrandom(2) can't answer
-// without blocking (no syscall, a seccomp policy, early boot): a mix of both
+// without blocking (no syscall, a seccomp policy, early boot): A mix of both
 // clocks, the pid and three addresses that ASLR places. Weaker than the
 // kernel, much stronger than a constant, and it never fails.
 static void chmap_fallback_hash_key(uint64_t out[4]) {
@@ -755,7 +755,7 @@ hash_u64_mode(uint64_t x, bool keyed, uint64_t int_seed) {
   return keyed ? hash_u64_seeded(x, int_seed) : hash_u64_fast(x);
 }
 
-// Hashes a key with the function for its type and the mode: integers, float,
+// Hashes a key with the function for its type and the mode: Integers, float,
 // double and pointers through hash_word_mode() or hash_u64_mode(), long double
 // through hash_long_double_value() in both modes, anything else through
 // hash_bytes_fast() or hash_bytes_keyed_ool(). A custom proc's result goes
@@ -845,7 +845,7 @@ static inline bool ranges_overlap(const void* a, size_t a_size, const void* b,
   return a_start < b_end && b_start < a_end;
 }
 
-// White-box work counters and their accessors for the tests: probe steps,
+// White-box work counters and their accessors for the tests: Probe steps,
 // rehashes, shift moves and steps, chain node visits, and the fast attempts of
 // keyed growths. They let a test assert on work instead of time. Each is
 // atomic with relaxed ordering, because the probe loops run on many threads
@@ -1055,7 +1055,7 @@ static bool oa_init(open_addr_map* map, size_t capacity,
   return true;
 }
 
-// The parameters of oa_insert_cap(): slots per doubling, and the log2 size
+// The parameters of oa_insert_cap(): Slots per doubling, and the log2 size
 // from which the cap stays fixed.
 #define OA_CAP_PER_DOUBLING 24u
 #define OA_CAP_LOG2_CEILING 12u
@@ -1232,7 +1232,7 @@ static ccol_retval oa_rebuild(open_addr_map* map, size_t new_capacity,
   return ccol_success;
 }
 
-// Gives the capacity a growth rehashes to: the smallest power of two at or
+// Gives the capacity a growth rehashes to: The smallest power of two at or
 // above twice the live count, at least the minimum. The load after it is
 // between a quarter and a half, so a delete can't shrink it straight back and
 // growth and shrink can't alternate.
@@ -1818,7 +1818,7 @@ static void detach_node_from_dllist(dllist_root* root, dllist_ref_node* node) {
   }
 }
 
-// Frees a chaining node: its heap key and value buffers (heap exactly when the
+// Frees a chaining node: Its heap key and value buffers (heap exactly when the
 // accessor size passes INLINE_STORAGE_THRESHOLD), its place on all_elems, and
 // the node. A NULL all_elems skips the list; only the failure paths of
 // sc_create_llist_node() pass it.
@@ -1843,7 +1843,7 @@ static void sc_destroy_llist_node(dllist_root* all_elems, llist_node* elem,
 // Makes a chaining node holding copies of the key and value, inline or on the
 // heap, for an insert of a new key, and puts it at the head of the
 // insertion-order list. Each accessor is set only once its storage holds the
-// bytes, so a failure frees only what exists. Forced inline: as a call it
+// bytes, so a failure frees only what exists. Forced inline: As a call it
 // costs each new key about 57 instructions.
 static inline __attribute__((always_inline)) llist_node* sc_create_llist_node(
     dllist_root* all_elems, ccol_memmgmt_procs* m_procs, size_t hash_val,
@@ -1906,7 +1906,7 @@ static inline bool long_double_keys_equal(const void* a_ptr,
   return a == b;
 }
 
-// Compares a node's key with key_ptr, for every chain search: sizes first,
+// Compares a node's key with key_ptr, for every chain search: Sizes first,
 // integer compares for 4 and 8 bytes, memcmp otherwise. A long double goes to
 // long_double_keys_equal() before the size dispatch, because it can be 8
 // bytes wide.
@@ -1989,7 +1989,7 @@ static inline __attribute__((always_inline)) llist_node* sc_find_in_llist(
   return NULL;
 }
 
-// Replaces a node's value, for an update of a present key: in place for the
+// Replaces a node's value, for an update of a present key: In place for the
 // same size, inline for a small value, a realloc or a new buffer for a bigger
 // one. Gives false when memory runs out. val_ptr may alias the stored value
 // (a chmap_get_ptr() result handed back), and every branch changes the
@@ -2194,7 +2194,7 @@ static inline size_t sc_hash_of_node(const sep_chain_map* map,
       map->custom_hashing_proc, keyed, g_chmap_hash_secret.int_seed);
 }
 
-// Switches a fast chaining map to keyed when its keys collide: every node gets
+// Switches a fast chaining map to keyed when its keys collide: Every node gets
 // its keyed hash and is linked into the same array again. Nothing moves or
 // allocates, so it can't fail and every reference, the order and every
 // iterator stay valid.
@@ -2285,7 +2285,7 @@ static __attribute__((noinline)) bool sc_relink_fast_attempt(
 // Grows or shrinks the bucket array of a chaining map by scale_factor when
 // the count crosses a threshold, and relinks every node by its stored hash;
 // the window restarts. A shrink is clamped to the minimum, takes the in-block
-// array back when its length fits, and measures the merged chains: one of
+// array back when its length fits, and measures the merged chains: One of
 // SC_CHAIN_CAP nodes switches a fast map. Growing a keyed map makes the fast
 // attempt. On a failed allocation nothing changes.
 static void sc_scale(sep_chain_map* map, bool up) {
@@ -2637,7 +2637,7 @@ typedef struct chmap_cmap_iterator {
 // refused, and it forces separate chaining so the open-addressing probe stays
 // free of an indirect call. An interned procs pointer is kept, any other is
 // copied into the block. The process secret is picked here, before any hash.
-// sc_min_buckets is the smallest first chaining array: the public minimum, or
+// sc_min_buckets is the smallest first chaining array: The public minimum, or
 // compact_bucket_array_size. Gives NULL with *err set on failure.
 static chmap chmap_create_impl(size_t initial_bucket_array_size,
                                ccol_data_type key_type, ccol_data_type val_type,
@@ -2775,7 +2775,7 @@ static inline ccol_data_type chmap_val_type(chmap chm) {
                                                 : chm->impl.sc->val_type;
 }
 
-// Gives the canonical form of a key for hashing and comparing: for a float or
+// Gives the canonical form of a key for hashing and comparing: For a float or
 // double key a copy in out_canon_* with -0.0 turned into 0.0, so the bitwise
 // key equality agrees with ==. Every other key, and every NaN payload, comes
 // back as it is.
@@ -2828,7 +2828,7 @@ static inline bool oa_val_size_matches(const open_addr_map* map,
 }
 
 // Tells whether key_size is right for the key type, checked by every entry
-// point on both backends: for a fixed-width type
+// point on both backends: For a fixed-width type
 // (ccol_fixed_width_data_type_size(), shared with cbstmap) it must be that
 // width, because the hash, the canonical form and the long double compare read
 // that many bytes. Keys with no fixed width always pass.
@@ -2944,7 +2944,7 @@ const ccol_chmap_entry_ref* ccol_chmap_entry_read(
 }
 
 // Gives the next live entry of a walk over either backend, so a teardown can
-// reach every value without allocating: chaining maps follow the ordered
+// reach every value without allocating: Chaining maps follow the ordered
 // cursor, open-addressing maps the slots. Gives false at the end or for a NULL
 // chm.
 bool ccol_chmap_walk_next(chmap chm, ccol_chmap_walk* walk, const void** key,

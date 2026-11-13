@@ -10,7 +10,7 @@
 # E[0-9A-Z]..., SIG..., LC_..., PRI..., ATOMIC_... and function names such as
 # is[a-z]..., to[a-z]..., str[a-z]..., mem[a-z]... for the headers that
 # declare their family. A program that declares or defines such a name has
-# undefined behavior: the compiler or the C library may already use it, a
+# undefined behavior: The compiler or the C library may already use it, a
 # macro of theirs then rewrites our code, and a symbol of theirs can be bound
 # in place of ours. Library code therefore spells none of them. A name that
 # only marks something as internal uses the form <prefix>__<rest>
@@ -24,10 +24,10 @@
 # A name that begins with an underscore passes only when it's a keyword of
 # the language, a builtin of the compiler, a macro that a system predefines or
 # a feature-test macro that POSIX lets a program define. That list is
-# explicit: a new use of such a name in the library has to be added to it
+# explicit: A new use of such a name in the library has to be added to it
 # here, which keeps each one a deliberate choice.
 #
-# POSIX reserves two more patterns for the system: names that end in _t for
+# POSIX reserves two more patterns for the system: Names that end in _t for
 # every header, and names that end in _MAX for <limits.h>. A name the library
 # defines takes neither form, so a type is cselectable and not cselectable_t,
 # and a limit ends in _LIMIT or _SIZE. The check finds the library's own
@@ -128,7 +128,7 @@ def defined_names(code):
             param = param.strip()
             if IDENT.fullmatch(param):
                 yield param, m.start(1)
-    # typedef statements: walk to the ';' at brace and paren depth 0.
+    # typedef statements: Walk to the ';' at brace and paren depth 0.
     for m in re.finditer(r"\btypedef\b", code):
         depth, i = 0, m.end()
         while i < len(code):
@@ -149,7 +149,7 @@ def defined_names(code):
         last = re.search(r"([A-Za-z_]\w*)\s*$", tail)
         if last:
             yield last.group(1), m.end() + last.start(1)
-    # enumerators: the first identifier of each item of an enum body.
+    # enumerators: The first identifier of each item of an enum body.
     for m in re.finditer(r"\benum\b[^;{]*\{", code):
         depth, i = 1, m.end()
         while i < len(code) and depth:

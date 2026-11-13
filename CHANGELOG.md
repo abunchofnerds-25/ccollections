@@ -111,7 +111,7 @@ source level and at the binary level.
     table takes 17 bytes for each slot.
   - `cvec_sort()` sorts the backing array in place.
   - `cvec_push()` accepts each expression whose type converts to the element
-    type: a variable, a literal, a computed value, or a struct value that a
+    type: A variable, a literal, a computed value, or a struct value that a
     function returns.
   - An iterator that a loop leaves early can outlive its container until the
     end of its scope, because the scope-exit cleanup frees it without reading
@@ -233,7 +233,7 @@ source level and at the binary level.
   allocated, which leaves the fields unchanged.
   `clog_set_signal_policy()` chooses what the library may do about SIGPIPE
   and SIGXFSZ. Under the default, `CLOG_SIGNALS_AUTO`, no write of a logger
-  ends the process through either signal: a write to a broken pipe or socket
+  ends the process through either signal: A write to a broken pipe or socket
   fails with EPIPE, and a logger on a regular file at the file size limit of
   the process (`ulimit -f`, or `LimitFSIZE=` of systemd) gets EFBIG and
   repairs its file once there is room. `CLOG_SIGNALS_UNTOUCHED` leaves both
@@ -275,7 +275,7 @@ source level and at the binary level.
     to the client's transfer-rate floor or timers.
   - An engine logger that the application installs on the client or the
     server stays in use across every later stop and start of that engine.
-  - A sub-router owns every path under its mount prefix: its middleware runs
+  - A sub-router owns every path under its mount prefix: Its middleware runs
     for every such request, and a path that none of its routes matches gets
     its 404 or 405 and never reaches a root route.
   - The server answers 505 to an HTTP major version other than 1, 501 to a
@@ -355,7 +355,7 @@ source level and at the binary level.
   error or a hang-up of its descriptor through its read or write handler, as
   libevent and libuv deliver it, so a connected UDP socket keeps receiving
   after an ICMP error.
-- Packaging: a shared library with a version and a SONAME, a static archive,
+- Packaging: A shared library with a version and a SONAME, a static archive,
   `pkg-config` metadata that the build generates, support for `PREFIX`,
   `DESTDIR`, `LIBDIR`, `INCLUDEDIR`, `MANDIR` and `PKGCONFIGDIR` in
   `make install`, and 534 manual pages (517 in section 3 and 17 in section 7).
@@ -364,7 +364,7 @@ source level and at the binary level.
   `#include <ccollections/NAME.h>`, so a header with the same name in the
   application never collides with one of the library's.
 - `make check_namespace`, which stops the build when any of these items has
-  no namespace prefix: an exported symbol, a public macro, a public typedef, an
+  no namespace prefix: An exported symbol, a public macro, a public typedef, an
   enumerator, or a struct, union or enum tag of an installed header.
 - `make check_abi`, which compares the exported ABI against the committed
   baseline under `abi/` and fails on an addition that nobody recorded and on
@@ -400,7 +400,7 @@ source level and at the binary level.
   `clogger` off as well it doesn't need zlib. A reduced build isn't
   interchangeable with a full build at the ABI level.
 - `chttpclient` connects to a host with several addresses by racing them
-  (Happy Eyeballs, RFC 8305) in every tier: the families alternate, the next
+  (Happy Eyeballs, RFC 8305) in every tier: The families alternate, the next
   address starts after 250 ms or at once on a failure, and the connect timeout
   bounds the whole race. It reads a final response that arrives while it still
   sends the body, so a `401` or `413` sent early reaches the caller instead of
@@ -523,7 +523,7 @@ source level and at the binary level.
   Each of those is stored as a NUL-terminated string, and a raw NUL inside
   one would end it early, so two anchors that differ only after such a byte
   would collapse into one name and an alias would resolve to the wrong node.
-- `chashmap` hashes in two modes. Every map starts in a fast mode: a
+- `chashmap` hashes in two modes. Every map starts in a fast mode: A
   Fibonacci multiply for integral, floating-point and pointer keys, XXH64
   with a secret seed that each process chooses at random for every key type
   without a fixed width, and the murmur3 finalizer for the result of a custom
@@ -553,7 +553,7 @@ source level and at the binary level.
   a handler can authorise each client on its own.
 - Certificate revocation lists in a `ca_bundle_path` are enforced, by the
   server against client certificates and by the client against server
-  certificates, as the `ssl_crl` directive of nginx does: every certificate
+  certificates, as the `ssl_crl` directive of nginx does: Every certificate
   of the chain below its trust anchor needs a CRL of its issuer in the
   bundle, and a revoked certificate, a missing CRL or an expired CRL fails
   the handshake.

@@ -26,7 +26,7 @@ LFLAGS = -lpthread $(CCOL_PLATFORM_LIBS)
 # tests_keys uses up every thread-specific key of the process before the
 # first ceventloop call, so it needs a process of its own too.
 # tests_exit_order runs in a process of its own because it checks the exit-time
-# destructor order of a whole process: an application destructor that runs
+# destructor order of a whole process: An application destructor that runs
 # after the destructors of cthreadcomm and still owns live queues and a live
 # loop at that point. Its source is first on the link line, which puts its
 # destructor last in the .fini_array walk.
@@ -52,7 +52,7 @@ test: build
 	./tests_exit_order
 	./tests_keys
 
-# die_after_fork=0: the ceventloop_handle_lifecycle tests of this suite
+# die_after_fork=0: The ceventloop_handle_lifecycle tests of this suite
 # fork and create new pthreads in the child; the test_tsan target of
 # tests/chttpclient/Makefile explains the exact TSan mechanism at more length.
 # This module destroys its ceventloop instances between tests, so the
@@ -61,7 +61,7 @@ test: build
 # chttpclient and chttpserver. We set it anyway so the three suites that fork
 # and then start new threads are consistent, and so a later test that leaves
 # this parent multi-threaded at fork time is covered too.
-# suppressions=tsan_rwlock_reinit.supp: one "thread leak" that ThreadSanitizer
+# suppressions=tsan_rwlock_reinit.supp: One "thread leak" that ThreadSanitizer
 # reports in the child of one fork test, for a thread that the parent joins.
 # The comment in that file gives the reason and the independent reproduction.
 test_tsan: build_tsan

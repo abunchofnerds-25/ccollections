@@ -15,7 +15,7 @@ chttpclient's async engine serves Tier 2 and Tier 3
 (chttpcli_do_async, chttpcli_do_async_streaming,
 chttpcli_do_pooled and chttpcli_do_pooled_streaming) for every
 client of the process. It starts with the first request of those tiers
-and stops once no client holds it: the last such request has
+and stops once no client holds it: The last such request has
 ended and the last idle connection of those tiers is closed, which
 chttpcli_destroy does for its own client. The engine's teardown then
 runs on a separate thread, after chttpcli_destroy has returned.
@@ -27,7 +27,7 @@ chttpcli_set_engine_mem_mgmt_procs installed or through the logger
 that chttpcli_set_engine_logger installed, so the application may
 release both. If no engine runs, the function returns at once.
 
-The function waits as long as any client holds the engine: a client
+The function waits as long as any client holds the engine: A client
 that is not destroyed and keeps idle Tier 2 or Tier 3 connections, a
 request of those tiers that is in flight, or the default client of
 chttp_default_client once it has used those tiers. The library's exit

@@ -4,7 +4,7 @@
 # The guides link to the HTML pages that `make man_html` renders and that the
 # Pages site publishes under SITE_MAN, never to the troff files under man/,
 # which GitHub shows as raw source. GitHub cannot check an absolute link for
-# us, so this script does: every link under SITE_MAN must name a page that
+# us, so this script does: Every link under SITE_MAN must name a page that
 # exists in man/ (or a module of the index), and a link to a troff file is
 # refused with the URL that should replace it. Links to man/README and to the
 # man/ directory itself are fine; they are about the source tree.

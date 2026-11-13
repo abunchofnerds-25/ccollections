@@ -41,7 +41,7 @@ CHTTP_ANY exists only for registration and is never the method of a
 request that really arrives.  A request whose method the server does
 not recognize at all (a WebDAV verb such as PROPFIND, a verb such as
 TRACE or CONNECT, or a custom verb) never reaches a handler, one
-registered with CHTTP_ANY included: the server rejects it with 501
+registered with CHTTP_ANY included: The server rejects it with 501
 Not Implemented before routing runs, and even before it parses the
 path.  chttpsvr_req_method(3) describes the guarantee that a handler
 gets from this.
@@ -101,7 +101,7 @@ that decodes to a NUL byte (%00) counts as an invalid encoding too,
 and is not decoded and compared as it is.
 
 You can register the same pair of method and pattern more than once,
-and each call succeeds with ccol_success, but the first one wins: the
+and each call succeeds with ccol_success, but the first one wins: The
 server only ever calls the FIRST handler that you registered.
 
 A pattern with two consecutive slashes, for example /foo//bar, is
@@ -115,7 +115,7 @@ it reaches the server.
 
 The handler runs on a thread of the worker pool of the server once the
 whole body has arrived, and chttpsvr_req_body then returns that body.
-No thread waits for a slow client in the meantime: a body that stops
+No thread waits for a slow client in the meantime: A body that stops
 arriving parks its connection without a thread, and any free worker
 continues it later.  So the thread that runs the handler can be a
 different one from the thread that began to read the body, and a

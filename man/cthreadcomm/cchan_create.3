@@ -38,13 +38,13 @@ destroy it with cchan_destroy().
 
 Each call picks its direction from the ID of the calling thread. The
 owner is the thread that called cchan_create(), and it must stay
-alive for as long as the cchan is in use: the channel routes a
+alive for as long as the cchan is in use: The channel routes a
 message by comparing the caller's thread ID with the one it took at
 creation. Once the owner exits, the OS can hand the same ID to a new,
 unrelated thread, and the channel would then treat that thread as the
 owner too without reporting anything.
 
-fork(2) and a cchan can be combined in two supported ways: call
+fork(2) and a cchan can be combined in two supported ways: Call
 fork(2) before you create the cchan, or create it and then call
 fork(2) followed at once by exec(3). A program that keeps running with
 no exec(3) after the fork while a cchan from before the fork is

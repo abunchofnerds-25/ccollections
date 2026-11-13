@@ -60,7 +60,7 @@ value that means no limit.
 
 All the timeouts and resource limits above are finite, so a server
 started from these defaults is already protected against two kinds
-of peer: one that opens a connection and then stalls, and one that
+of peer: One that opens a connection and then stalls, and one that
 sends a request body, or reads a response, one byte at a time.  Each
 limit can be changed independently.  For the fields up to ipv6_only, 0
 keeps its documented meaning for a caller that asks for it on
@@ -122,7 +122,7 @@ stream_read_timeout_us.
 A value of 0 in stream_read_timeout_us, max_body_read_duration_us,
 response_write_timeout_us or max_response_write_duration_us means
 "wait forever".  An unresponsive connection still can't hold the
-server for good with such a value: a shutdown of the server finishes
+server for good with such a value: A shutdown of the server finishes
 in bounded time even when a streaming handler really is blocked
 reading such a connection.  A shutdown here is a call to
 chttpsvr_destroy or to chttpsvr_engine_stop, while a restart with
@@ -135,7 +135,7 @@ request that is still making progress.
 response_write_timeout_us bounds the gap between two writes that make
 progress while the server sends one response to a client that reads
 slowly, so it is the write side of stream_read_timeout_us.  Progress
-means that the client takes bytes of the response: a send queue of
+means that the client takes bytes of the response: A send queue of
 the socket that shrinks, which the sweep checks about once a second,
 counts as much as a write that the kernel accepts.  A client that
 reads a large response steadily never hits this limit, however large
@@ -158,7 +158,7 @@ fails and the server closes the connection, so the client sees a
 truncated response or a reset.
 
 Two more writes are always bounded by a small internal ceiling of 2
-seconds, whatever you set here, 0 included: a courtesy rejection
+seconds, whatever you set here, 0 included: A courtesy rejection
 response (400, 404, 405, 408, 413, 500, 501, 503 or 505) that the
 server generates itself rather than a handler, and the interim
 "100 Continue" line for "Expect: 100-continue".  Both have a fixed,
@@ -197,7 +197,7 @@ expired connection, however many there are, so a connection past its
 deadline can live up to about a second longer.
 
 The default of 30 s is generous next to any legitimate client, which
-sends its header block right after it connects: even a full TLS
+sends its header block right after it connects: Even a full TLS
 handshake plus several kilobytes of headers over a lossy, high-latency
 link takes only seconds.  Raise it for a deployment whose clients
 really are slower than that, and set it to 0 to turn the limit off
@@ -239,7 +239,7 @@ AF_INET6 listener, so that it doesn't also accept IPv4-mapped
 connections, and makes a host name listen on its IPv6 address when it
 has one.  With ipv6_only off, a NULL or "" host is dual-stack wherever
 the system allows it, and an IPv6 address or name keeps the system
-default.  enable_keepalive and enable_reuseport are best effort: a
+default.  enable_keepalive and enable_reuseport are best effort: A
 failed setsockopt does not make chttpsvr_start fail.  None of the
 three has any effect on a Unix domain socket listener.
 
@@ -256,7 +256,7 @@ min_transfer_rate_bps is the floor on the average rate of a body read
 and of a response write.  The rate is measured from the start of
 each, and judged once min_transfer_rate_grace_us of it has passed.
 It closes a client that stays just inside every gap limit while
-moving almost nothing: a body below the floor gets 408 and a close, a
+moving almost nothing: A body below the floor gets 408 and a close, a
 response below it is cut off and closed, and chttpsvr_req_read() of a
 streaming handler fails with ccol_timed_out.  240 bytes a second
 after 5 s is the minimum data rate of Kestrel and of IIS.  Time in
@@ -279,7 +279,7 @@ the read that needs it, and a growth reserves the old buffer next to
 the new one until the copy is done.  The buffer doubles as it grows
 and never grows past the declared length, so a client that declares
 a large body and sends little of it holds little memory.  A body
-whose first buffer doesn't fit waits without a thread: nothing reads
+whose first buffer doesn't fit waits without a thread: Nothing reads
 it and no "100 Continue" invites it until memory frees, and a later
 growth that doesn't fit waits in the same way.  Waiters go ahead in
 the order in which they began to wait.  When every body that holds

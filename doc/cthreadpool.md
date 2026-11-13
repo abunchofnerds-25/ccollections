@@ -1,4 +1,4 @@
-# cthreadpool: running tasks on a pool of threads
+# cthreadpool: Running tasks on a pool of threads
 
 Starting a new thread for every small piece of work is expensive, since each
 `pthread_create` allocates a stack and makes a few system calls. A thread
@@ -70,11 +70,11 @@ if (!pool) { /* err gives the cause */ }
 ```
 
 `queue_capacity` picks the queue mode once, for the whole life of the pool.
-With `0` the queue is unbounded: a submit never waits for space and fails
+With `0` the queue is unbounded: A submit never waits for space and fails
 only when there is no memory left. With `N > 0` you get a bounded queue of
 `N` tasks, and a plain submit waits while it's full, which keeps a producer
 from running ahead of the workers. If your producer can make work faster
-than the workers finish it, take the bounded queue: with an unbounded one
+than the workers finish it, take the bounded queue: With an unbounded one
 nothing slows the producer down, and the backlog grows until memory runs
 out.
 
@@ -130,7 +130,7 @@ happens to the task. A submit that failed accepted nothing and doesn't call
 `on_complete`, which means that after a failed submit you have to free the
 argument yourself.
 
-## Futures: getting a result back
+## Futures: Getting a result back
 
 A future task is `void *fn(void *arg)`, and what it returns reaches every
 thread that waits on the future:
@@ -152,7 +152,7 @@ if (f) {
 argument isn't `NULL`, stores the reason there. That reason is the same code
 that `cthrpool_submit` returns for the same condition.
 `cthrpool_try_submit_future` and `cthrpool_timed_submit_future` are the
-non-blocking and timed variants: they return the code directly and hand the
+non-blocking and timed variants: They return the code directly and hand the
 future back through an out-parameter, so you can tell a full queue, a
 shutdown and a lack of memory apart.
 
@@ -162,7 +162,7 @@ result.
 
 You must call `cthrpool_future_free` exactly once for each future, also when
 you never called `cthrpool_future_get`. A free without a get means "run the
-task, I don't care about the answer": the task runs and the pool
+task, I don't care about the answer": The task runs and the pool
 throws its result away.
 
 Several threads can wait in `cthrpool_future_get` on the same future and all of
@@ -202,14 +202,14 @@ shutdown function, it finishes the queued tasks first.
 
 ## Detached futures
 
-Sometimes the result comes from a thread that isn't a pool worker at all: a
+Sometimes the result comes from a thread that isn't a pool worker at all: A
 network thread, an event loop callback or a hardware completion. For that
 case there is the **detached future**, which is the same `cthrpool_future` but
 created without a pool. The producer calls `cthrpool_future_fulfill` once and
 the consumer uses `cthrpool_future_get` and `cthrpool_future_free` as usual.
 There's a full example further down.
 
-## Example: counting words chapter by chapter
+## Example: Counting words chapter by chapter
 
 Every chapter is its own task, a shared atomic counter adds up the words of
 the whole book, and `cthrpool_wait` is the barrier before the report. The pool
@@ -268,7 +268,7 @@ int main(void) {
 }
 ```
 
-## Example: parallel search with futures
+## Example: Parallel search with futures
 
 Here the range is split into eight tasks and each one returns a count that
 it allocated on the heap. The main thread collects the futures in order, so
@@ -335,7 +335,7 @@ int main(void) {
 }
 ```
 
-## Example: a bounded job queue with an emergency stop
+## Example: A bounded job queue with an emergency stop
 
 This pool has two workers and a queue of four slots, and the producer waits
 at most 50 ms for a free slot for each job. Every job owns a heap argument
@@ -406,7 +406,7 @@ int main(void) {
 }
 ```
 
-## Example: a result from outside the pool
+## Example: A result from outside the pool
 
 ```c
 /* A detached future: a thread that is not a pool worker (here a simulated
@@ -456,7 +456,7 @@ The future goes away when the last holder releases its reference.
 ## Good to know
 
 Destroying a pool from one of its own tasks, or from the `on_complete` of one
-of its tasks, is a fatal error, and that's on purpose: the destroy would
+of its tasks, is a fatal error, and that's on purpose: The destroy would
 have to wait for the very task that called it. `cthrpool_wait` and the two
 shutdown functions do nothing when you call them from those places, for the
 same reason.

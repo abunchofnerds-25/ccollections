@@ -1,7 +1,7 @@
-# clogger: structured logging
+# clogger: Structured logging
 
 `clogger` writes log records that a program can search, filter and collect.
-A record isn't free-form text but a sequence of `key=value` pairs: the time,
+A record isn't free-form text but a sequence of `key=value` pairs: The time,
 the level, the process and the thread, the source location, the fields you
 attached, and finally the message.
 
@@ -65,7 +65,7 @@ ts=2026-10-06T16:24:43.551276Z level=ERROR proc=first(2741242):first(2741242) sr
 ```
 
 `clog` is a handle, a plain number and not a pointer, and `CLOG_NULL`
-(zero) means "no logger". Never cast a `clog` to `void *` or back: it's a
+(zero) means "no logger". Never cast a `clog` to `void *` or back: It's a
 64-bit number, and on a 32-bit system a pointer can't even hold it.
 
 The `clog_*` macros take a `printf` format and record the file, the line and
@@ -84,7 +84,7 @@ Each record starts with the same keys:
 |---|---|
 | `ts` | UTC time in ISO 8601, with microseconds |
 | `level` | `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `ALERT` or `FATAL` |
-| `proc` | `name(pid):thread(tid)`: the program name and the process ID, then the thread name and the thread ID |
+| `proc` | `name(pid):thread(tid)`: The program name and the process ID, then the thread name and the thread ID |
 | `src` | `file:line` of the log call |
 | `func` | the function that wrote the record |
 
@@ -183,7 +183,7 @@ if (clog_set_field(req_log, "request_id", id) != ccol_success)
     clog_warn(req_log, "request_id field not set");   /* fragment */
 ```
 
-## Derived loggers: one logger per task
+## Derived loggers: One logger per task
 
 Often you want some extra fields for one item of work, one HTTP request or
 one order, without touching the fields that the rest of the program uses.
@@ -200,7 +200,7 @@ clog_close(req_log);                      /* app_log stays open */
 
 A derived logger starts with a copy of its parent's fields and level, and
 after that the two are independent, so a field you set on one doesn't show
-up on the other. Everything about the output is shared though: the file or
+up on the other. Everything about the output is shared though: The file or
 descriptor, the format, the rotation, and the lock that keeps lines from
 mixing. A write through any of the handles rotates the file when a limit is
 reached, and rotation goes on as long as any handle is open, even after the
@@ -329,7 +329,7 @@ working after your program calls `chdir`.
 The logger only renames, compresses and deletes files that it recognises as
 its own rotated files, and leaves everything else in the directory alone. A
 rotated name whose timestamp is more than 30 days ahead of both the clock
-and the newest name the logger made isn't one of its files: the logger
+and the newest name the logger made isn't one of its files: The logger
 leaves it alone and logs a `WARN` record that names it. The consequence is
 that if the system clock steps back by more than 30 days, a logger that
 opens the file after the step (a restarted process, for example) won't
@@ -441,7 +441,7 @@ or a `"bt_error"` key in JSON) instead of quietly leaving it out.
 
 ## Signals: SIGPIPE and SIGXFSZ
 
-A logger can write to any kind of descriptor: a pipe into another program, a
+A logger can write to any kind of descriptor: A pipe into another program, a
 socket to a log collector, a terminal or a file. Two kinds of write can
 raise a signal whose default action kills the process. Writing to a pipe
 with no reader raises `SIGPIPE`. Writing to a file that has reached the file
@@ -477,7 +477,7 @@ describes both policies.
 `ccol_memmgmt_procs` as their last argument, and the logger then allocates
 through your functions. Set all four function pointers. Derived loggers use
 the same allocator. Two allocations belong to the library and go through
-`malloc`: the symbol text of a backtrace, which `backtrace_symbols` makes,
+`malloc`: The symbol text of a backtrace, which `backtrace_symbols` makes,
 and the small identity cache that every thread fills on its first record and
 that all loggers share. See [Memory management](memory.md).
 
@@ -485,7 +485,7 @@ If your program calls `fork()`, fork before you open a logger, or open the
 logger and call `exec` in the child right after the fork. The policy behind
 this is explained in [Concurrency](concurrency.md).
 
-## Example: per-order logging in a rotating file
+## Example: Per-order logging in a rotating file
 
 A small shop processes customer orders. Every record about an order carries
 the order ID and the customer, and no other record of the program does. The
@@ -596,7 +596,7 @@ The order fields only show up on the lines of their own order, while the
 `app` field of the root logger is on every line, because every derived
 logger started with a copy of it.
 
-## Example: worker threads with async JSON logging
+## Example: Worker threads with async JSON logging
 
 Four worker threads each give themselves a name and get a derived logger
 with their own `worker` field. All of them write through one async logger
@@ -684,7 +684,7 @@ Each worker closes its own derived handle while the other threads keep
 writing through theirs, and that's safe. Closing a handle that another
 thread is using is what you must not do.
 
-## Example: watching rotation and compression
+## Example: Watching rotation and compression
 
 This program sets a tiny size limit so that rotation kicks in at once. It
 writes 200 records and then lists the directory.
@@ -778,7 +778,7 @@ empty (0 bytes). The sizes, and how many records end up in each file, depend
 on the length of each record, which includes the program name and the time
 stamp.
 
-## Example: a command-line tool with -v and -q
+## Example: A command-line tool with -v and -q
 
 This tool prints the size of every file you give it and sends its own
 diagnostics to standard error through a logger. `-v` lowers the minimum
@@ -870,7 +870,7 @@ record gets glued to the fragment of a cut one.
 A full disk doesn't stop rotation. If the disk fills up in the middle of a
 record while a rotation is due, the logger gives up the rest of that record
 and rotates, which deletes the oldest generations and frees some room.
-Every rotated generation ends with a newline: the logger closes a cut record
+Every rotated generation ends with a newline: The logger closes a cut record
 in the file it retires, or cuts that file back to its last whole line when
 the file refuses even the newline.
 

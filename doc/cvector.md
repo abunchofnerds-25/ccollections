@@ -1,4 +1,4 @@
-# cvector: a vector
+# cvector: A vector
 
 `cvector` is a dynamic array. You push elements onto its end, it grows by
 itself, and you can read any element by its index in constant time. It's
@@ -57,7 +57,7 @@ macro reads that companion, and that's how `cvec_at` can give you an `int`
 you can assign to and how `cvec_push` knows what to convert its argument
 to.
 
-Any type works as the element type: a number, a pointer, a struct, a
+Any type works as the element type: A number, a pointer, a struct, a
 function pointer type such as `void (*)(int)`, even an array type such as
 `char[32]`. A vector can be created in a few ways:
 
@@ -208,7 +208,7 @@ create a vector and return `NULL` on failure. A vector made this way has no
 type companion, so give it one with `cvec_redeclare` before you use the
 macros on it.
 
-## Example: a paged leaderboard
+## Example: A paged leaderboard
 
 This program sorts students by score, highest first, and prints the result
 one page at a time. Students with the same score keep the order they were
@@ -258,7 +258,7 @@ int main(void) {
 }
 ```
 
-## Example: statistics over a stream of numbers
+## Example: Statistics over a stream of numbers
 
 Here the program reads numbers until its input ends (a fixed string stands
 in for standard input) and then shows the mean, the median and the 95th
@@ -313,7 +313,7 @@ int main(void) {
 
 It prints `n=10 mean=22.02 median=12.75 p95=65.86`.
 
-## Example: a list of owned strings
+## Example: A list of owned strings
 
 A vector of `char *` holds pointers and not the strings themselves. In this
 example the vector owns copies of the names it keeps, so the program frees

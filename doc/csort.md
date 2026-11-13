@@ -1,7 +1,7 @@
-# csort: stable sorting
+# csort: Stable sorting
 
 `csort` is the sort that the rest of the library uses. It's an iterative,
-bottom-up mergesort, so it is stable: if Ada and Chen both score 91 and Ada
+bottom-up mergesort, so it is stable: If Ada and Chen both score 91 and Ada
 comes first, she is still first after the sort, which `qsort` doesn't
 promise. It runs in O(n log n) whatever the input looks like, and since it
 works with loops instead of recursion a very large input can't overflow the
@@ -171,7 +171,7 @@ int main(void) {
 }
 ```
 
-## Example: a print queue by priority
+## Example: A print queue by priority
 
 Urgent jobs print first, and jobs with the same priority have to print in
 the order they arrived. Since the sort is stable, comparing the priority
@@ -215,7 +215,7 @@ int main(void) {
 `invoice.pdf` prints before `contract.pdf`, and the three jobs with
 priority 1 come out in the order they went in.
 
-## Example: sort by two keys
+## Example: Sort by two keys
 
 Stability also gives you sorting by several keys for free. Sort by the minor
 key first and then by the major key, and the second sort keeps the order of
@@ -259,7 +259,7 @@ int main(void) {
 }
 ```
 
-## Example: sort a ring buffer in place
+## Example: Sort a ring buffer in place
 
 Because of the getter, `csort_sort` can work on storage that isn't a simple
 array. A ring buffer keeps its oldest element at `head` and wraps from the

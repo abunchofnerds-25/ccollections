@@ -1,7 +1,7 @@
 #!/bin/sh
 # Checks that no other object in a process can take over a call that should
 # reach this library, which ELF allows by default and which no compiler or
-# linker reports: the dynamic loader binds every reference to the first
+# linker reports: The dynamic loader binds every reference to the first
 # definition of the name that it finds, in the program, in an LD_PRELOAD
 # object or in any library loaded ahead of ours.
 #
@@ -30,7 +30,7 @@
 # internal calls are left to reach the impostor. Without that control a
 # loader that ignored LD_PRELOAD would pass the check while testing nothing.
 #
-# macOS needs neither option: a Mach-O program records the library of every
+# macOS needs neither option: A Mach-O program records the library of every
 # symbol it imports, and a dylib binds its own calls at link time. The script
 # checks ELF objects only.
 #
@@ -234,15 +234,15 @@ run() { # run <expect: real|impostor> <preload> <mode>
   fi
 }
 
-# Control: the unversioned impostor does catch a call that the program binds
+# Control: The unversioned impostor does catch a call that the program binds
 # by name, so the preload is in effect and the runs below test something.
 run impostor "$TMP/libimpostor_plain.so" direct
-# -Bsymbolic-functions: the library's own calls reach the library, whatever
+# -Bsymbolic-functions: The library's own calls reach the library, whatever
 # is preloaded.
 run real "$TMP/libimpostor_plain.so" library
 run real "$TMP/libimpostor_versioned.so" library
 
-# Version node: an impostor with another node can't take the program's call.
+# Version node: An impostor with another node can't take the program's call.
 # musl and OpenBSD ignore symbol versions, so the check means nothing there.
 if "$READELF" -d "$SO" 2>/dev/null | grep -q 'libc\.musl'; then
   echo "check_symbol_binding: musl ignores symbol versions; the program-side check is skipped"

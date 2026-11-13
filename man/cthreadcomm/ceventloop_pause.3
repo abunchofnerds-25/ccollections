@@ -16,7 +16,7 @@ cchan selectable gives ccol_invalid_args, the same restriction
 that ceventloop_modify has.
 
 ceventloop_remove unregisters reg completely and queues it to be
-freed later. ceventloop_pause leaves reg as it is: it keeps its
+freed later. ceventloop_pause leaves reg as it is: It keeps its
 slot on the shared epoll entry of its fd, it still counts toward
 ceventloop_reg_count, and its ceventloop_reg_generation
 doesn't change.
@@ -33,7 +33,7 @@ other direction on the same fd, if there is one, is not affected.
 
 This is the cheap alternative to a ceventloop_remove followed
 later by a ceventloop_add, for a pattern where the same logical
-registration keeps coming back: a connection that goes to a worker
+registration keeps coming back: A connection that goes to a worker
 thread for blocking body I/O and comes back to the reactor for its next
 request, for example. A fresh add and remove pair costs one heap
 allocation and one free, plus churn in the chmap of the fd registry,
@@ -41,7 +41,7 @@ and pause and resume avoid both.
 
 With more than one reactor thread (num_reactor_threads > 1)
 EPOLLONESHOT is in use, and the dispatch worker runs its own re-arm
-once more after a paused callback returns. That is harmless: a re-arm
+once more after a paused callback returns. That is harmless: A re-arm
 always builds the epoll mask from the current state, so the extra
 re-arm applies the same mask without reg, and there is no race. Pause
 and resume still avoid the allocation and the registry changes in this

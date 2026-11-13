@@ -364,7 +364,7 @@ static void cvector_copy_into_tail(cvec v, const void *src, size_t n) {
 
 // Appends elem_count elements from arr_ptr with at most one reallocation, which
 // is cheaper than a push per element. It gives false on an overflow or a failed
-// reservation. arr_ptr may point into v's own buffer: such a source must stay
+// reservation. arr_ptr may point into v's own buffer: Such a source must stay
 // inside the reserved capacity (past it is a heap over-read), and it's turned
 // into an offset before cvector_reserve so the realloc can't leave it
 // dangling.
@@ -614,7 +614,7 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: gives the capacity of the buffer, so the tests can check the
+// Test hook: Gives the capacity of the buffer, so the tests can check the
 // growth and shrink thresholds that the public API doesn't show.
 size_t cvector_get_capacity(cvec v) {
   if (!v) {

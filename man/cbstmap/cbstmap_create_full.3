@@ -31,18 +31,18 @@ A pointer to the new BST map on success, NULL on failure.
 .SH NOTES
 .nf
 The default comparison for each key type is:
-  ccol_char: the platform's native char comparison, signed or unsigned
+  ccol_char: The platform's native char comparison, signed or unsigned
   to match how char behaves on this platform.
-  ccol_signed_char and short/int/long/long_long: a signed comparison,
+  ccol_signed_char and short/int/long/long_long: A signed comparison,
   which doesn't depend on whether char is signed on this platform.
   ccol_signed_char is a scalar signed char or its typedef int8_t; a
   signed char * string key is ccol_string instead.
-  The unsigned integer types and ccol_pointer: an unsigned comparison.
-  ccol_float/double/long_double: a numeric floating-point comparison, in
+  The unsigned integer types and ccol_pointer: An unsigned comparison.
+  ccol_float/double/long_double: A numeric floating-point comparison, in
   which a NaN key sorts above every non-NaN key and equal to every other
   NaN key.
-  ccol_string: a lexicographic order equivalent to strcmp.
-  ccol_other_types (a struct key type, for example): a raw memcmp of the
+  ccol_string: A lexicographic order equivalent to strcmp.
+  ccol_other_types (a struct key type, for example): A raw memcmp of the
   representation. That compares indeterminate padding bytes and compares
   each pointer member by its address, not by the object it points at, so
   pass a custom_comparison_proc for a struct key.

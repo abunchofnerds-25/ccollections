@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Common definitions of the library: the version, the pthread wrappers, error
+// Common definitions of the library: The version, the pthread wrappers, error
 // reporting, the allocator layer, the return codes, type introspection with
 // _Generic, and the key/value carrier of the maps. Every other header includes
 // it.
@@ -54,39 +54,52 @@ SOFTWARE.
 //
 // The release this header belongs to. The root Makefile reads the three numbers
 // from here, so the header, the library's file name and the pkg-config version
-// always agree. Each number is below 256. CCOL_VERSION_NUMBER packs them as
-// 0xMMmmpp, so versions compare as integers (2.1.3 is 0x020103), and
-// CCOL_VERSION_STRING spells them as "2.0.0".
+// always agree.
+
+// The major number of the release this header belongs to, below 256. The
+// version of the library loaded at run time comes from ccol_version().
 #define CCOL_VERSION_MAJOR 2
+// The minor number of the release this header belongs to, below 256. The
+// version of the library loaded at run time comes from ccol_version().
 #define CCOL_VERSION_MINOR 0
+// The patch number of the release this header belongs to, below 256. The
+// version of the library loaded at run time comes from ccol_version().
 #define CCOL_VERSION_PATCH 0
+// The release this header belongs to, packed as 0xMMmmpp so that versions
+// compare as integers (2.1.3 is 0x020103); use it for a version test in #if.
+// ccol_version() gives the version of the library loaded at run time.
 #define CCOL_VERSION_NUMBER \
   ((CCOL_VERSION_MAJOR << 16) | (CCOL_VERSION_MINOR << 8) | CCOL_VERSION_PATCH)
+// The release this header belongs to, as a string literal such as "2.0.0",
+// for messages. ccol_version_string() gives the version of the library loaded
+// at run time.
 #define CCOL_VERSION_STRING                                    \
   ccol__x_stringify(CCOL_VERSION_MAJOR) "." ccol__x_stringify( \
       CCOL_VERSION_MINOR) "." ccol__x_stringify(CCOL_VERSION_PATCH)
 
-// Gives the version of the library the program runs with, packed like
-// CCOL_VERSION_NUMBER. The macros give the version of the header you compiled
-// with; use this to learn the one the dynamic loader picked, which can be a
-// later release with the same SONAME.
+// Gives the version of the library the program runs with, packed as 0xMMmmpp
+// (2.1.3 is 0x020103) so that versions compare as integers. The
+// CCOL_VERSION_ macros give the version of the header you compiled with; use
+// this to learn the one the dynamic loader picked, which can be a later
+// release with the same SONAME.
 unsigned int ccol_version(void);
 
-// Gives the same version as a static string such as "2.0.0", for logs and
-// messages.
+// Gives the version of the library the program runs with as a string such as
+// "2.0.0", for logs and messages. The string is static: Don't free it. It can
+// differ from CCOL_VERSION_STRING, the version of the header you compiled
+// with, when the dynamic loader picked a later release with the same SONAME.
 const char *ccol_version_string(void);
 
 // Fork safety switch
-//
-// Some modules (cthreadpool, cthreadcomm, clogger, chttpserver, chttpclient)
-// register pthread_atfork() handlers that lock every live handle before a fork,
-// so the child never inherits a mutex that stays locked for ever. That costs
-// work on every fork() of the process. A program that never forks, or always
-// calls exec() right after fork(), can build with -DCCOL_FORK_SAFETY_REQUIRED=0
-// to drop those handlers and the state that exists only for them. The modules'
-// own locks and the close-on-exec gate stay either way. Define it before the
-// first include of this header; the default is 1.
 #ifndef CCOL_FORK_SAFETY_REQUIRED
+// Build switch, 1 by default. With 1, some modules (cthreadpool, cthreadcomm,
+// clogger, chttpserver, chttpclient) register pthread_atfork() handlers that
+// lock every live handle before a fork, so the child never inherits a mutex
+// that stays locked for ever; that costs work on every fork() of the process.
+// A program that never forks, or always calls exec() right after fork(), can
+// build the library with -DCCOL_FORK_SAFETY_REQUIRED=0 to drop those handlers
+// and the state that exists only for them. The modules' own locks stay either
+// way. Define it before the first include of this header.
 #define CCOL_FORK_SAFETY_REQUIRED 1
 #endif
 
@@ -105,7 +118,7 @@ const char *ccol_version_string(void);
 //
 // macOS has no pthread_mutex_timedlock(), pthread_rwlock_timedwrlock(),
 // pthread_condattr_setclock() or working sem_init(). CCOL__EMULATE_DARWIN_SYNC
-// selects our replacements: a timed lock polls a try-lock, a condition variable
+// selects our replacements: A timed lock polls a try-lock, a condition variable
 // remembers its clock, and a semaphore is a pipe. It's on by itself on macOS,
 // and the Linux and FreeBSD test builds define it to run the same code.
 #if defined(__APPLE__) && !defined(CCOL__EMULATE_DARWIN_SYNC)
@@ -131,7 +144,7 @@ void ccol__cloexec_gate_register(void);
 #pragma GCC visibility pop
 #endif
 
-// Mutex wrappers: the type, destroy, init with default attributes, lock,
+// Mutex wrappers: The type, destroy, init with default attributes, lock,
 // unlock, trylock and timedlock. Every module locks through them, so a port
 // changes this header only. m is the mutex object (the macros take its
 // address). Each evaluates to what the pthread call gives: 0 or an error
@@ -156,7 +169,7 @@ void ccol__cloexec_gate_register(void);
 #define ccol__mutex_timedlock(m, t) pthread_mutex_timedlock(&(m), &(t))
 #endif
 
-// Read-write lock wrappers: the type, destroy, init, write lock, read lock,
+// Read-write lock wrappers: The type, destroy, init, write lock, read lock,
 // timed write lock and unlock, for the slot tables and registries that many
 // threads read and few write. a is the lock object. Each evaluates to 0 or an
 // error number; the timed write lock takes the same absolute CLOCK_REALTIME
@@ -193,7 +206,7 @@ int ccol__rw_lock_reinit_in_child_impl(void *lock);
 
 #define ccol__rw_lock_unlock(a) pthread_rwlock_unlock(&(a))
 
-// Condition variable wrappers: the types, attribute init, destroy and setclock,
+// Condition variable wrappers: The types, attribute init, destroy and setclock,
 // init with default or given attributes (ca), wait, timed wait, signal and
 // broadcast. Queues, pools and the logger wait on them, and the monotonic clock
 // needs setclock. c is the condition variable and m its mutex, unlocked while
@@ -273,7 +286,7 @@ static inline int ccol__cond_var_init_clock(ccol__cond_var_s *c,
 #define ccol__cond_var_broadcast(c) pthread_cond_broadcast(&(c).cond)
 #endif
 
-// Semaphore wrappers: the type, init with count value, destroy, wait and post,
+// Semaphore wrappers: The type, init with count value, destroy, wait and post,
 // on an unnamed process-private semaphore s. They exist for the one
 // synchronization a signal handler may do: ccol__semaphore_post is
 // async-signal-safe (POSIX says so for sem_post(3)), while mutexes, condition
@@ -408,7 +421,7 @@ static inline int ccol__cond_var_timedwait_clock(ccol__cond_var_s *c,
 #endif
 }
 
-// Initializes s as a semaphore with count value: a pipe holding value bytes,
+// Initializes s as a semaphore with count value: A pipe holding value bytes,
 // with a write end that doesn't block. It replaces sem_init(), which doesn't
 // work on macOS. Both ends become close-on-exec inside the gate. Gives 0, or -1
 // with errno set; a value the pipe can't hold fails with EINVAL.
@@ -495,7 +508,7 @@ static inline int ccol__semaphore_pipe_post(ccol__semaphore_s *s) {
 }
 #endif
 
-// Thread wrappers: the id type, the caller's id, id comparison, create, join,
+// Thread wrappers: The id type, the caller's id, id comparison, create, join,
 // signal mask and kill, for the worker, poller and writer threads of the
 // modules. ccol__thread_create runs fn(arg) with default attributes and stores
 // the thread in handle; join waits for it. sigmask takes how, set and oldset as
@@ -518,7 +531,7 @@ static inline int ccol__semaphore_pipe_post(ccol__semaphore_s *s) {
 
 #define ccol__thread_kill(handle, sig) pthread_kill((handle), (sig))
 
-// One-time initialization: the flag type, its static initializer and
+// One-time initialization: The flag type, its static initializer and
 // ccol__call_once, which runs fn exactly once for every caller that races on
 // flag and evaluates to 0 or an error number. The library initializes every
 // lock lazily behind a once flag, so a port never needs a static lock
@@ -530,7 +543,7 @@ static inline int ccol__semaphore_pipe_post(ccol__semaphore_s *s) {
 
 #define ccol__call_once(flag, fn) pthread_once(&(flag), (fn))
 
-// Thread-local storage key wrappers: the type, create with a destructor that
+// Thread-local storage key wrappers: The type, create with a destructor that
 // runs at thread exit, delete, and set and get of the calling thread's value.
 // The per-thread caches of cjson, cyaml, cmempool and clogger hang off them.
 // create, delete and set evaluate to 0 or an error number; get gives the value
@@ -591,12 +604,12 @@ static inline int ccol__semaphore_pipe_post(ccol__semaphore_s *s) {
   pthread_setname_np(pthread_self(), (name))
 #endif
 
-// macOS only: stores the 64-bit numeric id of thread in *out_id, for the thread
+// macOS only: Stores the 64-bit numeric id of thread in *out_id, for the thread
 // id that clogger writes into each record. Evaluates to 0 or an error number.
 #define ccol__get_thread_id_np(thread, out_id) \
   pthread_threadid_np((thread), (out_id))
 
-// FreeBSD only: evaluates to the kernel thread id of the calling thread, for
+// FreeBSD only: Evaluates to the kernel thread id of the calling thread, for
 // the thread id that clogger writes into each record. The caller includes
 // <pthread_np.h>.
 #if defined(__FreeBSD__)
@@ -604,7 +617,7 @@ static inline int ccol__semaphore_pipe_post(ccol__semaphore_s *s) {
 #endif
 
 // Checks cond, a condition that must hold, and calls abort() after printing the
-// file, line and condition when it's false. It's the library's assert: many
+// file, line and condition when it's false. It's the library's assert: Many
 // checks (double free, a foreign pointer, corruption) are part of the contract,
 // so unlike assert() this always evaluates cond and never compiles away under
 // NDEBUG. It's a statement with no value.
@@ -628,7 +641,7 @@ static inline int ccol__semaphore_pipe_post(ccol__semaphore_s *s) {
 
 // Evaluates to the identifier prefix_n, unique in the translation unit when n
 // is
-// __COUNTER__. The container macros name every temporary this way: a temporary
+// __COUNTER__. The container macros name every temporary this way: A temporary
 // is in scope inside its own initializer, where the caller's argument is
 // evaluated, so nested public macros (chmap_get(m, chmap_get(m, k))) would
 // otherwise shadow each other under -Wshadow. The second level makes n expand
@@ -704,7 +717,7 @@ static inline int ccol__semaphore_pipe_post(ccol__semaphore_s *s) {
 // default allocator when it's NULL. Every allocation of the library goes
 // through them, so a container honours the procs it was created with. The
 // arguments after m_procs are those of the standard function, and each
-// evaluates to what that function gives. The outer parentheses matter: ?: binds
+// evaluates to what that function gives. The outer parentheses matter: ?: Binds
 // more loosely than a cast or +, so without them (char *)ccol__mem_alloc(mp, n)
 // + off would cast m_procs and add the offset to one arm only, and it would
 // compile silently.
@@ -722,21 +735,24 @@ static inline int ccol__semaphore_pipe_post(ccol__semaphore_s *s) {
 #define ccol__mem_free(m_procs, ptr) \
   ((m_procs) ? (m_procs)->free((ptr)) : ccol__default_mem_free((ptr)))
 
-// The invalid size_t (its largest value). Functions that give a size or an
-// index give it for "none" or a failure.
+// The invalid size_t, (size_t)-1, its largest value. Functions that give a
+// size or an index give it for "not found", "none" or a failure, so compare a
+// result with it before you use the result as an index.
 #define ccol_invalid_size ((size_t)-1)
 
-// Internal: the largest power of two a size_t can hold (2^31 or 2^63), the cap
+// Internal: The largest power of two a size_t can hold (2^31 or 2^63), the cap
 // of the power-of-two growth of the containers.
 #define ccol__max_power_of_two_size \
   ((size_t)1 << ((sizeof(size_t) * CHAR_BIT) - 1))
 
-// The largest element count of a collection; a growth past it fails.
+// The largest element count of a collection, the largest power of two a
+// size_t holds (2^31 with a 32-bit size_t, 2^63 with a 64-bit one). A growth
+// past it fails, with ccol_container_full or false as each function documents.
 #define ccol_max_elem_count ccol__max_power_of_two_size
 
 // Return codes
 //
-// The result of a collection operation: zero is success and every error is
+// The result of a collection operation: Zero is success and every error is
 // negative. Each enumerator has an explicit value on purpose. Some callers test
 // "== 0", and with implicit values a new enumerator in the middle would
 // renumber every later one, ccol_success included. Add new codes with explicit
@@ -754,7 +770,7 @@ typedef enum ccollections_retval {
   ccol_http_too_many_redirects = -12,
   ccol_http_invalid_url = -11,
   ccol_http_transfer_aborted = -10,
-  // msg_too_large: a message above the configured size limit.
+  // msg_too_large: A message above the configured size limit.
   ccol_msg_too_large = -9,
   ccol_container_empty = -8,
   ccol_container_full = -7,
@@ -844,19 +860,30 @@ static inline void ccol__dump_key_to_stderr(const void *data, size_t size) {
 #define ccol__destructor(destructor) __attribute__((cleanup(destructor)))
 
 // Custom memory management types
-//
-// The signatures of a custom malloc, free, calloc and realloc.
+
+// The malloc of a custom allocator. It must behave like malloc(3): Give a
+// block of size bytes aligned for any object type (_Alignof(max_align_t)), or
+// NULL when it can't.
 typedef void *(*ccol_malloc)(size_t size);
 
+// The free of a custom allocator. It must behave like free(3): Release a
+// block that the same allocator gave, and do nothing for NULL.
 typedef void (*ccol_free)(void *ptr);
 
+// The calloc of a custom allocator. It must behave like calloc(3): Give a
+// zeroed block of elem_count * elem_size bytes aligned for any object type,
+// or NULL when it can't or the product overflows.
 typedef void *(*ccol_calloc)(size_t elem_count, size_t elem_size);
 
+// The realloc of a custom allocator. It must behave like realloc(3): Resize
+// the block of ptr to size bytes, aligned for any object type, and give its
+// new address, or give NULL and leave the old block as it was when it can't.
+// A NULL ptr must work as a malloc of size bytes.
 typedef void *(*ccol_realloc)(void *ptr, size_t size);
 
 // A custom allocator. Give it to a collection's _mp or _full constructor. All
 // four functions must be non-NULL and behave like the standard ones, including
-// alignment: every block must be aligned for any object type
+// alignment: Every block must be aligned for any object type
 // (_Alignof(max_align_t)), since containers put such entries at the start of a
 // block.
 typedef struct ccol_memmgmt_procs {
@@ -868,7 +895,7 @@ typedef struct ccol_memmgmt_procs {
 
 // Comparison and hashing types
 //
-// A comparison for sorts and ordered maps: negative when first < second, zero
+// A comparison for sorts and ordered maps: Negative when first < second, zero
 // when equal, positive when first > second.
 typedef int (*ccol_comparison_proc)(const void *first, const void *second);
 
@@ -898,11 +925,11 @@ typedef struct cmap_pair {
 // changes, and you must destroy the iterator unless the walk reached its end.
 typedef struct cmap_iterator {
   // Both point at the container's own accessor of the current entry. You can
-  // write the bytes they address, but not the pairs: a stored pointer the
+  // write the bytes they address, but not the pairs: A stored pointer the
   // container never allocated would be freed by cbstmap's teardown.
   const cmap_pair *key_pair;
   const cmap_pair *val_pair;
-  // Internal: advance and destroy functions of the container.
+  // Internal: Advance and destroy functions of the container.
   struct cmap_iterator *(*ccol__next_fn)(struct cmap_iterator *);
   void (*ccol__free_fn)(struct cmap_iterator *);
   // true when val_pair->ptr is the element itself (cvector); false when the
@@ -956,7 +983,7 @@ typedef struct cmap_iterator {
     ccol__pmp_ok;                                                  \
   })
 
-// Internal: what the cleanup of ccol_scoped_ptr needs at the end of the scope,
+// Internal: What the cleanup of ccol_scoped_ptr needs at the end of the scope,
 // the address of the guarded pointer and the allocator that frees it. The
 // macros fill it in.
 typedef struct ccol__scoped_ptr_ctx {
@@ -979,17 +1006,20 @@ static inline void ccol__scoped_ptr_cleanup(ccol__scoped_ptr_ctx *ctx) {
 // NULL. It saves the free on every return path of a function that owns a
 // buffer. mmgmt_procs is kept by reference, so it must outlive the scope. Only
 // the last value is freed, so free an earlier value yourself before you assign
-// a new one. It's two declarations, so use it as a statement of its own. The
-// hidden context is marked unused because Clang 11 doesn't count a cleanup as a
-// use.
+// a new one. Hand the pointer out of the scope with ccol_scoped_ptr_release().
+// It's two declarations, so use it as a statement of its own.
 #define ccol_scoped_ptr_mp(name, type, mmgmt_procs)                    \
   type *name = NULL;                                                   \
   ccol__scoped_ptr_ctx name##__ccol_scoped_ctx __attribute__((unused)) \
   ccol__destructor(ccol__scoped_ptr_cleanup) = {(void **)&(name),      \
                                                 (mmgmt_procs)}
 
-// ccol_scoped_ptr_mp() with the default allocator, for the common case of a
-// malloc'ed buffer.
+// Declares type *name = NULL and frees whatever name holds with free() at the
+// end of the enclosing scope, on every way out, for the common case of a
+// malloc'ed buffer. Only the last value is freed, so free an earlier value
+// yourself before you assign a new one. Hand the pointer out of the scope with
+// ccol_scoped_ptr_release(). It's two declarations, so use it as a statement
+// of its own.
 #define ccol_scoped_ptr(name, type) ccol_scoped_ptr_mp(name, type, NULL)
 
 // Evaluates to the current value of name, a ccol_scoped_ptr variable, and sets
@@ -1287,7 +1317,7 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
   }
 }
 
-// Internal: evaluates to the ccol_data_type of a scalar var, or to
+// Internal: Evaluates to the ccol_data_type of a scalar var, or to
 // ccol_other_types for anything else. ccol_determine_ccol_data_type uses it
 // after it has ruled out strings and pointers. Only the type of var is read.
 #if defined(CCOL__CLANG_GENERIC_ASSOC_WARNING)
@@ -1362,13 +1392,12 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
       default: ccol_other_types)
 #endif
 
-// Evaluates to the ccol_data_type of data: ccol_string for a character array or
-// pointer, ccol_pointer for any other pointer, else the scalar type. chmap and
-// cbmap dispatch on this key type when the typed macros create a map. The
-// pointer test runs on a zeroed probe of data's type instead of data itself,
-// because Clang's -Wuninitialized treats the operand of
-// __builtin_classify_type() as evaluated, and data can be a companion type
-// variable that is uninitialized on purpose. data is never evaluated.
+// Evaluates to the ccol_data_type of the type of data: ccol_string for a
+// character array or pointer (signed and unsigned char too), ccol_pointer for
+// any other pointer, the matching scalar value for a standard integer or
+// floating type, and ccol_other_types for anything else, such as a struct.
+// chmap and cbmap choose how to store and compare keys from it. Only the type
+// of data counts; data is never evaluated.
 #define ccol_determine_ccol_data_type(data)                                 \
   ({                                                                        \
     ccol_data_type ccol__dcdt_r = ccol_other_types;                         \
@@ -1389,7 +1418,7 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
     ccol__dcdt_r;                                                           \
   })
 
-// Internal: evaluates to a constant 1 when lvalue has a character-pointer type,
+// Internal: Evaluates to a constant 1 when lvalue has a character-pointer type,
 // else 0, so __builtin_choose_expr() can select on it where the statement
 // expression of ccol__is_char_ptr() can't be used. Its list must match
 // ccol__is_char_ptr(). lvalue is never evaluated.
@@ -1401,7 +1430,7 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
    __builtin_types_compatible_p(__typeof__(lvalue), unsigned char *) ||     \
    __builtin_types_compatible_p(__typeof__(lvalue), const unsigned char *))
 
-// Internal: evaluates to a null pointer with the character-pointer type that
+// Internal: Evaluates to a null pointer with the character-pointer type that
 // expr decays to (char * for anything else). ccol__declared_or_own_type and
 // ccol__type_is_array_of_char use only its type. Every arm is a cast this
 // header writes, so it's well formed for any expr in the unchosen arm of a
@@ -1416,7 +1445,7 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
       const unsigned char *: (const unsigned char *)0, \
       default: (char *)0)
 
-// Internal: expands to the type a container macro gives its private copy of a
+// Internal: Expands to the type a container macro gives its private copy of a
 // caller expression expr, so the copy has the right type and width.
 // type_var is the companion type variable, so *(type_var) has the declared
 // type. For a declared non-string type it's that type, so the copy converts
@@ -1431,7 +1460,7 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
                                           ccol__char_ptr_flavour(expr),        \
                                           *(type_var)))
 
-// Internal: evaluates to a constant 1 when T (a type or an expression) is an
+// Internal: Evaluates to a constant 1 when T (a type or an expression) is an
 // array type, else 0. ccol__refuse_array_types and ccol__unqual_type need it.
 // The comma decays an array and keeps any other type, so the two types differ
 // exactly for an array (a function type also gives 1). Nothing is evaluated.
@@ -1439,7 +1468,7 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
   (!__builtin_types_compatible_p(__typeof__(T), \
                                  __typeof__((void)0, *(__typeof__(T) *)0)))
 
-// Internal: refuses an array key type KeyT or value type ValT at compile time,
+// Internal: Refuses an array key type KeyT or value type ValT at compile time,
 // with a message that starts with the container name. The typed macros copy
 // through a temporary of the declared type, and an array would decay and store
 // the address of the caller's array. It's two static assertions, valid inside a
@@ -1452,7 +1481,7 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
                  ": an array value type is not supported; wrap the " \
                  "array in a struct")
 
-// Internal: evaluates to x (not an array) as an rvalue without top-level
+// Internal: Evaluates to x (not an array) as an rvalue without top-level
 // qualifiers, for ccol__unqual_type; only its type is used. Clang drops them
 // with a comma, GCC before 11 doesn't, so GCC casts x to its own type (a GNU
 // extension for a struct, which Clang refuses).
@@ -1462,7 +1491,7 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
 #define ccol__unqual_nonarray_rvalue(x) (__extension__(__typeof__(x))(x))
 #endif
 
-// Internal: expands to the type of x without top-level qualifiers, for a
+// Internal: Expands to the type of x without top-level qualifiers, for a
 // temporary that a macro writes to even when the declared type is const. An
 // array type keeps its type, since dropping qualifiers would decay it. The
 // unchosen arm sees 0 instead of x, so no cast meets an array. x is never
@@ -1473,7 +1502,7 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
       ccol__unqual_nonarray_rvalue( \
           __builtin_choose_expr(ccol__type_is_array(x), 0, (x)))))
 
-// Internal: zeroes the padding bytes of the object obj_ptr points to, where the
+// Internal: Zeroes the padding bytes of the object obj_ptr points to, where the
 // compiler has __builtin_clear_padding(), and does nothing elsewhere. A struct
 // copy may carry stack garbage in its padding, and the containers hash and
 // compare every byte of a key, so the typed macros clear their own copy of each
@@ -1489,7 +1518,7 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
 
 // Map pair population
 //
-// Internal: fills *pair from data of any type, so the typed macros can hand any
+// Internal: Fills *pair from data of any type, so the typed macros can hand any
 // key or value to the raw cmap_pair layer. A character array gives its address
 // and strlen + 1. A character pointer gives the pointer and strlen + 1, or
 // {NULL, 0} for a NULL pointer, which the raw layers refuse; the pointer is
@@ -1515,14 +1544,14 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
 
 // Utility macros
 //
-// Internal: evaluate to the smaller or larger of a and b, for the size
+// Internal: Evaluate to the smaller or larger of a and b, for the size
 // arithmetic of the library and its inline code. They can evaluate an argument
 // twice.
 #define ccol__min(a, b) ((a) < (b) ? (a) : (b))
 
 #define ccol__max(a, b) ((a) > (b) ? (a) : (b))
 
-// Internal: compares the two T values at ptr1 and ptr2 and evaluates to -1, 0
+// Internal: Compares the two T values at ptr1 and ptr2 and evaluates to -1, 0
 // or 1 (negative, zero or positive in general). cbstmap and the default
 // comparators use it. Both are read with memcpy, because the bytes can come
 // from a hand-built cmap_pair with no alignment and no effective type of T, and

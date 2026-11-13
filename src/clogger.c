@@ -168,7 +168,7 @@ static bool clog_test_consume_rotate_failure(void) {
 #else
 
 // Stubs of a non-test build, so rotate() and the rotation checks need no
-// #ifdef: the clock is time(NULL) and no rotation failure is forced.
+// #ifdef: The clock is time(NULL) and no rotation failure is forced.
 static inline time_t clog_wall_now(void) { return time(NULL); }
 static inline bool clog_test_consume_rotate_failure(void) { return false; }
 #endif
@@ -180,7 +180,7 @@ static const char *const LEVEL_STR[] = {"TRACE", "DEBUG", "INFO",  "WARN",
 _Static_assert(sizeof(LEVEL_STR) / sizeof(LEVEL_STR[0]) == CLOG_OFF + 1,
                "LEVEL_STR must have exactly one entry per clog_level value");
 
-// Keys clog_set_field() refuses: the fixed keys every record carries. A user
+// Keys clog_set_field() refuses: The fixed keys every record carries. A user
 // field with one of them would give a duplicate key in JSON and logfmt, and a
 // duplicate SD-PARAM-NAME in syslog, which RFC 5424 forbids.
 static const char *const RESERVED_FIELD_KEYS[] = {
@@ -243,7 +243,7 @@ typedef struct {
 // Values of clog_shared.async_partial_record. A record can span several lines
 // (a logfmt backtrace), so a short write can stop inside a line or exactly at a
 // newline inside the record. Only the first leaves a line open on disk, so the
-// two need different repairs. CLOG_OWED_REPAIR is a separate bit: the target
+// two need different repairs. CLOG_OWED_REPAIR is a separate bit: The target
 // owes its output a newline or a loss marker.
 enum {
   CLOG_SPLIT_NONE = 0,
@@ -267,7 +267,7 @@ typedef struct clog_shared {
   // It sits next to fd because every write path tests both.
   unsigned char async_partial_record;
   // fd's clog_sink_kind, from fstat() at open and after each rotation. True
-  // sink_per_record means a message socket: one write per record, never a
+  // sink_per_record means a message socket: One write per record, never a
   // batch.
   unsigned char sink_kind;
   bool sink_per_record;
@@ -342,9 +342,9 @@ typedef struct clog_shared {
   int dir_fd;
   bool compressor_live;
   bool compressor_stop;
-  // compress_prune_deferred: a deletion pass kept an old generation only
+  // compress_prune_deferred: A deletion pass kept an old generation only
   // because its compression was running, so the compressor runs the pass again
-  // after it. compress_abort: the exit drain ran out of time, so the running
+  // after it. compress_abort: The exit drain ran out of time, so the running
   // compression stops at its next block and keeps the source.
   bool compress_prune_deferred;
   _Atomic bool compress_abort;
@@ -356,7 +356,7 @@ typedef struct clog_shared {
   // CLOG_FATAL calls waiting for mutex; the writer thread yields while it's not
   // zero (see clog_writer_lock()).
   atomic_uint fatal_waiters;
-  // The repair this target owes its output (see clog_pay_owed()): a newline
+  // The repair this target owes its output (see clog_pay_owed()): A newline
   // closing a line left open on disk, and the count, records and bytes of
   // losses no marker has named yet. owed_err is the last failed write's errno,
   // and owed_detail is the text of the first loss.
@@ -381,7 +381,7 @@ typedef struct clog_shared {
 #endif
 } clog_shared;
 
-// One logger handle's object: its level, its own fields and its record buffer.
+// One logger handle's object: Its level, its own fields and its record buffer.
 // fields_mutex guards fields only, so field changes on one derived logger don't
 // contend with writes on a sibling. When both locks are needed, shared->mutex
 // is taken first. min_level is atomic because clog__write() reads it before it
@@ -407,7 +407,7 @@ typedef struct {
   bool freed;
 } clog_slot;
 
-// The lock-free half of the handle table: handle to pointer, plus the pin that
+// The lock-free half of the handle table: Handle to pointer, plus the pin that
 // keeps a logger alive during a call. Every log call resolves here and must
 // write nothing another thread reads.
 static ccol_pintable clog_pintable;
@@ -558,7 +558,7 @@ size_t clog__test_live_shareds_count(void) {
 }
 #else
 
-// Stub of a non-test build, so clog_handle_acquire() needs no #ifdef: no
+// Stub of a non-test build, so clog_handle_acquire() needs no #ifdef: No
 // registration failure is forced.
 static inline bool clog_test_consume_forced_fresh_slot_reg_failure(void) {
   return false;
@@ -988,7 +988,7 @@ void clog__test_force_next_buf_ensure_failure(bool force) {
 }
 #else
 
-// Stub of a non-test build, so the append functions need no #ifdef: no append
+// Stub of a non-test build, so the append functions need no #ifdef: No append
 // failure is forced.
 static inline bool clog_test_consume_forced_buf_ensure_failure(void) {
   return false;
@@ -1132,7 +1132,7 @@ static int utf8_valid_seq_len(const unsigned char *p) {
 }
 
 // For a non-ASCII byte at p, the length of the sequence an escaper copies as it
-// is, or 0 when append_utf8_rewrite() must write it: a C1 control (a terminal
+// is, or 0 when append_utf8_rewrite() must write it: A C1 control (a terminal
 // can read 0xc2 0x9b as CSI) or a byte that isn't well-formed UTF-8.
 static inline int utf8_pass_len(const unsigned char *p) {
   if (p[0] == 0xc2 && p[1] <= 0x9f) return 0;
@@ -1361,7 +1361,7 @@ static void sd_param_name(const char *key, char name[33]) {
 }
 
 // Appends free text with every control escaped and '\\' doubled, so it reads
-// back without ambiguity and can't split a record: a syslog MSG, and a
+// back without ambiguity and can't split a record: A syslog MSG, and a
 // backtrace frame in logfmt and syslog. Bad UTF-8 becomes U+FFFD. s must not be
 // NULL.
 static int buf_append_ctrl_escaped(clog_buf *b, const char *s) {
@@ -1443,7 +1443,7 @@ static const char *get_progname(void) {
 
 // Gives the calling thread's OS thread ID for the identity cache, so a record's
 // tid matches what ps(1) shows. Where the platform has none, the pthread handle
-// stands in: unique per thread, but not what the tools show.
+// stands in: Unique per thread, but not what the tools show.
 static pid_t get_tid(void) {
 #if defined(__linux__)
   return (pid_t)syscall(SYS_gettid);
@@ -1592,7 +1592,7 @@ __attribute__((constructor)) static void clog_atfork_at_load(void) {
 }
 #endif
 
-// At unload and exit: frees the calling thread's cache, which no key destructor
+// At unload and exit: Frees the calling thread's cache, which no key destructor
 // frees for the thread that ends the process, and deletes the key so no thread
 // exiting after a dlclose() calls into unmapped code.
 __attribute__((destructor)) static void clog_tident_fini(void) {
@@ -1757,7 +1757,7 @@ void clog__test_force_write_errors(int err, unsigned int write_count) {
   atomic_store(&clog_test_write_error_uses, err ? write_count : 0u);
 }
 
-// A simulated full output: while clog_test_room_err isn't 0, writes take bytes
+// A simulated full output: While clog_test_room_err isn't 0, writes take bytes
 // until clog_test_room runs out, and then fail with that errno. After
 // clog_test_room_refusals refused writes the output has room again (0 keeps it
 // full).
@@ -1813,7 +1813,7 @@ static bool clog_test_socket_is_pipe(void) {
 }
 #else
 
-// Stubs of a non-test build, so the write loops need no #ifdef: none of the
+// Stubs of a non-test build, so the write loops need no #ifdef: None of the
 // write hooks does anything.
 static inline bool clog_test_socket_is_pipe(void) { return false; }
 static inline size_t clog_test_consume_next_write_cap(void) { return 0; }
@@ -1976,7 +1976,7 @@ static __attribute__((noinline, cold)) void clog_thread_set_signal_mask(
   clog_sig_thread = st;
 }
 
-// Brings a writer or compressor thread's mask in line with the policy: both
+// Brings a writer or compressor thread's mask in line with the policy: Both
 // signals blocked under AUTO, as inherited under UNTOUCHED. It unblocks only
 // what the module blocked, and the module never leaves its own signal pending,
 // so an unblock delivers nothing.
@@ -2015,7 +2015,7 @@ static __attribute__((noinline, cold)) void clog_ignore_sigpipe_once(void) {
 }
 
 // Prepares the signal state before every pipe write, so EPIPE can't kill the
-// process: a module thread syncs its own mask, any other thread applies the
+// process: A module thread syncs its own mask, any other thread applies the
 // process-wide SIGPIPE ignore under AUTO.
 static inline void clog_pipe_write_prepare(void) {
   if (clog_sig_thread != 0) {
@@ -2509,7 +2509,7 @@ static size_t clog_note_render(const clog_shared *sh, clog_format fmt,
 
 static bool clog_write_error_is_transient(int err);
 
-// Writes what the target owes (see clog_shared.owe_newline) in one write: the
+// Writes what the target owes (see clog_shared.owe_newline) in one write: The
 // newline closing an open line, and one marker naming the unreported losses
 // (the loss's own text for one, totals for more). A partial write is judged by
 // its last byte. It writes nothing while async_buf holds the continuation of a
@@ -3037,7 +3037,7 @@ void clog__test_append_ctrl_escaped(const char *raw, char *out, size_t outsz) {
   buf_free(&b);
 }
 
-// Backtrace hooks: force a failed capture, force every syslog frame append to
+// Backtrace hooks: Force a failed capture, force every syslog frame append to
 // fail (armed until cleared), or force a real capture clamped to no frames. See
 // test_helpers/clogger.h.
 static _Atomic bool clog_test_force_bt_capture_failure = false;
@@ -3072,7 +3072,7 @@ bool clog__test_backtrace_supported(void) { return CLOG_HAS_BACKTRACE != 0; }
 // Gives fd, a file this module created with mode 0600, the owner, group and
 // permission bits of *like. Owner and group go first and the bits are widened
 // after, so the file is never more readable than *like. Like logrotate it's
-// best effort: without the owner it still tries the group, and without the
+// best effort: Without the owner it still tries the group, and without the
 // group it clears the group bits. Used for a new live file and a .gz.
 static void clog_copy_owner_and_mode(int fd, const struct stat *like) {
   mode_t mode = like->st_mode & 0777;
@@ -3350,7 +3350,7 @@ static void clog_gen_filter_init(const clog_shared *sh, clog_gen_filter *f) {
   clog_time_to_stamp(ref + CLOG_ROTATION_FUTURE_TOLERANCE_SECS, f->limit);
 }
 
-// What a rotated-looking entry is: a generation, something else, or gone.
+// What a rotated-looking entry is: A generation, something else, or gone.
 typedef enum {
   CLOG_ENTRY_GENERATION,
   CLOG_ENTRY_IGNORED,
@@ -3459,7 +3459,7 @@ typedef struct {
 } clog_rotated_file;
 
 // Compares two rotated files for qsort(), oldest first by (stamp, sequence),
-// the order rotations happened in. The mtime can't be used: a compression
+// the order rotations happened in. The mtime can't be used: A compression
 // rewrites the file, so a big old generation can finish later than a newer one.
 static int cmp_rotated_oldest_first(const void *a, const void *b) {
   const clog_rotated_file *x = (const clog_rotated_file *)a;
@@ -3471,7 +3471,7 @@ static int cmp_rotated_oldest_first(const void *a, const void *b) {
 
 #ifdef RUNNING_UNIT_TESTS
 
-// Since the last reset: the most generations a pass left on disk (counted from
+// Since the last reset: The most generations a pass left on disk (counted from
 // a listing of its own), the most compressions in flight a pass saw, and the
 // most generations left beyond those kept only for a running compression.
 static _Atomic int clog_test_max_rotated_generations = 0;
@@ -3550,7 +3550,7 @@ void clog__test_set_prune_misses_running(bool miss) {
 #endif
 
 // Deletes sh's oldest generations beyond max_rotated_files. A generation is one
-// rotation: one file, or two (source and .gz) while it's being compressed. The
+// rotation: One file, or two (source and .gz) while it's being compressed. The
 // pass keeps the newest max_keep generations and deletes the older ones, except
 // the running compression and just_rotated (the file this rotation just moved
 // aside), which are never deleted. When it keeps an old generation only because
@@ -3711,7 +3711,7 @@ static void prune_rotated(clog_shared *sh, const char *just_rotated,
   ccol__mem_free(m_procs, files);
 }
 
-// True when candidate can't be a new rotation destination: the name exists, or
+// True when candidate can't be a new rotation destination: The name exists, or
 // (with check_gz) its .gz form exists. The second test matters because a
 // finished compression unlinks its source, so the bare name of an earlier
 // rotation in the same second looks free while its .gz holds the content.
@@ -3726,7 +3726,7 @@ static bool rotated_name_taken(int dir_fd, const char *candidate,
   return clog_entry_exists(dir_fd, gz);
 }
 
-// Background compression: a target that compresses owns one compressor thread,
+// Background compression: A target that compresses owns one compressor thread,
 // started by its first rotation that needs one. rotate() only queues a job, so
 // no log call ever waits for gzip. Jobs run one at a time, oldest first, which
 // is what bounds the files on disk to max_rotated_files plus one. The last
@@ -3738,7 +3738,7 @@ static bool rotated_name_taken(int dir_fd, const char *candidate,
 // may hold the target's mutex.
 static __thread const clog_shared *clog_thread_serves;
 
-// True once there's work for the exit drain: a writer or compressor thread
+// True once there's work for the exit drain: A writer or compressor thread
 // started, or a debt was left.
 static _Atomic bool clog_exit_drain_armed;
 
@@ -4430,7 +4430,7 @@ static const char BT_LINE_ERROR_MARKER[] = "\t#error backtrace unavailable\n";
 // so the backtrace lands in the same write as the record. Each frame goes
 // through the control escaper and is rolled back when it doesn't fit, so later
 // shorter frames still get in. A NULL syms appends BT_LINE_ERROR_MARKER.
-// Returns true when out shows the backtrace accurately: some frames went in, no
+// Returns true when out shows the backtrace accurately: Some frames went in, no
 // frame existed (depth at most CLOG_BT_INITIAL_FRAME), or the marker stands in
 // for frames that all failed to fit. False only when not even the marker fits.
 static bool emit_backtrace_lines(clog_buf *out, char *const *syms, int depth) {
@@ -4618,7 +4618,7 @@ void clog__test_emit_backtrace_syslog_unavailable_marker(clog logger,
 }
 #endif
 
-// What an async queue message carries: a record job, a flush request, or a wake
+// What an async queue message carries: A record job, a flush request, or a wake
 // (a plain flush with nothing attached, see clog_wake_writer()).
 typedef enum {
   CLOG_ASYNC_MSG_JOB,
@@ -4633,7 +4633,7 @@ typedef struct {
   size_t value_offset;
 } clog_field_view;
 
-// One record for the writer thread, complete in itself: everything
+// One record for the writer thread, complete in itself: Everything
 // clog_build_record() needs, captured by the submitting thread at submission,
 // since the writer may build it much later on another thread.
 typedef struct clog_async_job {
@@ -4686,7 +4686,7 @@ typedef struct clog_async_msg {
   } u;
 } clog_async_msg;
 
-// Where a record's fields come from: a logger's live map read under its
+// Where a record's fields come from: A logger's live map read under its
 // fields_mutex (synchronous and fatal paths), or a snapshot taken at submission
 // (async path). failed marks a snapshot that couldn't be taken. One loop,
 // clog_emit_fields(), serves both.
@@ -4882,7 +4882,7 @@ static bool clog_build_msg_and_close(clog_buf *out, clog_format fmt,
 }
 
 // Appends a small placeholder record in place of one that couldn't be built, so
-// nothing vanishes silently. alloc_failure picks the message: an allocation
+// nothing vanishes silently. alloc_failure picks the message: An allocation
 // failure, or a record larger than out->cap_limit. It starts at out->len (the
 // caller already rolled back) and never resets out, because out can be a batch
 // holding other records. With with_backtrace it adds the JSON marker. Returns
@@ -4947,7 +4947,7 @@ static bool clog_build_fallback_record(clog_buf *out, clog_shared *sh,
   return ok;
 }
 
-// Builds one complete record into out: header, fields, message and close, and
+// Builds one complete record into out: Header, fields, message and close, and
 // for logfmt the backtrace lines too, falling back to a placeholder on any
 // failure. It's the one record builder of the synchronous, fatal and async
 // paths; syslog frames are written by the caller afterwards. It resets out->oom
@@ -5096,7 +5096,7 @@ static void shared_close_owned_fd(clog_shared *sh) {
   }
 }
 
-// Allocates and initializes a clog_shared for the constructors: copies the
+// Allocates and initializes a clog_shared for the constructors: Copies the
 // procs and the path, creates the mutex, classifies the sink and caches the
 // sanitized hostname and APP-NAME (the raw hostname may hold bytes that would
 // split a syslog record). fd and dir_fd stay owned by the caller until it
@@ -5329,7 +5329,7 @@ static bool clog_write_error_is_no_room(int err) {
 }
 
 // Gives the length of the next piece of a large backlog, so a flush can rotate
-// between pieces: up to the first record boundary where the file reaches
+// between pieces: Up to the first record boundary where the file reaches
 // max_file_size, or all n bytes when it doesn't or the backoff blocks the
 // rotation. A boundary is a newline not followed by a tab. Needs sh->mutex;
 // rotation is on.
@@ -5515,7 +5515,7 @@ static __attribute__((noinline)) void clog_flush_and_settle(
   clog_settle_after_flush(sh, fmt, poll_timeout_ms);
 }
 
-// Frees a job envelope and everything it owns: the message spill, the field
+// Frees a job envelope and everything it owns: The message spill, the field
 // snapshot and the backtrace (with free(), since backtrace_symbols() used
 // malloc). Used by the writer thread after each job and by clog_write_async()
 // when the send fails.
@@ -5802,7 +5802,7 @@ static void *clog_writer_thread_main(void *arg) {
   }
 }
 
-// Turns async logging on for sh: resolves the config defaults, creates the
+// Turns async logging on for sh: Resolves the config defaults, creates the
 // queue, sets up async_buf (its limit raised to flush_buffer_size) and starts
 // the writer thread, undoing everything if a step fails. async_enabled is set
 // only at the end. Each constructor calls it last, so the writer thread never
@@ -5886,7 +5886,7 @@ static void shared_async_teardown(clog_shared *sh) {
   buf_free(&sh->async_buf);
 }
 
-// Validators of the enum setters and the open calls: each accepts only the
+// Validators of the enum setters and the open calls: Each accepts only the
 // values its enum names. They compare through int, since an enum can be
 // unsigned and a negative value would become a large one.
 static bool clog_level_is_valid(clog_level level) {
@@ -6130,7 +6130,7 @@ static void clog_shared_finish_last(clog_shared *sh) {
   shared_free_partial(sh);
 }
 
-// Tells whether target b may join target a on the same file: the same rotation,
+// Tells whether target b may join target a on the same file: The same rotation,
 // async configuration and allocator once defaults are applied. Used by
 // clog_file_register_or_attach().
 static bool clog_file_targets_compatible(const clog_shared *a,
@@ -6285,7 +6285,7 @@ static void clog_close_left_target(clog_shared *sh) {
   ccol__rw_lock_unlock(clog_slot_table.rwlock);
 }
 
-// Closes h, the public end of a logger. Steps: under the write lock it marks
+// Closes h, the public end of a logger. Steps: Under the write lock it marks
 // the slot not in use (a second close is fatal) and counts a close in flight;
 // it waits, polling without a bound, until no call still pins the handle
 // (giving up would free memory a caller still uses); under the write lock again
@@ -6655,7 +6655,7 @@ static __attribute__((noinline, cold)) bool clog_fatal_write_record(
 
 // Builds and writes one record synchronously, under the target's mutex, which
 // it takes itself (the caller must not hold it). It's instantiated twice with
-// fatal as a constant: for ordinary records and for a CLOG_FATAL record, which
+// fatal as a constant: For ordinary records and for a CLOG_FATAL record, which
 // skips the level filter, takes the mutex within deadline, marks a sink that
 // isn't a regular file as bounded, and returns false when the record didn't go
 // out whole. The ordinary records re-check the level under the lock. The
@@ -6770,7 +6770,7 @@ clog_write_sync_body(struct clogger *lg, clog_level level, const char *file,
   return delivered;
 }
 
-// Writes one ordinary record synchronously through clog_write_sync_body(): the
+// Writes one ordinary record synchronously through clog_write_sync_body(): The
 // path of every non-async target, and the fallback of clog_write_async() when
 // the envelope can't be allocated.
 static void __attribute__((format(printf, 9, 0))) clog_write_sync(
@@ -6792,7 +6792,7 @@ static clog_async_msg clog_wake_envelope = {.kind = CLOG_ASYNC_MSG_WAKE};
 
 // Wakes sh's writer thread after a thread that wrote a record itself left work
 // for it (kept batch bytes, an owed repair), since an idle writer waits without
-// a limit. A refused send needs nothing more: a full queue wakes the writer
+// a limit. A refused send needs nothing more: A full queue wakes the writer
 // anyway, sends off belong to a drain that settles the target, and an unbounded
 // queue out of memory leaves the work to the next record, flush, close or exit
 // drain.
@@ -6812,7 +6812,7 @@ static __attribute__((cold)) void clog_wake_writer(clog_shared *sh) {
 // under the mutex, after clog_flush_pinned() so it can't land ahead of records
 // already queued; it joins the batch behind kept records when it can, and runs
 // the rotation checks and the settle like any direct write. Only on the exit
-// paths is a record dropped: when a drain left the target, or when the mutex
+// paths is a record dropped: When a drain left the target, or when the mutex
 // doesn't come before the drain's deadline (an unbounded wait would keep the
 // handle pinned and hang a later close).
 static void __attribute__((format(printf, 9, 0))) clog_write_async(
@@ -6982,7 +6982,7 @@ void clog__test_force_flush_condvar_init_failure(bool force) {
 }
 #else
 
-// Stubs of a non-test build, so clog_flush_pinned() needs no #ifdef: no init
+// Stubs of a non-test build, so clog_flush_pinned() needs no #ifdef: No init
 // failure is forced.
 static inline bool clog_test_consume_forced_flush_mutex_init_failure(void) {
   return false;
@@ -6994,7 +6994,7 @@ static inline bool clog_test_consume_forced_flush_condvar_init_failure(void) {
 
 static void clog_flush_after_drain(clog_shared *sh);
 
-// Flushes lg's async target: queues a flush request and waits until the writer
+// Flushes lg's async target: Queues a flush request and waits until the writer
 // thread has written everything queued before it. It's the body of
 // clog_flush(), and clog_write_async() and the fatal path call it with a handle
 // they already pinned (the pin is held through the wait, so a close waits for
@@ -7048,7 +7048,7 @@ void clog_flush(clog h) {
 }
 
 // Makes the last delivery attempt for an async target's batch on the fatal and
-// exit paths: one bounded flush, a settle of a split record, and a marker for
+// exit paths: One bounded flush, a settle of a split record, and a marker for
 // whatever is still undelivered. timeout_ms bounds each write so an output that
 // takes nothing can't hold the process. Needs sh->mutex.
 static void clog_settle_batch_locked(clog_shared *sh, int timeout_ms) {
@@ -7064,7 +7064,7 @@ static void clog_exit_drain(void);
 // True once the exit drain is registered with atexit().
 static bool clog_exit_drain_registered;
 
-// Ends a CLOG_FATAL call after its record and unpin: calls exit(), whose exit
+// Ends a CLOG_FATAL call after its record and unpin: Calls exit(), whose exit
 // drain flushes every other async logger and finishes compressions within its
 // budget. Runs the drain directly only when its registration failed.
 static __attribute__((noinline, noreturn)) void clog_fatal_exit(void) {
@@ -7072,7 +7072,7 @@ static __attribute__((noinline, noreturn)) void clog_fatal_exit(void) {
   exit(EXIT_FAILURE);
 }
 
-// Exit drain: at exit() or a return from main() a still open async logger would
+// Exit drain: At exit() or a return from main() a still open async logger would
 // lose its queue and batch and cut a compression off, so a handler registered
 // at load drains every async target (queue, batch, a marker for what can't go
 // out) and then the compressions. One budget bounds every wait and lock, so a
@@ -7258,7 +7258,7 @@ typedef struct {
   clog_async_msg envelope;
 } clog_exit_flush;
 
-// Outcome of clog_owner_flush(): answered, sent but not answered, not sent
+// Outcome of clog_owner_flush(): Answered, sent but not answered, not sent
 // (queue full or refused), or no memory for the request.
 typedef enum {
   CLOG_OWNER_FLUSH_DONE,
@@ -7321,7 +7321,7 @@ static clog_owner_flush_result clog_owner_flush(
 }
 
 // Drains async target sh within the deadline, for the exit drain and the fatal
-// path: it turns sends off first, then puts the flush request in through the
+// path: It turns sends off first, then puts the flush request in through the
 // owner send, so every accepted record is ahead of it and later records take
 // the synchronous fallback. Then it settles the batch and pays an owed repair
 // under the mutex. When the writer doesn't answer, the queue stays full or the
@@ -7356,7 +7356,7 @@ static bool clog_exit_drain_async(clog_shared *sh,
   return true;
 }
 
-// Gives the deadline of a thread whose send a drain refused: the drain's own
+// Gives the deadline of a thread whose send a drain refused: The drain's own
 // deadline, and at least CLOG_SPLIT_RECORD_DRAIN_WAIT_MS from now, so a record
 // logged after a drain (from a destructor) still gets written.
 static struct timespec clog_after_drain_deadline(clog_shared *sh) {
@@ -7415,7 +7415,7 @@ static void clog_exit_drain_compressions(clog_shared *sh,
   ccol__mutex_unlock(sh->mutex);
 }
 
-// The exit handler: drains every async target and then its compressions within
+// The exit handler: Drains every async target and then its compressions within
 // one budget (the fatal deadline after a CLOG_FATAL call), and pays owed
 // repairs with a try-lock only. It walks live_shareds under the table's write
 // lock (taken for writing because a fork child re-initialized it), and skips
@@ -7536,7 +7536,7 @@ clog_write_fatal(struct clogger *lg, const char *file, int line,
   clog_fatal_exit();
 }
 
-// The function behind every clog_<level>() macro: checks the level with a
+// The function behind every clog_<level>() macro: Checks the level with a
 // relaxed load and returns at once for a dropped record, captures the backtrace
 // in this frame when asked, and sends the record down the fatal, async or
 // synchronous path. async_enabled is read without a lock, since it's written

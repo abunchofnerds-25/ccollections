@@ -214,7 +214,7 @@ missing `*_redeclare` in a new scope is the mistake almost everyone makes
 first with this library, and the compiler error names the companion
 variable that's missing.
 
-## Two layers: typed macros and raw functions
+## Two layers: Typed macros and raw functions
 
 Every typed macro calls a raw function:
 
@@ -274,7 +274,7 @@ prog.c:5: ccol_assert failed: false
 
 After that the program stops with SIGABRT.
 
-Expected failures are values: a key that may not be in the map, a queue
+Expected failures are values: A key that may not be in the map, a queue
 that may be empty, a server that may be down. The library reports them as a
 `ccol_retval`, which is `0` (`ccol_success`) on success and a negative
 code otherwise, such as `ccol_key_not_found`, `ccol_timed_out` or
@@ -426,7 +426,7 @@ the `try_` call instead of `ccol_timed_out`. For other fields the man page of
 the field says what `0` means, which is usually "no limit" or "the
 default".
 
-## Putting it together: a small grade book
+## Putting it together: A small grade book
 
 This program keeps records in a vector of structs and finds a record by
 name through a map. It passes both containers to helper functions, and it

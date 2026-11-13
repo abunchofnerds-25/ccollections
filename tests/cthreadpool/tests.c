@@ -87,7 +87,7 @@ static void _diag_warm_up_backtrace(void) {
 #endif
 }
 
-// The SIGALRM handler of a stuck child: writes the raw frames to diag_write_fd
+// The SIGALRM handler of a stuck child: Writes the raw frames to diag_write_fd
 // and exits with 66. It only calls async-signal-safe functions.
 static void _diag_alarm_handler(int sig) {
   (void)sig;
@@ -176,7 +176,7 @@ static void *release_gate_fn(void *arg) {
   return NULL;
 }
 
-// The releaser of the shutdown_immediate tests: it opens the gate only once the
+// The releaser of the shutdown_immediate tests: It opens the gate only once the
 // shutdown has set its immediate flag. The pool sets that flag and takes the
 // queue in one critical section, so the worker can't dequeue a task that the
 // shutdown must discard. After 10 s it opens the gate anyway.
@@ -231,7 +231,7 @@ static void *slow_identity(void *arg) {
   return arg;
 }
 
-// A future task held by a gate: it gives result only after the gate opens.
+// A future task held by a gate: It gives result only after the gate opens.
 typedef struct {
   atomic_int *gate;
   void *result;
@@ -245,7 +245,7 @@ static void *gated_identity(void *arg) {
   return ctx->result;
 }
 
-// The multi-waiter future tests: the task returns only once release is set, so
+// The multi-waiter future tests: The task returns only once release is set, so
 // every waiter stays inside cthrpool_future_get as long as the test needs.
 // results_ok counts the waiters that got expected_result.
 typedef struct {
@@ -255,7 +255,7 @@ typedef struct {
   atomic_int results_ok;
 } future_waiters_ctx_t;
 
-// The task of the multi-waiter tests: waits for release, then gives
+// The task of the multi-waiter tests: Waits for release, then gives
 // expected_result.
 static void *waiters_gated_fn(void *arg) {
   future_waiters_ctx_t *c = (future_waiters_ctx_t *)arg;
@@ -288,7 +288,7 @@ static int wait_for_future_refcount(cthrpool_future *f, int target,
 // A task that does nothing, so a test can watch on_complete alone.
 static void noop_fn(void *arg) { (void)arg; }
 
-// The self-submit tests: a task or on_complete submits twice into its own
+// The self-submit tests: A task or on_complete submits twice into its own
 // pool, and the two results (and futures) are recorded here.
 typedef struct {
   cthrpool pool;
@@ -354,7 +354,7 @@ static bool ctp_await_flag(atomic_int *flag) {
   return wait_for_flag(flag, 10000) != 0;
 }
 
-// The way out of a test whose held task didn't start in time: opens the gate,
+// The way out of a test whose held task didn't start in time: Opens the gate,
 // discards the queue and destroys the pool before the test's frame goes away.
 static void ctp_abandon_gated_pool(cthrpool *pool, atomic_int *gate) {
   atomic_store(gate, 1);
@@ -362,7 +362,7 @@ static void ctp_abandon_gated_pool(cthrpool *pool, atomic_int *gate) {
   cthrpool_destroy(*pool);
 }
 
-// The cross-pool test: a task on one pool makes a blocking submit into another
+// The cross-pool test: A task on one pool makes a blocking submit into another
 // pool that is full for a while.
 typedef struct {
   cthrpool other;
@@ -378,7 +378,7 @@ static void cross_pool_task_fn(void *arg) {
   atomic_store(&c->rc, (int)cthrpool_submit(c->other, noop_fn, NULL, NULL));
 }
 
-// A phase 1 task: sleeps 10 ms and increments the counter, so a wait between
+// A phase 1 task: Sleeps 10 ms and increments the counter, so a wait between
 // the phases has something to wait for.
 static void phase1_fn(void *arg) {
   sleep_ms(10);
@@ -789,7 +789,7 @@ TEST(submit, blocking_submit_from_within_a_task_reports_container_full) {
 // The counter of the tasks that self_timed_submit_task_fn submits.
 static atomic_int self_timed_counter;
 
-// A task that makes two timed submits with no limit into its own pool: one into
+// A task that makes two timed submits with no limit into its own pool: One into
 // the empty queue and one into the full one.
 static void self_timed_submit_task_fn(void *arg) {
   self_submit_ctx_t *c = (self_submit_ctx_t *)arg;
@@ -1115,7 +1115,7 @@ static ctp_full_queue_submit_t ctp_submit_on_full_queue(uint64_t timeout_us,
   return m;
 }
 
-// Checks the record of a timed submit that gave up: its deadline is timeout_us
+// Checks the record of a timed submit that gave up: Its deadline is timeout_us
 // after an instant inside the call and before the first wait, and it decided no
 // earlier than that deadline (2 ms of slack for a platform that waits on
 // another clock). The wall time serves only as a hang guard.
@@ -1860,7 +1860,7 @@ TEST(futures, submit_future_returns_null_on_oom) {
   cthrpool_destroy(pool);
 }
 
-// What one round of every_future_submit_locks_the_pool_once measured: results
+// What one round of every_future_submit_locks_the_pool_once measured: Results
 // and lock counts of each kind of submit.
 typedef struct {
   bool created;
@@ -2762,7 +2762,7 @@ TEST(shutdown_immediate, on_complete_reports_discarded_tasks_as_not_run) {
   for (int i = 0; i < DISCARD_TASKS; i++) REQUIRE_EQ(atomic_load(&seen[i]), 1);
 }
 
-// An on_complete of a discarded task that calls back into its own pool: the
+// An on_complete of a discarded task that calls back into its own pool: The
 // wait and both shutdowns must be no-ops there and a submit must be refused,
 // or the thread would wait on the shutdown it is running itself.
 typedef struct {
@@ -2818,7 +2818,7 @@ TEST(shutdown_immediate, discarded_on_complete_can_call_back_into_its_pool) {
   REQUIRE_EQ(atomic_load(&rc.submit_rv), (int)ccol_not_permitted);
 }
 
-// Two pools whose discard callbacks nest on one thread: a callback discarded
+// Two pools whose discard callbacks nest on one thread: A callback discarded
 // from outer shuts down inner, whose discard callback then runs inside it.
 // There the thread must still count as a worker of outer, so calls into outer
 // behave as from one of its own callbacks instead of waiting for ever on a
@@ -3839,7 +3839,7 @@ TEST(cthrpool_handle_lifecycle, bounded_slot_reuse_under_churn) {
   REQUIRE_EQ(cthrpool__slot_table_capacity_for_tests(), capacity_after_first);
 }
 
-// A task or on_complete that destroys its own pool. That must be fatal: the
+// A task or on_complete that destroys its own pool. That must be fatal: The
 // worker touches the pool again on its way back through its loop.
 typedef struct {
   cthrpool pool;
@@ -3916,7 +3916,7 @@ TEST(cthrpool_handle_lifecycle, destroy_from_within_own_on_complete_is_fatal) {
 }
 
 // A task that shuts down its own pool. That must be a full no-op that leaves
-// the shutdown flags unset: otherwise the next submit fails, and the worker's
+// the shutdown flags unset: Otherwise the next submit fails, and the worker's
 // failed self-join would never be retried.
 typedef struct {
   cthrpool pool;
@@ -4038,7 +4038,7 @@ TEST(cthrpool_handle_lifecycle, wait_from_within_own_task_does_not_hang) {
   REQUIRE_EQ(ok, 1);
 }
 
-// A task that forks: the grandchild is a copy of the worker with the pool
+// A task that forks: The grandchild is a copy of the worker with the pool
 // marked foreign and the worker key still naming the pool. A destroy there must
 // still count as a self-call, or the foreign teardown frees the pool under the
 // worker's own frame.
@@ -4572,7 +4572,7 @@ static void ctp_sd_sleep_ms(int ms) {
   nanosleep(&ts, NULL);
 }
 
-// The concurrent shutdown tests: a task holds the pool's only worker until gate
+// The concurrent shutdown tests: A task holds the pool's only worker until gate
 // opens, so no shutdown call can have joined it and none may have returned
 // while the gate is shut.
 typedef struct ctp_sd_fixture {
@@ -4801,7 +4801,7 @@ TEST(cthrpool_shutdown, immediate_escalates_a_drain_already_in_progress) {
 }
 
 // Enough cycles with a failing free list push that the starting free list
-// can't absorb them: with recovery the table grows by one at most, without it
+// can't absorb them: With recovery the table grows by one at most, without it
 // by one per cycle. The reclaimed slot must give a working pool.
 TEST(cthrpool_handle_lifecycle,
      a_free_list_push_failure_does_not_strand_a_slot) {
@@ -4840,7 +4840,7 @@ TEST(cthrpool_handle_lifecycle,
   REQUIRE_LE(after, before + 1);
 }
 
-// A gate for the contention tests: tasks count themselves in entered, park
+// A gate for the contention tests: Tasks count themselves in entered, park
 // until open (30 s at most) and count their run in ran.
 typedef struct ctp_gate {
   _Atomic bool open;
@@ -4918,7 +4918,7 @@ static void *ctp_stress_submitter_thread(void *arg) {
 }
 
 // Races six submitters of every mode against eight workers on a queue of
-// capacity queue_cap. True when every task ran: a lost wake leaves a thread
+// capacity queue_cap. True when every task ran: A lost wake leaves a thread
 // asleep for good, so the wait is bounded and a timeout shuts the pool down
 // immediately before the join.
 static bool ctp_signal_stress(size_t queue_cap, long per_submitter) {

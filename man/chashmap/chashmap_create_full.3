@@ -83,7 +83,7 @@ macros needs the two procedures.
 .SH "HASHING AND RESISTANCE TO HASH FLOODING"
 .PP
 Every map has two hash modes and starts in the fast one. In the fast mode
-an integer, float, double or pointer key gets a Fibonacci multiply: the
+an integer, float, double or pointer key gets a Fibonacci multiply: The
 key times the odd 64-bit constant nearest to 2^64 divided by the golden
 ratio, read from the high bits of the product. On a 32-bit target a 64-bit
 key is multiplied at 64 bits as well, so both of its halves reach the
@@ -159,7 +159,7 @@ the mode.
 When a keyed map grows, it tries the fast mode on the new table (the
 doubled table of an open-addressing map, or the bucket array of a
 separate-chaining map that grows by four). It keeps the fast mode unless
-that fill shows that the keys collide under it: an open-addressing entry
+that fill shows that the keys collide under it: An open-addressing entry
 that would land more than the new table's cap from its home slot, a
 separate-chaining chain that would reach 20 nodes, or displacements or
 chain walks that add up to more than the count plus 64. The attempt stops
@@ -168,7 +168,7 @@ keyed hash, so nothing more is allocated. For a map of n entries a failed
 attempt inspects at most 2 * n + cap + 65 slots, or hashes n nodes and
 walks at most n + 83 chain nodes, on top of the keyed fill. Since growth is
 geometric, a map whose every growth fails pays a constant amount of extra
-work per insert: at most about four slots and two keyed placements per
+work per insert: At most about four slots and two keyed placements per
 insert in an open-addressing table of 4096 slots or more, and about three
 node operations and 1.3 keyed hashes under separate chaining. A map that
 goes back to the fast mode is judged by its inserts again, so a resumed
@@ -205,9 +205,9 @@ current mode. So a hash can be an identity, a counter or a value already
 reduced modulo a small number, and it still distributes well.
 .nf
 Implementation selection:
-  - Open addressing: both key and value are integral types <=8 bytes,
+  - Open addressing: Both key and value are integral types <=8 bytes,
     and custom_key_equality_proc is NULL
-  - Separate chaining: either key or value is non-integral or >8 bytes,
+  - Separate chaining: Either key or value is non-integral or >8 bytes,
     or custom_key_equality_proc is not NULL
 Integral types: char, short, int, long, long long (signed/unsigned),
                float, double
@@ -220,7 +220,7 @@ deleted slot and only live entries decide a resize. A grow leaves the
 live load between 0.25 and 0.50, and a shrink leaves it below 0.50.
 For a float or double key_type, a -0.0 key is always turned into 0.0
 before it is hashed, stored or compared, which matches -0.0 == 0.0 in
-C. That holds when custom_hashing_proc is not NULL too: the custom
+C. That holds when custom_hashing_proc is not NULL too: The custom
 function always gets the canonical bit pattern, and that is the value
 the map stores.
 A long double key_type always uses separate chaining, and key equality

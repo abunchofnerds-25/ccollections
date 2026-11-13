@@ -57,7 +57,7 @@ typedef struct {
 void ccol_growbuf_init(ccol_growbuf *b, ccol_memmgmt_procs *mp);
 
 // Like ccol_growbuf_init(), for a caller that knows roughly how much it will
-// append, so it doesn't pay for growth steps: the store holds at least hint + 1
+// append, so it doesn't pay for growth steps: The store holds at least hint + 1
 // bytes (never less than 64). A hint of SIZE_MAX can't be represented, so it
 // sets oom.
 void ccol_growbuf_init_hint(ccol_growbuf *b, ccol_memmgmt_procs *mp,

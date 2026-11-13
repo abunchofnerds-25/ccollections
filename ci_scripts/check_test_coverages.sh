@@ -27,7 +27,7 @@ CCOL_DISABLED_SOURCES="${CCOL_DISABLED_SOURCES:-}"
 # measuring that other suite.
 #
 # cdebuglog is a diagnostic buffer you turn on yourself while chasing a timing
-# problem that is hard to reproduce. It isn't part of the shipped library: a
+# problem that is hard to reproduce. It isn't part of the shipped library: A
 # suite compiles it only when it adds it to its own SRC_FILES for the length
 # of one investigation.
 #
@@ -60,7 +60,7 @@ awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$EXCLUDED" '
 	# script looks it up, is the path of that file relative to the root of
 	# the repository, which is exactly what the directory listing in END
 	# gives. Do not keep a fixed number of path components from the end
-	# instead: that form cannot describe both include/cvector.h and
+	# instead: That form cannot describe both include/cvector.h and
 	# include/internal/cgrowbuf.h. Whichever depth it takes, the records of
 	# the other file go under a key that no listing ever gives, and that
 	# file then goes into the "no instrumented lines" group, which does not
@@ -134,7 +134,7 @@ awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$EXCLUDED" '
 			}
 		}
 		# An empty listing is the one result that the script must refuse
-		# instead of report: a wrong working directory gives an empty
+		# instead of report: A wrong working directory gives an empty
 		# listing, and every check below it would then pass after it
 		# examined nothing at all.
 		if (nfiles == 0) {

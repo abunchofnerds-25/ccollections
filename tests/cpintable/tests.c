@@ -219,7 +219,7 @@ TEST(pintable, nested_pins_on_one_handle_are_counted_individually) {
   ccol_pintable_dispose(&t);
 }
 
-// A fork child depends on this: the threads that would release these pins
+// A fork child depends on this: The threads that would release these pins
 // don't exist there, and its first destroy would wait forever.
 TEST(pintable, reset_drops_every_outstanding_pin) {
   SCOPED_PINTABLE(t);
@@ -267,7 +267,7 @@ typedef struct {
   _Atomic size_t *resolved;
 } pin_worker_arg_t;
 
-// Thread body of the balance test: pins and unpins a->handle a->iterations
+// Thread body of the balance test: Pins and unpins a->handle a->iterations
 // times and counts the successful resolves in *a->resolved.
 static void *pin_worker(void *p) {
   pin_worker_arg_t *a = p;
@@ -345,7 +345,7 @@ typedef struct {
   pin_start_gate_t *gate;
 } race_arg_t;
 
-// Thread body of the drain race: waits at the gate, then pins a->handle until
+// Thread body of the drain race: Waits at the gate, then pins a->handle until
 // *a->stop, counting in *a->violations every pinned object whose magic is
 // wrong. After the retire every pin fails, and it sleeps between attempts so
 // it doesn't starve the retiring thread under valgrind.
@@ -455,7 +455,7 @@ typedef struct {
   uint64_t handle;
 } unpin_arg_t;
 
-// Thread body of the split-pin test: releases a pin on a thread other than the
+// Thread body of the split-pin test: Releases a pin on a thread other than the
 // one that took it.
 static void *unpin_on_another_thread(void *p) {
   unpin_arg_t *a = p;

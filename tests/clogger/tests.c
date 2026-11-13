@@ -1401,7 +1401,7 @@ TEST(output, long_message_uses_heap_and_is_not_truncated) {
 }
 
 // An allocator that fails every request above 4096 bytes, to reach the "heap
-// allocation for the full message failed" path deterministically: logger
+// allocation for the full message failed" path deterministically: Logger
 // construction and ordinary records stay below that size, and only the heap
 // spill of a large message goes above it.
 static void *_size_capped_malloc(size_t sz) {
@@ -1877,7 +1877,7 @@ TEST(rotation, prune_never_deletes_unrelated_file_with_similar_name) {
 }
 
 // The log file is deleted while the logger holds it open. The next rotation's
-// rename() fails with ENOENT, which rotation treats as a clean slate: it
+// rename() fails with ENOENT, which rotation treats as a clean slate: It
 // creates the file again at the original path and carries on.
 TEST(rotation, logger_recovers_after_file_externally_deleted) {
   char dir[256];
@@ -2750,7 +2750,7 @@ static void *_counting_realloc(void *p, size_t sz) {
 }
 
 // The realloc failure lands in the construction, the record or a backtrace
-// frame. Each must degrade cleanly: every line written starts with the right
+// frame. Each must degrade cleanly: Every line written starts with the right
 // prefix and ends with a newline, so no partial write merges into the next.
 TEST(robustness, error_with_backtrace_never_writes_malformed_lines_under_oom) {
   ccol_memmgmt_procs procs = {
@@ -3570,7 +3570,7 @@ TEST(json, error_has_inline_bt_array) {
 }
 
 // A capture that succeeds with depth <= CLOG_BT_INITIAL_FRAME is a real, empty
-// backtrace: the record holds "bt":[] and no bt_error. The
+// backtrace: The record holds "bt":[] and no bt_error. The
 // clog__test_force_shallow_backtrace_depth() hook forces that depth.
 TEST(json, error_with_shallow_backtrace_capture_still_yields_empty_bt_array) {
   BT_SKIP_WITHOUT_SUPPORT();
@@ -4654,7 +4654,7 @@ static void *_level_fastpath_toggler(void *arg) {
 
 // clog__write() checks min_level once without a lock, then again under the
 // lock. This stresses that unlocked check against clog_set_level() calls from
-// another thread: no crash, and every line that passes is a whole record.
+// another thread: No crash, and every line that passes is a whole record.
 TEST(threading, concurrent_filtered_writes_and_level_changes_no_crash) {
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
@@ -5220,7 +5220,7 @@ TEST(fork_safety, handle_acquire_rollback_leaves_slot_fork_safe) {
 }
 
 // The forced registration failure applies to clog_derive() too, whose shared
-// object is always the parent's, already registered one: the derive must
+// object is always the parent's, already registered one: The derive must
 // return CLOG_NULL, and the next plain derive must succeed.
 TEST(fork_safety, handle_acquire_rollback_hook_also_fires_for_derive) {
   clog parent = clog_create_from_fd_mp(STDERR_FILENO, CLOG_INFO, NULL, NULL);
@@ -5860,7 +5860,7 @@ TEST(async, syslog_backtrace_not_duplicated_on_shutdown_drain) {
   }
 }
 
-// The same hazard through the other return path: a forced capture failure
+// The same hazard through the other return path: A forced capture failure
 // writes the "#error backtrace unavailable" record, which must appear once.
 TEST(async,
      syslog_backtrace_capture_failure_marker_not_duplicated_on_shutdown_drain) {
@@ -6818,7 +6818,7 @@ TEST(robustness, unrepresentable_record_logfmt_no_marker_without_backtrace) {
   cleanup_dir(dir, "app.log");
 }
 
-// The JSON form: the innermost fallback also embeds bt_error when a backtrace
+// The JSON form: The innermost fallback also embeds bt_error when a backtrace
 // was requested.
 TEST(robustness, unrepresentable_record_json_embeds_bt_error_marker) {
   char dir[256];
@@ -7798,7 +7798,7 @@ static bool line_starts_a_record(const char *line) {
 }
 
 // Counts the records that begin inside line past its start, so the framing
-// tests can find a record written into the middle of another: a "ts=" beyond
+// tests can find a record written into the middle of another: A "ts=" beyond
 // offset 0, or a syslog "<PRI>1 " (whose ">1 " sits at offset 2 to 4).
 static int count_interior_record_starts(const char *line) {
   int n = 0;
@@ -7849,7 +7849,7 @@ static void make_split_test_body(char *body, size_t bodysz,
 
 // The writer can hold the continuation of a record whose first half is on
 // disk. A syslog record goes out in its own write(), so the library first
-// settles the continuation: it writes the missing newline and a marker naming
+// settles the continuation: It writes the missing newline and a marker naming
 // the loss. Without that, the syslog record lands in the middle of the logfmt
 // record.
 TEST(split_record_framing, a_syslog_record_never_lands_inside_a_retained_one) {
@@ -7989,7 +7989,7 @@ TEST(split_record_framing,
   REQUIRE_TRUE(has_sync);
 }
 
-// CLOG_FATAL must never wait: it gives a retained continuation one bounded
+// CLOG_FATAL must never wait: It gives a retained continuation one bounded
 // attempt, then repairs the framing instead of writing into the middle of the
 // record. It runs in a child, which only has to stop without a signal (valgrind
 // replaces its exit status), and the child forgets the parent's fixtures
@@ -8060,7 +8060,7 @@ TEST(split_record_framing, a_fatal_record_never_lands_inside_a_retained_one) {
 
 // Write errors that no retry outlasts, and the last delivery attempt
 
-// The async configuration of these tests: the buffer is big enough, and the
+// The async configuration of these tests: The buffer is big enough, and the
 // interval long enough, that only explicit flushes, the close and the fatal
 // path write anything.
 static const clog_async_cfg g_undelivered_acfg = {
@@ -8395,7 +8395,7 @@ TEST(split_record_framing, a_repair_drops_the_backtrace_of_the_split_record) {
 #include <netinet/in.h>
 #include <sys/socket.h>
 
-// What a receiver thread saw on a datagram socket: the number of datagrams,
+// What a receiver thread saw on a datagram socket: The number of datagrams,
 // those that aren't exactly one line, those with a loss marker and those that
 // carry body. json_ok stays true while every datagram starts with '{', and the
 // receiver reads nothing for start_delay_ms first.
@@ -8888,7 +8888,7 @@ TEST(rotation_cfg_abi, a_consumer_sees_the_same_layout_the_library_does) {
   REQUIRE_EQ(consumer.sizeof_rotation_interval_us, (size_t)8);
 }
 
-// The same agreement through the library: a config filled in by the consumer
+// The same agreement through the library: A config filled in by the consumer
 // view must rotate as written and must not turn on gzip, which nobody set.
 TEST(rotation_cfg_abi, a_consumer_built_config_rotates_as_it_was_written) {
   char dir[256];
@@ -8953,7 +8953,7 @@ TEST(short_write, a_cut_short_record_is_terminated_and_the_loss_reported) {
 }
 
 // The bytes a short batch write didn't take continue what did land, so the
-// next flush offers them again: that restores the cut record and delivers the
+// next flush offers them again: That restores the cut record and delivers the
 // records behind it instead of losing the whole batch.
 TEST(short_write, an_async_batch_keeps_what_the_write_did_not_take) {
   char dir[256];
@@ -9146,7 +9146,7 @@ TEST(rotation, retention_orders_rotated_files_by_name_not_modification_time) {
 #define RTN_MAX_THREADS 6
 #define RTN_MAX_RECORDS 600
 
-// One writer of a retention scenario: its logger, its index, how many records
+// One writer of a retention scenario: Its logger, its index, how many records
 // it writes, and the start gate (each writer counts itself in arrived and
 // waits for go).
 typedef struct {
@@ -9267,7 +9267,7 @@ static int _rtn_check_suffixes(bool seen[][RTN_MAX_RECORDS], int threads,
   return any_survivor ? pruned_threads : -1;
 }
 
-// One retention scenario: compression, async mode, writer and record counts,
+// One retention scenario: Compression, async mode, writer and record counts,
 // and whether writers log through derived handles.
 typedef struct {
   bool compress;
@@ -9659,7 +9659,7 @@ static bool _tid_parse_proc(const char *text, const char *msg,
   return true;
 }
 
-// One worker of each_thread_reads_its_identity_once: what it renamed itself
+// One worker of each_thread_reads_its_identity_once: What it renamed itself
 // to, its TID and how many times it read its identity.
 typedef struct {
   clog lg;
@@ -9735,7 +9735,7 @@ TEST(thread_identity, each_thread_reads_its_identity_once) {
   REQUIRE_TRUE(all_ok);
 }
 
-// What _tid_rename_worker() saw: the results of each rename and the name the
+// What _tid_rename_worker() saw: The results of each rename and the name the
 // kernel holds after the long and the refused renames.
 typedef struct {
   clog lg;
@@ -10125,7 +10125,7 @@ TEST(async, flush_interval_above_llong_max_does_not_spin_the_writer) {
   }
 }
 
-// One producer of the sustained-load test: its logger, the start gate
+// One producer of the sustained-load test: Its logger, the start gate
 // (arrived and release) and the stop flag.
 typedef struct {
   clog lg;
@@ -10316,7 +10316,7 @@ static void *_close_in_background(void *arg) {
 }
 
 // The last clog_close() of a target returns only after every queued
-// compression has finished: the close starts while one compression is held
+// compression has finished: The close starts while one compression is held
 // and two wait in the queue, and afterwards every rotated file is a valid
 // .gz with no plain file next to it.
 TEST(compression, close_finishes_every_queued_compression) {
@@ -10894,7 +10894,7 @@ static bool child_was_ready(const char *dir) {
 // deliver a record.
 #define EXIT_TEST_NO_TIMER_US 3600000000ULL
 
-// One writer of an exit test: its logger, its number and its record count.
+// One writer of an exit test: Its logger, its number and its record count.
 typedef struct {
   clog lg;
   int t;
@@ -10911,7 +10911,7 @@ static void *exit_seq_writer(void *arg) {
   return NULL;
 }
 
-// Runs the child of the exit tests: an async logger in fmt with queue size
+// Runs the child of the exit tests: An async logger in fmt with queue size
 // qsize, threads writers of per records each, then exit(1) with the logger
 // open. The drain gets 60 s instead of 5 s, because draining thousands of
 // records takes seconds under valgrind and these tests are about what the
@@ -10968,7 +10968,7 @@ static long run_exit_drain_child(const char *dir, clog_format fmt, size_t qsize,
   return found == distinct ? distinct : -1;
 }
 
-// Runs the child of the full-queue test: a queue of one record and a writer
+// Runs the child of the full-queue test: A queue of one record and a writer
 // that spends 3 s per record, so record B fills the queue behind A. The drain
 // then sends its flush request without a wait into the full queue. Writes '1'
 // to report_fd when the drain left the target alone, '0' when it didn't and
@@ -11070,7 +11070,7 @@ TEST(exit_drain, exit_after_threads_finish_keeps_every_record) {
   REQUIRE_EQ(bounded, 4000L);
 }
 
-// Runs the child of the compression exit tests: a rotating, compressing logger
+// Runs the child of the compression exit tests: A rotating, compressing logger
 // that rotates once and calls exit(0) while that compression runs, or while it
 // is held when hold is true.
 static void exit_compress_child(const char *path, bool hold) {
@@ -11099,7 +11099,7 @@ static void exit_compress_child(const char *path, bool hold) {
   exit(0);
 }
 
-// What a directory holds after exit_compress_child(): plain rotated files, .gz
+// What a directory holds after exit_compress_child(): Plain rotated files, .gz
 // files, .gz files that gunzip -t refuses, unfinished outputs, and where the
 // record ended up.
 typedef struct {
@@ -11173,7 +11173,7 @@ TEST(exit_drain, exit_finishes_a_running_compression) {
   REQUIRE_TRUE(st.body_in_gz);
 }
 
-// A compression that can't finish within the budget is abandoned cleanly: no
+// A compression that can't finish within the budget is abandoned cleanly: No
 // .gz and no unfinished output, and the plain source keeps the record.
 TEST(exit_drain, exit_abandons_a_compression_that_cannot_finish) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
@@ -11493,7 +11493,7 @@ TEST(compression, compressed_file_keeps_the_mode_of_its_source) {
 
 // One file opened twice in one process
 
-// One writer of the same-file tests: its handle, its number and its record
+// One writer of the same-file tests: Its handle, its number and its record
 // count.
 typedef struct {
   clog lg;
@@ -11639,7 +11639,7 @@ TEST(same_file, a_second_open_with_another_configuration_fails) {
 }
 
 // An allocator for the join tests that counts live blocks in g_join_live and
-// trips at call g_join_trip of its malloc, calloc and realloc: that call fails,
+// trips at call g_join_trip of its malloc, calloc and realloc: That call fails,
 // or, with g_join_trip_arms_slot set, succeeds and arms the hook that fails the
 // next handle acquisition. While g_join_other_threads_fail is set, every
 // allocation fails on every thread but g_join_main_thread.
@@ -11710,7 +11710,7 @@ static int join_sweep(const char *path, const clog_rotation_cfg *cfg,
 }
 
 // A join that fails for lack of memory or of a handle slot returns CLOG_NULL
-// and gives back its reference to the target: the first logger keeps writing,
+// and gives back its reference to the target: The first logger keeps writing,
 // every block comes back, and after the first logger closes an open with
 // another configuration works.
 TEST(same_file, a_join_that_fails_gives_back_its_reference) {
@@ -13144,7 +13144,7 @@ static void fatal_behind_busy_writer_child(const char *path) {
 }
 
 // The writer takes the target's mutex again at once for each record, yet the
-// fatal call gets it: the writer steps aside while a fatal call waits, and the
+// fatal call gets it: The writer steps aside while a fatal call waits, and the
 // fatal call waits at least long enough for the record in hand to finish.
 TEST(fatal, a_busy_writer_thread_does_not_cost_the_fatal_record) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
@@ -13848,7 +13848,7 @@ TEST(rotation_foreign, a_link_at_a_rotated_name_is_never_read_or_removed) {
 }
 
 // A regular file whose rotated name has a stamp far in the future and a
-// suffix nothing can follow isn't a generation: naming doesn't start above it
+// suffix nothing can follow isn't a generation: Naming doesn't start above it
 // (which would refuse every rotation), and it takes no retention slot.
 TEST(rotation_foreign, a_far_future_name_neither_stops_rotation_nor_counts) {
   char dir[64];
@@ -14043,7 +14043,7 @@ TEST(rotation_foreign, a_long_ignored_name_is_cut_in_its_warning) {
   REQUIRE_FALSE(whole);
 }
 
-// The state of drain_pipe_later(): the read end, the buffer it fills, the
+// The state of drain_pipe_later(): The read end, the buffer it fills, the
 // writable-wait count before the test and whether a wait was seen.
 typedef struct {
   int rd;
@@ -14148,7 +14148,7 @@ TEST(rotation_foreign, a_file_another_user_owns_is_never_compressed) {
 }
 
 // The next open removes a rotation's private file that a stopped process left
-// empty, and only that: a file with content or a link of that name shape
+// empty, and only that: A file with content or a link of that name shape
 // stays.
 TEST(rotation_foreign, open_removes_only_an_empty_private_file_of_a_rotation) {
   char dir[64];
@@ -14235,7 +14235,7 @@ TEST(rotation_foreign, a_live_path_that_is_a_link_is_moved_aside_once) {
 
 // Counts the record starts in the line [line, end) (a logfmt "ts=", a JSON
 // "{\"", a syslog ">1 ", a logfmt marker), to find a record written onto
-// another one's fragment: a well-framed line holds at most one.
+// another one's fragment: A well-framed line holds at most one.
 static int nr_record_starts(const char *line, const char *end) {
   static const char *const starts[] = {"ts=", "{\"", ">1 ",
                                        "level=ERROR msg=\"log record"};
@@ -14319,7 +14319,7 @@ TEST(output_without_room, a_sync_record_never_joins_a_fragment) {
   }
 }
 
-// The async form: when the newline that closes a fragment fails, the next
+// The async form: When the newline that closes a fragment fails, the next
 // flush must not write the batch onto the fragment; once there's room the
 // newline and the marker go first.
 TEST(output_without_room, an_async_batch_never_joins_a_fragment) {
@@ -14878,7 +14878,7 @@ TEST(output_without_room, a_backlog_that_starts_mid_record_is_split_too) {
 }
 
 // A synchronous logger that owes a repair and never writes again pays it at
-// exit: the file ends with a newline and a marker.
+// exit: The file ends with a newline and a marker.
 TEST(output_without_room, an_owed_repair_is_paid_at_exit) {
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);

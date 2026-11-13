@@ -12,10 +12,10 @@ void cthrpool_wait(cthrpool pool);
 .SH DESCRIPTION
 .nf
 Blocks until the task queue is empty and every active task has
-stopped. It doesn't shut the pool down: every worker thread stays
+stopped. It doesn't shut the pool down: Every worker thread stays
 alive, and the caller can submit new tasks after the call returns.
 
-Contract: no other thread should submit a task while cthrpool_wait runs,
+Contract: No other thread should submit a task while cthrpool_wait runs,
 because with an unbounded queue a submission from another thread can
 keep this call blocked for ever.
 .fi

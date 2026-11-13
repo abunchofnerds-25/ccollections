@@ -67,7 +67,7 @@ typedef chashmap *chmap;
 
 // Creates a map with every option. initial_bucket_array_size can't be 0; 1 to
 // 16 gives 16, and a larger value is rounded up to a power of two. key_type and
-// val_type pick the backend: open addressing when both are integral and at
+// val_type pick the backend: Open addressing when both are integral and at
 // most 8 bytes (char to long long, float, double; never long double) and
 // custom_key_equality_proc is NULL, separate chaining otherwise. mmgmt_procs
 // is your allocator or NULL. A custom_key_equality_proc needs a
@@ -88,12 +88,12 @@ typedef chashmap *chmap;
 // gets the raw bytes, so it must be value-based itself (hash frexpl(), say), or
 // equal values can land in different buckets.
 //
-// Every map starts in the fast mode: a Fibonacci multiply for integral, float,
+// Every map starts in the fast mode: A Fibonacci multiply for integral, float,
 // double and pointer keys, XXH64 with a secret seed for strings and other
 // buffers, and the murmur3 finalizer on a custom hash. Inserts of new keys are
 // measured, and a map whose keys collide more than a random function would let
 // them (an insert far from its home slot, a chain of 20 nodes, or 256 inserts
-// that cost too much in total) switches to the keyed mode: a seeded
+// that cost too much in total) switches to the keyed mode: A seeded
 // two-multiply mixer for fixed-width keys and custom results, SipHash-1-3 for
 // buffers. A lookup never writes to the map. The switch keeps every entry, and
 // under separate chaining every reference, the insertion order and every
@@ -109,8 +109,13 @@ chmap chashmap_create_full(size_t initial_bucket_array_size,
                            ccol_key_equality_proc custom_key_equality_proc,
                            char **err);
 
-// Creates a map with the default allocator and the default hash, for the
-// common case; see chashmap_create_full() for the arguments and the result.
+// Creates a hash map with the default allocator and the built-in hash.
+// initial_bucket_array_size can't be 0; 1 to 16 gives 16, and a larger value
+// is rounded up to a power of two. key_type and val_type describe the key and
+// the value and pick the storage: Open addressing when both are integral and
+// at most 8 bytes, separate chaining otherwise. Returns the map, or NULL with
+// an error string in *err (err may be NULL; never free the string). Destroy
+// the map with chashmap_destroy(). See also chashmap_create_full().
 static inline __attribute__((always_inline)) chmap
 chashmap_create(size_t initial_bucket_array_size, ccol_data_type key_type,
                 ccol_data_type val_type, char **err) {
@@ -118,8 +123,14 @@ chashmap_create(size_t initial_bucket_array_size, ccol_data_type key_type,
                               NULL, NULL, NULL, err);
 }
 
-// Creates a map that allocates through mmgmt_procs, with the default hash; see
-// chashmap_create_full().
+// Creates a hash map that takes all its memory from mmgmt_procs, your
+// allocator table (NULL for the default allocator), and hashes with the
+// built-in hash. The table must stay valid until the map is destroyed.
+// initial_bucket_array_size can't be 0; 1 to 16 gives 16, and a larger value
+// is rounded up to a power of two. key_type and val_type pick open addressing
+// when both are integral and at most 8 bytes, separate chaining otherwise.
+// Returns the map, or NULL with an error string in *err (err may be NULL;
+// never free the string). Destroy it with chashmap_destroy().
 static inline __attribute__((always_inline)) chmap chashmap_create_mp(
     size_t initial_bucket_array_size, ccol_data_type key_type,
     ccol_data_type val_type, ccol_memmgmt_procs *mmgmt_procs, char **err) {
@@ -127,8 +138,14 @@ static inline __attribute__((always_inline)) chmap chashmap_create_mp(
                               mmgmt_procs, NULL, NULL, err);
 }
 
-// Creates a map that hashes keys with custom_hashing_proc, with the default
-// allocator; see chashmap_create_full().
+// Creates a hash map that hashes keys with custom_hashing_proc and allocates
+// with the default allocator. The hash must give the same value for keys the
+// map treats as equal (equal contents for a string); the map mixes the result
+// further, so any function of the key works. initial_bucket_array_size can't
+// be 0; 1 to 16 gives 16, and a larger value is rounded up to a power of two.
+// key_type and val_type describe the key and the value. Returns the map, or
+// NULL with an error string in *err (err may be NULL; never free the string).
+// Destroy it with chashmap_destroy().
 static inline __attribute__((always_inline)) chmap
 chashmap_create_ch(size_t initial_bucket_array_size, ccol_data_type key_type,
                    ccol_data_type val_type,
@@ -139,89 +156,93 @@ chashmap_create_ch(size_t initial_bucket_array_size, ccol_data_type key_type,
 
 // Operations
 
-// Gives the number of key-value pairs the map holds. Asserts on a NULL chm.
+// Returns the number of key-value pairs that the map holds. Asserts on a NULL
+// chm.
 size_t chashmap_elem_count(chmap chm);
 
-// Removes every element, so a map can be reused without a new allocation, and
-// resizes the array to new_bucket_array_size rounded up to a power of two (16
-// at least) unless it's 0. It gives ccol_not_enough_memory when the resize
-// fails, but every element is gone anyway. Asserts on a NULL chm.
+// Removes and frees every element, so the map can be filled again without a
+// new map. A new_bucket_array_size other than 0 also resizes the bucket array
+// to that size rounded up to a power of two (16 at least); 0 keeps the size.
+// Returns ccol_success, or ccol_not_enough_memory when the resize fails; every
+// element is gone either way. Asserts on a NULL chm.
 ccol_retval chashmap_reset(chmap chm, size_t new_bucket_array_size);
 
-// Inserts the pair, or replaces the value when the key is present (the key
-// stays); the raw insert behind chmap_insert(), for code that must not stop
-// the program. The map copies both. It gives ccol_success for a new key and
-// ccol_key_already_present for an update, which is also a success. It gives
-// ccol_invalid_args for a NULL pointer, a size of 0, or a key or value size
-// that doesn't match a fixed-width declared type (char to long long, float,
-// double, long double, pointers; ccol_string and ccol_other_types aren't
-// checked), ccol_container_full at ccol_max_elem_count and
-// ccol_not_enough_memory. key_pair and val_pair may point into this map (a
-// chashmap_get_elem_ref() result, say), even when the insert grows it. Open
-// addressing doubles past a load of 0.70; chaining grows by 4 once
-// elem_count >= (bucket_count + 1) * 1.5.
+// Inserts the key-value pair, or replaces the value when the key is already
+// there (the stored key stays). The map copies the bytes of both pairs. This is
+// the raw insert for code that must not stop the program on failure. Returns
+// ccol_success for a new key and ccol_key_already_present for an update, which
+// is also a success. Returns ccol_invalid_args for a NULL pointer, a size of 0,
+// or a key or value size that doesn't match a fixed-width declared type (char
+// to long long, float, double, long double, pointers; ccol_string and
+// ccol_other_types aren't checked), ccol_container_full at ccol_max_elem_count
+// and ccol_not_enough_memory. key_pair and val_pair may point into this map (a
+// chashmap_get_elem_ref() result, say), even when the insert grows it. An
+// insert can invalidate every reference into the map. Open addressing doubles
+// past a load of 0.70; chaining grows by 4 once elem_count >=
+// (bucket_count + 1) * 1.5.
 ccol_retval chashmap_insert_elem(chmap chm, const cmap_pair *key_pair,
                                  const cmap_pair *val_pair);
 
-// Copies the value of the key into your buffer, so you keep a copy that no
-// later change of the map affects: min(stored size, target_buf_size) bytes,
-// with the rest of target_buf zeroed. It gives ccol_success,
+// Looks up the key and copies its value into target_buf, so you keep a copy
+// that no later change of the map affects: min(stored size, target_buf_size)
+// bytes, with the rest of target_buf zeroed. Returns ccol_success,
 // ccol_key_not_found, or ccol_invalid_args for a NULL pointer, a size of 0 or
 // a key size that doesn't match a fixed-width key type.
 ccol_retval chashmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
                                    void *target_buf, size_t target_buf_size);
 
-// Finds the value of the key without copying it: fills your *val_pair with the
+// Finds the value of the key without copying it: Fills your *val_pair with the
 // location and size of the stored value. You may change those bytes in place,
 // but not ptr or size themselves (that changes only your copy). The pointer is
-// valid until an insert, delete or resize; lookups of other keys never
-// invalidate it. It gives ccol_success, ccol_key_not_found or
-// ccol_invalid_args (as for chashmap_get_elem_copy()), and every failure with
-// a non-NULL val_pair sets it to {NULL, 0}.
+// valid until an insert, delete or resize; lookups never invalidate it.
+// Returns ccol_success, ccol_key_not_found, or ccol_invalid_args for a NULL
+// pointer, a size of 0 or a key size that doesn't match a fixed-width key
+// type. Every failure with a non-NULL val_pair sets it to {NULL, 0}.
 ccol_retval chashmap_get_elem_ref(chmap chm, const cmap_pair *key_pair,
                                   cmap_pair *val_pair);
 
-// Internal: gives the accessor a separate-chaining map keeps for the value of a
+// Internal: Gives the accessor a separate-chaining map keeps for the value of a
 // key, whose ptr field is the stored char *; the string arm of chmap_get_ptr()
 // needs its address. An open-addressing map gives ccol_invalid_args, and every
 // failure sets *val_accessor to NULL. Use chmap_get_ptr() instead.
 ccol_retval chashmap__get_val_accessor(chmap chm, const cmap_pair *key_pair,
                                        const cmap_pair **val_accessor);
 
-// Deletes the key and frees its key and value; the raw delete behind
-// chmap_remove(). It gives ccol_success, ccol_key_not_found or
-// ccol_invalid_args (as for chashmap_get_elem_copy()). An open-addressing
-// delete moves later entries of the cluster back, so every reference into the
-// map is invalid after it. Open addressing halves below a load of 0.25 and
-// chaining shrinks by 4 once elem_count < (bucket_count + 1) / 8, never below
-// the minimum.
+// Deletes the key and frees the map's copies of the key and the value. This is
+// the raw delete for code that must not stop the program. Returns
+// ccol_success, ccol_key_not_found, or ccol_invalid_args for a NULL pointer, a
+// size of 0 or a key size that doesn't match a fixed-width key type. Treat
+// every reference into the map as invalid after a delete: On an
+// open-addressing map it moves other entries. Open addressing halves below a
+// load of 0.25 and chaining shrinks by 4 once elem_count <
+// (bucket_count + 1) / 8, never below the minimum.
 ccol_retval chashmap_delete_elem(chmap chm, const cmap_pair *key_pair);
 
 // Iteration
 
-// Internal: frees an iterator that chashmap_begin_iter() (declared in
+// Internal: Frees an iterator that chashmap_begin_iter() (declared in
 // citerators.h) made; every map iterator calls it through its free function.
 void chashmap__iterator_destroy(cmap_iterator *iter);
 
 // Destruction
 
-// Internal: frees every key, value and bucket of the map; the body of
+// Internal: Frees every key, value and bucket of the map; the body of
 // chashmap_destroy(). Use the macro instead.
 void chashmap__destroy(chmap chm);
 
 // Destroys the map and calls val_dtor (when not NULL) with dtor_ctx once for
-// each live value, right before its entry is freed. It's meant for maps of
-// owned pointers, and it allocates nothing, so it reaches every value even
-// when memory runs out, which a walk with chashmap_begin_iter() can't promise.
-// val_pair is const and points into storage that is about to go away; read it
-// and free what it owns. val_dtor must not change the map. A NULL chm does
-// nothing, and chm isn't set to NULL.
+// each live value, right before its entry is freed. Use it for a map whose
+// values own memory, such as pointers to your own objects: It allocates
+// nothing, so it reaches every value even when memory runs out, which a walk
+// with chashmap_begin_iter() can't promise. val_pair is const and points into
+// storage that is about to go away; read it and free what it owns. val_dtor
+// must not change the map. A NULL chm does nothing, and chm isn't set to NULL.
 void chashmap_destroy_with_dtor(chmap chm,
                                 void (*val_dtor)(const cmap_pair *val_pair,
                                                  void *dtor_ctx),
                                 void *dtor_ctx);
 
-// Internal: destroys *chm and sets it to NULL; the cleanup handler that the
+// Internal: Destroys *chm and sets it to NULL; the cleanup handler that the
 // _scoped macros attach with ccol__destructor.
 static inline void chashmap__destroy_cleanup(chmap *chm) {
   if (chm && *chm) {
@@ -230,14 +251,15 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
   }
 }
 
-// Frees every key, value and bucket of the map and sets chm to NULL, so the
-// handle can't be used after the free. chm must be a modifiable lvalue and is
-// evaluated once; NULL is fine.
+// Destroys the map: Frees every key, value and bucket, and sets chm to NULL so
+// the handle can't be used after the free. chm must be a modifiable lvalue and
+// is evaluated once; a NULL handle does nothing. Pointers that the map gave
+// you (a char * from chmap_get(), say) are invalid afterwards.
 #define chashmap_destroy(chm)  \
   ccol__chashmap_destroy_impl( \
       chm, ccol__uniq(ccol__chashmap_destroy_slot, __COUNTER__))
 
-// Internal: the body of chashmap_destroy(). It takes the address of chm once
+// Internal: The body of chashmap_destroy(). It takes the address of chm once
 // into slot, a name from ccol__uniq(), so destroy macros can nest without
 // -Wshadow warnings.
 #define ccol__chashmap_destroy_impl(chm, slot) \
@@ -249,9 +271,11 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
 
 // Type-inferred declaration and creation macros
 
-// Type-inferred macros. chmap_redeclare declares the companion type variables
-// for a map made in another scope, because the typed macros read the key and
-// value types from them.
+// Makes the typed chmap_* macros usable on a map handle that was created in
+// another scope, such as a function parameter or a struct field. It declares
+// only the key and value type information that those macros read; it creates
+// and destroys nothing. KeyT and ValT must be the types the map was created
+// with. An array type is refused at compile time; wrap it in a struct.
 //
 //   void process(chmap map) {
 //     chmap_redeclare(map, int, char *);
@@ -263,18 +287,24 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
       NULL;                                                                \
   __typeof__(ValT) *hm_name##__ccol_val_type_var __attribute__((unused)) = NULL
 
-// Declare a map hm_name with its companion type variables, which the typed
-// macros read. chmap_declare leaves it uninitialized (use a chmap_init macro
-// next); chmap_declare_scoped sets it to NULL and destroys it at the end of
-// the scope. Array key or value types are refused at compile time. The unused
-// attribute sits on the pointer type because this macro also declares struct
-// members, and GCC before 11 refuses it on a member.
+// Declares a hash map handle hm_name with key type KeyT and value type ValT,
+// without creating a map. The handle is left uninitialized: Create the map
+// with chmap_init(), chmap_init_mp(), chmap_init_ch() or chmap_init_full()
+// before any other chmap_* macro, and destroy it with chmap_destroy(). It also
+// works inside a struct. An array key or value type is refused at compile
+// time; wrap it in a struct.
 #define chmap_declare(hm_name, KeyT, ValT)                                \
   ccol__refuse_array_types("chmap", KeyT, ValT);                          \
   __typeof__(KeyT) *__attribute__((unused)) hm_name##__ccol_key_type_var; \
   __typeof__(ValT) *__attribute__((unused)) hm_name##__ccol_val_type_var; \
   chmap hm_name
 
+// Declares a hash map handle hm_name with key type KeyT and value type ValT,
+// set to NULL, without creating a map. Create it later with chmap_init() or
+// another chmap_init_* macro. When the variable goes out of scope the map is
+// destroyed by itself; chmap_destroy() before that is allowed and leaves NULL
+// behind. An array key or value type is refused at compile time; wrap it in a
+// struct.
 #define chmap_declare_scoped(hm_name, KeyT, ValT)                          \
   ccol__refuse_array_types("chmap", KeyT, ValT);                           \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) = \
@@ -283,11 +313,15 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
       NULL;                                                                \
   chmap hm_name ccol__destructor(chashmap__destroy_cleanup) = NULL
 
-// Creates the map for a declared hm_name with your allocator, hash and key
-// equality (any of them NULL), with CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE.
-// The key and value types come from the companions, so you don't repeat them.
-// It stops the program with ccol__fatal_err() on failure. See
-// chashmap_create_full() for the rule that ties the two procs together.
+// Creates the map for a handle that chmap_declare() or chmap_declare_scoped()
+// declared, with every option; the key and value types come from that
+// declaration. mmgmt_procs is your allocator table (NULL for the default; it
+// must outlive the map), custom_hashing_proc your hash and
+// custom_key_equality_proc your key comparison (NULL for the built-in ones).
+// An equality proc needs a hash proc that gives equal keys the same hash, and
+// selects separate chaining. Starts with
+// CHMAP_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE buckets. Ends the program with a
+// fatal error when the map can't be created.
 #define chmap_init_full(hm_name, mmgmt_procs, custom_hashing_proc,          \
                         custom_key_equality_proc)                           \
   do {                                                                      \
@@ -304,9 +338,14 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
-// Declare and create a map with every option in one step: chmap_declare (or
-// chmap_declare_scoped) plus chmap_init_full. They stop the program on
-// failure.
+// Declares a hash map handle hm_name for key type KeyT and value type ValT and
+// creates the map, with every option. mmgmt_procs is your allocator table
+// (NULL for the default; it must outlive the map), custom_hashing_proc your
+// hash and custom_key_equality_proc your key comparison (NULL for the built-in
+// ones). An equality proc needs a hash proc that gives equal keys the same
+// hash. Ends the program with a fatal error when the map can't be created.
+// Destroy the map with chmap_destroy(). An array key or value type is refused
+// at compile time.
 #define chmap_construct_full(hm_name, KeyT, ValT, mmgmt_procs,              \
                              custom_hashing_proc, custom_key_equality_proc) \
   ccol__refuse_array_types("chmap", KeyT, ValT);                            \
@@ -329,6 +368,14 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
+// Declares a hash map handle hm_name for key type KeyT and value type ValT and
+// creates the map, with every option; the map is destroyed by itself when
+// hm_name goes out of scope. mmgmt_procs is your allocator table (NULL for the
+// default; it must outlive the map), custom_hashing_proc your hash and
+// custom_key_equality_proc your key comparison (NULL for the built-in ones).
+// An equality proc needs a hash proc that gives equal keys the same hash. Ends
+// the program with a fatal error when the map can't be created. An array key
+// or value type is refused at compile time.
 #define chmap_construct_full_scoped(hm_name, KeyT, ValT, mmgmt_procs,       \
                                     custom_hashing_proc,                    \
                                     custom_key_equality_proc)               \
@@ -352,8 +399,10 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
-// Creates the map for a declared hm_name with the default allocator and hash,
-// reading the types from the companions. It stops the program on failure.
+// Creates the map for a handle that chmap_declare() or chmap_declare_scoped()
+// declared, with the default allocator and the built-in hash; the key and
+// value types come from that declaration. Ends the program with a fatal error
+// when the map can't be created.
 #define chmap_init(hm_name)                                                 \
   do {                                                                      \
     char *ccol__chmap_err = NULL;                                           \
@@ -368,9 +417,11 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
-// Declare and create a map with the default settings in one step, the usual
-// way to start; the scoped form destroys it at the end of the scope. They stop
-// the program on failure.
+// Declares a hash map handle hm_name for key type KeyT and value type ValT and
+// creates the map with the default allocator and the built-in hash; the usual
+// way to start. Ends the program with a fatal error when the map can't be
+// created. Destroy the map with chmap_destroy(). An array key or value type is
+// refused at compile time; wrap it in a struct.
 //
 //   chmap_construct(ages, char *, int);    // separate chaining
 //   chmap_insert(ages, "Alice", 30);
@@ -396,6 +447,11 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
+// Declares a hash map handle hm_name for key type KeyT and value type ValT and
+// creates the map with the default allocator and the built-in hash. The map is
+// destroyed by itself when hm_name goes out of scope. Ends the program with a
+// fatal error when the map can't be created. An array key or value type is
+// refused at compile time; wrap it in a struct.
 #define chmap_construct_scoped(hm_name, KeyT, ValT)                         \
   ccol__refuse_array_types("chmap", KeyT, ValT);                            \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
@@ -416,8 +472,10 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
-// Creates the map for a declared hm_name that allocates through mmgmt_procs.
-// It stops the program on failure.
+// Creates the map for a handle that chmap_declare() or chmap_declare_scoped()
+// declared, taking all its memory from mmgmt_procs, your allocator table (NULL
+// for the default). The table must stay valid until the map is destroyed. Ends
+// the program with a fatal error when the map can't be created.
 #define chmap_init_mp(hm_name, mmgmt_procs)                                 \
   do {                                                                      \
     char *ccol__chmap_err = NULL;                                           \
@@ -432,9 +490,12 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
-// Declare and create a map that allocates through mmgmt_procs; the scoped
-// form destroys it at the end of the scope. They stop the program on
-// failure.
+// Declares a hash map handle hm_name for key type KeyT and value type ValT and
+// creates the map, taking all its memory from mmgmt_procs, your allocator
+// table (NULL for the default). The table must stay valid until the map is
+// destroyed. Ends the program with a fatal error when the map can't be
+// created. Destroy the map with chmap_destroy(). An array key or value type is
+// refused at compile time.
 #define chmap_construct_mp(hm_name, KeyT, ValT, mmgmt_procs)                \
   ccol__refuse_array_types("chmap", KeyT, ValT);                            \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
@@ -455,6 +516,12 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
+// Declares a hash map handle hm_name for key type KeyT and value type ValT and
+// creates the map, taking all its memory from mmgmt_procs, your allocator
+// table (NULL for the default). The map is destroyed by itself when hm_name
+// goes out of scope, and the table must stay valid until then. Ends the
+// program with a fatal error when the map can't be created. An array key or
+// value type is refused at compile time.
 #define chmap_construct_mp_scoped(hm_name, KeyT, ValT, mmgmt_procs)         \
   ccol__refuse_array_types("chmap", KeyT, ValT);                            \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
@@ -475,8 +542,11 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
-// Creates the map for a declared hm_name that hashes with
-// custom_hashing_proc. It stops the program on failure.
+// Creates the map for a handle that chmap_declare() or chmap_declare_scoped()
+// declared, hashing keys with custom_hashing_proc and allocating with the
+// default allocator. The hash must give the same value for keys the map
+// treats as equal (equal contents for a string). Ends the program with a fatal
+// error when the map can't be created.
 #define chmap_init_ch(hm_name, custom_hashing_proc)                         \
   do {                                                                      \
     char *ccol__chmap_err = NULL;                                           \
@@ -491,9 +561,12 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
-// Declare and create a map that hashes with custom_hashing_proc; the scoped
-// form destroys it at the end of the scope. They stop the program on
-// failure.
+// Declares a hash map handle hm_name for key type KeyT and value type ValT and
+// creates the map, hashing keys with custom_hashing_proc. The hash must give
+// the same value for keys the map treats as equal (equal contents for a
+// string). Ends the program with a fatal error when the map can't be created.
+// Destroy the map with chmap_destroy(). An array key or value type is refused
+// at compile time.
 #define chmap_construct_ch(hm_name, KeyT, ValT, custom_hashing_proc)        \
   ccol__refuse_array_types("chmap", KeyT, ValT);                            \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
@@ -514,6 +587,12 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                       \
   } while (0)
 
+// Declares a hash map handle hm_name for key type KeyT and value type ValT and
+// creates the map, hashing keys with custom_hashing_proc. The map is destroyed
+// by itself when hm_name goes out of scope. The hash must give the same value
+// for keys the map treats as equal (equal contents for a string). Ends the
+// program with a fatal error when the map can't be created. An array key or
+// value type is refused at compile time.
 #define chmap_construct_ch_scoped(hm_name, KeyT, ValT, custom_hashing_proc) \
   ccol__refuse_array_types("chmap", KeyT, ValT);                            \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
@@ -536,17 +615,22 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
 
 // Type-inferred operation macros
 
-// Destroys the map and sets chm to NULL; the typed-layer name of
-// chashmap_destroy().
+// Destroys the map: Frees every key, value and bucket, and sets chm to NULL so
+// the handle can't be used after the free. chm must be a modifiable lvalue and
+// is evaluated once; a NULL handle does nothing. Pointers that the map gave
+// you (a char * from chmap_get(), say) are invalid afterwards. A map from a
+// _scoped macro may also be destroyed early this way.
 #define chmap_destroy(chm) chashmap_destroy(chm)
 
-// Inserts or updates key with val, the everyday insert, and stops the program
-// when that fails. It evaluates each argument once. Both are converted to the
-// declared types like a plain assignment (never a reinterpretation of bytes;
-// no implicit conversion means a compile error), so a float key in an int map
-// is found again by an int lookup. A character pointer type keeps the
-// expression's own pointer type. A NULL string key or value stops the program
-// with ccol_invalid_args.
+// Inserts key with its value, or replaces the value when the key is already
+// there. The map stores its own copies, a string included. Any expression
+// works for either argument, and each is evaluated once. Both are converted to
+// the declared types like a plain assignment (never a reinterpretation of
+// bytes; no implicit conversion means a compile error), so a float key in an
+// int map is found again by an int lookup. A character pointer type keeps the
+// expression's own pointer type. Ends the program with a fatal error when the
+// insert fails, for example for lack of memory or for a NULL string key or
+// value (ccol_invalid_args).
 #define chmap_insert(hm_name, key, ccol__chmap_val)                            \
   ccol__chmap_insert_impl(hm_name, (key), (ccol__chmap_val),                   \
                           ccol__uniq(ccol__chmap_insert_key_tmp, __COUNTER__), \
@@ -555,7 +639,7 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
                           ccol__uniq(ccol__chmap_insert_vp, __COUNTER__),      \
                           ccol__uniq(ccol__chmap_insert_r, __COUNTER__))
 
-// Internal: the body of chmap_insert(). It copies key and val into
+// Internal: The body of chmap_insert(). It copies key and val into
 // temporaries of the declared types and calls chashmap_insert_elem(). The
 // temporaries get their names from ccol__uniq(), so the macro nests, and they
 // keep a copy of each expression for the whole call, so an rvalue works.
@@ -583,16 +667,18 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     }                                                                          \
   } while (0)
 
-// Removes key from the map and evaluates to ccol_success, ccol_key_not_found,
-// or ccol_invalid_args for a NULL string key. Unlike the other typed macros it
-// never stops the program, because a missing key is an ordinary outcome.
+// Removes key and its value from the map and frees the map's copies of both.
+// Evaluates to ccol_success, ccol_key_not_found, or ccol_invalid_args for a
+// NULL string key. It never ends the program, because a missing key is an
+// ordinary outcome. The key is converted to the declared key type, as
+// chmap_insert() converts it.
 #define chmap_remove(hm_name, key)                                             \
   ccol__chmap_remove_impl(hm_name, (key),                                      \
                           ccol__uniq(ccol__chmap_remove_key_tmp, __COUNTER__), \
                           ccol__uniq(ccol__chmap_remove_kp, __COUNTER__),      \
                           ccol__uniq(ccol__chmap_remove_r, __COUNTER__))
 
-// Internal: the body of chmap_remove(). The key goes through a temporary of
+// Internal: The body of chmap_remove(). The key goes through a temporary of
 // the declared key type, as in chmap_insert(), so it finds what an insert
 // stored.
 #define ccol__chmap_remove_impl(hm_name, key, ccol__chmap_key_tmp,             \
@@ -607,9 +693,12 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     ccol__chmap_r;                                                             \
   })
 
-// Evaluates to the value of key itself (the char * for a string), for a key
-// you know is there. It stops the program when the key is missing, for a NULL
+// Evaluates to a copy of the value stored for key, for a key you know is
+// there. For a string value it gives the map's own char *, which stays valid
+// until that key is replaced or removed or the map is destroyed; don't free
+// it. Ends the program with a fatal error when the key is missing, for a NULL
 // string key, and when the stored size doesn't match the declared value type.
+// Use chmap_get_ptr() for a lookup that may miss.
 #define chmap_get(hm_name, key)                                          \
   ccol__chmap_get_impl(hm_name, (key),                                   \
                        ccol__uniq(ccol__chmap_get_key_tmp, __COUNTER__), \
@@ -618,7 +707,7 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
                        ccol__uniq(ccol__chmap_get_vp, __COUNTER__),      \
                        ccol__uniq(ccol__chmap_get_r, __COUNTER__))
 
-// Internal: the body of chmap_get(). The key goes through a temporary of the
+// Internal: The body of chmap_get(). The key goes through a temporary of the
 // declared key type, as in chmap_insert(), so it finds what an insert stored.
 #define ccol__chmap_get_impl(hm_name, key, ccol__chmap_key_tmp,               \
                              ccol__chmap_val, ccol__chmap_kp, ccol__chmap_vp, \
@@ -654,7 +743,7 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
     *ccol__chmap_val;                                                         \
   })
 
-// Internal: converts p to the result type of chmap_get_ptr(). For a string
+// Internal: Converts p to the result type of chmap_get_ptr(). For a string
 // value type the target becomes const, because the only char * in the entry
 // is the map's own accessor; storing another pointer there would leave its
 // size describing the old string. Every other type comes back unchanged.
@@ -670,12 +759,13 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
                                   const *)(p),                                 \
       default: (p))
 
-// Evaluates to a pointer to the value of key, or NULL when it's missing (or
-// for a NULL string key), for a lookup that may miss or that changes the value
-// in place; the pointer is valid until the next insert, delete or resize. It
-// stops the program when the stored size doesn't match the declared type. For
-// a char * value the result is char *const *: edit the bytes of the string
-// within its length, and use chmap_insert() to replace it.
+// Evaluates to a pointer to the value stored for key, or NULL when the map
+// doesn't hold the key (or for a NULL string key); use it for a lookup that
+// may miss or that changes the value in place. The pointer is valid until the
+// next insert, delete or resize. Ends the program with a fatal error when the
+// stored size doesn't match the declared value type. For a char * value the
+// result is char *const *: Edit the bytes of the string within its length,
+// and use chmap_insert() to replace it.
 //
 //   char *const *sptr = chmap_get_ptr(names, key);
 //   if (sptr) (*sptr)[0] = 'j';
@@ -688,7 +778,7 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
       ccol__uniq(ccol__chmap_get_ptr_acc, __COUNTER__),                     \
       ccol__uniq(ccol__chmap_get_ptr_r, __COUNTER__))
 
-// Internal: the body of chmap_get_ptr(). Strings go through
+// Internal: The body of chmap_get_ptr(). Strings go through
 // chashmap__get_val_accessor(), every other type through
 // chashmap_get_elem_ref(). The value pair needs no initializer, because the
 // lookup fills it on every path and it's read only after a success. The
@@ -735,10 +825,15 @@ static inline void chashmap__destroy_cleanup(chmap *chm) {
         (__typeof__(*hm_name##__ccol_val_type_var) *)0)))(ccol__chmap_val);    \
   })
 
-// Evaluate to the entry count of the map, and empty it (see chashmap_reset());
-// the typed-layer names of chashmap_elem_count() and chashmap_reset().
+// Evaluates to the number of key-value pairs in the map, as a size_t. Asserts
+// on a NULL handle.
 #define chmap_size(chm) chashmap_elem_count((chm))
 
+// Removes and frees every entry, so the map can be filled again without a new
+// map. A new_bucket_array_size other than 0 also resizes the bucket array to
+// that size rounded up to a power of two (16 at least); 0 keeps the size.
+// Evaluates to ccol_success, or ccol_not_enough_memory when the resize fails;
+// every entry is gone either way. Asserts on a NULL handle.
 #define chmap_reset(chm, new_bucket_array_size) \
   chashmap_reset((chm), (new_bucket_array_size))
 

@@ -46,7 +46,7 @@ SOFTWARE.
 // endless stream of them is still malformed input.
 #define CHTTP1_MAX_LEADING_BLANK_LINES 25
 
-// Bits of chttp1_parser.flags: the facts the header block established, which
+// Bits of chttp1_parser.flags: The facts the header block established, which
 // the framing rules and the accessors read. F_CHUNKED says the latest
 // Transfer-Encoding line that names a coding ends in chunked;
 // F_CHUNKED_APPLIED says chunked appeared anywhere in the merged list so far
@@ -108,7 +108,7 @@ bool chttp1_is_tchar(unsigned char c) {
   }
 }
 
-// Tells whether a header value must not hold byte c: every control byte
+// Tells whether a header value must not hold byte c: Every control byte
 // except HTAB, and DEL. It's the only check that catches a bare CR or a NUL,
 // since accumulate_line() leaves those in the line as content.
 static bool is_invalid_value_byte(unsigned char c) {
@@ -214,7 +214,7 @@ static inline size_t spill_cap(size_t spill_budget) {
 // Appends input from *pp up to end to the current line, until CRLF, a full
 // buffer or the end of input. Every line-based state of the parser uses it,
 // so lines can span execute() calls. *pp always moves to show what was
-// consumed: to end for NEED_MORE and TOO_LONG, past the line end for READY and
+// consumed: To end for NEED_MORE and TOO_LONG, past the line end for READY and
 // BAD_EOL. On READY parser->line_len is the content without the CRLF.
 // spill_budget is 0 for a line that must fit line_buf, or the remaining header
 // budget for a response header or trailer line that may spill (it may set
@@ -509,7 +509,7 @@ static bool header_name_is(const char *name, size_t name_len,
 
 // Scans one Transfer-Encoding value (v, len, OWS already trimmed) and answers
 // every question the framing rules ask about chunked on that line. It's one
-// function on purpose: two scanners with their own idea of a token boundary
+// function on purpose: Two scanners with their own idea of a token boundary
 // could disagree about one header, and their answers drive opposite
 // decisions, which is the ambiguity request smuggling needs. A new question
 // about the list goes here.
@@ -576,7 +576,7 @@ static void parse_connection_tokens(chttp1_parser *parser, const char *v,
   }
 }
 
-// Gives the total header byte cap of parser: its override, or the default.
+// Gives the total header byte cap of parser: Its override, or the default.
 // Header lines and the first line are both charged against it.
 static size_t effective_max_total_header_bytes(const chttp1_parser *parser) {
   return parser->max_total_header_bytes_override
@@ -597,7 +597,7 @@ static size_t header_spill_budget(const chttp1_parser *parser) {
 // Validates the current line as one "name: value" header or trailer, charges
 // it to the header count and byte caps, and calls on_header or on_trailer.
 // is_trailer picks the kind. A header line also updates the framing,
-// Connection, Expect and Host state in parser->flags and host_count: a
+// Connection, Expect and Host state in parser->flags and host_count: A
 // duplicate or bad Content-Length, chunked applied twice (on one line or
 // across merged lines, F_CHUNKED_APPLIED), a request chunked that isn't last
 // on its line, and Content-Length with chunked are refused. F_CHUNKED is
@@ -832,7 +832,7 @@ static bool parse_chunk_size_line(chttp1_parser *parser) {
 
 // Terminal outcomes
 //
-// Ends the parse on malformed input: stores reason, moves the parser to DEAD
+// Ends the parse on malformed input: Stores reason, moves the parser to DEAD
 // and gives CHTTP1_ERROR.
 static chttp1_errno fail(chttp1_parser *parser, const char *reason) {
   parser->reason = reason;
@@ -846,7 +846,7 @@ static chttp1_errno fail_already_set(chttp1_parser *parser) {
   return CHTTP1_ERROR;
 }
 
-// Ends the parse after a callback reported an error: moves the parser to DEAD,
+// Ends the parse after a callback reported an error: Moves the parser to DEAD,
 // sets a reason if none is set and gives CHTTP1_USER.
 static chttp1_errno user_error(chttp1_parser *parser) {
   parser->state = CHTTP1_ST_DEAD;
@@ -854,7 +854,7 @@ static chttp1_errno user_error(chttp1_parser *parser) {
   return CHTTP1_USER;
 }
 
-// Finishes a message: fires on_message_complete, records in parser->consumed
+// Finishes a message: Fires on_message_complete, records in parser->consumed
 // how much of data was used (p is the current position), moves to
 // MESSAGE_DONE and gives CHTTP1_PAUSED, or CHTTP1_USER when the callback
 // fails.
@@ -1323,7 +1323,7 @@ uint64_t chttp1_body_bytes_still_expected(const chttp1_parser *parser) {
 
 // Worker-pull body and response streaming
 //
-// Prepares stream, the shared body of the two prepare functions: it zeroes
+// Prepares stream, the shared body of the two prepare functions: It zeroes
 // the stream, records fd, tls_conn and mp, and copies leftover into a carry
 // buffer from mp. On a failed copy it gives false and rolls every field back
 // so the stream is all zeros, except fd, which goes to -1 so a caller that
@@ -1427,7 +1427,7 @@ static void compute_deadline(struct timespec *deadline, int timeout_ms) {
   }
 }
 
-// Reads up to buflen bytes into buf for a worker that pulls a body: from the
+// Reads up to buflen bytes into buf for a worker that pulls a body: From the
 // carry-over first (freeing it once drained), then from the connection within
 // timeout_ms. It gives the bytes read, 0 at EOF, or -1 with timed_out or
 // last_errno set. A TLS stream reads before polling: OpenSSL may hold

@@ -34,7 +34,7 @@ then make arr a new ancestor of child while arr is also a descendant
 of child, which is a cycle.
 
 When memory is low the library cannot always finish that last check.
-It doesn't risk an undetected cycle in that case: it returns
+It doesn't risk an undetected cycle in that case: It returns
 ccol_not_enough_memory, and the call deep-frees child just as it does
 when the insert itself runs out of memory.
 .fi

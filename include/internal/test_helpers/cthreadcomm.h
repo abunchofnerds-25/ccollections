@@ -27,7 +27,7 @@ SOFTWARE.
 // Internal only. The test hooks of cthreadcomm, defined in src/cthreadcomm.c.
 // They force failures, hold a thread at a chosen point, or read state the
 // public API doesn't show. They exist only under RUNNING_UNIT_TESTS, which no
-// shipped build defines. Every "next" hook is one-shot: the call that uses it
+// shipped build defines. Every "next" hook is one-shot: The call that uses it
 // disarms it, and you call it again to arm another one.
 
 #include <cthreadcomm.h>
@@ -127,7 +127,7 @@ void ccircq__test_unlock_mutex_for_tests(ccircq *cq);
 // Write-locks the loop's reg_slot_rwlock directly, so a thread other than the
 // forking one can hold it across a fork(). It gives the resolved loop (NULL for
 // an invalid handle, and then nothing is locked), and the unlock must take that
-// pointer: resolving the handle again can deadlock against a fork() that holds
+// pointer: Resolving the handle again can deadlock against a fork() that holds
 // the slot table mutex while it waits for this lock. The unlock with NULL does
 // nothing.
 void *ceventloop__test_wrlock_reg_slot_for_tests(ceventloop loop);

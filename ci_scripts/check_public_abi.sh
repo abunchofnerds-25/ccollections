@@ -17,7 +17,7 @@
 #      application that is already linked. It only needs binutils, so it
 #      always runs. On macOS the library is a Mach-O file and this layer reads
 #      the dylib with the system's nm instead.
-#   2. The full ABI corpus: the function signatures and the layout of every
+#   2. The full ABI corpus: The function signatures and the layout of every
 #      public struct those signatures reach, compared by abidiff from
 #      libabigail. It catches what a list of names can't, like a parameter type
 #      that changes or a new field in a public struct that a caller passes by
@@ -29,7 +29,7 @@
 #      and OpenBSD, where this layer can't run.
 #
 # Layer 2 works per architecture because layout does. A change can leave every
-# structure identical byte for byte on one target and break another: widen a
+# structure identical byte for byte on one target and break another: Widen a
 # member from size_t to unsigned long long and nothing changes on LP64, where
 # both types have the same width, while on ILP32 every later field moves. Only
 # the baseline of the architecture you build can see that, and that's why the
@@ -157,7 +157,7 @@ CORPUS_BASELINE="$ABI_DIR/libccollections.so.$ABI_VERSION.$ARCH.abi"
 # library that pulls in glibc's pthread_mutex_t and pthread_cond_t, since the
 # queue and loop structs embed them.
 #
-# Those types aren't part of the contract with a consumer: no installed header
+# Those types aren't part of the contract with a consumer: No installed header
 # names one, and a consumer only ever holds a pointer to the opaque struct
 # around them. Recording them would make the corpus a property of the
 # TOOLCHAIN rather than of the interface. GCC emits the array-subrange index
@@ -280,7 +280,7 @@ fi
 fail=0
 
 # ---------------------------------------------------------------------------
-# Layer 1: exported symbol set
+# Layer 1: Exported symbol set
 # ---------------------------------------------------------------------------
 if [ ! -f "$SYMS_BASELINE" ]; then
 	echo "check_public_abi: no baseline at $SYMS_BASELINE" >&2
@@ -318,7 +318,7 @@ if [ -n "$added" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Layer 2: full ABI corpus
+# Layer 2: Full ABI corpus
 # ---------------------------------------------------------------------------
 if [ "$FORMAT" = macho ]; then
 	echo "check_public_abi: NOTE - $SO is a Mach-O dylib and abidiff reads only" \
@@ -341,13 +341,13 @@ else
 	# change abidiff can PROVE is incompatible. That set is smaller than the
 	# set of changes that really break a compiled application, so it can't
 	# be the only case that fails. A public struct that grows sets bit 2
-	# alone (value 4, ABIDIFF_ABI_CHANGE): one more size_t in cmap_pair, for
+	# alone (value 4, ABIDIFF_ABI_CHANGE): One more size_t in cmap_pair, for
 	# example, takes it from 16 to 24 bytes, which moves every later field
 	# of every public struct holding a cmap_pair and breaks every
 	# application built against the old header, and yet abidiff exits 4 for
 	# it. So bit 2 is fatal here as well.
 	#
-	# That makes this layer behave like the symbol name layer above: any
+	# That makes this layer behave like the symbol name layer above: Any
 	# change to the ABI, compatible or not, has to be recorded again with
 	# `make update_abi_baseline` and show up as a line in the diff a
 	# reviewer sees. A new symbol is an ordinary, permitted change; what

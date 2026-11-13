@@ -85,7 +85,7 @@ static _Atomic bool g_ossl_alloc_fired = false;
 static pthread_t g_ossl_alloc_thread;
 
 #if !defined(LIBRESSL_VERSION_NUMBER)
-// Tells the forwarders whether this allocation fails: only on the armed thread
+// Tells the forwarders whether this allocation fails: Only on the armed thread
 // and only the g_ossl_alloc_fail_at-th one counted in g_ossl_alloc_seen. It
 // counts the call and sets g_ossl_alloc_fired when it fails one.
 static bool _ossl_should_fail(void) {
@@ -123,7 +123,7 @@ __attribute__((constructor(101))) static void _hook_openssl_allocator(void) {
 }
 #endif
 
-// Sets when the calling thread's two OpenSSL DRBGs reseed: after secs seconds
+// Sets when the calling thread's two OpenSSL DRBGs reseed: After secs seconds
 // and after requests random draws, where 0 turns a trigger off (EVP_RAND(7),
 // RAND_DRBG_reseed(3)). A reseed allocates, so a reseed that falls into a
 // sweep run makes it allocate more than the counted run and fails it for no
@@ -241,7 +241,7 @@ static int _openssl_selfsigned_encrypted(const char *key_path,
   return 0;
 }
 
-// Creates g_cert_dir and every certificate the suite uses: the server
+// Creates g_cert_dir and every certificate the suite uses: The server
 // (127.0.0.1 with an IP SAN), the client, named.test and the encrypted key.
 // It fills the path globals and g_enc_cert_ready, which is separate so an
 // openssl without the needed cipher skips only the password tests. Gives -1
@@ -273,7 +273,7 @@ static int _generate_all_certs(void) {
 
 static void _teardown(void);
 
-// Prepares the binary: registers _teardown() with atexit (OpenBSD runs no
+// Prepares the binary: Registers _teardown() with atexit (OpenBSD runs no
 // destructor of a program that links libpthread), ignores SIGPIPE so a
 // regression can't kill the binary (tests_sigpipe asserts the property),
 // resets inherited signals so system() works, and generates the
@@ -700,7 +700,7 @@ static bool _ctls_run_in_child(void (*body)(void *out), void *out,
   return got == out_size;
 }
 
-// What the SSL_CERT_FILE child reports: the trust result and whether the
+// What the SSL_CERT_FILE child reports: The trust result and whether the
 // client verified, with the variable at the server certificate and then at
 // another one.
 typedef struct {
@@ -710,7 +710,7 @@ typedef struct {
   bool other_verified;
 } _system_ca_names_result_t;
 
-// The child of ssl_cert_file_names_the_trusted_bundle: trusts the system store
+// The child of ssl_cert_file_names_the_trusted_bundle: Trusts the system store
 // with SSL_CERT_FILE at the server certificate and then at another one, and
 // records in the _system_ca_names_result_t at out whether each context
 // verified the server.
@@ -731,7 +731,7 @@ static void _system_ca_names_body(void *out) {
   ctls_ctx_release(other);
 }
 
-// The system store is the file SSL_CERT_FILE names: a client trusting it
+// The system store is the file SSL_CERT_FILE names: A client trusting it
 // verifies a server whose self-signed certificate is that file, and stops once
 // the variable names another certificate. Runs in a child.
 TEST(ctls_system_ca, ssl_cert_file_names_the_trusted_bundle) {
@@ -747,7 +747,7 @@ TEST(ctls_system_ca, ssl_cert_file_names_the_trusted_bundle) {
   REQUIRE_FALSE(r.other_verified);
 }
 
-// What the parse-once child reports: whether every context was built, how
+// What the parse-once child reports: Whether every context was built, how
 // many parses ran, and whether the last context verifies.
 typedef struct {
   bool all_ok;
@@ -755,7 +755,7 @@ typedef struct {
   bool verified;
 } _system_ca_once_result_t;
 
-// The child of the_default_file_is_parsed_once_per_process: builds four
+// The child of the_default_file_is_parsed_once_per_process: Builds four
 // system-trust contexts (each rebuilt once more by an ALPN add) and records
 // how many parses that took and whether the last context verifies.
 static void _system_ca_once_body(void *out) {
@@ -814,7 +814,7 @@ TEST(ctls_ctx, alpn_add_and_count_and_cleanup_fires_on_release) {
   REQUIRE_TRUE(cleaned_up);
 }
 
-// The state the reentry cleanup shares with its helper thread: the context,
+// The state the reentry cleanup shares with its helper thread: The context,
 // whether the helper finished, whether the lock was free, whether the cleanup
 // ran, and the helper thread.
 typedef struct {
@@ -913,7 +913,7 @@ TEST(ctls_handshake, self_signed_no_verify_completes) {
   ctls_ctx_release(server_ctx);
 }
 
-// The header of a poisoning allocation: the size, padded to max_align_t.
+// The header of a poisoning allocation: The size, padded to max_align_t.
 typedef struct {
   size_t size;
   max_align_t align;
@@ -1516,7 +1516,7 @@ TEST(ctls_sni, unmatched_name_falls_back_to_default) {
   ctls_ctx_release(server_ctx);
 }
 
-// What _alpn_capture_cb() saw: whether it fired and the protocol name.
+// What _alpn_capture_cb() saw: Whether it fired and the protocol name.
 typedef struct alpn_capture {
   bool fired;
   char name[64];
@@ -1681,7 +1681,7 @@ TEST(ctls_ex_data, connections_leave_the_openssl_app_data_slot_alone) {
   REQUIRE_EQ(client_app_after, (void *)&_app_data_sentinel);
 }
 
-// What _alpn_destroy_own_conn_cb() saw: whether it fired and whether the
+// What _alpn_destroy_own_conn_cb() saw: Whether it fired and whether the
 // handshake had finished by then.
 typedef struct {
   bool fired;
@@ -1789,7 +1789,7 @@ TEST(ctls_alpn, no_overlap_negotiates_no_protocol_at_all) {
   REQUIRE_EQ(len, (size_t)0);
 }
 
-// The client side: a server with no ALPN must leave the client with nothing
+// The client side: A server with no ALPN must leave the client with nothing
 // agreed, or it would speak HTTP/2 framing to an HTTP/1.1 peer.
 TEST(ctls_alpn,
      a_server_that_negotiates_none_leaves_the_client_reporting_none) {
@@ -1991,7 +1991,7 @@ static ctls_ctx *g_sni_race_ctx = NULL;
 // Re-adds the named certificate "race.test" of g_sni_race_ctx about 1000
 // times a second until g_sni_race_stop is set. Each add frees the previous
 // named SSL_CTX, the one a concurrent servername callback must never use after
-// its lookup. The usleep() throttle matters: an unthrottled thread on its own
+// its lookup. The usleep() throttle matters: An unthrottled thread on its own
 // core keeps the context lock so much that the handshakes starve, and
 // sched_yield() doesn't help across cores.
 static void *_sni_race_rotate_thread(void *arg) {
@@ -2129,7 +2129,7 @@ static _Atomic long g_ssl_ctx_destroyed = 0;
 #define CENSUS_NEW_DONE return
 #endif
 
-// The ex_data new callback of the census: counts one SSL_CTX creation in
+// The ex_data new callback of the census: Counts one SSL_CTX creation in
 // g_ssl_ctx_created.
 static CENSUS_NEW_RET _ssl_ctx_census_new(void *parent, void *ptr,
                                           CRYPTO_EX_DATA *ad, int idx,
@@ -2144,7 +2144,7 @@ static CENSUS_NEW_RET _ssl_ctx_census_new(void *parent, void *ptr,
   CENSUS_NEW_DONE;
 }
 
-// The ex_data free callback of the census: counts one SSL_CTX destruction in
+// The ex_data free callback of the census: Counts one SSL_CTX destruction in
 // g_ssl_ctx_destroyed.
 static void _ssl_ctx_census_free(void *parent, void *ptr, CRYPTO_EX_DATA *ad,
                                  int idx, long argl, void *argp) {
@@ -2280,7 +2280,7 @@ static const char *const g_stress_names[] = {
     "one.stress.test", "two.stress.test", "leaf.wild.stress.test",
     "nothing.stress.test"};
 
-// The state the stress threads share: the stop flag, the start gate and its
+// The state the stress threads share: The stop flag, the start gate and its
 // arrival count, the handshake and accept counters, the listening socket and
 // its address, and the two contexts.
 static _Atomic bool g_stress_stop = false;
@@ -2567,7 +2567,7 @@ static void _sweep_arm(int nth) {
 // Disarms g_sweep_mp, so every allocation succeeds.
 static void _sweep_disarm(void) { atomic_store(&g_alloc_fail_at, 0); }
 
-// How many allocation indexes the sweep tries: past the last allocation any
+// How many allocation indexes the sweep tries: Past the last allocation any
 // of these calls makes, so every branch is covered.
 #define CTLS_SWEEP_DEPTH 46
 
@@ -2746,7 +2746,7 @@ static const char *const g_cfg_names[] = {NULL, "keep.test", "rot.test",
 static const char *const g_cfg_before[] = {"test-client", "named.test",
                                            "named.test", "test-client"};
 
-// Builds the rollback fixture on allocator mp: a default file certificate,
+// Builds the rollback fixture on allocator mp: A default file certificate,
 // two named file certificates and an ALPN protocol. Gives NULL when any step
 // fails.
 static ctls_ctx *_cfg_fixture(ccol_memmgmt_procs *mp) {
@@ -2788,7 +2788,7 @@ static ccol_retval _cfg_run_op(ctls_ctx *ctx, cfg_op_t op) {
   return ccol_invalid_args;
 }
 
-// Tells whether ctx serves exactly what the fixture configured: the
+// Tells whether ctx serves exactly what the fixture configured: The
 // g_cfg_before CNs for g_cfg_names and no peer verification.
 static bool _cfg_unchanged(ctls_ctx *ctx) {
   char buf[128];
@@ -3834,7 +3834,7 @@ TEST(ctls_sni, a_wildcard_covers_exactly_one_label) {
 // The peer is a plain OpenSSL client, which keeps a session and offers it on
 // the next connection as every real resuming client does.
 //
-// One resumption case: the protocol version, whether the client presents
+// One resumption case: The protocol version, whether the client presents
 // g_client_cert, and the SNI name (NULL for none).
 typedef struct {
   int max_version;
@@ -4144,7 +4144,7 @@ TEST(ctls_oom, ctx_new_under_openssl_allocation_failure_gives_everything_back) {
   REQUIRE_FALSE(unbalanced);
 }
 
-// The connection constructors the sweeps cover: a client by name, a client by
+// The connection constructors the sweeps cover: A client by name, a client by
 // IP literal, and a server.
 typedef enum {
   CREATE_CLIENT_NAME,
@@ -4232,7 +4232,7 @@ TEST(ctls_oom,
   }
 }
 
-// A verified mutual TLS pair: the server trusts the client's self-signed
+// A verified mutual TLS pair: The server trusts the client's self-signed
 // certificate, and the server context takes its memory from server_mp.
 typedef struct {
   ctls_ctx *server_ctx;
@@ -4447,7 +4447,7 @@ TEST(ctls_oom, peer_cert_accessors_under_allocation_failure_cache_nothing) {
   REQUIRE_FALSE(md_bad);
 }
 
-// What _alpn_log_cleanup() saw: how many cleanups ran and the last udata.
+// What _alpn_log_cleanup() saw: How many cleanups ran and the last udata.
 typedef struct {
   int cleanups;
   void *last_udata;
@@ -4521,7 +4521,7 @@ TEST(ctls_oom, a_failed_alpn_replacement_keeps_the_earlier_registration) {
   REQUIRE_FALSE(breach);
 }
 
-// What the hashed-directory child reports: the trust result and whether the
+// What the hashed-directory child reports: The trust result and whether the
 // client verified, with the directory holding the server certificate and
 // with an empty one.
 typedef struct {
@@ -4547,7 +4547,7 @@ static bool _hashed_dir_make(const char *dir) {
          symlink(g_server_cert, link_path) == 0;
 }
 
-// The child of the hashed-directory test: makes a hashed directory and an
+// The child of the hashed-directory test: Makes a hashed directory and an
 // empty one, points SSL_CERT_FILE at a key (which contributes no
 // certificate) and SSL_CERT_DIR at each directory in turn, and records in the
 // _system_ca_dir_result_t at out whether a system-trust client verifies.
@@ -4589,7 +4589,7 @@ static void _system_ca_dir_body(void *out) {
 }
 
 // With a default CA file that holds no certificate, the system store is the
-// directory SSL_CERT_DIR names: a client trusts the server whose certificate
+// directory SSL_CERT_DIR names: A client trusts the server whose certificate
 // it holds, and nothing from an empty one. Runs in a child.
 TEST(ctls_system_ca,
      a_default_file_without_certificates_falls_back_to_the_directory) {
@@ -4605,7 +4605,7 @@ TEST(ctls_system_ca,
   REQUIRE_FALSE(r.verified_empty);
 }
 
-// What the allocation sweep child reports: failed and broken calls, whether
+// What the allocation sweep child reports: Failed and broken calls, whether
 // the sweep got past the last allocation, and the clean call's verification
 // and trusted certificate count.
 typedef struct {
@@ -4642,7 +4642,7 @@ static bool _write_system_ca_bundle(const char *path) {
   return ok;
 }
 
-// The child of a_default_file_that_cannot_be_parsed_for_memory_says_so: with
+// The child of a_default_file_that_cannot_be_parsed_for_memory_says_so: With
 // SSL_CERT_FILE at the six-certificate bundle and SSL_CERT_DIR empty, it
 // fails each OpenSSL allocation of ctls_ctx_trust_system() in turn. A success
 // must trust as many certificates as the clean call (which must also verify

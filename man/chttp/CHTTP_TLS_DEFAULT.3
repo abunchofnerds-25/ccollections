@@ -27,7 +27,7 @@ with a designated initializer that names only some of its fields,
 verifies the server's chain and matches its hostname on a client.  On a
 server, the same struct with a ca_bundle_path requires every client to
 present a certificate that verifies against that bundle.  Writing less
-than you meant to never gives you a weaker setting: you have to assign a
+than you meant to never gives you a weaker setting: You have to assign a
 field to weaken a check, and the name of that field says what you give
 up.
 .PP
@@ -60,7 +60,7 @@ A ca_bundle_path holds one or more CA certificates in PEM form and may
 hold certificate revocation lists (CRLs) beside them.  A file that holds
 only CRLs names no CA and is refused.  When the bundle holds a CRL,
 revocation is checked for the whole chain that the peer presents, as the
-ssl_crl directive of nginx does: every certificate of that chain below
+ssl_crl directive of nginx does: Every certificate of that chain below
 its trust anchor needs a CRL of its issuer in the bundle.  The handshake
 fails for a revoked certificate, for a certificate whose issuer has no
 CRL in the bundle, and for a CRL past its next update time, because a

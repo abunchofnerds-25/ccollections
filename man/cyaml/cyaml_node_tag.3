@@ -30,7 +30,7 @@ key, but there is nowhere to keep the tag itself.
 
 The node owns the tag string and the caller must not free it.  The
 pointer is borrowed and stays valid until the node's tag or value is
-set again or the node is destroyed, so any of these ends it: a
+set again or the node is destroyed, so any of these ends it: A
 cyaml_node_set_tag(3) on the node, a cyaml_set(3) that reaches the
 node (a new value drops a core tag that doesn't match it), a
 cyaml_list_remove(3), cyaml_dictionary_remove(3) or cyaml_delete(3)

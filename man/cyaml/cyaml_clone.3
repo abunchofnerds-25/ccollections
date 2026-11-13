@@ -23,7 +23,7 @@ caller builds directly with cyaml_create_list_mp(3) and
 cyaml_dictionary_set(3) has the same nesting limit that
 cyaml_parse*(3) applies at parse time, and cyaml_serialize(3),
 cyaml_serialize_flow(3) and cyaml_serialize_stream(3) apply exactly
-that limit as well: a tree may nest at most 500 containers (lists
+that limit as well: A tree may nest at most 500 containers (lists
 and dictionaries) on any path, counting the root when it is a
 container, and scalars and tags take no level.  So every tree that a
 parse gives can be cloned.  A tree that nests more containers than

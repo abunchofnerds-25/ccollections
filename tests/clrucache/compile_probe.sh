@@ -51,12 +51,12 @@ export LC_ALL
 failures=0
 checks=0
 
-# $1: case name
+# $1: Case name
 # $2: "accept" or "reject"
-# $3: for a reject case, an extended regular expression the compiler's output
+# $3: For a reject case, an extended regular expression the compiler's output
 #     must match; "-" for an accept case
-# $4: body statements placed inside ccol_probe
-# $5: optional file-scope text placed ahead of ccol_probe, for a case that
+# $4: Body statements placed inside ccol_probe
+# $5: Optional file-scope text placed ahead of ccol_probe, for a case that
 #     needs a callback of its own rather than a statement
 probe() {
   name=$1

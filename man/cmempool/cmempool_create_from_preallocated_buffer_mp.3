@@ -59,7 +59,7 @@ The pool struct itself comes from mmgmt_procs
 The pool calls the functions of mmgmt_procs for its dynamic fallback
 entries, and for its own bookkeeping of them, in the middle of an
 update of its own state and with its lock held when it has one. Those
-functions must not call back into the same pool: with a lock the call
+functions must not call back into the same pool: With a lock the call
 deadlocks, and without one it corrupts that state. An allocator built
 on a pool must draw from a different pool
 Returns NULL with an error if elem_size is zero

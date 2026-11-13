@@ -78,7 +78,7 @@ the tag.
 
 The text of a tag always survives the round trip in full.  Every byte
 that the URI characters of YAML 1.2 section 5.6 don't allow literally
-inside "!<...>" is written as a percent escape: the '%' that starts an
+inside "!<...>" is written as a percent escape: The '%' that starts an
 escape, a '>', a line break, a space, a quote, a brace, every control
 byte and every byte of a UTF-8 sequence, among others.  A '#' is
 written as %23 as well, because libyaml and PyYAML refuse a verbatim
@@ -96,7 +96,7 @@ cyaml_serialize_free_mp() when the tree used a custom allocator.
 node doesn't have to come from cyaml_parse*().  A tree that the
 caller builds directly with cyaml_create_list_mp(3) and
 cyaml_dictionary_set(3) has the same nesting limit that
-cyaml_parse*(3) applies at parse time: a tree may nest at most 500
+cyaml_parse*(3) applies at parse time: A tree may nest at most 500
 containers (lists and dictionaries) on any path, counting the root
 when it is a container, and scalars and tags take no level.  So every
 tree that a parse gives can be serialized, and the text this function

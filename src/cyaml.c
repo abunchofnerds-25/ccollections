@@ -118,7 +118,7 @@ static inline bool yb_ends_with_char(const ybuf *b, char c) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: runs the three helpers above on a buffer in the state a failed
+// Test hook: Runs the three helpers above on a buffer in the state a failed
 // append leaves (oom set, no store, a stale length). Gives one bit per helper
 // that answered without reading the store, 7 when all three did. The volatile
 // values keep the compiler from folding the calls away.
@@ -210,7 +210,7 @@ static ccol__thread_ls_key pool_key;
 
 // Readers hold it across "check pool_key_live, then set the key", and the
 // destructor holds it as writer to clear the flag and delete the key. A plain
-// atomic check isn't enough: the key could be deleted under a
+// atomic check isn't enough: The key could be deleted under a
 // pthread_setspecific() that is already running. Initialized lazily under
 // pool_key_once.
 static ccol__rw_lock pool_key_rwlock;
@@ -234,7 +234,7 @@ static __thread size_t parse_byte_budget = (size_t)-1;
 // Set when the byte budget refuses a charge, so the parser can name the limit.
 static __thread bool parse_byte_budget_exhausted = false;
 
-// What the byte budget charges per kind of allocation: a node, the empty
+// What the byte budget charges per kind of allocation: A node, the empty
 // backing store of a list or a dictionary, one dictionary entry, and the
 // allocator's own overhead per block. Each figure is at or above the measured
 // cost on LP64, so the budget never understates memory. List slots aren't
@@ -357,7 +357,7 @@ static void do_pool_key_init(void) {
   atomic_store(&pool_key_live, true);
 }
 
-// Tears the node pool down when the library unloads or the process exits: sets
+// Tears the node pool down when the library unloads or the process exits: Sets
 // pool_key_finalized, drains the calling thread's pool, then clears
 // pool_key_live and deletes the key under the write lock. Without the delete,
 // dlopen and dlclose cycles use up the process's keys.
@@ -428,7 +428,7 @@ CYAML_PARSE_HOT cyaml_node *node_alloc(cyaml_node_type type,
   return n;
 }
 
-// Frees a node struct, the one release path for every node: a default-allocator
+// Frees a node struct, the one release path for every node: A default-allocator
 // node goes into the thread pool unless it's full, any other node goes back to
 // its own allocator. A thread that can't arm the pool key (no key left, the set
 // fails, or the destructor already ran) frees the node, since nothing would
@@ -510,7 +510,7 @@ static void pool_drain(void *arg) {
 
 #ifdef RUNNING_UNIT_TESTS
 #if defined(CCOL__EMULATE_DARWIN_TLS)
-// Test hook: gives the size of the calling thread's pool, so tests can check
+// Test hook: Gives the size of the calling thread's pool, so tests can check
 // the cap and that pools stay per thread.
 size_t cyaml_debug_pool_size(void) {
   cyaml_tls *t = cyaml_tls_peek();
@@ -664,7 +664,7 @@ static inline bool cyaml_api_string_ok(const char *s) {
 }
 
 // Checks a cyaml__set_typed() payload without touching a node, so a refused
-// cyaml_set() changes nothing: the type must be a scalar one, raw_size must
+// cyaml_set() changes nothing: The type must be a scalar one, raw_size must
 // match the width the type needs, raw may be NULL only for CYAML_NULL, a void
 // pointer value must be NULL, and a string must be well-formed UTF-8. Every
 // refusal is ccol_invalid_args. Without these checks a wrong size would read
@@ -1199,7 +1199,7 @@ cyaml cyaml_dictionary_get(cyaml map, const char *key) {
   return cyaml_read_child(vp.ptr);
 }
 
-// Removes and frees the element at index, for callers that edit a list: it
+// Removes and frees the element at index, for callers that edit a list: It
 // destroys the element, moves the later ones down and pops the last slot.
 // ccol_invalid_args for a bad list or index.
 ccol_retval cyaml_list_remove(cyaml seq, size_t index) {
@@ -1240,7 +1240,7 @@ bool cyaml_dictionary_next(cyaml_dictionary_iter *it) {
   return true;
 }
 
-// Starts a dictionary walk: fills it with the oldest member of dict and reads
+// Starts a dictionary walk: Fills it with the oldest member of dict and reads
 // its successor. false for an empty, NULL or wrong-type dict, or a NULL it.
 bool cyaml_dictionary_first(cyaml dict, cyaml_dictionary_iter *it) {
   if (!it) return false;
@@ -1294,7 +1294,7 @@ static bool clone_attach_tag(cyaml dst, const char *src_tag,
 #define CYAML_WALK_INLINE_FRAMES 16
 
 // Grows an explicit walk stack to new_cap frames, for the parser, the clone and
-// the serializers, which walk without recursion. It gives the new storage: the
+// the serializers, which walk without recursion. It gives the new storage: The
 // first growth copies the inline frames to the heap, later ones realloc. On
 // failure it gives NULL and leaves *cap alone, so the caller can unwind what it
 // pushed. The depth caps keep new_cap * elem_size far from overflow.
@@ -1321,7 +1321,7 @@ static void *walk_stack_grow(void *stack, size_t *cap, void *inline_base,
   return walk_stack_grow_to(stack, cap, *cap * 2, inline_base, elem_size, mp);
 }
 
-// One level of clone_node()'s walk: a source container and its clone. A list
+// One level of clone_node()'s walk: A source container and its clone. A list
 // walks by idx up to count; a dictionary walks through next, and idx counts the
 // entries seen so the caller can tell a walk that stopped early.
 typedef struct {
@@ -1500,7 +1500,7 @@ cyaml cyaml_clone(cyaml node) {
                     &height);
 }
 
-// One change a speculative parse made to the anchor table: an owned copy of the
+// One change a speculative parse made to the anchor table: An owned copy of the
 // name and the node it named before (NULL when the change added it).
 typedef struct {
   char *name;
@@ -1630,7 +1630,7 @@ static void parse_discard(cyaml_node *n) {
 // parser charges this budget.
 #define CYAML_MAX_PARSE_BYTES ((size_t)256 * 1024 * 1024)
 
-// The byte budget grows with the input at this many bytes per byte: the same
+// The byte budget grows with the input at this many bytes per byte: The same
 // "[:,:,:]" shape costs about 331, times 1.5 rounded up. Without the scaling a
 // large honest document (a big Kubernetes List) would be refused.
 #define CYAML_PARSE_BYTES_PER_INPUT_BYTE 512
@@ -1655,12 +1655,12 @@ static inline size_t parse_budget_for_input(size_t floor, size_t per_byte,
 // small document and restores them afterwards.
 size_t cyaml_test_parse_node_floor = CYAML_MAX_PARSE_NODES;
 size_t cyaml_test_parse_byte_floor = CYAML_MAX_PARSE_BYTES;
-// The floors the budgets start from: the test variables above in test builds,
+// The floors the budgets start from: The test variables above in test builds,
 // the fixed constants otherwise.
 #define CYAML_PARSE_NODE_FLOOR cyaml_test_parse_node_floor
 #define CYAML_PARSE_BYTE_FLOOR cyaml_test_parse_byte_floor
 
-// Test hook: gives parse_budget_for_input(), so tests can check the scaling and
+// Test hook: Gives parse_budget_for_input(), so tests can check the scaling and
 // the saturation.
 size_t cyaml_debug_parse_budget_for_input(size_t floor, size_t per_byte,
                                           size_t input_len) {
@@ -1706,7 +1706,7 @@ static inline void parse_amp_enter(void) {
   parse_amp_start_byte_budget = parse_byte_budget;
 }
 
-// Closes an amplification region: the outermost one charges what the region
+// Closes an amplification region: The outermost one charges what the region
 // used to both budgets and sets parse_amp_limit_hit when the amplification
 // budget was the binding one. A refund inside the region never lifts the budget
 // above its start.
@@ -1764,7 +1764,7 @@ __thread size_t cyaml_test_last_parse_bytes_charged;
 __thread size_t cyaml_test_peak_parse_frame_cap;
 #endif
 
-// Disarms the budgets at every exit of parse_common(): sets them back to
+// Disarms the budgets at every exit of parse_common(): Sets them back to
 // unlimited and clears parse_discard_ctx, so nothing a parse left can reach
 // later calls on this thread.
 static inline void parse_node_budget_disarm(void) {
@@ -1879,7 +1879,7 @@ static bool parse_key_fits_below_mapping(parse_ctx *ctx, cyaml_node *key) {
 }
 
 // Every byte of input that an error message quotes goes through
-// cyaml_err_echo(), so messages stay printable ASCII: no terminal escapes, no
+// cyaml_err_echo(), so messages stay printable ASCII: No terminal escapes, no
 // forged log lines, no invalid UTF-8. Bytes 0x20 to 0x7E stay, any other byte
 // becomes <0xNN>, and a long text is cut at a whole byte with "...". The macros
 // give each echo its own compound-literal buffer that lives to the end of the
@@ -1954,7 +1954,7 @@ static size_t line_start_pos_backward_scan(parse_ctx *ctx) {
   return p;
 }
 
-// Extends the line cache of line_start_pos(): appends the start of every line
+// Extends the line cache of line_start_pos(): Appends the start of every line
 // from line_scan_pos up to, not including, up_to. On OOM it frees the cache and
 // sets line_cache_disabled for good.
 static void line_starts_extend(parse_ctx *ctx, size_t up_to) {
@@ -2057,7 +2057,7 @@ CYAML_PARSE_HOT int current_col(parse_ctx *ctx) {
 
 // True when a tab sits anywhere between the line start and ctx->pos. Block
 // entries call it, because a block column can't be measured across a tab. The
-// whitespace skippers don't refuse tabs themselves: inside open content a tab
+// whitespace skippers don't refuse tabs themselves: Inside open content a tab
 // is data, and their callers need them to always move forward.
 static bool line_indent_has_tab(parse_ctx *ctx) {
   size_t p = line_start_pos(ctx);
@@ -2065,7 +2065,7 @@ static bool line_indent_has_tab(parse_ctx *ctx) {
 }
 
 // Gives the indentation of the current line, for the indent comparisons of flow
-// continuation lines and block values: the spaces before the first tab when the
+// continuation lines and block values: The spaces before the first tab when the
 // leading whitespace holds one, else current_col(). A tab after the indent is
 // separation.
 static int line_space_indent(parse_ctx *ctx) {
@@ -2266,7 +2266,7 @@ static size_t cyaml_first_refused_char(const unsigned char *p, size_t len) {
 }
 
 // Writes the error for the character at p[at] that cyaml_first_refused_char()
-// refused into msg, so the caller learns where and what it is: the defect, the
+// refused into msg, so the caller learns where and what it is: The defect, the
 // bytes as 0xNN, and the line and column counted from 1. The column counts
 // characters, and a leading byte-order mark isn't counted. The text comes from
 // the UTF-8 helper shared with cjson.
@@ -2348,7 +2348,7 @@ static inline bool at_col0_bom(parse_ctx *ctx) {
 // Creates the anchor table on first use. The table points names at the anchored
 // nodes, which stay where the document put them, so registering copies nothing;
 // an alias resolves to a deep clone, charged to the amplification budget. The
-// table owns no node: each one lives in a tree or in the kept list until
+// table owns no node: Each one lives in a tree or in the kept list until
 // anchors_destroy(), which runs at the end of every document.
 static bool anchors_ensure(parse_ctx *ctx) {
   if (ctx->anchors) return true;
@@ -2447,7 +2447,7 @@ static bool anchors_store(parse_ctx *ctx, const char *name, cyaml_node *node) {
 
 // The one speculative parse is a flow collection that may be an implicit block
 // key (see try_parse_scalar_dict_key_body()). Its side effects must vanish when
-// it's rejected: stored anchors, kept nodes and budget charges. begin records
+// it's rejected: Stored anchors, kept nodes and budget charges. begin records
 // the budgets and the kept length and starts an undo log; reject restores all
 // of it without allocating, accept keeps it. A new side effect in a parse
 // function needs an undo here too.
@@ -2464,7 +2464,7 @@ typedef struct {
   bool amp_limit_hit;
 } anchor_speculation;
 
-// Starts a speculation: snapshots the budgets and the kept length into sp and
+// Starts a speculation: Snapshots the budgets and the kept length into sp and
 // installs a fresh undo log in ctx.
 static void anchor_speculation_begin(parse_ctx *ctx, anchor_speculation *sp) {
   sp->undo.entries = sp->undo.inline_entries;
@@ -2482,7 +2482,7 @@ static void anchor_speculation_begin(parse_ctx *ctx, anchor_speculation *sp) {
   ctx->anchor_undo = &sp->undo;
 }
 
-// Ends a speculation, for both accept and reject: frees the log's name copies
+// Ends a speculation, for both accept and reject: Frees the log's name copies
 // and puts the outer log back.
 static void anchor_speculation_end(parse_ctx *ctx, anchor_speculation *sp) {
   for (size_t i = 0; i < sp->undo.len; i++)
@@ -2492,13 +2492,13 @@ static void anchor_speculation_end(parse_ctx *ctx, anchor_speculation *sp) {
   ctx->anchor_undo = sp->outer;
 }
 
-// Accepts a speculation: ends it and keeps its changes, when the flow
+// Accepts a speculation: Ends it and keeps its changes, when the flow
 // collection really was a key or the parse fails anyway.
 static void anchor_speculation_accept(parse_ctx *ctx, anchor_speculation *sp) {
   anchor_speculation_end(ctx, sp);
 }
 
-// Rejects a speculation, so the second reading sees no trace of it: undoes the
+// Rejects a speculation, so the second reading sees no trace of it: Undoes the
 // stores in reverse order (a name the speculation added keeps a slot with NULL,
 // so no map delete is needed), frees the nodes it kept and restores the
 // budgets. The caller has already destroyed the speculative tree, so the
@@ -2575,7 +2575,7 @@ static ccol_retval tag_handles_set(parse_ctx *ctx, const char *handle,
   return chashmap_insert_elem(ctx->tag_handles, &kp, &vp);
 }
 
-// Gives the prefix of handle, to resolve a shorthand tag: a %TAG definition,
+// Gives the prefix of handle, to resolve a shorthand tag: A %TAG definition,
 // else the default for "!" or "!!", else NULL.
 static const char *tag_handles_lookup(parse_ctx *ctx, const char *handle) {
   if (ctx->tag_handles) {
@@ -2597,7 +2597,7 @@ static void tag_handles_destroy(parse_ctx *ctx) {
   ctx->tag_handles = NULL;
 }
 
-// Reads an anchor or alias name after '&' or '*' into *name_out: everything up
+// Reads an anchor or alias name after '&' or '*' into *name_out: Everything up
 // to whitespace, a flow indicator or '#'. A ':' followed by whitespace ends the
 // name too, so "*x: y" uses alias x as a key. On an empty name or OOM it sets
 // ctx->error and gives false; the speculative key parse relies on ctx->error to
@@ -2668,7 +2668,7 @@ static bool try_parse_bool_scalar(const char *s, bool *out) {
 }
 
 // Tells whether s is a core-schema int and stores it in *out, for implicit
-// typing and !!int: decimal with an optional sign, or unsigned 0x hex or 0o
+// typing and !!int: Decimal with an optional sign, or unsigned 0x hex or 0o
 // octal with a lowercase prefix, at most LLONG_MAX. The first byte must be a
 // digit or a sign, because strtoll() skips leading whitespace that an escape
 // can carry. The digits after 0x or 0o are checked by hand, since strtoull()
@@ -3384,11 +3384,11 @@ done:
   return true;
 }
 
-// The chomping of a block scalar: one final newline, none, or every trailing
+// The chomping of a block scalar: One final newline, none, or every trailing
 // line.
 typedef enum { CHOMP_CLIP, CHOMP_STRIP, CHOMP_KEEP } chomp_mode;
 
-// Reads the header of a block scalar after | or >, for both block styles: at
+// Reads the header of a block scalar after | or >, for both block styles: At
 // most one chomp indicator and at most one indent digit (1 to 9), in either
 // order, then an optional comment that needs whitespace before its '#'. Sets
 // *chomp, and *explicit_indent (0 when no digit is given). false with
@@ -3446,9 +3446,9 @@ static bool parse_block_scalar_header(parse_ctx *ctx, chomp_mode *chomp,
   return true;
 }
 
-// What scan_block_scalar_line() found. ERROR: ctx->error is set. END: the
-// scalar ends before this line, and ctx->pos is back at its start. BLANK: an
-// empty line, ctx->pos at its end. CONTENT: a content line, *spaces_out holds
+// What scan_block_scalar_line() found. ERROR: ctx->error is set. END: The
+// scalar ends before this line, and ctx->pos is back at its start. BLANK: An
+// empty line, ctx->pos at its end. CONTENT: A content line, *spaces_out holds
 // its leading spaces (at least block_indent) and ctx->pos sits after them.
 typedef enum {
   SCAN_BLOCK_LINE_ERROR,
@@ -3459,7 +3459,7 @@ typedef enum {
 
 // Measures and classifies one line of a block scalar for both block styles,
 // updating indent_determined, block_indent and max_leading_blank_spaces. The
-// shared rules live here: a tab as indentation while the indent is unknown is
+// shared rules live here: A tab as indentation while the indent is unknown is
 // an error, no leading blank line may be indented past the first content line,
 // the indent is detected from the first content line, and a document marker in
 // column 0 always ends the scalar (its auto-detected indent may be 0). A line
@@ -3616,7 +3616,7 @@ static bool parse_block_scalar_content(parse_ctx *ctx, int parent_indent,
   return true;
 }
 
-// Reads the content of a folded block scalar: it collects the lines as spans
+// Reads the content of a folded block scalar: It collects the lines as spans
 // borrowed from ctx->src (no copy per line), then folds them. A single break
 // between two lines becomes a space, a blank line a newline, and a break next
 // to a more indented line (spaces or a tab past block_indent) stays a newline,
@@ -3816,7 +3816,7 @@ CYAML_PARSE_HOT bool parse_plain_scalar(parse_ctx *ctx, bool in_flow,
 }
 
 // Extends the first line of a plain scalar (first_owned, owned from here on)
-// with continuation lines: blank lines and lines indented past indent. Each
+// with continuation lines: Blank lines and lines indented past indent. Each
 // line step folds to one space and each blank line to a newline. It stops at a
 // document marker, a line at or below indent, a flow indicator, a comment line,
 // a ':' at the start of a line (an implicit key's ':' must stay on the key's
@@ -3948,7 +3948,7 @@ static bool at_bare_seq_indicator(parse_ctx *ctx) {
 }
 
 // True when the current character may start a flow plain scalar, so a lone "-"
-// or "?" in flow is refused: anything but a '-' or '?' that isn't followed by a
+// or "?" in flow is refused: Anything but a '-' or '?' that isn't followed by a
 // character a flow plain scalar may hold. ':' is left out on purpose, so "[:
 // value]" can still read an empty key.
 static bool at_valid_flow_plain_scalar_start(parse_ctx *ctx) {
@@ -3962,7 +3962,7 @@ static bool at_valid_flow_plain_scalar_start(parse_ctx *ctx) {
 }
 
 // Skips a tag token at a '!' the caller has seen, for look-aheads that only
-// need to get past it: a shorthand ends at whitespace or a flow indicator, and
+// need to get past it: A shorthand ends at whitespace or a flow indicator, and
 // a verbatim "!<...>" runs to its '>', commas included.
 static void skip_tag_token(parse_ctx *ctx) {
   ctx->pos++;
@@ -4022,7 +4022,7 @@ static inline bool tag_text_char_ok(unsigned char c, bool tag_char) {
   }
 }
 
-// Checks tag text for parse_tag_token_raw() and the %TAG parser: refuses, as a
+// Checks tag text for parse_tag_token_raw() and the %TAG parser: Refuses, as a
 // parse error naming it, the first byte that tag_text_char_ok() refuses (start
 // is text's offset in the input). true when every byte is allowed.
 static bool tag_text_check(parse_ctx *ctx, const char *text, size_t len,
@@ -4092,7 +4092,7 @@ static bool percent_decode_tag_inplace(parse_ctx *ctx, char *text,
   return true;
 }
 
-// Parses and resolves a tag token at a '!': verbatim "!<...>", or a shorthand
+// Parses and resolves a tag token at a '!': Verbatim "!<...>", or a shorthand
 // with the "!", "!!" or "!name!" handle (a named handle is confirmed by a look
 // ahead for its closing '!'). *resolved_out gets the owned resolved tag, or
 // NULL for a bare "!". Every failure (bad character, handle with no suffix,
@@ -4319,7 +4319,7 @@ static inline __attribute__((always_inline)) bool at_block_value_indicator(
          after == '\0';
 }
 
-// Tries to read an implicit block key and its ':': a plain, quoted or flow
+// Tries to read an implicit block key and its ':': A plain, quoted or flow
 // collection key, or an alias, with an optional anchor and tag in either order.
 // The ':' check runs before any key-only work (cloning an alias, typing a
 // scalar, canonical text), because the same text is usually a value and the
@@ -4327,7 +4327,7 @@ static inline __attribute__((always_inline)) bool at_block_value_indicator(
 // a speculation and rejected when no ':' follows. Every implicit key must fit
 // on one line.
 //
-// On a match ctx->pos is past the ':' and the outputs are set: the owned anchor
+// On a match ctx->pos is past the ':' and the outputs are set: The owned anchor
 // name (NULL for none or an alias key), the owned key text, whether the key is
 // a merge key ("<<" plain and untagged, or with the core merge tag; an anchor
 // doesn't matter), and the typed node an anchor should name. On no match
@@ -4597,7 +4597,7 @@ typedef enum {
   PFK_BLOCK_DICT
 } pframe_kind;
 
-// What a frame asks the driver to push: exactly the arguments of the call it
+// What a frame asks the driver to push: Exactly the arguments of the call it
 // stands for. resolved_tag and first_key are borrowed.
 typedef struct {
   pframe_kind kind;
@@ -4613,7 +4613,7 @@ typedef struct {
   bool first_key_is_merge_candidate;
 } preq;
 
-// The resume points of each frame kind: each names the child the frame waits
+// The resume points of each frame kind: Each names the child the frame waits
 // for.
 enum {
   NS_ENTRY = 0,
@@ -4638,7 +4638,7 @@ enum {
   BDS_AFTER_VALUE
 };
 
-// A "<<" entry of a mapping being read: its value, owned by the frame until the
+// A "<<" entry of a mapping being read: Its value, owned by the frame until the
 // mapping ends, and the member count when it appeared, which places the merged
 // members. It never enters the map, so merge entries never collide.
 typedef struct {
@@ -5114,7 +5114,7 @@ static cyaml_node *parse_flow_list(parse_ctx *ctx, int indent) {
 #define CYAML_FLOAT_KEY_BUF_LEN 32
 
 // Writes into buf the shortest "%.Ng" text that reads back as exactly the
-// finite double v, for float values and float keys: it tries 15, 16 and 17
+// finite double v, for float values and float keys: It tries 15, 16 and 17
 // digits, and 1 to 14 first for a subnormal (5e-324 is "5e-324").
 static void format_shortest_double(double v,
                                    char buf[static CYAML_FLOAT_KEY_BUF_LEN]) {
@@ -5132,7 +5132,7 @@ static void format_shortest_double(double v,
 }
 
 // Writes the canonical key text of a float into buf, so equal numbers make the
-// same dictionary key: the shortest round-trip digits with no ".0" (so the keys
+// same dictionary key: The shortest round-trip digits with no ".0" (so the keys
 // 1.0 and 1 are the same), ".nan", ".inf", "-.inf", and "0" for both zeros.
 // Every such text parses back to a value with the same text, which lets the
 // serializer write it unquoted. Runs in the C locale.
@@ -5418,7 +5418,7 @@ static cyaml_node *parse_flow_dictionary(parse_ctx *ctx, int indent) {
   return parse_drive(ctx, &rq);
 }
 
-// Dispatches one node: the decision tree the parser runs for every node,
+// Dispatches one node: The decision tree the parser runs for every node,
 // suspended at its descents (an anchored value, a tagged value, a collection,
 // a flow collection that may become a key). It's inlined into the driver, since
 // half of all parse steps are node dispatches.
@@ -5432,7 +5432,7 @@ static cyaml_node *parse_flow_dictionary(parse_ctx *ctx, int indent) {
 // resolved_tag (the enclosing tag, which decides the type where the content is
 // built). The '&', '!' and '*' branches pass these on.
 //
-// The branches: a document marker or a column-0 BOM is never content. "&a key:"
+// The branches: A document marker or a column-0 BOM is never content. "&a key:"
 // and "!t key:" decorate only the key, so they try the key reader first. A
 // property alone on its line takes a value only from a more indented line (or a
 // "- " at a mapping's indent), else the node is empty and still typed by the
@@ -6183,7 +6183,7 @@ CYAML_PARSE_HOT pbmn pbmn_begin(parse_ctx *ctx, int map_indent,
 // Looks ahead at the key starting at ctx->pos and tells whether it's a real
 // merge key, restoring ctx->pos. Every key form (implicit and explicit, block
 // and flow) uses it before reading the key. It walks the whole anchor and tag
-// chain, since "&y !!str <<" has a tag after its anchor: an untagged plain "<<"
+// chain, since "&y !!str <<" has a tag after its anchor: An untagged plain "<<"
 // counts, and so does a plain or quoted "<<" with the core merge tag. in_flow
 // picks flow_skip_ws() (which reads indent) or skip_inline_ws(). Whitespace
 // after
@@ -6277,7 +6277,7 @@ static bool explicit_key_peek_is_merge_candidate(parse_ctx *ctx, int indent,
   return is_candidate;
 }
 
-// Finishes an explicit "? key" entry once its key node is in: builds the
+// Finishes an explicit "? key" entry once its key node is in: Builds the
 // canonical key text, then looks for the ':' on a later line at exactly
 // map_indent (no tab before it, and a ':' that isn't followed by whitespace
 // starts a plain key instead). The key node is a descent, so pode_begin() and
@@ -6493,7 +6493,7 @@ static cyaml_node *merge_source_at(cyaml_node *val, size_t i) {
   return *(cyaml_node **)cvector_at(val->value.list, i);
 }
 
-// One segment that merge_reorder() moves: the first explicit member after a
+// One segment that merge_reorder() moves: The first explicit member after a
 // merge entry, and the first member and count of what that entry placed.
 typedef struct {
   const ccol_chmap_entry_ref *explicit_first;
@@ -6549,7 +6549,7 @@ static bool merge_reorder(parse_ctx *ctx, cyaml_node *map,
 
 // Expands the merge entries of a mapping once it's read; the frames keep every
 // "<<" entry aside, so map holds only explicit members. The caller keeps the
-// values. Precedence follows PyYAML: explicit members win, a later merge entry
+// values. Precedence follows PyYAML: Explicit members win, a later merge entry
 // beats an earlier one, and inside one entry an earlier source wins. With
 // several entries, a temporary map of winning values is built first and the
 // members are placed in document order after. A source mapping's own merges
@@ -6923,7 +6923,7 @@ static bool pframe_open(parse_ctx *ctx, pframe *f, const preq *rq) {
   return true;
 }
 
-// Frees everything a frame still owns, for a failed parse: the driver sweeps
+// Frees everything a frame still owns, for a failed parse: The driver sweeps
 // every frame left on the stack, since a container under construction belongs
 // only to its frame. It gives back the depth level of a collection frame, and
 // of a flow pair whose value was being read.
@@ -7344,7 +7344,7 @@ static bool skip_document_prefix_bom(parse_ctx *ctx) {
   return true;
 }
 
-// Parses one document: optional directives (each needs a "---" after it), an
+// Parses one document: Optional directives (each needs a "---" after it), an
 // optional "---", one root node, and an optional "...". Content on the same
 // line as "---" may only be a flow node, and a '%' after this document's own
 // "---" belongs to the next document. On success ctx->pos is past the document
@@ -7484,7 +7484,7 @@ static char *cyaml_err_storage(void) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test builds only: ends the process when a parse message isn't printable
+// Test builds only: Ends the process when a parse message isn't printable
 // ASCII, right where the message is reported, so the tests and fuzz targets
 // catch an echo that was missed.
 static void cyaml_err_assert_printable(const char *msg) {
@@ -7517,7 +7517,7 @@ static void cyaml_report_err(char **err_str, const char *msg) {
   *err_str = buf;
 }
 
-// The body of every parse: checks the whole input for c-printable UTF-8, arms
+// The body of every parse: Checks the whole input for c-printable UTF-8, arms
 // the budgets, allocates the line cache (its failure fails the parse), skips
 // BOMs of the first document prefix and parses each document. One document
 // gives its root; several give a list of roots, where each document after the
@@ -7758,7 +7758,7 @@ cyaml cyaml_parse_n_mp(const char *yaml_str, size_t len, char **err_str,
 }
 
 // True when n's tag is a core tag that names n's type, so the serializer can
-// leave it out: the output already reads back as that type. A mismatched core
+// leave it out: The output already reads back as that type. A mismatched core
 // tag, which no public call can make, would go out verbatim instead of
 // vanishing.
 static bool tag_matches_node_type(const cyaml_node *n) {
@@ -7931,7 +7931,7 @@ static bool key_is_canonical_number(const char *s) {
   return strcmp(s, canon) == 0;
 }
 
-// Tells whether the serializer must quote the dictionary key s: canonical
+// Tells whether the serializer must quote the dictionary key s: Canonical
 // numbers go out plain, everything else follows needs_quoting().
 static bool key_needs_quoting(const char *s) {
   if (s && key_is_canonical_number(s)) return false;
@@ -8161,7 +8161,7 @@ static int lltoa_y(char *buf, long long v) {
 
 static void serialize_block(ybuf *b, cyaml_node *n, int depth, int max_depth);
 
-// Writes a string scalar for the block writer: double-quoted when a parse would
+// Writes a string scalar for the block writer: Double-quoted when a parse would
 // read it as another type or it holds a character that needs it
 // (needs_quoting()), plain otherwise.
 static void serialize_block_scalar(ybuf *b, cyaml_node *n) {
@@ -8240,7 +8240,7 @@ static void yb_append_verbatim_tag_capped(ybuf *b, const char *tag,
   yb_verbatim_tag_body(b, tag, limit);
 }
 
-// What a serialize_*_head() call found: the node is fully written, or it's a
+// What a serialize_*_head() call found: The node is fully written, or it's a
 // non-empty list or dictionary whose children the walk must visit.
 typedef enum {
   CYAML_EMIT_DONE,
@@ -8248,7 +8248,7 @@ typedef enum {
   CYAML_EMIT_DICT
 } cyaml_emit_head;
 
-// One level of the block writer's walk: a list walks n by idx up to count, a
+// One level of the block writer's walk: A list walks n by idx up to count, a
 // dictionary walks through next in insertion order. depth is the indentation
 // level.
 typedef struct {
@@ -8523,7 +8523,7 @@ static int flow_dict_entry_cmp(const void *a, const void *b) {
   return strcmp(ea->key, eb->key);
 }
 
-// One level of the flow writer's walk: a list walks by index, a dictionary
+// One level of the flow writer's walk: A list walks by index, a dictionary
 // walks through the sorted entries copy of canonical mode or through next in
 // insertion order.
 typedef struct {
@@ -8787,7 +8787,7 @@ char *cyaml_serialize_flow(cyaml node) {
 __thread size_t cyaml__canonical_key_peak_bytes_for_tests;
 #endif
 // Builds the canonical flow text of a collection used as a key, for
-// node_to_dict_key_string(): every dictionary sorted by key, so equal
+// node_to_dict_key_string(): Every dictionary sorted by key, so equal
 // structures give equal text. It stops at the first byte past
 // CYAML_MAX_CANONICAL_KEY_LEN, so a refused key costs at most that much work.
 // NULL with *too_long set when the text is too long, NULL with *too_long false
@@ -8883,7 +8883,7 @@ static bool parse_list_index_component(const char *digits, size_t *idx_out) {
 }
 
 // Why navigate_y() stopped, so set and delete can tell a malformed path
-// (ccol_invalid_args: wrong parent type, bad "#N", empty component, bad UTF-8,
+// (ccol_invalid_args: Wrong parent type, bad "#N", empty component, bad UTF-8,
 // at any position) from an absent well-formed component (ccol_key_not_found).
 // The UTF-8 test runs only from the first component that doesn't resolve.
 typedef enum {
@@ -8895,7 +8895,7 @@ typedef enum {
 } cyaml_nav_fail;
 
 // Walks a dot-separated path from root and gives the node at its end, or NULL,
-// for every path operation. path_copy is writable: each unescaped dot becomes a
+// for every path operation. path_copy is writable: Each unescaped dot becomes a
 // NUL and each component is unescaped in place. "#N" indexes a list. After an
 // absent component it still scans the rest for an empty or non-UTF-8
 // component, since that makes the whole path malformed. *fail_reason_out (may

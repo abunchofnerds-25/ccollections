@@ -103,7 +103,7 @@ err_str   Out-parameter for the parse error message.  On success the
           out, or the process has no thread-specific key left for
           the buffer), the message is a fixed text that names no
           reason.  Pass NULL to throw the message away.  The
-          message is printable ASCII whatever the input holds: a
+          message is printable ASCII whatever the input holds: A
           printable ASCII byte of the input is quoted as it is, and
           any other byte is spelled as 0xNN.
 mp        Custom memory management procedures for every node of the
@@ -128,7 +128,7 @@ The caller owns the returned tree and must free it with
 cjson_destroy().
 
 The caller does NOT own the error string.  The err and err_str
-out-parameters of every module in this library follow one rule: the
+out-parameters of every module in this library follow one rule: The
 library owns the string and the caller never frees it.  See the note
 at the top of common.h.
 

@@ -40,7 +40,7 @@ SOFTWARE.
 
 TAU_MAIN()
 
-// The capacity of test_ctx_t: the header and trailer lines and the body bytes
+// The capacity of test_ctx_t: The header and trailer lines and the body bytes
 // it keeps, large enough for every message whose fields the tests check.
 #define MAX_TEST_HEADERS 32
 #define TEST_BODY_CAP (256 * 1024)
@@ -697,7 +697,7 @@ TEST(framing, content_length_decimal_overflow_rejected) {
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
 }
 
-// RFC 7230 SS3.3.3: a response whose final coding isn't chunked is read until
+// RFC 7230 SS3.3.3: A response whose final coding isn't chunked is read until
 // the connection closes. A request in that state is refused (see
 // request_body_framing).
 TEST(framing, transfer_encoding_not_chunked_reads_until_eof) {
@@ -728,7 +728,7 @@ TEST(framing,
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
 }
 
-// The order doesn't matter: the decision is made after every
+// The order doesn't matter: The decision is made after every
 // Transfer-Encoding line.
 TEST(framing,
      response_non_chunked_transfer_encoding_before_content_length_rejected) {
@@ -754,7 +754,7 @@ TEST(framing,
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
 }
 
-// The legal counterpart: with no Content-Length nothing disagrees, and the
+// The legal counterpart: With no Content-Length nothing disagrees, and the
 // response is read until EOF and never kept alive.
 TEST(framing,
      response_non_chunked_transfer_encoding_alone_still_reads_until_eof) {
@@ -869,7 +869,7 @@ TEST(framing, response_transfer_encoding_ending_in_chunked_still_accepted) {
 // cases pin that in both modes, and that the rules about the merged list see
 // through the empty line wherever it sits.
 //
-// One case: a label and the Transfer-Encoding lines.
+// One case: A label and the Transfer-Encoding lines.
 typedef struct {
   const char *label;
   // Each line ends in CRLF.
@@ -1223,7 +1223,7 @@ TEST(trailer_isolation, trailer_does_not_reach_on_header_in_response_mode) {
   REQUIRE_STREQ(trailer_or_absent(&ctx, "X-Origin"), "forged");
 }
 
-// The case the split closes: a proxy sets X-Forwarded-For and a gateway sets
+// The case the split closes: A proxy sets X-Forwarded-For and a gateway sets
 // X-Authenticated-User, and the client appends trailers of the same names. Both
 // header values must survive. The Host line is required in request mode.
 TEST(trailer_isolation, trailer_does_not_reach_on_header_in_request_mode) {
@@ -1315,7 +1315,7 @@ TEST(trailer_isolation, on_trailer_error_reports_user) {
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_USER);
 }
 
-// The configuration that chttpclient.c and chttpserver.c ship: with no trailer
+// The configuration that chttpclient.c and chttpserver.c ship: With no trailer
 // callback a trailer is validated, charged against the caps and dropped.
 TEST(trailer_isolation, unset_on_trailer_discards_trailers_without_error) {
   static const chttp1_settings no_trailer_settings = {
@@ -1742,7 +1742,7 @@ TEST(request_line, split_across_every_byte_boundary) {
   }
 }
 
-// RFC 7230 SS3.5: a server should ignore an empty line before the
+// RFC 7230 SS3.5: A server should ignore an empty line before the
 // request-line, and some clients send a stray CRLF after a POST body. Refusing
 // it would close a healthy keep-alive connection.
 TEST(request_line, single_leading_blank_line_tolerated) {
@@ -1809,7 +1809,7 @@ TEST(request_body_framing, no_framing_headers_means_no_body_not_eof) {
   REQUIRE_EQ(ctx.body_len, (size_t)0);
 }
 
-// RFC 7230 SS5.4: a server answers 400 to an HTTP/1.1 request without Host and
+// RFC 7230 SS5.4: A server answers 400 to an HTTP/1.1 request without Host and
 // to any request with more than one Host or an invalid one. The parser checks
 // at the end of the header block, where the count is final. Two Host lines let
 // a front end and a back end disagree about the authority. Response mode
@@ -1970,7 +1970,7 @@ TEST(request_body_framing, trailer_name_not_whitelisted) {
   REQUIRE_TRUE(find_header(&ctx, "Custom-Trailer") == NULL);
 }
 
-// RFC 7230 SS3.3.3: a request whose final coding isn't chunked has no length
+// RFC 7230 SS3.3.3: A request whose final coding isn't chunked has no length
 // and must be refused, because a request has no EOF framing to fall back on.
 TEST(request_body_framing,
      transfer_encoding_present_but_final_coding_not_chunked_rejected) {
@@ -2492,7 +2492,7 @@ TEST(stream, read_timeout_zero_returns_data_when_already_available) {
   close(fds[1]);
 }
 
-// With nothing available one immediate check reports a timeout: no hang and no
+// With nothing available one immediate check reports a timeout: No hang and no
 // fake read of zero bytes.
 TEST(stream, read_timeout_zero_times_out_when_nothing_available) {
   int fds[2];
@@ -2747,7 +2747,7 @@ TEST(stream_tls, leftover_decrypted_bytes_drained_before_ctls_conn_read) {
 // reset over a line buffer that holds a long earlier message, or poison bytes,
 // and check every result.
 //
-// The poison bytes: the ones the line readers act on (NUL, CR, LF, colon,
+// The poison bytes: The ones the line readers act on (NUL, CR, LF, colon,
 // space, a digit, a token byte, DEL and a byte above 0x7F).
 static const unsigned char g_reset_poison[] = {0x00, '\r', '\n', ':', ' ',
                                                '0',  'X',  0x7f, 0xff};

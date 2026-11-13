@@ -55,7 +55,7 @@ same key. Since a zero turns an insert into an update, the procedure
 defines key equality as well as key order.
 
 The procedure must give a strict weak order over KeyT, and that order
-must not change while the map holds elements: the same pair of keys
+must not change while the map holds elements: The same pair of keys
 always compares the same way, swapping the two gives the opposite sign,
 and the order is transitive. An inconsistent procedure breaks the
 placement invariant of the tree, and after that the map can't find keys

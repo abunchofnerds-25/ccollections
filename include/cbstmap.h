@@ -61,34 +61,44 @@ cbmap cbstmap_create_full(ccol_data_type key_type,
                           ccol_comparison_proc custom_comparison_proc,
                           char **err);
 
-// Creates a map with the default allocator and the default order; the short
-// form of cbstmap_create_full().
+// Creates an ordered map for keys of key_type with the default allocator and
+// the default order for that type (integers and floating keys by value,
+// strings by bytes, any other type with memcmp). key_type also sets the width
+// a fixed-width key must have. Returns the map, or NULL with an error string
+// in *err when err isn't NULL (never free the string). Destroy it with
+// cbstmap_destroy().
 static inline __attribute__((always_inline)) cbmap
 cbstmap_create(ccol_data_type key_type, char **err) {
   return cbstmap_create_full(key_type, NULL, NULL, err);
 }
 
-// Creates a map that allocates through mmgmt_procs and uses the default order;
-// the short form of cbstmap_create_full().
+// Creates an ordered map for keys of key_type that takes all its memory from
+// mmgmt_procs, your allocator table (NULL for malloc and free), and uses the
+// default order for key_type. The table must stay valid until the map is
+// destroyed. Returns the map, or NULL with an error string in *err when err
+// isn't NULL (never free the string). Destroy it with cbstmap_destroy().
 static inline __attribute__((always_inline)) cbmap cbstmap_create_mp(
     ccol_data_type key_type, ccol_memmgmt_procs *mmgmt_procs, char **err) {
   return cbstmap_create_full(key_type, mmgmt_procs, NULL, err);
 }
 
-// Creates a map ordered by custom_comparison_proc with the default allocator;
-// the short form of cbstmap_create_full(). The comparator decides only the
-// order; key_type decides the key width and alignment.
+// Creates an ordered map whose keys are ordered by custom_comparison_proc,
+// with the default allocator. The comparator gets pointers to the bytes of two
+// keys and returns a negative, zero or positive int; it decides only the
+// order, while key_type decides the key width and alignment. Returns the map,
+// or NULL with an error string in *err when err isn't NULL (never free the
+// string). Destroy it with cbstmap_destroy().
 static inline __attribute__((always_inline)) cbmap
 cbstmap_create_ch(ccol_data_type key_type,
                   ccol_comparison_proc custom_comparison_proc, char **err) {
   return cbstmap_create_full(key_type, NULL, custom_comparison_proc, err);
 }
 
-// Gives the number of entries. Asserts on a NULL cbm.
+// Returns the number of key-value pairs in the map. Asserts on a NULL cbm.
 size_t cbstmap_elem_count(cbmap cbm);
 
-// Frees every node, key and value with an iterative post-order walk and leaves
-// an empty map you can keep using. It gives ccol_success. Asserts on a NULL
+// Removes and frees every key and value and leaves an empty map that you can
+// keep using. It allocates nothing and returns ccol_success. Asserts on a NULL
 // cbm.
 ccol_retval cbstmap_reset(cbmap cbm);
 
@@ -112,44 +122,48 @@ ccol_retval cbstmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
 ccol_retval cbstmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
                                   void *target_buf, size_t target_buf_size);
 
-// Fills your val_pair with the address and size of the stored value. You may
-// read and change those bytes in place, but don't free them; to replace a value
-// call cbstmap_insert_elem(). The pointer stays valid until the next insert or
-// delete; a lookup never moves anything. It gives ccol_success,
-// ccol_key_not_found, or ccol_invalid_args for the same key problems as
-// cbstmap_get_elem_copy() or a NULL val_pair. On every failure a non-NULL
-// val_pair gets {NULL, 0}. Asserts on a NULL cbm.
+// Finds the value of key_pair without copying it: Fills your val_pair with the
+// address and size of the stored value. You may read and change those bytes in
+// place, but don't free them; to replace a value call cbstmap_insert_elem().
+// The pointer stays valid until the next insert or delete; a lookup never
+// moves anything. Returns ccol_success, ccol_key_not_found, or
+// ccol_invalid_args for a NULL key_pair or val_pair, a NULL ptr with a
+// non-zero size, a key whose size doesn't match a fixed-width key type, or a
+// size-0 key on a ccol_string map. On every failure a non-NULL val_pair gets
+// {NULL, 0}. Asserts on a NULL cbm.
 ccol_retval cbstmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
                                  cmap_pair *val_pair);
 
-// Internal: hands the string arm of cbmap_get_ptr() the accessor the map keeps
+// Internal: Hands the string arm of cbmap_get_ptr() the accessor the map keeps
 // for a value, whose ptr field is the stored char *. *val_accessor is NULL on
 // failure. Use cbmap_get_ptr() instead.
 ccol_retval cbstmap__get_val_accessor(cbmap cbm, const cmap_pair *key_pair,
                                       const cmap_pair **val_accessor);
 
-// Removes key_pair, frees its key and value and rebalances. A node with two
-// children is replaced by the smallest key on its right when the right side is
-// at least as tall, else by the largest key on its left. It gives ccol_success,
-// ccol_key_not_found, or ccol_invalid_args for the same key problems as
-// cbstmap_get_elem_copy(). Asserts on a NULL cbm.
+// Removes the entry of key_pair and frees the map's copies of its key and
+// value. Returns ccol_success, ccol_key_not_found, or ccol_invalid_args for a
+// NULL key_pair, a NULL ptr with a non-zero size, a key whose size doesn't
+// match a fixed-width key type, or a size-0 key on a ccol_string map. Treat
+// pointers into the map as invalid after a delete. Asserts on a NULL cbm.
 ccol_retval cbstmap_delete_elem(cbmap cbm, const cmap_pair *key_pair);
 
-// Internal: frees an iterator, at the end of a walk or when a loop leaves early
+// Internal: Frees an iterator, at the end of a walk or when a loop leaves early
 // (ccol_iter_destroy()). cbstmap_begin_iter() is declared in citerators.h,
 // because ccol_begin() needs all three containers' functions.
 void cbstmap__iterator_destroy(cmap_iterator *iter);
 
-// Internal: frees the map and everything in it. Use cbstmap_destroy() instead.
+// Internal: Frees the map and everything in it. Use cbstmap_destroy() instead.
 void cbstmap__destroy(cbmap cbm);
 
-// Frees every node, key and value and sets cbm to NULL. cbm must be a
-// modifiable lvalue and is evaluated once; NULL is fine.
+// Destroys the map: Frees every node, key and value, and sets cbm to NULL so
+// the handle can't be used after the free. cbm must be a modifiable lvalue and
+// is evaluated once; a NULL handle does nothing. Pointers that the map gave
+// you are invalid afterwards.
 #define cbstmap_destroy(cbm)  \
   ccol__cbstmap_destroy_impl( \
       cbm, ccol__uniq(ccol__cbstmap_destroy_slot, __COUNTER__))
 
-// Internal: the body of cbstmap_destroy(). slot comes from ccol__uniq(), so
+// Internal: The body of cbstmap_destroy(). slot comes from ccol__uniq(), so
 // destroy macros can nest without -Wshadow warnings.
 #define ccol__cbstmap_destroy_impl(cbm, slot) \
   do {                                        \
@@ -158,7 +172,7 @@ void cbstmap__destroy(cbmap cbm);
     *slot = NULL;                             \
   } while (0)
 
-// Internal: destroys *cbm and sets it to NULL. It's the cleanup function the
+// Internal: Destroys *cbm and sets it to NULL. It's the cleanup function the
 // _scoped forms attach with ccol__destructor.
 static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
   if (cbm && *cbm) {
@@ -167,25 +181,34 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
   }
 }
 
-// Declares the companion type variables for a map created in another scope, so
-// the typed macros work on it there. An array key or value type is refused at
-// compile time; wrap the array in a struct.
+// Makes the typed cbmap_* macros usable on a map handle that was created in
+// another scope, such as a function parameter or a struct field. It declares
+// only the key and value type information that those macros read; it creates
+// and destroys nothing. KeyT and ValT must be the types the map was created
+// with. An array key or value type is refused at compile time; wrap the array
+// in a struct.
 #define cbmap_redeclare(hm_name, KeyT, ValT)                               \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                           \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) = \
       NULL;                                                                \
   __typeof__(ValT) *hm_name##__ccol_val_type_var __attribute__((unused)) = NULL
 
-// Declares a map variable and its companion type variables, all left
-// uninitialized. Call one of the cbmap_init macros before use.
+// Declares an ordered map handle hm_name with key type KeyT and value type
+// ValT, without creating a map. The handle is left uninitialized: Create the
+// map with cbmap_init(), cbmap_init_mp(), cbmap_init_cc() or cbmap_init_full()
+// before any other cbmap_* macro, and destroy it with cbmap_destroy(). An array
+// key or value type is refused at compile time; wrap it in a struct.
 #define cbmap_declare(hm_name, KeyT, ValT)                                \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                          \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)); \
   __typeof__(ValT) *hm_name##__ccol_val_type_var __attribute__((unused)); \
   cbmap hm_name
 
-// cbmap_declare() for a map that is destroyed at the end of its scope; the
-// handle starts as NULL.
+// Declares an ordered map handle hm_name with key type KeyT and value type
+// ValT, set to NULL, without creating a map. Create it later with cbmap_init()
+// or another cbmap_init_* macro. When the variable goes out of scope the map is
+// destroyed by itself; cbmap_destroy() before that is allowed and leaves NULL
+// behind. An array key or value type is refused at compile time.
 #define cbmap_declare_scoped(hm_name, KeyT, ValT)                          \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                           \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) = \
@@ -194,9 +217,11 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
       NULL;                                                                \
   cbmap hm_name ccol__destructor(cbstmap__destroy_cleanup) = NULL
 
-// The cbmap_init macros create a declared map, taking the key type from the
-// companion variable. The _mp form takes an allocator, _cc a comparator and
-// _full both. Each stops the program when the creation fails.
+// Creates the map for a handle that cbmap_declare() or cbmap_declare_scoped()
+// declared, with the default allocator and the default order for the declared
+// key type. Ends the program with a fatal error when the map can't be created.
+// A struct key gets a memcmp order, so give it a comparator with
+// cbmap_init_cc().
 #define cbmap_init(hm_name)                                                 \
   do {                                                                      \
     char *ccol__cbmap_err = NULL;                                           \
@@ -209,6 +234,11 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
+// Creates the map for a handle that cbmap_declare() or cbmap_declare_scoped()
+// declared, taking all its memory from mmgmt_procs, your allocator table (NULL
+// for the default). The table must stay valid until the map is destroyed. Keys
+// get the default order for the declared key type. Ends the program with a
+// fatal error when the map can't be created.
 #define cbmap_init_mp(hm_name, mmgmt_procs)                                 \
   do {                                                                      \
     char *ccol__cbmap_err = NULL;                                           \
@@ -221,6 +251,11 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
+// Creates the map for a handle that cbmap_declare() or cbmap_declare_scoped()
+// declared, with keys ordered by custom_comparison_proc and the default
+// allocator. The comparator gets pointers to the bytes of two keys and returns
+// a negative, zero or positive int. A struct key needs one. Ends the program
+// with a fatal error when the map can't be created.
 #define cbmap_init_cc(hm_name, custom_comparison_proc)                      \
   do {                                                                      \
     char *ccol__cbmap_err = NULL;                                           \
@@ -233,6 +268,12 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
+// Creates the map for a handle that cbmap_declare() or cbmap_declare_scoped()
+// declared. mmgmt_procs is your allocator table (NULL for the default; it must
+// outlive the map) and custom_comparison_proc orders the keys (NULL for the
+// default order of the declared key type); it gets pointers to the bytes of
+// two keys and returns a negative, zero or positive int. Ends the program with
+// a fatal error when the map can't be created.
 #define cbmap_init_full(hm_name, mmgmt_procs, custom_comparison_proc)       \
   do {                                                                      \
     char *ccol__cbmap_err = NULL;                                           \
@@ -245,10 +286,12 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
-// The cbmap_construct macros declare and create a map in one step, with the
-// same _mp, _cc and _full variants as cbmap_init; the _scoped forms destroy the
-// map at the end of its scope. Each stops the program on failure. A struct key
-// gets the memcmp order, so use a _cc form for it.
+// Declares an ordered map handle hm_name for key type KeyT and value type ValT
+// and creates the map with the default allocator and the default order for
+// KeyT. Ends the program with a fatal error when the map can't be created.
+// Destroy it with cbmap_destroy(). A struct key gets a memcmp order, so use
+// cbmap_construct_cc() for it. An array key or value type is refused at
+// compile time.
 #define cbmap_construct(hm_name, KeyT, ValT)                                \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                            \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
@@ -267,6 +310,11 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
+// Declares an ordered map handle hm_name for key type KeyT and value type ValT
+// and creates the map with the default allocator and the default order for
+// KeyT. The map is destroyed by itself when hm_name goes out of scope. Ends the
+// program with a fatal error when the map can't be created. A struct key gets
+// a memcmp order, so use cbmap_construct_cc_scoped() for it.
 #define cbmap_construct_scoped(hm_name, KeyT, ValT)                         \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                            \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
@@ -285,6 +333,11 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
+// Declares an ordered map handle hm_name for key type KeyT and value type ValT
+// and creates the map, taking all its memory from mmgmt_procs, your allocator
+// table (NULL for the default). The table must stay valid until the map is
+// destroyed. Keys get the default order for KeyT. Ends the program with a
+// fatal error when the map can't be created. Destroy it with cbmap_destroy().
 #define cbmap_construct_mp(hm_name, KeyT, ValT, mmgmt_procs)                \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                            \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
@@ -303,6 +356,12 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
+// Declares an ordered map handle hm_name for key type KeyT and value type ValT
+// and creates the map, taking all its memory from mmgmt_procs, your allocator
+// table (NULL for the default). The map is destroyed by itself when hm_name
+// goes out of scope, and the table must stay valid until then. Keys get the
+// default order for KeyT. Ends the program with a fatal error when the map
+// can't be created.
 #define cbmap_construct_mp_scoped(hm_name, KeyT, ValT, mmgmt_procs)         \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                            \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
@@ -321,6 +380,11 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
+// Declares an ordered map handle hm_name for key type KeyT and value type ValT
+// and creates the map with keys ordered by custom_comparison_proc. The
+// comparator gets pointers to the bytes of two keys and returns a negative,
+// zero or positive int. Ends the program with a fatal error when the map can't
+// be created. Destroy it with cbmap_destroy().
 #define cbmap_construct_cc(hm_name, KeyT, ValT, custom_comparison_proc)     \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                            \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
@@ -339,6 +403,11 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
+// Declares an ordered map handle hm_name for key type KeyT and value type ValT
+// and creates the map with keys ordered by custom_comparison_proc, which gets
+// pointers to the bytes of two keys and returns a negative, zero or positive
+// int. The map is destroyed by itself when hm_name goes out of scope. Ends the
+// program with a fatal error when the map can't be created.
 #define cbmap_construct_cc_scoped(hm_name, KeyT, ValT, custom_comparison_proc) \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                               \
   __typeof__(KeyT) *hm_name##__ccol_key_type_var __attribute__((unused)) =     \
@@ -357,6 +426,12 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                          \
   } while (0)
 
+// Declares an ordered map handle hm_name for key type KeyT and value type ValT
+// and creates the map. mmgmt_procs is your allocator table (NULL for the
+// default; it must outlive the map) and custom_comparison_proc orders the keys
+// (NULL for the default order of KeyT); it gets pointers to the bytes of two
+// keys and returns a negative, zero or positive int. Ends the program with a
+// fatal error when the map can't be created. Destroy it with cbmap_destroy().
 #define cbmap_construct_full(hm_name, KeyT, ValT, mmgmt_procs,              \
                              custom_comparison_proc)                        \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                            \
@@ -376,6 +451,13 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
+// Declares an ordered map handle hm_name for key type KeyT and value type ValT
+// and creates the map; it is destroyed by itself when hm_name goes out of
+// scope. mmgmt_procs is your allocator table (NULL for the default; it must
+// stay valid until then) and custom_comparison_proc orders the keys (NULL for
+// the default order of KeyT); it gets pointers to the bytes of two keys and
+// returns a negative, zero or positive int. Ends the program with a fatal
+// error when the map can't be created.
 #define cbmap_construct_full_scoped(hm_name, KeyT, ValT, mmgmt_procs,       \
                                     custom_comparison_proc)                 \
   ccol__refuse_array_types("cbmap", KeyT, ValT);                            \
@@ -395,16 +477,21 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                       \
   } while (0)
 
-// Destroys the map and sets cbm to NULL; the typed name of cbstmap_destroy().
+// Destroys the map: Frees every node, key and value, and sets cbm to NULL so
+// the handle can't be used after the free. cbm must be a modifiable lvalue and
+// is evaluated once; a NULL handle does nothing. Pointers that the map gave
+// you (a char * from cbmap_get(), say) are invalid afterwards.
 #define cbmap_destroy(cbm) cbstmap_destroy(cbm)
 
-// Inserts or updates key with val and stops the program on any failure other
-// than ccol_key_already_present. key and val are converted to the declared key
-// and value types as a plain assignment would convert them, so a float never
-// lands in an int map as its bit pattern; a char pointer type keeps the type of
-// the expression, so a const char * needs no cast. A NULL char pointer key or
-// value isn't a string and stops the program with ccol_invalid_args. Any
-// expression is fine and each one is evaluated once.
+// Inserts key with its value, or replaces the value when the key is already
+// there; the map stores its own copies, a string included. It ends the program
+// with a fatal error on any failure, such as lack of memory. key and val are
+// converted to the declared key and value types as a plain assignment would
+// convert them, so a float never lands in an int map as its bit pattern; a
+// char pointer type keeps the type of the expression, so a const char * needs
+// no cast. A NULL char pointer key or value isn't a string and stops the
+// program with ccol_invalid_args. Any expression is fine and each one is
+// evaluated once.
 #define cbmap_insert(hm_name, key, ccol__cbmap_val)                            \
   ccol__cbmap_insert_impl(hm_name, (key), (ccol__cbmap_val),                   \
                           ccol__uniq(ccol__cbmap_insert_key_tmp, __COUNTER__), \
@@ -413,7 +500,7 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
                           ccol__uniq(ccol__cbmap_insert_vp, __COUNTER__),      \
                           ccol__uniq(ccol__cbmap_insert_r, __COUNTER__))
 
-// Internal: the body of cbmap_insert(). Its temporaries come from ccol__uniq()
+// Internal: The body of cbmap_insert(). Its temporaries come from ccol__uniq()
 // so it can nest in any public macro. They have the declared types (through
 // ccol__declared_or_own_type()), so a narrower or wider expression is converted
 // and the node always holds sizeof(ValT) bytes, and they live for the whole
@@ -446,16 +533,18 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     }                                                                          \
   } while (0)
 
-// Removes key and gives the ccol_retval of cbstmap_delete_elem(); it doesn't
-// stop the program on ccol_key_not_found. A NULL char pointer key gives
-// ccol_invalid_args.
+// Removes key and its value from the map and frees the map's copies of both.
+// Evaluates to ccol_success, ccol_key_not_found, or ccol_invalid_args for a
+// NULL char pointer key. It never ends the program, because a missing key is
+// an ordinary outcome. The key is converted to the declared key type, as
+// cbmap_insert() converts it.
 #define cbmap_remove(hm_name, key)                                             \
   ccol__cbmap_remove_impl(hm_name, (key),                                      \
                           ccol__uniq(ccol__cbmap_remove_key_tmp, __COUNTER__), \
                           ccol__uniq(ccol__cbmap_remove_kp, __COUNTER__),      \
                           ccol__uniq(ccol__cbmap_remove_r, __COUNTER__))
 
-// Internal: the body of cbmap_remove(). The key goes through the declared key
+// Internal: The body of cbmap_remove(). The key goes through the declared key
 // type, as in cbmap_insert().
 #define ccol__cbmap_remove_impl(hm_name, key, ccol__cbmap_key_tmp,           \
                                 ccol__cbmap_kp, ccol__cbmap_r)               \
@@ -471,9 +560,12 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     ccol__cbmap_r;                                                           \
   })
 
-// Gives the value of key, or for a string value the stored char *. It stops the
-// program when the key is missing, when the stored size doesn't match the
-// declared value type, and for a NULL char pointer key.
+// Evaluates to a copy of the value stored for key, for a key you know is
+// there. For a string value it gives the map's own char *, which stays valid
+// until that key is replaced or removed or the map is destroyed; don't free
+// it. Ends the program with a fatal error when the key is missing, when the
+// stored size doesn't match the declared value type, and for a NULL char
+// pointer key. Use cbmap_get_ptr() for a lookup that may miss.
 #define cbmap_get(hm_name, key)                                          \
   ccol__cbmap_get_impl(hm_name, (key),                                   \
                        ccol__uniq(ccol__cbmap_get_key_tmp, __COUNTER__), \
@@ -482,7 +574,7 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
                        ccol__uniq(ccol__cbmap_get_vp, __COUNTER__),      \
                        ccol__uniq(ccol__cbmap_get_r, __COUNTER__))
 
-// Internal: the body of cbmap_get(). A key stored through the declared-type
+// Internal: The body of cbmap_get(). A key stored through the declared-type
 // conversion is found only by a lookup that makes the same conversion.
 #define ccol__cbmap_get_impl(hm_name, key, ccol__cbmap_key_tmp,               \
                              ccol__cbmap_val, ccol__cbmap_kp, ccol__cbmap_vp, \
@@ -520,7 +612,7 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
     *ccol__cbmap_val;                                                         \
   })
 
-// Internal: gives p unchanged, except for a map with string values, where the
+// Internal: Gives p unchanged, except for a map with string values, where the
 // target becomes const. The only char * object the map holds for a value is the
 // ptr field of its accessor, and storing another pointer there would leave the
 // accessor's size describing the old string; later reads would then overrun the
@@ -538,12 +630,13 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
                                   const *)(p),                                 \
       default: (p))
 
-// Gives a pointer to the value of key, or NULL when the key is missing or is a
-// NULL char pointer. You can change the value in place until the next insert or
-// delete. For a string value the result is char *const *: read the string and
+// Evaluates to a pointer to the value stored for key, or NULL when the key is
+// missing or is a NULL char pointer; use it for a lookup that may miss or that
+// changes the value in place. The pointer is valid until the next insert or
+// delete. For a string value the result is char *const *: Read the string and
 // edit its bytes within the stored length, but replace it only with
-// cbmap_insert(). It stops the program when the stored size doesn't match the
-// declared value type.
+// cbmap_insert(). Ends the program with a fatal error when the stored size
+// doesn't match the declared value type.
 #define cbmap_get_ptr(hm_name, key)                                         \
   ccol__cbmap_get_ptr_impl(                                                 \
       hm_name, (key), ccol__uniq(ccol__cbmap_get_ptr_key_tmp, __COUNTER__), \
@@ -553,7 +646,7 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
       ccol__uniq(ccol__cbmap_get_ptr_acc, __COUNTER__),                     \
       ccol__uniq(ccol__cbmap_get_ptr_r, __COUNTER__))
 
-// Internal: the body of cbmap_get_ptr(). The value pair has no initializer
+// Internal: The body of cbmap_get_ptr(). The value pair has no initializer
 // because the lookup fills it on every path and it's read only after a success.
 // For a string value the result points at the accessor's ptr field; the cast
 // through uintptr_t drops the library's const without a -Wcast-qual warning in
@@ -601,10 +694,12 @@ static inline void cbstmap__destroy_cleanup(cbmap *cbm) {
         (__typeof__(*hm_name##__ccol_val_type_var) *)0)))(ccol__cbmap_val);    \
   })
 
-// cbmap_size() evaluates to the number of entries and cbmap_reset() empties the
-// map; the typed names of cbstmap_elem_count() and cbstmap_reset().
+// Evaluates to the number of key-value pairs in the map, as a size_t. Asserts
+// on a NULL handle.
 #define cbmap_size(cbm) cbstmap_elem_count((cbm))
 
+// Removes and frees every key and value and leaves an empty map that you can
+// keep using. Evaluates to ccol_success. Asserts on a NULL handle.
 #define cbmap_reset(cbm) cbstmap_reset((cbm))
 
 #pragma GCC visibility pop

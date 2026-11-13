@@ -1,4 +1,4 @@
-# cstring: a growable string
+# cstring: A growable string
 
 `cstring` is a heap-allocated string that grows as you add text to it. It
 looks after the size of the buffer itself, it adds text without `strcat` so
@@ -87,7 +87,7 @@ The arguments are plain C strings, so a literal, a `char` array or the
 `cstr_c_str` of another `cstr` all work. The case functions change only the
 ASCII letters `A` to `Z` and `a` to `z`, whatever the locale, and never
 touch a byte above 0x7F, which keeps a UTF-8 string valid. `cstr_trim` works
-the same way: it removes only ASCII white space (space, `\t`, `\n`, `\v`,
+the same way: It removes only ASCII white space (space, `\t`, `\n`, `\v`,
 `\f` and `\r`) in every locale and leaves every byte above 0x7F alone.
 
 If you know the final size in advance, call `cstr_reserve(s, bytes)`. It
@@ -182,7 +182,7 @@ if (cstring_append(s, piece) != ccol_success) {
 in this layer. All of these functions are listed in the Reference section
 below.
 
-## Example: a settings file reader
+## Example: A settings file reader
 
 Lots of programs keep their settings as `key = value` lines with `#`
 comments. This one trims each line, skips empty lines and comments, cuts
@@ -247,7 +247,7 @@ int main(void) {
 }
 ```
 
-## Example: a mail-merge template
+## Example: A mail-merge template
 
 A message template has placeholders like `{name}`, and the program replaces
 them with values from a table after escaping each value for HTML. The
@@ -288,7 +288,7 @@ int main(void) {
 }
 ```
 
-## Example: normalise file paths
+## Example: Normalise file paths
 
 The program turns paths that a user typed into one canonical form. Each
 backslash becomes a slash, a run of two or more slashes becomes a single

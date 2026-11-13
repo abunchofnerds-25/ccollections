@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal: the test-only hooks of the procs intern table. src/common.c
+// Internal: The test-only hooks of the procs intern table. src/common.c
 // defines them and tests/common uses them to count, empty and slow down the
 // slots. They exist only under RUNNING_UNIT_TESTS.
 

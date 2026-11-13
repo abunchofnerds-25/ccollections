@@ -1517,7 +1517,7 @@ TEST(cvectors, construct_scoped_lifecycle) {
   }
 }
 
-// The hygiene tests: a caller variable named r or _tmp, inside a macro
+// The hygiene tests: A caller variable named r or _tmp, inside a macro
 // argument, must not resolve to a local of the macro. Such a capture compiles
 // silently and reads an uninitialized value.
 TEST(cvectors, push_value_named_r_is_not_shadowed_by_internal_retval) {
@@ -1681,7 +1681,7 @@ TEST(cvectors, append_array_fatal_err_evaluates_count_argument_exactly_once) {
 }
 
 // The conversion tests check the stored value, not only that the push
-// compiles: a float pushed into an int vector must truncate as in
+// compiles: A float pushed into an int vector must truncate as in
 // `int x = f;`, never store the float's bit pattern.
 TEST(cvectors,
      push_expression_float_into_int_vector_converts_not_reinterprets) {
@@ -2560,7 +2560,7 @@ TEST(find, an_aggregate_element_type_is_accepted_by_the_macro) {
 }
 
 // A named array is a value of an array element type for cvec_push and
-// cvec_find: it's zero-filled up to the element size or cut to it.
+// cvec_find: It's zero-filled up to the element size or cut to it.
 TEST(find, a_named_array_is_a_value_of_an_array_element_type) {
   typedef char name8[8];
   cvec_construct(vec, name8);
@@ -2671,7 +2671,7 @@ TEST(iterator_raii, a_scope_exit_before_the_iterator_is_assigned_is_safe) {
   REQUIRE_EQ(seen_before_assignment, NULL);
 }
 
-// The NULL-string tests: the default string comparator orders NULL first and
+// The NULL-string tests: The default string comparator orders NULL first and
 // makes it equal only to NULL, so find and sort never hand NULL to strcmp().
 TEST(null_strings, find_in_a_char_ptr_vector_holding_a_null_element) {
   cvec_construct(vec, char *);
@@ -2743,7 +2743,7 @@ TEST(cvectors, append_array_rejects_a_source_range_past_the_reservation) {
   cvector_destroy(cvec);
 }
 
-// Sweeps the bound itself: ending at the reservation is accepted, one element
+// Sweeps the bound itself: Ending at the reservation is accepted, one element
 // more is refused.
 TEST(cvectors, append_array_accepts_a_source_range_ending_at_the_reservation) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
@@ -2993,7 +2993,7 @@ static unsigned cvec_sort_lcg(unsigned *state) {
     }                                                                      \
   } while (0)
 
-// The eq expressions for CVEC_SORT_MATCH_CASE: byte equality, and float
+// The eq expressions for CVEC_SORT_MATCH_CASE: Byte equality, and float
 // equality where NaN equals NaN, since NaN never compares equal with ==.
 #define CVEC_SORT_BYTES_EQ (memcmp(&x, &y, sizeof(x)) == 0)
 #define CVEC_SORT_FLOAT_EQ ((isnan(x) && isnan(y)) || x == y)
@@ -3360,7 +3360,7 @@ TEST(cvectors, destroy_evaluates_the_vector_once) {
 
 // The sum that the function-pointer elements below add to.
 static int cvec_fp_elem_calls;
-// Function-pointer elements: each adds its argument, or twice it, to
+// Function-pointer elements: Each adds its argument, or twice it, to
 // cvec_fp_elem_calls, so the test can tell which ones were called.
 static void cvec_fp_elem_add(int x) { cvec_fp_elem_calls += x; }
 static void cvec_fp_elem_twice(int x) { cvec_fp_elem_calls += 2 * x; }

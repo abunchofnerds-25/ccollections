@@ -24,7 +24,7 @@
 
 #pragma once
 
-// Internal: a process-lifetime copy of a caller's allocator procs. Objects
+// Internal: A process-lifetime copy of a caller's allocator procs. Objects
 // that keep an allocator pointer for their whole life store the interned
 // pointer, so the caller's struct may live on a stack frame that returns, or
 // be freed, while those objects are in use. Not installed, not exported.
@@ -36,14 +36,14 @@
 // table never allocates and nothing frees it.
 #define CCOL_PROCS_INTERN_CAPACITY 64
 
-// Interns *mp: stores in *out a pointer, valid for the life of the process, to
+// Interns *mp: Stores in *out a pointer, valid for the life of the process, to
 // a copy of it. Objects that keep an allocator pointer for their whole life
 // (cjson and cyaml nodes) store this pointer, so the caller's struct may go
 // away. The same four function pointers always give the same pointer, so two
 // interned pointers compare by content. An interned pointer comes back as it
 // is, and mp == NULL gives NULL. Gives ccol_success, or ccol_container_full
 // (with *out NULL) when every slot holds another content.
-// The lookup takes no lock: published copies never change and the table fills
+// The lookup takes no lock: Published copies never change and the table fills
 // from slot 0, so it reads the published prefix with acquire loads. A lookup
 // that meets a slot another thread is still writing waits for it, so each
 // content takes exactly one slot even when many threads intern it at once.

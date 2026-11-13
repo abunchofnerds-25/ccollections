@@ -12,7 +12,7 @@ ccol_retval cchan_recv(cchan *ch, cmessage *target_buf);
 .SH DESCRIPTION
 .nf
 Receives a message from the channel, waiting as long as it takes for
-one to arrive. The queue is chosen from the thread that calls it: the
+one to arrive. The queue is chosen from the thread that calls it: The
 owner thread receives from the cchan_workers_to_owner queue and any
 other thread receives from the cchan_owner_to_workers queue. The
 message's data is handed over without a copy, so its ownership moves to

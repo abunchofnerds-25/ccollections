@@ -721,7 +721,7 @@ TEST(csort, get_default_comparison_proc_returns_null_for_unsupported_types) {
   REQUIRE_EQ((void *)cmp, NULL);
 }
 
-// Types for the predicate test below: enums, a union, arrays and a function
+// Types for the predicate test below: Enums, a union, arrays and a function
 // pointer, none of which has a default comparator except where noted.
 typedef enum { csort_test_enum_a = 0, csort_test_enum_b = 11 } csort_test_enum;
 typedef enum {

@@ -160,7 +160,7 @@ static cyaml _cyaml_dict_child(cyaml parent, const char *key) {
   return cyaml_dictionary_get(parent, key);
 }
 
-// Reads the shape of the BOM test document: the size of "root" and the two
+// Reads the shape of the BOM test document: The size of "root" and the two
 // nested integers "leaf" and "deep". The BOM tests compare these between the
 // documents with and without a mark. Each out-parameter stays as the caller
 // set it when the shape doesn't match.
@@ -3747,7 +3747,7 @@ TEST(
 // Serialization
 
 // The parse error message lives in library storage, the same rule as for every
-// err and err_str out-parameter of the library (see common.h): the caller never
+// err and err_str out-parameter of the library (see common.h): The caller never
 // frees it, and a failed allocation can't make it disappear.
 TEST(parse_error_string, is_library_storage_and_survives_without_a_free) {
   char *err = NULL;
@@ -10516,7 +10516,7 @@ typedef struct {
   size_t end_pool_size;
 } pool_populate_result_t;
 
-// The worker of the fresh-thread pool test: records its pool size, allocates
+// The worker of the fresh-thread pool test: Records its pool size, allocates
 // 50 nodes and only then frees them all, and records the size again in the
 // pool_populate_result_t at arg. All 50 are alive at once, so each is a fresh
 // allocation and the pool grows by one entry per node.
@@ -10551,7 +10551,7 @@ typedef struct {
   size_t end_pool_size;
 } cross_thread_free_arg_t;
 
-// The worker of the cross-thread free test: destroys the nodes in the
+// The worker of the cross-thread free test: Destroys the nodes in the
 // cross_thread_free_arg_t at arg and records its own pool size before and
 // after.
 static void *cross_thread_free_thread(void *arg) {
@@ -10966,7 +10966,7 @@ TEST(cyaml_tags,
   cyaml_destroy(scalar);
 }
 
-// Ownership: one return code, one rule about the child
+// Ownership: One return code, one rule about the child
 
 // Every argument rejection returns ccol_invalid_args and leaves the child with
 // the caller. The pool's free-list length shows a wrongly destroyed child as
@@ -11277,7 +11277,7 @@ typedef struct {
   bool flow_ok;
 } cyaml_deep_walk_args_t;
 
-// The worker of the small-stack walk test: clones and serializes a->tree in
+// The worker of the small-stack walk test: Clones and serializes a->tree in
 // both styles and records in *a which walks succeeded.
 static void *cyaml_deep_walk_thread(void *arg) {
   cyaml_deep_walk_args_t *a = (cyaml_deep_walk_args_t *)arg;
@@ -11468,7 +11468,7 @@ typedef struct {
   bool saw_depth_error;
 } cyaml_deep_parse_args_t;
 
-// The worker of cyaml_run_parse_on_small_stack(): parses a->doc and records in
+// The worker of cyaml_run_parse_on_small_stack(): Parses a->doc and records in
 // *a whether it parsed and whether it failed on the nesting depth.
 static void *cyaml_deep_parse_thread(void *arg) {
   cyaml_deep_parse_args_t *a = (cyaml_deep_parse_args_t *)arg;
@@ -11966,7 +11966,7 @@ TEST(nul_in_tokens, every_parsed_document_round_trips_through_both_emitters) {
   }
 }
 
-// cyaml_set: every accepted C value type, arrays included
+// cyaml_set: Every accepted C value type, arrays included
 
 // A pointer that is const itself, at file scope. cyaml_set() copies its value
 // into a decayed, unqualified local, so such a pointer and a named char array
@@ -12123,9 +12123,9 @@ TEST(set_value_types, const_pointer_round_trips_through_serialize) {
   REQUIRE_TRUE(ok);
 }
 
-// Shared helpers: deep comparison and a serialize round trip
+// Shared helpers: Deep comparison and a serialize round trip
 
-// Returns the tag of n that a round trip keeps: a custom tag, or NULL for a
+// Returns the tag of n that a round trip keeps: A custom tag, or NULL for a
 // core tag, which the serializer leaves out because implicit typing restores
 // it. _rt_deep_equal() compares tags through it.
 static const char *_rt_custom_tag(cyaml n) {
@@ -12203,7 +12203,7 @@ static bool _rt_round_trips(cyaml doc) {
   return ok;
 }
 
-// Float dictionary keys: shortest round-trip text
+// Float dictionary keys: Shortest round-trip text
 
 TEST(float_keys, canonical_text_is_the_shortest_round_trip) {
   char *err = NULL;
@@ -12575,7 +12575,7 @@ TEST(flow_closing_indent, closing_left_of_the_parent_is_still_refused) {
   REQUIRE_TRUE(_fc_check("- - [\n    a\n]\n", NULL));
 }
 
-// Duplicate keys: the last value wins and nothing leaks
+// Duplicate keys: The last value wins and nothing leaks
 
 // A counting allocator for the duplicate-key tests, which check that every
 // block they caused is freed again. These forward to the C library and keep
@@ -12699,7 +12699,7 @@ TEST(duplicate_keys, merge_keeps_the_explicit_value_and_frees_nothing_live) {
   REQUIRE_EQ(live, 0L);
 }
 
-// Set of a new key: a failed build leaves no placeholder behind
+// Set of a new key: A failed build leaves no placeholder behind
 
 // A budget allocator for the failed-set tests. These refuse every allocation
 // once _ff_left (decremented on each call) reaches zero, and keep the number
@@ -13012,7 +13012,7 @@ TEST(errors, tag_that_disagrees_with_an_implicit_key_rejected) {
   REQUIRE_EQ(accepted, (size_t)0);
 }
 
-// Speculative key parse: a value is never treated as a key
+// Speculative key parse: A value is never treated as a key
 
 // Builds "<prefix>[item00000, item00001, ...]<suffix>" with n items, a flow
 // collection longer than the canonical key limit for the speculative key
@@ -13320,7 +13320,7 @@ TEST(set_value_types, unsigned_above_llong_max_becomes_a_float) {
   REQUIRE_TRUE(same_as_parse);
 }
 
-// The worker of the pool-key lock test: parses and destroys a small document
+// The worker of the pool-key lock test: Parses and destroys a small document
 // five times on a new thread. Sets *arg to 0 when a parse fails, else 1.
 static void *cyaml_pool_arm_worker(void *arg) {
   int *ok = (int *)arg;
@@ -13825,14 +13825,14 @@ TEST(anchor_speculation, a_refused_key_reading_is_not_charged) {
 // the exiting thread has already drained.
 static pthread_key_t _late_doc_key;
 
-// The destructor of _late_doc_key: destroys the document stored there, after
+// The destructor of _late_doc_key: Destroys the document stored there, after
 // the exiting thread's pool has already drained.
 static void _late_doc_dtor(void *p) {
   cyaml doc = (cyaml)p;
   cyaml_destroy(doc);
 }
 
-// The worker of the late-destructor test: stores a parsed document under
+// The worker of the late-destructor test: Stores a parsed document under
 // _late_doc_key so its destructor frees nodes after the pool drained. *arg is
 // set to 1 when that worked. The key gets a placeholder before the pool key is
 // armed, so the pool drains first on glibc (key order) and on OpenBSD (reverse
@@ -14654,7 +14654,7 @@ TEST(stream_charset, tag_percent_escapes_must_decode_to_utf8) {
   REQUIRE_TRUE(ok);
 }
 
-// API strings: well-formed UTF-8 is required
+// API strings: Well-formed UTF-8 is required
 
 // Byte strings that aren't UTF-8, one of each kind of defect, which the API
 // UTF-8 tests pass to every call that takes a string.
@@ -14789,7 +14789,7 @@ TEST(api_utf8, node_set_tag_refuses_ill_formed_tag_and_keeps_the_old_one) {
 
 // The canonical text of a collection key is built under its limit
 
-// The largest canonical buffer the builder may need: the 64 KiB limit plus a
+// The largest canonical buffer the builder may need: The 64 KiB limit plus a
 // byte and the NUL, grown by doubling from 256 bytes. A literal, so it doesn't
 // move with the library constant. The canonical key tests require the peak
 // buffer to stay under it.
@@ -15066,7 +15066,7 @@ static char *cyaml_test_nest(const char *head, const char *open, size_t n,
   return s;
 }
 
-// What a parse of one document did, with every resource released: whether the
+// What a parse of one document did, with every resource released: Whether the
 // document could be built at all, whether it parsed, whether a refusal named
 // the nesting limit or an alias expansion, and whether every walk of an
 // accepted tree succeeded and reparsed.
@@ -15840,7 +15840,7 @@ TEST(serialize, indentation_wider_than_one_block_round_trips) {
 }
 
 // A component that isn't UTF-8 makes a path malformed at any position, like an
-// empty component: set and delete answer ccol_invalid_args and get gives NULL,
+// empty component: Set and delete answer ccol_invalid_args and get gives NULL,
 // while a well-formed absent component stays ccol_key_not_found.
 TEST(paths, a_component_that_is_not_utf8_is_invalid_at_any_position) {
   char *err = NULL;

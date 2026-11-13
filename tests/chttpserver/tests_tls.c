@@ -130,7 +130,7 @@ static int _openssl_selfsigned(const char *key_path, const char *cert_path,
   return 0;
 }
 
-// Makes the certificate directory and the three pairs the tests use: the
+// Makes the certificate directory and the three pairs the tests use: The
 // server's, the client identity for the mutual TLS tests (real files, so
 // ctls_ctx_cert_add runs end to end) and a second client identity that no
 // server trusts. It fills g_cert_dir and the path globals and gives 0, or -1 on
@@ -434,7 +434,7 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
   REQUIRE_TRUE(body_matches);
 }
 
-// Mutual TLS: a server whose ca_bundle_path trusts this suite's self-signed
+// Mutual TLS: A server whose ca_bundle_path trusts this suite's self-signed
 // client certificate (its own CA). Each test starts such a server and drives
 // one request with a client that presents the trusted identity, an untrusted
 // one, or nothing.
@@ -1008,7 +1008,7 @@ static bool _tls_wait_parked_bodies(chttpsvr h, size_t want) {
 }
 
 // The TLS twin of slow_clients.slow_bodies_park_and_hold_no_worker_thread in
-// tests.c: four clients stop in the middle of their bodies, the connections
+// tests.c: Four clients stop in the middle of their bodies, the connections
 // park without a thread, and a fresh request is served.
 TEST(chttpserver_tls, slow_tls_bodies_park_and_hold_no_worker_thread) {
   if (!g_cert_ready) return;
@@ -1173,7 +1173,7 @@ static bool _split_read_has(_split_tls_client_t *c, const char *needle,
 
 // A parked body sets SO_RCVLOWAT. The plaintext still expected is a safe mark
 // only while OpenSSL holds no part of a record. Here the 5000-byte body travels
-// in one record and the client holds back its last 10 bytes: enough to reach
+// in one record and the client holds back its last 10 bytes: Enough to reach
 // the mark and wake the reactor, not enough to decrypt. The server reads the
 // partial record into OpenSSL and parks again, and the last 10 bytes must still
 // wake it. A mark of 5000 taken from the plaintext alone waits for ever.
@@ -1237,7 +1237,7 @@ static size_t _tls_exchange(_raw_tls_client_t *c, const char *req, char *buf,
 }
 
 // The TLS twin of slow_clients.a_write_cut_inside_the_head_or_the_body_
-// resumes_intact in tests.c: a write that stops inside the head or the body
+// resumes_intact in tests.c: A write that stops inside the head or the body
 // resumes from the exact byte.
 TEST(chttpserver_tls, a_tls_write_cut_inside_the_head_or_the_body_resumes) {
   if (!g_cert_ready) return;
@@ -1364,7 +1364,7 @@ static void _pki_remove(void) {
   rmdir(g_pki_dir);
 }
 
-// The shell script that builds the PKI: the two CAs, the leaf certificates,
+// The shell script that builds the PKI: The two CAs, the leaf certificates,
 // the revocations, the CRLs and the CA bundles the tests use.
 static const char g_pki_script[] =
     "set -e\n"
@@ -1518,7 +1518,7 @@ static bool _crl_handshake(const char *bundle, const char *cert,
   return ok && done;
 }
 
-// A bundle that holds a CRL enforces it: the revoked client fails with
+// A bundle that holds a CRL enforces it: The revoked client fails with
 // X509_V_ERR_CERT_REVOKED and an unrevoked one of the same CA verifies. A CRL
 // that's loaded but not enforced would let the revoked client verify.
 TEST(tls_crl, a_revoked_client_certificate_is_refused) {
@@ -1539,7 +1539,7 @@ TEST(tls_crl, a_revoked_client_certificate_is_refused) {
 }
 
 // With a CRL in the bundle, every certificate below the anchor needs a CRL
-// from its issuer: only the intermediate's CRL refuses its client with
+// from its issuer: Only the intermediate's CRL refuses its client with
 // X509_V_ERR_UNABLE_TO_GET_CRL, both CRLs accept it, and no CRL checks nothing.
 // Checking only the leaf (no X509_V_FLAG_CRL_CHECK_ALL) would accept it.
 TEST(tls_crl, every_ca_of_the_chain_needs_a_crl) {

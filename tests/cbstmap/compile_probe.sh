@@ -1,6 +1,6 @@
 #!/bin/sh
 # Compile-time probe for the rule behind every cmap_pair accessor that the
-# map hands out: the key_pair/val_pair an iterator carries, and the stored
+# map hands out: The key_pair/val_pair an iterator carries, and the stored
 # char* that cbmap_get_ptr() reaches for a map with string values. It also
 # pins the signature of cbstmap_get_elem_ref(), which fills a cmap_pair that the
 # caller owns and hands out no accessor.
@@ -32,7 +32,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # The in-tree headers by default. CCOL_PROBE_INCLUDE_DIR points the probe at
 # another header tree, and that's how we check the probe itself isn't
-# vacuous: the guarantee lives in the headers, so to confirm a case can fail
+# vacuous: The guarantee lives in the headers, so to confirm a case can fail
 # you run it against a copy of them with the qualifier removed.
 INCLUDE_DIR=${CCOL_PROBE_INCLUDE_DIR:-"$SCRIPT_DIR/../../include"}
 WORK_DIR=$(mktemp -d)
@@ -68,12 +68,12 @@ checks=0
 ASSIGN_PTR="assignment of member 'ptr' in read-only object|cannot assign to .* with const-qualified type"
 ASSIGN_SIZE="assignment of member 'size' in read-only object|cannot assign to .* with const-qualified type"
 
-# $1: case name
+# $1: Case name
 # $2: "accept" or "reject"
-# $3: for a reject case, an extended regular expression the compiler's output
+# $3: For a reject case, an extended regular expression the compiler's output
 #     must match; "-" for an accept case
-# $4: body statements placed inside ccol_probe
-# $5: optional file-scope text placed ahead of ccol_probe, for a case that
+# $4: Body statements placed inside ccol_probe
+# $5: Optional file-scope text placed ahead of ccol_probe, for a case that
 #     needs a callback of its own rather than a statement
 probe() {
   name=$1

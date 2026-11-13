@@ -74,7 +74,7 @@ __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
 // The bounded-join fixture. Every test races background threads against the
 // library's locks, and a real regression can leave a thread stuck, possibly
 // holding the process-wide engine mutex, so every later test would hang on it.
-// The tests use TEST_F: a test tracks each thread it creates with _fx_track()
+// The tests use TEST_F: A test tracks each thread it creates with _fx_track()
 // and joins with _fx_join(), and the teardown joins what is left with a bound,
 // then detaches it. A hang then fails the test at fault instead of a later one.
 
@@ -232,7 +232,7 @@ TEST_F(engine_stop_fixture, force_stop_while_started_then_destroy_is_safe) {
   chttpsvr_engine_wait();
 }
 
-// The reaper quiesces every registered server: two started servers, each with
+// The reaper quiesces every registered server: Two started servers, each with
 // an idle keep-alive connection.
 TEST_F(engine_stop_fixture, force_stop_quiesces_multiple_servers) {
   (void)tau;
@@ -855,7 +855,7 @@ TEST_F(engine_stop_fixture,
   REQUIRE_EQ(status, 200);
 }
 
-// The SIGUSR1 handler: calls chttpsvr_engine_stop(), as an application's
+// The SIGUSR1 handler: Calls chttpsvr_engine_stop(), as an application's
 // SIGTERM handler would.
 static void _sigusr1_calls_engine_stop(int sig) {
   (void)sig;
@@ -875,7 +875,7 @@ static void *_signal_test_thread(void *arg) {
   return NULL;
 }
 
-// chttpsvr_engine_stop() is async-signal-safe: it only posts a semaphore, and a
+// chttpsvr_engine_stop() is async-signal-safe: It only posts a semaphore, and a
 // watcher thread does the locking and the thread creation. A thread that holds
 // the engine mutex raises SIGUSR1, whose handler calls the stop. Without the
 // watcher this deadlocks; the bounded wait turns that into a failure. srv has
@@ -1328,7 +1328,7 @@ static void *_start_racing_quiesce_stop_thread(void *arg) {
 }
 
 // The same STOPPING wait, driven by the quiesce pass of chttpsvr_engine_stop()
-// instead of a plain stop: the start sees STOPPING with the quiesce already
+// instead of a plain stop: The start sees STOPPING with the quiesce already
 // claimed. The test proves the interleaving is safe and the engine comes back.
 TEST_F(
     engine_stop_fixture,
@@ -1961,7 +1961,7 @@ TEST_F(engine_stop_fixture,
   REQUIRE_TRUE(joined);
 }
 
-// The reaper hand-off keeps the destroy asynchronous: a new server binds the
+// The reaper hand-off keeps the destroy asynchronous: A new server binds the
 // same port at once with no engine wait between.
 TEST_F(engine_stop_fixture,
        destroy_without_an_engine_wait_still_allows_an_immediate_rebind) {
@@ -2072,7 +2072,7 @@ static void *_es_stop_and_wait(void *arg) {
   return NULL;
 }
 
-// A forced stop must end connections that wait with no thread: a parked body, a
+// A forced stop must end connections that wait with no thread: A parked body, a
 // memory waiter and a queued streaming request.
 TEST_F(engine_stop_fixture, force_stop_ends_parked_waiting_and_queued) {
   chttpsvr__set_wait_in_flight_bounds_for_tests(300, 2000);
@@ -2178,7 +2178,7 @@ static bool _engine_settle_bounded(int bound_ms) {
   }
 }
 
-// The installed logger serves every later engine: two full cycles each log
+// The installed logger serves every later engine: Two full cycles each log
 // their creation and teardown through it, though the caller closed its own
 // handle. A teardown that closed it would send the second cycle to the silent
 // fallback. The test first settles an engine an earlier test left behind.
@@ -2604,7 +2604,7 @@ static void _dead_alloc_check(void) {
     abort();
   }
 }
-// The allocator entries: each checks g_dead_alloc_dead, then calls the C
+// The allocator entries: Each checks g_dead_alloc_dead, then calls the C
 // library, so the test can show that nothing allocates after the destroy.
 static void *_dead_malloc(size_t n) {
   _dead_alloc_check();

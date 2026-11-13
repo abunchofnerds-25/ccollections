@@ -70,14 +70,14 @@ A producer wakes exactly one waiter for each message it sends or each
 slot it frees, never all of them at once.  A caller that stops watching
 a queue while the queue is still ready for its direction passes the
 wake on to the next waiter, so the notification it got is never lost.
-That holds for every way of leaving the call: another selectable
+That holds for every way of leaving the call: Another selectable
 becomes ready, the deadline passes, an fd fires, or the call returns an
 error.  No waiter is left sleeping on a queue that has something for
 it.
 
 Every selectable is checked at least once before the call waits, so a
 selectable that is ready at the start is reported, also with a
-timeout_us of 0.  No wakeup is lost: a send or a free that happens
+timeout_us of 0.  No wakeup is lost: A send or a free that happens
 between that check and the wait ends the wait too.  A spurious wakeup
 or a signal neither ends the wait early nor moves the deadline.  On the
 fd path the remaining time is rounded up to whole milliseconds, so the
@@ -144,7 +144,7 @@ ccol_invalid_args       ready_index or selectables is NULL; n is 0; n
                         a type tag is unknown to the library; or a dir
                         is neither cselect_read nor
                         cselect_write.
-ccol_not_enough_memory  An internal allocation failed: the array of
+ccol_not_enough_memory  An internal allocation failed: The array of
                         waiter nodes, one per selectable, or, with fd
                         selectables, the fd state or the wait's event
                         buffer.  No waiter is left behind and no message
@@ -157,7 +157,7 @@ ccol_unexpected_failure poll(2), epoll_create1(2), eventfd(2) or
                         one fd selectable.  cselect_timed() also
                         returns this code in one more case, which needs
                         no fd selectable and a timeout_us other than
-                        UINT64_MAX: the internal timed wait on a
+                        UINT64_MAX: The internal timed wait on a
                         condition variable fails with an error that is
                         not a timeout.  Treat it as a fatal problem in
                         the environment, such as a full fd table or
@@ -196,7 +196,7 @@ Sends on a queue can be turned off with ccircq_disable_sending() or
 cdynmq_disable_sending().  Read-direction waiters on that queue stay
 registered and keep waiting for a message.  For the write direction, a
 queue whose sends are off counts as ready, the same way a pipe whose
-reader has gone is ready for POLLOUT: every write-direction waiter is
+reader has gone is ready for POLLOUT: Every write-direction waiter is
 woken at once, a call that starts while sends are off returns at once
 (also on a full circular queue), and the ccircq_try_send() or
 cdynmq_send() that the caller makes next returns
@@ -210,7 +210,7 @@ behaviour.
 
 The same goes for a queue or a cchan handed to
 ccircq_selectable(), cdynmq_selectable() or
-cchan_selectable(): it must not be destroyed while a
+cchan_selectable(): It must not be destroyed while a
 cselect() or cselect_timed() call watches it.
 ccircq_destroy(), cdynmq_destroy() and
 cchan_destroy() assert when the queue has a linked waiter, from

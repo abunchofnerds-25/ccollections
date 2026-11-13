@@ -22,7 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-// A compile-time probe: every public macro of clrucache.h must nest inside the
+// A compile-time probe: Every public macro of clrucache.h must nest inside the
 // argument of another public macro, and inside its own, under -Wshadow -Werror.
 // The Makefile compiles this file with -fsyntax-only; nothing here runs.
 #include <chashmap.h>

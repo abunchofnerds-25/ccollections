@@ -41,7 +41,7 @@ SOFTWARE.
 // sort.
 typedef void *(*csort_item_getter_proc)(void *collection, size_t index);
 
-// Internal: the default comparator for char * elements. Reach it through
+// Internal: The default comparator for char * elements. Reach it through
 // csort_get_default_comparison_proc(). first and second are the addresses of
 // the stored pointers (char **). Two strings compare with strcmp(); a stored
 // NULL sorts before every string and equals only another NULL, so it's never
@@ -49,7 +49,7 @@ typedef void *(*csort_item_getter_proc)(void *collection, size_t index);
 int csort__default_string_comparison_proc(const void *first,
                                           const void *second);
 
-// Internal: sorts col; the body of csort_sort(). Use the macro instead.
+// Internal: Sorts col; the body of csort_sort(). Use the macro instead.
 bool csort__merge_sort(void *col, size_t length, size_t elem_size,
                        csort_item_getter_proc getter_proc,
                        ccol_comparison_proc comparison_proc,
@@ -70,16 +70,16 @@ bool csort__merge_sort(void *col, size_t length, size_t elem_size,
   (csort__merge_sort((col), (length), (elem_size), (getter_proc),        \
                      (comparison_proc), (mprocs)))
 
-// Internal: expands to the name csort__default_<name>_comparison_proc, so the
+// Internal: Expands to the name csort__default_<name>_comparison_proc, so the
 // declarations, the definitions and the selector all spell one name.
 #define csort__default_cmp(name) csort__default_##name##_comparison_proc
 
-// Internal: expands to the prototype of the default comparator for name, which
+// Internal: Expands to the prototype of the default comparator for name, which
 // the list below uses to declare one per type.
 #define csort__declare_default_integral_comparison_proc(type, name) \
   int csort__default_cmp(name)(const void *first, const void *second)
 
-// Internal: the default comparators of the standard types. bool puts false
+// Internal: The default comparators of the standard types. bool puts false
 // before true. For float, double and long double, NaN is greater than every
 // other value and equal only to NaN; the merge needs a real total order, and a
 // plain (a > b) - (a < b) calls NaN equal to everything, which scrambles the
@@ -103,16 +103,16 @@ csort__declare_default_integral_comparison_proc(long double, long_double);
 
 #undef csort__declare_default_integral_comparison_proc
 
-// Evaluates to the default comparator for the type of x, or NULL for a type
-// without one; cvec_sort, cvec_find and callers of csort_sort() use it to get a
-// comparator without naming one. It covers every integral and floating type
-// (const too), bool, and char * / const char *. A char array such as char
-// name[64] decays to a pointer inside _Generic, so it's excluded explicitly and
-// gives NULL; the string comparator would read its bytes as a pointer. For
-// fixed-size string fields pass your own comparator. The local is called
-// csort__gdcp_result so it can't capture a caller's argument of a common name.
-// The two definitions differ only in the Clang pragmas.
 #if defined(CCOL__CLANG_GENERIC_ASSOC_WARNING)
+// Evaluates to the default comparator (a ccol_comparison_proc) for the type
+// of x, or NULL for a type without one, so you can sort or search without
+// writing a comparator. x is used only for its type and is never evaluated, so
+// any expression of the wanted type works. It covers every integral and
+// floating type (const too), enums, bool (false before true), and char * and
+// const char * with plain, signed or unsigned char (strcmp order, a NULL
+// pointer before every string). NaN sorts after every other value and equals
+// only NaN. A char array such as char name[64] gives NULL, since its bytes
+// aren't a pointer; pass your own comparator for fixed-size string fields.
 #define csort_get_default_comparison_proc(x)                                  \
   ({                                                                          \
     ccol_comparison_proc csort__gdcp_result = NULL;                           \
@@ -162,6 +162,15 @@ csort__declare_default_integral_comparison_proc(long double, long_double);
     csort__gdcp_result;                                                       \
   })
 #else
+// Evaluates to the default comparator (a ccol_comparison_proc) for the type
+// of x, or NULL for a type without one, so you can sort or search without
+// writing a comparator. x is used only for its type and is never evaluated, so
+// any expression of the wanted type works. It covers every integral and
+// floating type (const too), enums, bool (false before true), and char * and
+// const char * with plain, signed or unsigned char (strcmp order, a NULL
+// pointer before every string). NaN sorts after every other value and equals
+// only NaN. A char array such as char name[64] gives NULL, since its bytes
+// aren't a pointer; pass your own comparator for fixed-size string fields.
 #define csort_get_default_comparison_proc(x)                                \
   ({                                                                        \
     ccol_comparison_proc csort__gdcp_result = NULL;                         \
@@ -205,7 +214,7 @@ csort__declare_default_integral_comparison_proc(long double, long_double);
   })
 #endif
 
-// Internal: evaluates to 1 when csort_get_default_comparison_proc(x) gives a
+// Internal: Evaluates to 1 when csort_get_default_comparison_proc(x) gives a
 // comparator and to 0 when it gives NULL; cvec_sort uses it to refuse an
 // element type with no default comparator at compile time. It's an integer
 // constant expression, so it works in a _Static_assert, and x is never

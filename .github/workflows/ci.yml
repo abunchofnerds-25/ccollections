@@ -5,7 +5,7 @@ on:
   pull_request:
 
 # A push to a branch that also has an open pull request starts two builds, one
-# for each trigger, and that's on purpose: pushing to a branch with no open pull
+# for each trigger, and that's on purpose: Pushing to a branch with no open pull
 # request is a normal way to get a full matrix run here, so the push trigger
 # can't be limited to main. A newer run on the same ref cancels the one before
 # it, so the second build costs queue time only once per ref.
@@ -29,7 +29,7 @@ jobs:
   linux-x86_64-gcc:
     name: Linux x86_64 (GCC)
     runs-on: ubuntu-24.04
-    # Nothing inside the process limits a hang: a queue receive that blocks or a
+    # Nothing inside the process limits a hang: A queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
     # real time here (`make test` plus `make memtest`), so this timeout leaves
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         # abigail-tools gives us abidiff, so the ABI check compares more than
-        # the names of the exported symbols: it also covers the function
+        # the names of the exported symbols: It also covers the function
         # signatures and the layouts of the public structs. That layer reads the
         # corpus baseline under abi/ for the architecture of the library that
         # the job built, and the check takes that architecture from the ELF
@@ -81,7 +81,7 @@ jobs:
       - name: every installable filename is a literal path
         run: make check_filenames
       # The guides link to the HTML man pages of the Pages site, and GitHub
-      # can't check an absolute link, so this does: every one must name a page
+      # can't check an absolute link, so this does: Every one must name a page
       # under man/, and none may point at a troff source. Rendering the pages
       # here too means a page that mandoc reports an error in, such as a text
       # line that `man` silently drops, fails the pull request and not the
@@ -192,7 +192,7 @@ jobs:
   linux-x86_64-clang:
     name: Linux x86_64 (Clang)
     runs-on: ubuntu-24.04
-    # Nothing inside the process limits a hang: a queue receive that blocks or a
+    # Nothing inside the process limits a hang: A queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
     # real time here (`make test` plus `make memtest`), so this timeout leaves
@@ -396,7 +396,7 @@ jobs:
     # would pass CI. Debian 11 has left the regular mirrors (their
     # bullseye-security misses the current updates), so apt reads Debian's own
     # archive.debian.org, which keeps every package of the release. It doesn't
-    # use snapshot.debian.org: that service answers with 503 and 504 for hours
+    # use snapshot.debian.org: That service answers with 503 and 504 for hours
     # at a time.
     container: debian:bullseye
     timeout-minutes: 120
@@ -435,7 +435,7 @@ jobs:
   linux-x86_64-minimal:
     name: Linux x86_64 (minimal build, no optional modules)
     runs-on: ubuntu-24.04
-    # Nothing inside the process limits a hang: a queue receive that blocks or a
+    # Nothing inside the process limits a hang: A queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
     # real time here (`make test` plus `make memtest`), so this timeout leaves
@@ -480,7 +480,7 @@ jobs:
   linux-x86_64-coverage:
     name: Coverage threshold
     runs-on: ubuntu-24.04
-    # Nothing inside the process limits a hang: a queue receive that blocks or a
+    # Nothing inside the process limits a hang: A queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
     # real time here (`make test` plus `make memtest`), so this timeout leaves
@@ -505,7 +505,7 @@ jobs:
   linux-x86_64-sanitizers:
     name: Linux x86_64 (ASan + UBSan)
     runs-on: ubuntu-24.04
-    # Nothing inside the process limits a hang: a queue receive that blocks or a
+    # Nothing inside the process limits a hang: A queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
     # real time here (`make test` plus `make memtest`), so this timeout leaves
@@ -521,7 +521,7 @@ jobs:
         # valgrind can't work together, so this job never runs `make memtest` on
         # a build with a sanitizer.
         #
-        # -fno-sanitize-recover=undefined is needed: without it
+        # -fno-sanitize-recover=undefined is needed: Without it
         # UndefinedBehaviorSanitizer writes its report to stderr and carries on,
         # the process exits 0 all the same, and a real finding here wouldn't
         # fail this job.
@@ -530,7 +530,7 @@ jobs:
   linux-x86_64-tsan:
     name: Linux x86_64 (ThreadSanitizer)
     runs-on: ubuntu-24.04
-    # Nothing inside the process limits a hang: a queue receive that blocks or a
+    # Nothing inside the process limits a hang: A queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
     # real time here (`make test` plus `make memtest`), so this timeout leaves
@@ -683,7 +683,7 @@ jobs:
     # test and hangs on a program that forks. The code that only macOS compiles
     # sits behind the _CCOL_EMULATE_DARWIN_* switches, and this job turns them
     # on so that valgrind checks those paths for leaks and memory errors on
-    # every push: the condition variable, timed locks and semaphore of common.h
+    # every push: The condition variable, timed locks and semaphore of common.h
     # (SYNC), the socket setup and the bounded send of csock.h (SOCK), the
     # portable memrchr (MEMRCHR) and the per-thread state that a key owns (TLS).
     # The kqueue wake descriptor (WAKEFD) needs kqueue, so only FreeBSD can run
@@ -702,7 +702,7 @@ jobs:
   linux-i386-gcc:
     name: Linux i386 (GCC, gcc -m32)
     runs-on: ubuntu-24.04
-    # Nothing inside the process limits a hang: a queue receive that blocks or a
+    # Nothing inside the process limits a hang: A queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
     # real time here (`make test` plus `make memtest`), so this timeout leaves
@@ -722,7 +722,7 @@ jobs:
         # information package, libc6-dbg:i386, which this job doesn't install.
         run: make CC="gcc -m32" test
       # Struct layout belongs to one architecture, so the x86_64 job can't stand
-      # in for this one: a member that goes from size_t to unsigned long long,
+      # in for this one: A member that goes from size_t to unsigned long long,
       # for example, changes nothing on LP64 but moves every later field on
       # ILP32. The check reads the architecture out of the ELF header of the
       # library, so it picks the i386 baseline even though the runner is x86_64.
@@ -734,7 +734,7 @@ jobs:
   linux-i386-clang:
     name: Linux i386 (Clang, clang -m32)
     runs-on: ubuntu-24.04
-    # Nothing inside the process limits a hang: a queue receive that blocks or a
+    # Nothing inside the process limits a hang: A queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
     # real time here (`make test` plus `make memtest`), so this timeout leaves
@@ -763,7 +763,7 @@ jobs:
   linux-i386-ubsan:
     name: Linux i386 (UBSan, gcc -m32 and clang -m32)
     runs-on: ubuntu-24.04
-    # Nothing inside the process limits a hang: a queue receive that blocks or a
+    # Nothing inside the process limits a hang: A queue receive that blocks or a
     # drain that never finishes just stops the output, and the default ceiling
     # of this job is six hours. The suites it runs take about twenty minutes of
     # real time here (`make test` plus `make memtest`), so this timeout leaves
@@ -791,7 +791,7 @@ jobs:
         # between the two, where neither the x86_64 sanitizer job nor the plain
         # i386 jobs can see it.
         #
-        # -fno-sanitize-recover=undefined is needed: without it
+        # -fno-sanitize-recover=undefined is needed: Without it
         # UndefinedBehaviorSanitizer writes its report to stderr and carries on,
         # the process exits 0 all the same, and a real finding here wouldn't
         # fail the job.
@@ -830,7 +830,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # arm64 is a ports architecture: its package indices are on
+        # arm64 is a ports architecture: Its package indices are on
         # ports.ubuntu.com, not on the primary and security archive mirrors that
         # the default sources of this runner name. The default sources have to
         # be limited to amd64, because they hold no arm64 indices at all, and we
@@ -865,7 +865,7 @@ jobs:
         #
         # No Ubuntu 24.04 archive holds a fixed build, so this step copies the
         # static qemu-user binary out of an official Debian trixie image instead
-        # of installing one from apt. Nothing else about these jobs changes: the
+        # of installing one from apt. Nothing else about these jobs changes: The
         # binary is static-pie and needs no libc, so it runs directly on the
         # runner, and the cross toolchain, the sysroot and the build flags all
         # stay the same.
@@ -884,7 +884,7 @@ jobs:
         # The test and memtest targets of each module hold a plain `./tests`
         # command with no place for a prefix, so on this x86_64 runner you can't
         # run an aarch64 binary from CC=aarch64-linux-gnu-gcc through `make
-        # test`: the shell would try to run the ARM binary directly and fail at
+        # test`: The shell would try to run the ARM binary directly and fail at
         # once with "cannot execute binary file". So this job builds each module
         # with the existing `build` target, unchanged, and then runs the
         # `./tests` binary of that module through qemu-aarch64. There's no `make
@@ -963,7 +963,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # s390x is a ports architecture: its package indices are on
+        # s390x is a ports architecture: Its package indices are on
         # ports.ubuntu.com, not on the primary and security archive mirrors that
         # the default sources of this runner name. The default sources have to
         # be limited to amd64, because they hold no s390x indices at all, and we
@@ -998,7 +998,7 @@ jobs:
         #
         # No Ubuntu 24.04 archive holds a fixed build, so this step copies the
         # static qemu-user binary out of an official Debian trixie image instead
-        # of installing one from apt. Nothing else about these jobs changes: the
+        # of installing one from apt. Nothing else about these jobs changes: The
         # binary is static-pie and needs no libc, so it runs directly on the
         # runner, and the cross toolchain, the sysroot and the build flags all
         # stay the same.
@@ -1126,7 +1126,7 @@ jobs:
         # finds the exact path at run time instead of hard-coding one, because
         # the path names the GCC version that the gcc-aarch64-linux-gnu package
         # of this runner ships, and this workflow must not assume a version. It
-        # does NOT pass an explicit --sysroot=, on purpose: the
+        # does NOT pass an explicit --sysroot=, on purpose: The
         # aarch64-linux-gnu-ld of Debian and Ubuntu already holds the correct
         # sysroot, /usr/aarch64-linux-gnu, from the time the package was built,
         # and a --sysroot= on top of that puts the prefix in front of every path
@@ -1182,7 +1182,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # armhf is a ports architecture just like arm64 above: its package
+        # armhf is a ports architecture just like arm64 above: Its package
         # indices are on ports.ubuntu.com, not on the primary and security
         # archive mirrors that the default sources of this runner name. We limit
         # the default sources to amd64 and add an armhf source of its own that
@@ -1215,7 +1215,7 @@ jobs:
           sudo rm -rf "$STAGE"
           qemu-arm-static --version | head -1
       - name: Cross-build and run each module's test suite under qemu-arm
-        # This has the same shape as the aarch64 job above: it builds each
+        # This has the same shape as the aarch64 job above: It builds each
         # module with the existing `build` target and
         # CC=arm-linux-gnueabihf-gcc, and then runs the ./tests binary of that
         # module through qemu-arm, because this x86_64 runner can't run an armhf
@@ -1320,7 +1320,7 @@ jobs:
         # sysroot, and a --sysroot= on top of that puts the prefix in front of
         # every path that ld resolves a second time, so the link fails.
         #
-        # clang generates no code for -fstack-clash-protection on this target: a
+        # clang generates no code for -fstack-clash-protection on this target: A
         # binary built with the flag is identical, byte for byte, to one built
         # without it, on both clang-18 and clang-19, and the driver then reports
         # "argument unused during compilation". That's why the root Makefile and

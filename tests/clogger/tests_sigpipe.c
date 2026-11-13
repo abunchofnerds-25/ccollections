@@ -137,7 +137,7 @@ static void _child_pass(void) {
 // Reports that the child completed phase, so a failure shows how far it got.
 static void _child_mark(int phase) { _child_send(-phase); }
 
-// What a forked scenario left: its wait status, the values it reported in
+// What a forked scenario left: Its wait status, the values it reported in
 // order, and whether the fork happened.
 typedef struct {
   int status;
@@ -182,7 +182,7 @@ static void _run_child(void (*fn)(void), child_outcome_t *out) {
   }
 }
 
-// Tells whether a child passed: its last report is 0. The exit status isn't
+// Tells whether a child passed: Its last report is 0. The exit status isn't
 // used, because valgrind can replace a forked child's status.
 static bool _child_passed(const child_outcome_t *o) {
   return o->forked && o->nvalues > 0 && o->values[o->nvalues - 1] == 0;
@@ -266,7 +266,7 @@ TEST(sigpipe, an_invalid_policy_is_refused) {
   REQUIRE_EQ(clog_set_signal_policy(CLOG_SIGNALS_AUTO), ccol_success);
 }
 
-// Scenario: under AUTO, opening a synchronous pipe logger leaves SIGPIPE at its
+// Scenario: Under AUTO, opening a synchronous pipe logger leaves SIGPIPE at its
 // default, and its first write (on the calling thread) sets SIG_IGN.
 static void _scenario_sync_pipe_auto(void) {
   CHILD_CHECK(_sigpipe_is(SIG_DFL));
@@ -290,7 +290,7 @@ TEST(sigpipe, sync_pipe_logger_ignores_sigpipe_only_from_its_first_write) {
   REQUIRE_TRUE(_child_passed(&o));
 }
 
-// Scenario: the async writer thread keeps SIGPIPE blocked in its own mask, so
+// Scenario: The async writer thread keeps SIGPIPE blocked in its own mask, so
 // the process's disposition stays at its default.
 static void _scenario_async_pipe_auto(void) {
   CHILD_CHECK(_sigpipe_is(SIG_DFL));
@@ -315,7 +315,7 @@ TEST(sigpipe, async_pipe_logger_leaves_the_disposition_at_default) {
   REQUIRE_TRUE(_child_passed(&o));
 }
 
-// Scenario: the writer thread takes back the SIGPIPE its own failed write left
+// Scenario: The writer thread takes back the SIGPIPE its own failed write left
 // pending. Phase 1 writes to a broken pipe with SIGPIPE blocked; phase 2 puts a
 // healthy pipe under the fd and switches to UNTOUCHED, so the thread unblocks
 // SIGPIPE and a SIGPIPE left pending would kill the child; phase 3 breaks the
@@ -366,7 +366,7 @@ TEST(sigpipe, writer_thread_consumes_its_sigpipe_and_follows_a_policy_change) {
   REQUIRE_TRUE(ok);
 }
 
-// Scenario: under UNTOUCHED a synchronous write to a broken pipe raises SIGPIPE
+// Scenario: Under UNTOUCHED a synchronous write to a broken pipe raises SIGPIPE
 // on the calling thread and the disposition stays at its default.
 static void _scenario_sync_pipe_untouched(void) {
   CHILD_CHECK(_sigpipe_is(SIG_DFL));
@@ -393,7 +393,7 @@ TEST(sigpipe, untouched_policy_leaves_sigpipe_to_the_application_sync) {
   REQUIRE_TRUE(_child_passed(&o));
 }
 
-// Scenario: under UNTOUCHED the writer thread keeps the mask it inherited (not
+// Scenario: Under UNTOUCHED the writer thread keeps the mask it inherited (not
 // blocking SIGPIPE), so its write to a broken pipe ends the child.
 static void _scenario_async_pipe_untouched(void) {
   CHILD_CHECK(_sigpipe_is(SIG_DFL));
@@ -456,7 +456,7 @@ static void _count_sigpipe(int sig) {
   _handler_hits++;
 }
 
-// Scenario: under AUTO a calling-thread pipe write leaves an application
+// Scenario: Under AUTO a calling-thread pipe write leaves an application
 // handler in place, and the handler sees the SIGPIPE of the failed record and
 // of the loss marker behind it.
 static void _scenario_application_handler_stays(void) {
@@ -484,7 +484,7 @@ TEST(sigpipe, auto_policy_keeps_a_handler_of_the_application) {
   REQUIRE_TRUE(_child_passed(&o));
 }
 
-// Scenario: a refused policy value changes nothing, so AUTO stays and the first
+// Scenario: A refused policy value changes nothing, so AUTO stays and the first
 // synchronous pipe write sets SIG_IGN.
 static void _scenario_invalid_policy_changes_nothing(void) {
   CHILD_CHECK(clog_set_signal_policy(CLOG_SIGNALS_AUTO) == ccol_success);

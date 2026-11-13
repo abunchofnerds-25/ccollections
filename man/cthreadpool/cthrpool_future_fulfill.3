@@ -21,7 +21,7 @@ cthrpool_future_free and no cthrpool_future_get call is in progress.
 
 Call it exactly once for each detached future. Don't call it on a
 future that cthrpool_submit_future, cthrpool_try_submit_future or
-cthrpool_timed_submit_future returned: the worker thread that runs the
+cthrpool_timed_submit_future returned: The worker thread that runs the
 task of such a future fulfills it inside the library.
 .fi
 .SH PARAMETERS

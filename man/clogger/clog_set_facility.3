@@ -19,25 +19,25 @@ change is visible to every logger handle that writes to the same file
 descriptor, the root logger and every derived logger.
 
 The facility matters only when the output format is CLOG_FMT_SYSLOG.
-Calling this with any other format does no harm: the store keeps the new
+Calling this with any other format does no harm: The store keeps the new
 value, and it reaches the output once somebody selects CLOG_FMT_SYSLOG.
 
 Available facility codes (RFC 5424 / RFC 3164):
-  CLOG_SYSLOG_KERN     (0): kernel messages
-  CLOG_SYSLOG_USER     (1): user-level messages (default)
-  CLOG_SYSLOG_MAIL     (2): mail system
-  CLOG_SYSLOG_DAEMON   (3): system daemons
-  CLOG_SYSLOG_AUTH     (4): security / authorization messages
-  CLOG_SYSLOG_SYSLOG   (5): internal syslogd messages
-  CLOG_SYSLOG_LPR      (6): line printer subsystem
-  CLOG_SYSLOG_NEWS     (7): network news subsystem
+  CLOG_SYSLOG_KERN     (0): Kernel messages
+  CLOG_SYSLOG_USER     (1): User-level messages (default)
+  CLOG_SYSLOG_MAIL     (2): Mail system
+  CLOG_SYSLOG_DAEMON   (3): System daemons
+  CLOG_SYSLOG_AUTH     (4): Security / authorization messages
+  CLOG_SYSLOG_SYSLOG   (5): Internal syslogd messages
+  CLOG_SYSLOG_LPR      (6): Line printer subsystem
+  CLOG_SYSLOG_NEWS     (7): Network news subsystem
   CLOG_SYSLOG_UUCP     (8): UUCP subsystem
-  CLOG_SYSLOG_CRON     (9): clock daemon
-  CLOG_SYSLOG_AUTHPRIV (10): security / authorization (private)
+  CLOG_SYSLOG_CRON     (9): Clock daemon
+  CLOG_SYSLOG_AUTHPRIV (10): Security / authorization (private)
   CLOG_SYSLOG_FTP      (11): FTP daemon
-  CLOG_SYSLOG_LOCAL0   (16): local use 0
+  CLOG_SYSLOG_LOCAL0   (16): Local use 0
   ...
-  CLOG_SYSLOG_LOCAL7   (23): local use 7
+  CLOG_SYSLOG_LOCAL7   (23): Local use 7
 .fi
 .SH PARAMETERS
 .nf

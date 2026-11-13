@@ -119,7 +119,7 @@ typedef struct cbstmap {
   uint8_t cmp_kind;
 } cbstmap;
 
-// An in-order iterator: a cmap_iterator plus a fixed stack of nodes whose left
+// An in-order iterator: A cmap_iterator plus a fixed stack of nodes whose left
 // subtree is done and which are waiting to be visited.
 typedef struct cbmap_cmap_iterator {
   // The free function of the map's allocator (NULL for the default). A scoped
@@ -137,7 +137,7 @@ typedef struct cbmap_cmap_iterator {
   (cbmap_cmap_iterator *)((uint8_t *)u_iter - \
                           offsetof(cbmap_cmap_iterator, user_iter))
 
-// One step of the path a descent records: a node and the link that points at
+// One step of the path a descent records: A node and the link that points at
 // it.
 typedef struct node_stack_entry {
   bmap_node *node;
@@ -305,7 +305,7 @@ static uint8_t cbmap_cmp_kind(ccol_data_type key_type,
 }
 
 // Checks the creation inputs of cbstmap_create_full(), which means only the
-// allocator: every key type is legal, and one it doesn't know uses memcmp like
+// allocator: Every key type is legal, and one it doesn't know uses memcmp like
 // ccol_other_types. Sets *err and gives false on failure.
 static bool verify_cbmap_create_inputs(ccol_memmgmt_procs *mmgmt_procs,
                                        char **err) {
@@ -494,7 +494,7 @@ static inline int cmp_unsigned_small(void *ptr1, void *ptr2, size_t size) {
 }
 
 // Three-way comparison of two T values with NaN above every other value and
-// equal only to NaN. A BST needs a real total order: with the native < and > a
+// equal only to NaN. A BST needs a real total order: With the native < and > a
 // NaN key compares equal to the first node it meets, and an insert would
 // overwrite that node's value. The operands are read with memcpy because a
 // caller's pair carries no alignment or effective type of T. The temporaries
@@ -639,7 +639,7 @@ static inline void cbmap_move_bytes(void *dst, const void *src, size_t n) {
 }
 #undef CBMAP_SMALL_COPY_BODY
 
-// The typed loop of cbmap_find_node(): reads the wanted key once, reads each
+// The typed loop of cbmap_find_node(): Reads the wanted key once, reads each
 // node's key at key_offset and compares with < and ==. The caller has checked
 // that the key has its type's width, so the read stays inside its bytes.
 #define CBMAP_FIND_TYPED(T)                                                    \
@@ -1205,7 +1205,7 @@ ccol_retval cbstmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
 }
 
 // Looks up key_pair and hands out the address of its value accessor, for the
-// string arm of cbmap_get_ptr(): the accessor's ptr field is the only char *
+// string arm of cbmap_get_ptr(): The accessor's ptr field is the only char *
 // object of a string value. *val_accessor is NULL on failure.
 ccol_retval cbstmap__get_val_accessor(cbmap cbm, const cmap_pair *key_pair,
                                       const cmap_pair **val_accessor) {

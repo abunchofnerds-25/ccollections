@@ -11,7 +11,7 @@
 # belong to some other package.
 #
 # The recipes run under `set -f`, which turns that expansion off. This script
-# is the other half of the guard: it keeps such a name out of the tree in the
+# is the other half of the guard: It keeps such a name out of the tree in the
 # first place, so we don't depend on that one `set -f` surviving every later
 # edit of the Makefile. A name with a space or a tab is refused for the same
 # reason, since the shell splits the argument list on it.

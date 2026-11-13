@@ -85,7 +85,7 @@ void cstring__destroy(cstr s) {
 }
 
 // Says whether length + 1 fits in a size_t. Every function that sizes a buffer
-// as length + 1 checks this first: a length of SIZE_MAX would wrap to a
+// as length + 1 checks this first: A length of SIZE_MAX would wrap to a
 // capacity of 0, which cstring_grow_to() takes as already enough, and the copy
 // would then run past the real buffer.
 static bool cstring_length_fits_with_terminator(size_t length) {
@@ -140,7 +140,7 @@ static void destroy_cstr_vector(cvec v) {
 // Creates a string holding the init_len bytes at initial (NULL is fine when
 // init_len is 0; the bytes hold no '\0'). Creation, substring and split all
 // build strings here, so the checks and the allocation logic live in one place.
-// The buffer gets its final size at once: the power of two above init_len + 1,
+// The buffer gets its final size at once: The power of two above init_len + 1,
 // 16 at least. An interned procs pointer is kept as it is; any other procs
 // struct is copied into the tail of the string's block, so a string costs two
 // allocations and never points at the caller's struct. Gives NULL with *err set
@@ -270,7 +270,7 @@ bool cstring_is_empty(cstr s) {
 // build a string. Gives ccol_success (also for an empty str), ccol_invalid_args
 // for a NULL str, ccol_container_full on a length overflow or
 // ccol_not_enough_memory. str may point into s; its offset is saved before the
-// buffer can move. The function is 64-byte aligned on purpose: the short block
+// buffer can move. The function is 64-byte aligned on purpose: The short block
 // that a non-growing append jumps to must sit in one 64-byte line, and at an
 // offset of 32 or 48 bytes every append costs about 45 percent more. After a
 // change here or a compiler change, check the block with objdump.
@@ -357,7 +357,7 @@ ccol_retval cstring_prepend(cstr s, const char *str) {
 }
 
 // Inserts str at byte pos (pos equal to the length appends). The buffer grows
-// before the memmove. str may point into s: its offset is saved before the
+// before the memmove. str may point into s: Its offset is saved before the
 // buffer can move, shifted when it lies after pos, and the final copy is a
 // memmove because source and destination can overlap. Results as for
 // cstring_append(), plus ccol_invalid_args for pos past the end.
@@ -707,7 +707,7 @@ unsigned long cstring_rfind_linear_count_for_tests = 0;
 // Gives the start of the rightmost needle that lies entirely inside hay[0,
 // limit), or ccol_invalid_size. The backward scan hands over to it when
 // candidates keep failing, because it bounds the search at O(limit + nlen) for
-// any text: it's Knuth-Morris-Pratt run right to left on the reversed needle.
+// any text: It's Knuth-Morris-Pratt run right to left on the reversed needle.
 // The failure table takes one size_t per needle byte, from m_procs when it
 // doesn't fit on the stack; when that allocation fails it sets *table_ok to
 // false and searches nothing. Bumps the test counter.

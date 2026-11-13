@@ -16,13 +16,13 @@ iteration visits the entries in ascending key order, and that order is
 part of the contract (see cbstmap_begin_iter(3)).
 
 The key type picks the default order:
-  - char: the native order of char.
-  - The signed integer types: a signed order.
-  - The unsigned integer types and pointers: an unsigned order.
-  - The floating types: a numeric order, in which a NaN sorts above all
+  - char: The native order of char.
+  - The signed integer types: A signed order.
+  - The unsigned integer types and pointers: An unsigned order.
+  - The floating types: A numeric order, in which a NaN sorts above all
     other values.
-  - A string: the strcmp order.
-  - Every other key type, a struct for example: a raw memcmp of the key
+  - A string: The strcmp order.
+  - Every other key type, a struct for example: A raw memcmp of the key
     bytes. A custom comparison procedure replaces this order.
 cbstmap_create_full(3) gives the complete rules, and cbmap_construct_cc(3)
 the contract of a comparison procedure.

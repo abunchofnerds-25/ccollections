@@ -42,7 +42,7 @@ an rvalue, a literal and a computed expression alike.
 
 The one exception, which converts nothing, is a declared key or value
 type that is a CHARACTER POINTER. char *, signed char * and
-unsigned char * are a single type to this library: all three classify as
+unsigned char * are a single type to this library: All three classify as
 ccol_string, a NUL-terminated string that the macro measures with strlen,
 and the tree compares the bytes of the string, never the pointer type. A
 map keyed on unsigned char * can therefore be reached through a char *

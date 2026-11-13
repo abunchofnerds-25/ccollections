@@ -65,7 +65,7 @@ accepts nothing and never calls on_complete.
 cthrpool_future_get(3) blocks until the task has a result and returns
 it, or returns NULL for a task that a shutdown cancelled. Any number of
 threads can wait on one future. The pool never allocates, copies or
-frees a result: the thread that gets it owns it, and frees it the same
+frees a result: The thread that gets it owns it, and frees it the same
 way the task allocated it. Call cthrpool_future_free(3) exactly once for
 each future that a submit returned, whether you call
 cthrpool_future_get(3) or not; without a get the future is

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Compile-time probes for the cvector macros.
 #
-# The probes cover four properties that only the compiler can show: that
+# The probes cover four properties that only the compiler can show: That
 # cvec_sort rejects some element types, that cvec_pop refuses an array
 # element type, that the value macros and cvector_append_array() accept const
 # data under -Werror (a const source array, a const-qualified element type
@@ -137,7 +137,7 @@ run_for_compiler() {
     return 0
   fi
   compilers_used=$((compilers_used + 1))
-  # Ask the compiler what it is instead of trusting its name: on macOS `gcc`
+  # Ask the compiler what it is instead of trusting its name: On macOS `gcc`
   # is Apple clang, which refuses the GCC-only warnings as unknown options.
   if printf '' | "$cc" -dM -E -x c - 2>/dev/null | grep -q '__clang__'; then
     EXTRA_CFLAGS=""

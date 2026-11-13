@@ -32,13 +32,13 @@ the merge key that first brings their key in the mapping's member
 order; see cyaml_dictionary_first(3).  A dictionary keeps its members
 in the order of the text, and a key that the text repeats has the
 place of its first occurrence and the value of its last.  Three more
-cases make the parse fail, like any other malformed input: a tag that
+cases make the parse fail, like any other malformed input: A tag that
 doesn't match the type of the content, a malformed %TAG directive,
 and a merge-key source that is not valid.  !!null is the one
 exception to the first of these, because it forces CYAML_NULL on any
 text and has no canonical "wrong" spelling.
 
-These are parse errors too: a plain scalar that starts with ']', '}'
+These are parse errors too: A plain scalar that starts with ']', '}'
 or ',' outside a flow collection, a '[' or '{' inside a flow plain
 scalar, a tag that holds a byte outside the URI characters of YAML
 1.2 (see cyaml(7)), a %YAML directive whose major version is not 1,
@@ -73,7 +73,7 @@ cyaml_parse() is an inline wrapper that passes NULL for mp.
 
 On a parse failure, when err_str is not NULL, the function points
 *err_str at a null-terminated error message.  The LIBRARY owns that
-message, so never free it: it is not an allocation, and mp never sees
+message, so never free it: It is not an allocation, and mp never sees
 it.  The text stays readable until the next FAILING parse on the same
 thread, the same lifetime that strerror(3) gives.  The storage is per
 thread, so two threads that parse at the same time never overwrite
@@ -121,7 +121,7 @@ The caller owns the returned tree and must free it with
 cyaml_destroy().
 
 The caller does NOT own the error string.  The err and err_str
-out-parameters of every module in this library follow one rule: the
+out-parameters of every module in this library follow one rule: The
 library owns the string and the caller never frees it.  See the note
 at the top of common.h.
 
@@ -155,7 +155,7 @@ quote the key in the document to keep its text as written.  This
 holds for an implicit key, an explicit key, a flow dictionary key and
 the "key: value" shorthand of a flow sequence, so every spelling of
 the same value lands on the same key, whatever the notation.  A
-quoted key with no tag is never canonicalized: the stored key text
+quoted key with no tag is never canonicalized: The stored key text
 is always exactly its own decoded content.
 
 A tag on a key types that key exactly as it types a value, in every
@@ -166,7 +166,7 @@ The keys of this DOM are plain strings and not nodes, so the tag
 itself is not kept.  An anchor on a tagged key names the typed node.
 
 The text under an explicit !!int or !!float tag must match the
-core-schema grammar of that type from its first byte: an int begins
+core-schema grammar of that type from its first byte: An int begins
 with a digit or a sign, and a float with a digit, a sign or ".".
 A space, tab or line break at the end of the text is ignored, but no
 byte in front of the number is, so '!!int " 42"' and '!!int "\ev42"'
@@ -180,7 +180,7 @@ directive whenever it is a plain, untagged scalar, and whenever its
 tag is the core merge tag, tag:yaml.org,2002:merge (!!merge, a %TAG
 shorthand of it, or its verbatim form), whether the key is plain or
 quoted.  That holds in any mapping, whatever built it.  There are
-five forms: the implicit style of a block mapping ("<<: value"), the
+five forms: The implicit style of a block mapping ("<<: value"), the
 explicit style of a block mapping ("? <<" and ": value"), the
 implicit style of a flow mapping ("{<<: value}"), the explicit style
 of a flow mapping ("{? <<: value}"), and the one-entry mapping that
@@ -211,7 +211,7 @@ line, and the column counts characters.  For example:
     (line 3, column 7); write it as an escape sequence in a
     double-quoted scalar
 
-    invalid UTF-8 in a YAML stream (line 1, column 4): overlong
+    invalid UTF-8 in a YAML stream (line 1, column 4): Overlong
     encoding (lead byte 0xc0)
 
 Most other parse errors give a byte offset into the input instead, as
@@ -227,7 +227,7 @@ scalar is the one way to put such a character into a value: "\ex01",
 "\ex7f", "\ex80" and "\euFFFE" are printable text that names it.  Two
 "\eu" escapes that form a UTF-16 surrogate pair ("\euD83D\euDE00")
 name one character, as in JSON.  An escape that names no character
-is a parse error: a lone surrogate in a "\eu" escape, and a "\eU"
+is a parse error: A lone surrogate in a "\eu" escape, and a "\eU"
 value that is a surrogate or above U+10FFFF.  Percent-escapes in a
 tag must decode to well-formed UTF-8.
 
@@ -248,12 +248,12 @@ parser never quietly turns it into an integer that wrapped around or
 that has the wrong sign.
 
 Indentation is spaces only, as YAML 1.2 defines it.  A tab is
-separation whitespace wherever the grammar allows separation: after a
+separation whitespace wherever the grammar allows separation: After a
 \&'-', '?' or ':' indicator ("key:\etvalue"), after the spaces that
 indent a line, inside a flow collection, after "---" or "...", between
 the parts of a directive, and before a comment, so JSON indented with
 tabs parses.  A tab is refused where it would decide a
-block-structural column: in front of a block mapping key or a block
+block-structural column: In front of a block mapping key or a block
 sequence '-' on its line ("\eta: 1", "key:\et- a", "-\etb: c"), and as
 the indentation of a block scalar.  Inside a scalar a tab is content.
 
@@ -261,7 +261,7 @@ Block-structured content (a mapping or a sequence) must start on its
 own line after an explicit "---" marker and must not share that line,
 but a scalar or a flow collection may share it.
 
-A UTF-8 byte order mark may stand in the prefix of a document: at the
+A UTF-8 byte order mark may stand in the prefix of a document: At the
 start of the stream, at the start of the line of a later document
 after a "..." or before a "---", and at the end of the stream.  A
 prefix may hold several marks, with comment lines between them.  The
@@ -297,7 +297,7 @@ its anchored node below the containers around the alias, so its
 expansion must fit in the levels left there, and the value of a merge
 key counts where it stands, before the merge moves its members into
 the mapping.  A collection that serves as a dictionary key counts
-below the mapping that holds the key, in every key form: an implicit
+below the mapping that holds the key, in every key form: An implicit
 or explicit key of a block mapping, an alias used as a key, a key of
 a flow mapping, and the key of a "key: value" pair in a flow
 sequence.  When a stream holds several documents, the parse gives a
@@ -311,7 +311,7 @@ nesting depth of the document.  The limit bounds the work of a
 single call, not the stack the caller has to provide.  A non-scalar
 dictionary key whose canonicalized flow-YAML text is larger than
 64 KiB is refused too.  This second limit is for a key that is itself
-a mapping holding another such key many levels deep: canonicalization
+a mapping holding another such key many levels deep: Canonicalization
 quotes the quoted text of each enclosing level again, so that text
 grows fast with the nesting depth.  The text is built only up to the
 limit, so a refused key costs at most 64 KiB of text whatever its

@@ -62,7 +62,7 @@ These rejections run no middleware:
     memory pressure.
   - A 503 means that the worker pool is full, so no more application
     work may start.
-  - A 501 or a 505 is decided before the request is routed: a 501 for
+  - A 501 or a 505 is decided before the request is routed: A 501 for
     a method token outside the seven chttp_method names or for a
     transfer coding that the server does not implement, and a 505 for
     an HTTP version whose major number is not 1.  There is no routed
@@ -104,7 +104,7 @@ neither router reached its own cap when you registered; the server
 then answers the affected request with HTTP 500.
 
 You may register the same path and method more than once, and each
-registration returns ccol_success, but the first one wins: the
+registration returns ccol_success, but the first one wins: The
 server only ever calls the FIRST handler that you registered.
 .fi
 .SH "SEE ALSO"

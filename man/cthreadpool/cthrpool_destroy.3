@@ -39,7 +39,7 @@ dereferenced.
 
 A call on pool from inside a task running on one of pool's worker
 threads, or from the on_complete callback of that task, is a FATAL
-ERROR as well, for a related reason: that worker is still on its way
+ERROR as well, for a related reason: That worker is still on its way
 back through its own dispatch loop, and it would touch the pool's
 mutex, condition variables and struct right after this call freed
 them. Leave the destroy to another thread, or run it after the task

@@ -27,7 +27,7 @@ SOFTWARE.
 // Internal only. Turns a public timeout (a uint64_t count of microseconds)
 // into an absolute CLOCK_MONOTONIC deadline, or into the coarser units that
 // system calls take. Every module goes through these helpers so they all
-// saturate the same way: a value too large to represent becomes the largest
+// saturate the same way: A value too large to represent becomes the largest
 // deadline we can represent, and never wraps into the past, which would turn a
 // very long wait into one that ends at once. All the arithmetic is uint64_t, so
 // ILP32 and LP64 give the same results. Everything is static inline and the

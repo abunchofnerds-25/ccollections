@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal only: the test-only check of the fork-handler order, and the
+// Internal only: The test-only check of the fork-handler order, and the
 // counters of the close-on-exec gate. src/common.c defines them, and only a
 // build with RUNNING_UNIT_TESTS has them, so none of this ships.
 #include <common.h>

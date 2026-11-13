@@ -23,7 +23,7 @@ SOFTWARE.
 */
 
 // This binary runs with SIGPIPE at its default disposition, so it must stay a
-// binary of its own: the other binaries of this directory ignore SIGPIPE, and
+// binary of its own: The other binaries of this directory ignore SIGPIPE, and
 // an ignored SIGPIPE is thrown away when it is raised.
 //
 // It checks that the server leaves the SIGPIPE disposition as the application
@@ -156,7 +156,7 @@ TEST(chttpsvr_sigpipe, a_gather_write_to_a_closed_peer_raises_no_sigpipe) {
   REQUIRE_EQ(err, EPIPE);
 }
 
-// Flags shared by the response test and its handlers: the slow handler
+// Flags shared by the response test and its handlers: The slow handler
 // entered, the client closed, and the probe handler ran and what it saw.
 static atomic_int g_slow_entered;
 static atomic_int g_client_gone;

@@ -30,7 +30,7 @@ fmt    printf-style format string.
 .nf
 TRACE is the finest level and produces a lot of output, so turn it on
 only when you diagnose low-level behaviour.
-Every clog_<level> macro has the same thread-safety guarantee: the
+Every clog_<level> macro has the same thread-safety guarantee: The
 shared write lock covers the whole cycle that formats and writes a
 record, so a partial line never ends up between the lines of another
 thread.

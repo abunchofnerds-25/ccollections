@@ -58,7 +58,7 @@ behavior without guessing:
 The library parses untrusted input and terminates network connections, so
 these findings are in scope:
 
-- A memory safety fault that is reachable from any public API: an access
+- A memory safety fault that is reachable from any public API: An access
   outside the bounds of an object, a use after free, a double free, or a read
   of uninitialized memory.
 - A fault that is reachable from attacker-controlled bytes in `cjson`, in

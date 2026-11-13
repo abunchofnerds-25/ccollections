@@ -17,7 +17,7 @@ returning a value <0, 0 or >0.
 
 This is the supported way to sort a vector whose element type has no
 default comparison procedure, that is the element types for which
-cvec_sort refuses to compile: a struct, a union, a pointer to anything
+cvec_sort refuses to compile: A struct, a union, a pointer to anything
 other than char, and a fixed-size char array. It sorts a type that does
 have a default comparison procedure as well, and then the procedure you
 pass defines the order.

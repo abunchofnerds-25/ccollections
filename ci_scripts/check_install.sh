@@ -66,7 +66,7 @@ awk '/^```c$/ { on = 1; next } on && /^```$/ { exit } on { print }' \
 [ -s "$tmp/hello.c" ] || fail "README.md holds no C example"
 # What the example prints is the first ```text block after it, so whoever
 # edits the example sees the output right below it. Both sides lose their
-# trailing blanks: the example prints a space after each number, and an editor
+# trailing blanks: The example prints a space after each number, and an editor
 # may strip that space from README.md.
 strip_trailing() { sed 's/[[:space:]]*$//'; }
 expected=$(awk '/^```c$/ { c = 1; next } c && /^```$/ { c = 0; after = 1; next }
@@ -110,7 +110,7 @@ else
 fi
 
 # The installed header, the installed library and the pkg-config file have to
-# name one release: a program compiled against the header, linked by
+# name one release: A program compiled against the header, linked by
 # pkg-config and run against the library sees all three.
 cat > "$tmp/version.c" <<'EOF'
 #include <stdio.h>

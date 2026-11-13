@@ -57,7 +57,7 @@ The macro is safe to call whether or not the shared engine is still
 running.  It frees the engine reference of name, and if that was the
 last reference an asynchronous engine stop can start.  It is also
 safe when chttpsvr_engine_stop() has already forced the engine down
-while name was started: that engine stop has then already quiesced
+while name was started: That engine stop has then already quiesced
 this server, so the call finds the teardown done and frees what is
 left of the server.  If such a forced stop is still tearing this same
 server down on its own background thread, the call waits for that
@@ -66,7 +66,7 @@ teardown to finish instead of racing it.
 This macro only STARTS that asynchronous engine stop.  The destroy of
 the reactor, the stop of the idle sweep and the close of the fallback
 engine logger all run on a separate reaper thread after this call
-returns, and every guarantee of this call is about name alone: its
+returns, and every guarantee of this call is about name alone: Its
 listener is closed, its connections are closed and its worker pool is
 drained.  Call chttpsvr_engine_wait() after it whenever that final
 teardown has to finish before your next step.  Always call it before

@@ -33,11 +33,11 @@ SOFTWARE.
 // on_request_line, CHTTP1_HEADERS_DIVERT_BODY and the request body rule of
 // RFC 7230 section 3.3. The parser does no I/O. A request parser, and a
 // response parser that never enabled line spilling, owns nothing, so it can
-// live on the stack and needs no release: the line buffer is a fixed array in
+// live on the stack and needs no release: The line buffer is a fixed array in
 // the struct, and its size is also the line length cap. Body bytes never pass
 // through that buffer.
 //
-// Three caps hold back a peer that sends endless headers: the line length,
+// Three caps hold back a peer that sends endless headers: The line length,
 // the header count and the total header bytes. Trailers count against the
 // same count and byte budget as the headers.
 //
@@ -80,7 +80,7 @@ typedef enum {
   // the parse stopped right after the header block, before any body byte.
   // chttp1_parser_consumed() is the size of the header block in this call's
   // buffer; the rest belongs to the caller (for example as the leftover of
-  // chttp1_stream_prepare()). Unlike PAUSED this isn't terminal: state already
+  // chttp1_stream_prepare()). Unlike PAUSED this isn't terminal: State already
   // sits at the body framing, and more chttp1_parser_execute() calls, from the
   // thread that owns the connection, continue the body.
   CHTTP1_HEADERS_ONLY
@@ -119,7 +119,7 @@ typedef enum {
   CHTTP1_ST_DEAD
 } chttp1__state;
 
-// What an EOF means at the current point: a clean boundary, the end of an
+// What an EOF means at the current point: A clean boundary, the end of an
 // EOF-delimited body, or a cut message. chttp1_parser_finish() reads it, so
 // its caller needn't know the framing.
 typedef enum {
@@ -172,7 +172,7 @@ typedef struct {
   // body follows (a HEAD response, whatever Content-Length says), or, in
   // request mode, DIVERT_BODY to stop with CHTTP1_HEADERS_ONLY. Any other value
   // stops with CHTTP1_USER, so a callback can report a real error. DIVERT_BODY
-  // acts as HAS_BODY when there's nothing to divert: no framing at all, or
+  // acts as HAS_BODY when there's nothing to divert: No framing at all, or
   // "Content-Length: 0". A chunked body is always diverted, since its emptiness
   // shows only on the first chunk-size line.
   int (*on_headers_complete)(chttp1_parser *p);
@@ -189,7 +189,7 @@ typedef struct {
 // The parser. It owns a resource only after a response parser with spilling
 // enabled has spilled a line.
 struct chttp1_parser {
-  // For the caller: set it after the init and read it in the callbacks.
+  // For the caller: Set it after the init and read it in the callbacks.
   void *data;
 
   // Response mode only, set before on_headers_complete; 0 in request mode.
@@ -214,17 +214,17 @@ struct chttp1_parser {
 
   size_t header_count;
   size_t total_header_bytes;
-  // Request mode: blank lines accepted before the request line (RFC 7230
+  // Request mode: Blank lines accepted before the request line (RFC 7230
   // section 3.5).
   size_t leading_blank_lines;
 
   // Request mode: Host lines seen, saturating. Judged at the end of the header
-  // block: more than one, or none in HTTP/1.1, is a 400 (RFC 7230 section 5.4),
+  // block: More than one, or none in HTTP/1.1, is a 400 (RFC 7230 section 5.4),
   // because two Host lines let a front end and a back end disagree about the
   // authority.
   uint8_t host_count;
 
-  // Response mode: set by chttp1_parser_enable_line_spill().
+  // Response mode: Set by chttp1_parser_enable_line_spill().
   bool line_spill_enabled;
 
   // Overrides of the built-in header count and total byte caps, 0 for the
@@ -251,7 +251,7 @@ struct chttp1_parser {
   const chttp1_settings *settings;
 
   // Accumulates the status, request, header, trailer and chunk-size lines,
-  // across execute() calls. It must stay the last member: an init clears only
+  // across execute() calls. It must stay the last member: An init clears only
   // the members in front of it, which is safe because nothing reads a byte of
   // line_buf or line_spill not written since the reset. Every reader stops at
   // line_len, and accumulate_line() looks back only at bytes it counted. A new
@@ -385,7 +385,7 @@ uint64_t chttp1_declared_content_length(const chttp1_parser *parser);
 // large (413) instead of a generic failure. False in every other case.
 bool chttp1_chunk_size_limit_exceeded(const chttp1_parser *parser);
 
-// Gives the body bytes the framing still guarantees: the rest of a
+// Gives the body bytes the framing still guarantees: The rest of a
 // Content-Length body, the rest of the current chunk's data, and 0 on a
 // chunk-size line, a chunk CRLF, in the trailers and in every other state. A
 // server uses it as SO_RCVLOWAT, since a peer that follows its framing sends
@@ -405,7 +405,7 @@ bool chttp1_request_bytes_may_remain(const chttp1_parser *parser);
 //
 // A reactor-free helper that lets a worker thread read and write a connection
 // with an absolute timeout per call. It first delivers the carry-over bytes a
-// reactor thread read along with the headers. The usual flow: parse the head
+// reactor thread read along with the headers. The usual flow: Parse the head
 // until CHTTP1_HEADERS_ONLY, hand the fd and the unconsumed bytes to a worker,
 // which prepares a stream with them and feeds chttp1_stream_read() output to
 // the same parser until CHTTP1_PAUSED. chttp1_stream_write() serves the
@@ -434,7 +434,7 @@ typedef struct chttp1_stream {
   bool timed_out;
   bool prepared;
   bool released;
-  // When true, writes never wait: a full socket counts as a timeout. For a
+  // When true, writes never wait: A full socket counts as a timeout. For a
   // caller that waits for writability on its own reactor. Cleared by prepare;
   // no effect on reads.
   bool write_nonblocking;

@@ -96,7 +96,7 @@ build: $(SRC_OBJS) tests_locale
 # The locale_folding tests run the client under a Turkish LC_CTYPE, where
 # strcasecmp() and tolower() fold 'I' to a letter other than 'i'. They use
 # this private copy of tr_TR.UTF-8, found through LOCPATH. The step is best
-# effort: without localedef (macOS has none) or the tr_TR locale source, the
+# effort: Without localedef (macOS has none) or the tr_TR locale source, the
 # directory stays empty and those tests print that they skipped.
 tests_locale:
 	mkdir -p tests_locale
@@ -128,12 +128,12 @@ build_tsan:
 # instances go away between tests, so ITS OWN parent is single-threaded when
 # it forks.
 #
-# suppressions=tsan_openssl.supp: the comment in that file describes the one
+# suppressions=tsan_openssl.supp: The comment in that file describes the one
 # known race it suppresses, which is entirely inside OpenSSL (client
 # handshakes running at the same time and verifying against one shared trust
 # store).
 #
-# print_suppressions=1: a suppression that matches nothing prints exactly
+# print_suppressions=1: A suppression that matches nothing prints exactly
 # what a working one prints, so every run shows how many times each anchor
 # fired. If an anchor's count stays at zero, derive it again from a real
 # report instead of leaving it there.
@@ -143,7 +143,7 @@ test_tsan: build_tsan check_tsan_supp
 # A ThreadSanitizer suppression matches any frame of either access in the
 # race, so an anchor that names one of our own functions silently hides a
 # race in this library just as easily as the third-party race it was written
-# for. This target turns that into a hard failure: every race: anchor in
+# for. This target turns that into a hard failure: Every race: anchor in
 # tsan_openssl.supp must name a frame that the test binary doesn't define,
 # which for a third-party race means a symbol inside libcrypto or libssl and
 # not one of ours. It fails just as loudly when the file gives no anchor at
@@ -223,7 +223,7 @@ build_parser: $(PARSER_OBJS)
 # status line differ enough in grammar that each wants a corpus of its own,
 # and one shared pile doesn't serve both. They need clang, since libFuzzer is
 # a feature of Clang and LLVM. tests/cyaml/Makefile has the same `fuzz`
-# target, with the same reason for .PHONY: a directory fuzz/corpus_request or
+# target, with the same reason for .PHONY: A directory fuzz/corpus_request or
 # fuzz/corpus_response is already on disk, and without .PHONY make takes a
 # bare `fuzz_request` or `fuzz_response` target as already done and skips the
 # whole recipe. Run ./fuzz_chttp1_request fuzz/corpus_request
@@ -316,7 +316,7 @@ memtest: build build_parser build_default_client build_differential build_sigpip
 # plain, non-atomic increments, and the async engine of this suite runs many
 # threads, two of which can increment the same counter at once. gcov then
 # sometimes reports a negative delta when it reconciles the counts, and it
-# isn't deterministic: a different file, line and value from one run to the
+# isn't deterministic: A different file, line and value from one run to the
 # next. It's a limit of the gcov instrumentation for concurrent code and has
 # nothing to do with the library's logic. The mismatch and inconsistent flags
 # are there for the same kind of reason, a known quirk of the tool.

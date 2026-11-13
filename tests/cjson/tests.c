@@ -159,7 +159,7 @@ TEST(construction, object_replace_frees_old) {
   cjson_destroy(o);
 }
 
-// The ownership tests: a node that already has an owner (a borrowed reference
+// The ownership tests: A node that already has an owner (a borrowed reference
 // from a getter, a parsed child, the container itself) must be refused with
 // ccol_invalid_args and the tree must stay intact. Two owners would each
 // destroy the node, which corrupts the heap; with the default allocator the
@@ -1909,7 +1909,7 @@ TEST(construction, object_get_null_returns_null) {
   cjson_destroy(o);
 }
 
-// A tracking allocator: the _ta_* functions forward to the C library and count
+// A tracking allocator: The _ta_* functions forward to the C library and count
 // allocations and frees, so a test can see that a tree uses its custom
 // allocator and that the counts balance.
 static size_t _ta_allocs = 0;
@@ -1936,7 +1936,7 @@ static ccol_memmgmt_procs _tracking_alloc = {
     .realloc = _ta_realloc,
 };
 
-// A budget allocator: it lets g_alloc_remaining calls through and then fails
+// A budget allocator: It lets g_alloc_remaining calls through and then fails
 // every later one (-1 means no limit), for the sweeps of every failure point.
 static int g_alloc_remaining = -1;
 
@@ -1960,7 +1960,7 @@ static ccol_memmgmt_procs g_counting_mp = {.malloc = counting_malloc,
                                            .realloc = counting_realloc,
                                            .free = free};
 
-// A single-fault allocator: it fails only the call whose 1-based number is
+// A single-fault allocator: It fails only the call whose 1-based number is
 // g_single_fault_at and counts calls in g_single_fault_counter. A test needs it
 // when something built after the failure (an error message) must still
 // succeed.
@@ -3093,7 +3093,7 @@ TEST(node_pool, cap_eviction_keeps_pool_bounded) {
   REQUIRE_EQ(cjson_debug_pool_size(), (size_t)CJSON_TEST_POOL_CAP);
 }
 
-// What pool_populate_thread() saw: its pool size before and after.
+// What pool_populate_thread() saw: Its pool size before and after.
 typedef struct {
   size_t start_pool_size;
   size_t end_pool_size;
@@ -4368,7 +4368,7 @@ TEST(dict_iter, a_walk_allocates_nothing) {
   REQUIRE_EQ((void *)copy, NULL);
 }
 
-// The shape of a nesting test document: all arrays, all objects, or both
+// The shape of a nesting test document: All arrays, all objects, or both
 // alternating by level.
 typedef enum { DEPTH_ARRAYS, DEPTH_OBJECTS, DEPTH_MIXED } depth_shape_t;
 
@@ -4647,7 +4647,7 @@ TEST(cjson_macros, destroy_evaluates_its_argument_once) {
   REQUIRE_EQ((void *)trees[1], NULL);
 }
 
-// The honest allocator of the procs tests (_pl_* functions): it counts calls
+// The honest allocator of the procs tests (_pl_* functions): It counts calls
 // and live blocks. The poison allocator (_pl_poison_*) forwards to the C
 // library and counts calls in _pl_poison_calls; any call means the library read
 // the caller's struct after the call that took it.
@@ -4835,7 +4835,7 @@ TEST(set_value_types, c11_true_is_an_int_and_a_cast_makes_a_bool) {
   REQUIRE_TRUE(b_is_bool);
 }
 
-// What the memory probe allocator measures: live and peak bytes, live blocks,
+// What the memory probe allocator measures: Live and peak bytes, live blocks,
 // calls; fail makes every later call fail.
 typedef struct {
   size_t live_bytes;
@@ -4856,7 +4856,7 @@ static void _mem_note(size_t add, size_t sub) {
   g_mem.live_bytes -= sub;
   if (g_mem.live_bytes > g_mem.peak_bytes) g_mem.peak_bytes = g_mem.live_bytes;
 }
-// The probe allocator: each block records its size in a header so the
+// The probe allocator: Each block records its size in a header so the
 // functions can follow the live and peak bytes in g_mem.
 static void *_mem_malloc(size_t n) {
   if (g_mem.fail) return NULL;

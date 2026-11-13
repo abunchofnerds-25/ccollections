@@ -14,13 +14,13 @@ ccol_retval cthrpool_try_submit_future(cthrpool pool,
 .fi
 .SH DESCRIPTION
 .nf
-Allocates a future and submits it to the pool, and never blocks: when
+Allocates a future and submits it to the pool, and never blocks: When
 a bounded queue is at capacity the function returns
 ccol_container_full at once and sets *out to NULL. With an unbounded
 queue it behaves exactly like cthrpool_submit_future.
 
 On success *out is set to a new cthrpool_future handle with a reference
-count of 2: the caller holds one reference, and the queued task holds
+count of 2: The caller holds one reference, and the queued task holds
 the other. The caller must call cthrpool_future_free exactly once when
 it is done.
 .fi

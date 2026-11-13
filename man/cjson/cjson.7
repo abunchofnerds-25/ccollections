@@ -19,7 +19,7 @@ cjson_type(3) gives the type of a node, as a cjson_node_type:
                      cjson_double_val(3)
   CJSON_STRING       a UTF-8 string, read with cjson_str_val(3)
   CJSON_LIST         an array of child nodes
-  CJSON_DICTIONARY   an object: string keys, each with a child node
+  CJSON_DICTIONARY   an object: String keys, each with a child node
 
 A value accessor stops the program through ccol__fatal_err() when the
 node has a different type, and for a NULL node as well, so call

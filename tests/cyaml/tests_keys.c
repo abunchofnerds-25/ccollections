@@ -24,7 +24,7 @@ SOFTWARE.
 
 // Parsing in a process with no thread-specific key left. The destructor of a
 // cyaml key frees each thread's node pool and error buffer, so a thread that
-// can't arm that key must keep neither: every node goes back to the allocator
+// can't arm that key must keep neither: Every node goes back to the allocator
 // and a failed parse reports a fixed message. The key is created once per
 // process, so this runs in its own binary where no cyaml call comes first; the
 // memtest target runs it under valgrind, which reports anything left behind.
@@ -48,7 +48,7 @@ static pthread_key_t exhausted[MAX_TEST_KEYS];
 // real program, before using up the rest.
 static __thread volatile int runtime_tls_probe;
 
-// What one thread saw: how many of its parses worked, its pool size after the
+// What one thread saw: How many of its parses worked, its pool size after the
 // destroys, and whether a failed parse gave the fixed message.
 typedef struct {
   int parsed;
@@ -56,7 +56,7 @@ typedef struct {
   int fixed_message;
 } keys_thread_result_t;
 
-// Thread body: parses and destroys a document four times, then fails a parse,
+// Thread body: Parses and destroys a document four times, then fails a parse,
 // and records the results in the keys_thread_result_t that arg points at.
 static void *parse_and_destroy(void *arg) {
   keys_thread_result_t *r = (keys_thread_result_t *)arg;

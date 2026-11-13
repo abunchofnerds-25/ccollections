@@ -40,7 +40,7 @@ typedef struct {
   size_t thread_magazines;
 } user_args_t;
 
-// Thread body of the unload test: allocates and frees 100 entries of a->mp,
+// Thread body of the unload test: Allocates and frees 100 entries of a->mp,
 // counting failures, then records how many magazines this thread holds before
 // it exits.
 static void *pool_user(void *arg) {
@@ -57,7 +57,7 @@ static void *pool_user(void *arg) {
   return NULL;
 }
 
-// After the unload no thread may build a magazine: nothing would drain it at
+// After the unload no thread may build a magazine: Nothing would drain it at
 // thread exit, the pool would count it as live forever and memtest would
 // report it lost.
 TEST(mempool_unload, no_thread_cache_is_built_after_the_module_unloads) {

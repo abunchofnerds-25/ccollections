@@ -1,4 +1,4 @@
-# citerators: one loop for every container
+# citerators: One loop for every container
 
 `citerators` is the iteration API that [cvector](cvector.md),
 [chashmap](chashmap.md) and [cbstmap](cbstmap.md) share. You write the same
@@ -85,7 +85,7 @@ ccol_for_each(prices, it, {
 });
 ```
 
-Keys are read-only, and so is a `char *` value: the compiler won't let you
+Keys are read-only, and so is a `char *` value: The compiler won't let you
 point it at another string. If you want to store a different string, insert
 the key again after the loop.
 
@@ -177,7 +177,7 @@ The iterator treats a `NULL` container handle as an empty container, on
 purpose. That helps with a container you only create when its first element
 arrives, and the loop doesn't need a `NULL` check of its own.
 
-## Example: the most frequent words
+## Example: The most frequent words
 
 This program counts words with a hash map, copies the counts into a vector
 while it walks the map, sorts the vector by count with the most frequent
@@ -239,7 +239,7 @@ The `word` pointers in the table borrow the key copies that belong to the
 map. That's fine here since the map doesn't change while the table is in
 use, and the table is destroyed first.
 
-## Example: remove expired sessions
+## Example: Remove expired sessions
 
 A server keeps its sessions in an ordered map from a session id to the last
 time it saw that session. Entries can't be removed while the loop walks the

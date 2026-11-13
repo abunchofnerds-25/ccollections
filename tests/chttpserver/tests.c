@@ -352,7 +352,7 @@ static void _stream_error_report_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 // Reports in x-trailer-value what chttpsvr_req_header says for "X-Trailer",
 // which the client sends only as a trailer of a chunked body. It pins that a
-// trailer isn't a request header: it reads as absent even though the whole body
+// trailer isn't a request header: It reads as absent even though the whole body
 // is read before a buffered handler runs.
 static void _buffered_trailer_echo_handler(chttpsvr_req *req,
                                            chttpsvr_resp *resp, void *ctx) {
@@ -453,7 +453,7 @@ static void _path_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
   chttpsvr_resp_write_str(resp, chttpsvr_req_path(req));
 }
 
-// Writes what chttpsvr_req_query_one gives for "q": the value, "not_found",
+// Writes what chttpsvr_req_query_one gives for "q": The value, "not_found",
 // "multi_value" or "error". It serves /query-one for the query_one tests.
 static void _query_one_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                void *ctx) {
@@ -490,7 +490,7 @@ static void _multi_write_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "baz");
 }
 
-// Writes the body with chttpsvr_resp_printf: one call that fits its stack
+// Writes the body with chttpsvr_resp_printf: One call that fits its stack
 // buffer and forty more that add up past it, for printf_accumulates.
 static void _printf_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
   (void)req;
@@ -1088,7 +1088,7 @@ static chttpcli_response *_bounded_get(void) {
   return resp;
 }
 
-// Thread entry: sends one GET /bounded-503 and throws the response away. The
+// Thread entry: Sends one GET /bounded-503 and throws the response away. The
 // 503 test fills the pool from such threads.
 static void *_send_bounded_req(void *arg) {
   (void)arg;
@@ -1097,7 +1097,7 @@ static void *_send_bounded_req(void *arg) {
   return NULL;
 }
 
-// Thread entry: sends a GET that g_srv answers with 404 and stores the status,
+// Thread entry: Sends a GET that g_srv answers with 404 and stores the status,
 // or -1, in the int that arg points to. It makes the burst of rejections of
 // concurrent_route_rejections_do_not_starve_other_requests.
 static void *_send_unmatched_route_req(void *arg) {
@@ -1240,7 +1240,7 @@ static void _restore_unused_servers(int *scope) {
   __attribute__((cleanup(_restore_unused_servers), \
                  unused)) int _fork_test_scope = _release_unused_servers()
 
-// Builds every server and route of this binary before the first test: raises
+// Builds every server and route of this binary before the first test: Raises
 // the fd soft limit (some tests hold hundreds of connections), opens
 // g_test_logger, registers the routes of g_srv and its sub-routers, installs
 // the engine logger and starts g_srv, g_bounded_srv and g_small_body_srv.
@@ -2214,7 +2214,7 @@ static size_t g_wrap_free_count;
 static size_t g_wrap_calloc_count;
 static size_t g_wrap_realloc_count;
 
-// The counting allocator of custom_allocator_lifecycle: each function counts
+// The counting allocator of custom_allocator_lifecycle: Each function counts
 // its call in its g_wrap_*_count and passes it to the C library (free counts
 // only non-NULL pointers).
 static void *_wrap_malloc(size_t n) {
@@ -3602,7 +3602,7 @@ TEST(
 }
 
 // A request with Expect: 100-continue and no body must not get "100 Continue",
-// even when the streaming handler reads: there is no body to invite.
+// even when the streaming handler reads: There is no body to invite.
 TEST(chttpserver, expect_100_continue_not_sent_for_bodyless_streaming_request) {
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
@@ -3845,7 +3845,7 @@ TEST(chttpserver, stream_read_timeout_ms_zero_means_wait_indefinitely) {
   chttpsvr_destroy(srv);
 }
 
-// Concurrent streaming echo: each thread posts its own payload and checks the
+// Concurrent streaming echo: Each thread posts its own payload and checks the
 // echo and the global middleware header.
 #define N_CONCURRENT_STREAMS 8
 
@@ -5728,7 +5728,7 @@ static void *_drip_body_bg_thread(void *arg) {
 }
 
 // The server and the done signal of one destroy-from-a-thread test. Each run
-// has its own block on the heap: a test that times out detaches its thread and
+// has its own block on the heap: A test that times out detaches its thread and
 // leaks the block, and a thread left over from an earlier test can then never
 // signal a later test's wait.
 typedef struct {
@@ -5853,7 +5853,7 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
 
 // Declares a large Content-Length on the port that arg points to, sends a few
 // bytes and then neither sends nor closes. It is the stalled peer of
-// destroy_does_not_hang_when_worker_blocked_with_disabled_timeouts: with both
+// destroy_does_not_hang_when_worker_blocked_with_disabled_timeouts: With both
 // read timeouts at 0 only the forced unblock of the destroy can free the worker
 // that reads it.
 static void *_stall_forever_bg_thread(void *arg) {
@@ -6723,7 +6723,7 @@ TEST(chttpserver, max_connections_at_capacity_does_not_busy_loop) {
   REQUIRE_EQ(status_c, 200);
 }
 
-// Arms the allocator below: once set, every calloc fails. Accepting a
+// Arms the allocator below: Once set, every calloc fails. Accepting a
 // connection makes exactly one calloc through the server's procs (the conn
 // struct), so arming it after chttpsvr_start makes every later accept fail its
 // allocation.
@@ -6762,7 +6762,7 @@ static bool _wait_for_listener_resource_pause(size_t before) {
 }
 
 // An allocation failure after a successful accept must not loop straight back
-// to accept: it pauses the listener (a sleep would block the shared reactor)
+// to accept: It pauses the listener (a sleep would block the shared reactor)
 // and the idle sweep resumes it once allocations work again. White-box counters
 // show the pause, because the sweep can resume the listener at any moment.
 TEST(chttpserver,
@@ -7067,7 +7067,7 @@ static void _large_body_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 // Tells whether the server's end of client_fd's TCP connection is still open in
-// this process: a socket other than client_fd whose ports mirror client_fd's.
+// this process: A socket other than client_fd whose ports mirror client_fd's.
 // response_write_timeout_closes_slow_reader_connection uses it to see that the
 // server really closed.
 static bool _server_end_of_conn_open(int client_fd) {
@@ -7239,7 +7239,7 @@ TEST(chttpserver, idle_sweep_negative_elapsed_never_flagged_as_timed_out) {
   REQUIRE_TRUE(chttpsvr__conn_idle_timed_out_for_tests(now, now, 0));
 }
 
-// A cap expires only when its whole span has passed: time left rounds up,
+// A cap expires only when its whole span has passed: Time left rounds up,
 // elapsed time rounds down. Each case is less than a millisecond from the
 // limit, some across a tv_sec boundary, where truncating arithmetic fires
 // early.
@@ -7677,7 +7677,7 @@ TEST(chttpserver, head_request_on_rejected_route_still_has_no_body) {
 // allocation of the server and leave the rest alone.
 static _Atomic size_t g_fail_alloc_size = 0;
 
-// The fail-at-size allocator: each allocating call returns NULL when its size
+// The fail-at-size allocator: Each allocating call returns NULL when its size
 // equals g_fail_alloc_size and passes through to the C library otherwise. The
 // allocation failure tests use it to fail one chosen allocation of the server.
 static void *_fail_at_size_malloc(size_t n) {
@@ -8517,7 +8517,7 @@ TEST(chttpserver,
 
 // Calls next and nothing else. The handle lifecycle tests below register it
 // when they need a call that resolves the server. Those tests check the
-// generation-tagged handle: a second destroy, concurrent or not, and a destroy
+// generation-tagged handle: A second destroy, concurrent or not, and a destroy
 // from the server's own worker are fatal errors instead of a double free. They
 // fork, because ccol__fatal_err aborts, and use NULL loggers so they don't
 // depend on the state of _setup.
@@ -8739,7 +8739,7 @@ static void _self_restarting_handler_for_lifecycle_test(chttpsvr_req *req,
 }
 
 // Destroys g_self_restart_srv_for_lifecycle_test if it exists. The self-restart
-// test calls it before a failing REQUIRE returns: a global can't carry a
+// test calls it before a failing REQUIRE returns: A global can't carry a
 // cleanup attribute, and a leaked server would hang the engine wait of
 // _teardown.
 static void _destroy_self_restart_test_server_if_live(void) {
@@ -8938,7 +8938,7 @@ TEST(chttpsvr_handle_lifecycle, router_resolve_unpin_race_stress) {
 }
 
 #if CCOL_FORK_SAFETY_REQUIRED
-// The fork-safety tests: they need the atfork handlers, which a
+// The fork-safety tests: They need the atfork handlers, which a
 // CCOL_FORK_SAFETY_REQUIRED=0 build leaves out. This is the feeder thread's
 // server and its stop flag.
 typedef struct {
@@ -9602,7 +9602,7 @@ TEST(doubling_growth_cap, byte_size_multiplication_overflow_rejected) {
   REQUIRE_EQ(chttpsvr__doubling_growth_cap_for_tests(cap, 4096, 8), (size_t)0);
 }
 
-// The accept errno classification: resource exhaustion (EMFILE and friends)
+// The accept errno classification: Resource exhaustion (EMFILE and friends)
 // backs off with a rate-limited log, a per-connection error such as
 // ECONNABORTED is retried at once. The tests call the classifier directly.
 TEST(accept_errno_classification,
@@ -10903,7 +10903,7 @@ TEST(chttpserver, a_1xx_status_from_a_handler_goes_out_as_500_with_a_date) {
   REQUIRE_TRUE(_first_date_value(buf, val, sizeof(val)));
 }
 
-// The slow-client tests: the parking of slow bodies and slow readers, the rate
+// The slow-client tests: The parking of slow bodies and slow readers, the rate
 // floor, the body memory limit and the streaming pool. Every wait on the server
 // is a bounded poll of white-box state, every time limit is crossed with the
 // injected clock and a sweep tick run on the test thread, and each test ends by
@@ -10928,7 +10928,7 @@ static void _sc_nap_ms(long ms) {
 }
 
 // Connects to 127.0.0.1:port and returns the fd, or -1. It is the client socket
-// of the slow-client tests: a 5 s receive timeout makes a regression fail a
+// of the slow-client tests: A 5 s receive timeout makes a regression fail a
 // read instead of hanging, and TCP_NODELAY sends every write at once, because a
 // kernel that delays acknowledgements on loopback (FreeBSD) would hold a second
 // small write back.
@@ -11075,33 +11075,33 @@ static bool _sc_wait_for_zero(chttpsvr h, _sc_probe_fn probe, void *arg,
   }
   return true;
 }
-// Probe: the number of connections of h parked on a body. Each of these small
+// Probe: The number of connections of h parked on a body. Each of these small
 // probes returns one white-box count of h for _sc_wait_for; arg is unused.
 static size_t _sc_parked_bodies(chttpsvr h, void *arg) {
   (void)arg;
   return chttpsvr__parked_count_for_tests(h, 1);
 }
-// Probe: the number of connections of h parked on a write.
+// Probe: The number of connections of h parked on a write.
 static size_t _sc_parked_writes(chttpsvr h, void *arg) {
   (void)arg;
   return chttpsvr__parked_count_for_tests(h, 2);
 }
-// Probe: the number of requests of h waiting for body memory.
+// Probe: The number of requests of h waiting for body memory.
 static size_t _sc_mem_waiting(chttpsvr h, void *arg) {
   (void)arg;
   return chttpsvr__mem_waiting_for_tests(h);
 }
-// Probe: the body memory that h has reserved.
+// Probe: The body memory that h has reserved.
 static size_t _sc_mem_in_use(chttpsvr h, void *arg) {
   (void)arg;
   return chttpsvr__mem_in_use_for_tests(h);
 }
-// Probe: the number of requests in h's streaming queue.
+// Probe: The number of requests in h's streaming queue.
 static size_t _sc_stream_queue(chttpsvr h, void *arg) {
   (void)arg;
   return chttpsvr__stream_queue_len_for_tests(h);
 }
-// Probe: the number of active threads of h's streaming pool.
+// Probe: The number of active threads of h's streaming pool.
 static size_t _sc_stream_active(chttpsvr h, void *arg) {
   (void)arg;
   return chttpsvr__pool_active_for_tests(h, true);
@@ -11453,12 +11453,12 @@ TEST(slow_clients, rate_floor_keeps_a_body_just_above_it) {
   REQUIRE_TRUE(_sc_wait_for_zero(srv, _sc_mem_in_use, NULL, 5000));
 }
 
-// Probe: the number of active threads of h's worker pool.
+// Probe: The number of active threads of h's worker pool.
 static size_t _sc_workers_active(chttpsvr h, void *arg) {
   (void)arg;
   return chttpsvr__pool_active_for_tests(h, false);
 }
-// Probe: the process-wide count of parked connections handed to a worker.
+// Probe: The process-wide count of parked connections handed to a worker.
 static size_t _sc_resume_dispatches(chttpsvr h, void *arg) {
   (void)h;
   (void)arg;
@@ -12113,7 +12113,7 @@ TEST(slow_clients, a_queued_streaming_request_past_its_deadline_gets_503) {
 }
 
 // Runs one round of the claim race of
-// the_sweep_and_a_streaming_task_answer_a_request_once: the streaming task
+// the_sweep_and_a_streaming_task_answer_a_request_once: The streaming task
 // stops just before (where = 1) or just after (where = 2) it takes the queued
 // request, that request's deadline passes and the sweep runs. Exactly one of
 // the two must answer, with one 503, and the handler must never run for it. The
@@ -12994,13 +12994,13 @@ TEST(conformance, chunk_extensions_are_bounded_by_the_data_they_carry) {
 
 #include <internal/chttp1_parser.h>
 
-// What _spill_on_header saw: the longest value and the number of headers.
+// What _spill_on_header saw: The longest value and the number of headers.
 typedef struct {
   size_t longest_value;
   size_t headers;
 } _spill_ctx_t;
 
-// Header callback of the response line spill tests: counts the header and keeps
+// Header callback of the response line spill tests: Counts the header and keeps
 // the longest value length in the _spill_ctx_t of the parser.
 static int _spill_on_header(chttp1_parser *p, const char *name, size_t name_len,
                             const char *value, size_t value_len) {
@@ -13016,7 +13016,7 @@ static int _spill_on_header(chttp1_parser *p, const char *name, size_t name_len,
 // Allocations and frees of the spill allocator below.
 static _Atomic int g_spill_allocs = 0;
 static _Atomic int g_spill_frees = 0;
-// The counting allocator of the spill tests: each call is counted in
+// The counting allocator of the spill tests: Each call is counted in
 // g_spill_allocs or g_spill_frees and passed to the C library.
 static void *_spill_malloc(size_t n) {
   atomic_fetch_add(&g_spill_allocs, 1);
@@ -13445,13 +13445,13 @@ TEST(listener_unix, a_relative_path_is_cleaned_up_after_a_chdir) {
   REQUIRE_TRUE(b_kept);
 }
 
-// Probe: the number of connections of h in a lingering close.
+// Probe: The number of connections of h in a lingering close.
 static size_t _lc_lingering(chttpsvr h, void *arg) {
   (void)arg;
   return chttpsvr__parked_count_for_tests(h, 6);
 }
 
-// Probe: the requests of h that a thread is serving or rejecting right now.
+// Probe: The requests of h that a thread is serving or rejecting right now.
 static size_t _lc_in_flight(chttpsvr h, void *arg) {
   (void)arg;
   int n = chttpsvr__in_flight_requests_for_tests(h);
@@ -13747,7 +13747,7 @@ TEST(slow_clients, a_huge_declared_length_never_wraps_the_memory_count) {
   REQUIRE_EQ(after, 200);
 }
 
-// State of the allocator below: once armed, it fails the g_lc_fail_nth-th
+// State of the allocator below: Once armed, it fails the g_lc_fail_nth-th
 // allocation of exactly g_lc_fail_size bytes and passes every other call
 // through. g_lc_fail_seen counts the allocations of that size and g_lc_failed
 // the refusals.
@@ -13763,7 +13763,7 @@ static bool _lc_should_fail(size_t n) {
   atomic_fetch_add(&g_lc_failed, 1);
   return true;
 }
-// The fail-nth-of-size allocator of the lost-copy tests: each allocating call
+// The fail-nth-of-size allocator of the lost-copy tests: Each allocating call
 // returns NULL when _lc_should_fail says so and passes through otherwise.
 static void *_lc_malloc(size_t n) {
   return _lc_should_fail(n) ? NULL : malloc(n);
@@ -13856,7 +13856,7 @@ TEST(chttpserver, a_lost_copy_of_pipelined_bytes_closes_the_connection) {
   }
 }
 
-// Probe: the number of idle connections of h.
+// Probe: The number of idle connections of h.
 static size_t _rx_idle(chttpsvr h, void *arg) {
   (void)arg;
   return chttpsvr__idle_count_for_tests(h);
@@ -13937,7 +13937,7 @@ TEST(sweep, one_tick_closes_every_expired_idle_and_parked_connection) {
   REQUIRE_EQ(timeouts, _RX_PARKED_N);
 }
 
-// Probe: the number of active threads of h's worker pool.
+// Probe: The number of active threads of h's worker pool.
 static size_t _rx_workers_active(chttpsvr h, void *arg) {
   (void)arg;
   return chttpsvr__pool_active_for_tests(h, false);
@@ -15405,7 +15405,7 @@ TEST(pause_fallback, a_parked_body_resumes_and_completes) {
 // long as the body.
 #define _BM_PORT (TEST_PORT + 300)
 
-// The server of _bm_server, and what _bm_probe_handler saw while it ran: its
+// The server of _bm_server, and what _bm_probe_handler saw while it ran: Its
 // own request's reservation, its body buffer's capacity, and the reservations
 // of the whole server.
 static _Atomic uint64_t g_bm_srv = 0;
@@ -15943,7 +15943,7 @@ static void _drain_slow_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "done");
 }
 
-// One client of the drain test: its socket path, how many requests it
+// One client of the drain test: Its socket path, how many requests it
 // pipelines, the shared start and stop flags, and how many answers it got.
 typedef struct {
   const char *sock_path;
@@ -16223,7 +16223,7 @@ static _Atomic int g_locale_set_te_rv = 1;
 
 // Echoes x-client-id, tries to set "TRANSFER-ENCODING" (storing the result in
 // g_locale_set_te_rv) and sets "CONNECTION". Under the Turkish locale both
-// names must still be recognised: the first refused, the second kept off the
+// names must still be recognised: The first refused, the second kept off the
 // wire.
 static void _locale_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                    void *ctx) {
@@ -16633,7 +16633,7 @@ TEST(listen_info, a_unix_listener_reports_its_path_and_no_port) {
   REQUIRE_STREQ(addr, host_buf);
 }
 
-// The request context tests: the keys are the addresses of these constants, and
+// The request context tests: The keys are the addresses of these constants, and
 // the values are these strings, which the tests compare by address.
 static const char g_ctx_key_a = 0, g_ctx_key_b = 0, g_ctx_key_c = 0,
                   g_ctx_key_d = 0, g_ctx_key_e = 0, g_ctx_key_unset = 0,
@@ -17144,7 +17144,7 @@ static bool _sw_fail_now(void) {
   atomic_fetch_add(&g_sw_failed, 1);
   return true;
 }
-// The allocator of the allocation sweeps: each allocating call fails when
+// The allocator of the allocation sweeps: Each allocating call fails when
 // _sw_fail_now says so and keeps g_sw_live up to date otherwise.
 static void *_sw_malloc(size_t n) {
   if (_sw_fail_now()) return NULL;
@@ -17361,7 +17361,7 @@ static void _rsw_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     chttpsvr_resp_set_status(resp, 500);
 }
 
-// Tells whether the handler's results and the response in buf agree: every call
+// Tells whether the handler's results and the response in buf agree: Every call
 // gave ccol_success or ccol_not_enough_memory, and a header is on the wire
 // exactly when the call that set it worked.
 static bool _rsw_response_agrees(const char *buf) {

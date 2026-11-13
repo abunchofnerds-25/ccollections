@@ -35,11 +35,11 @@ returns, and even after main() returns. A pool that threads share keeps a small
 cache of entries for each thread. A destroy of the pool marks those caches dead
 but doesn't free them, because a cache belongs to the thread that holds it and
 another thread must not free it under that thread. Each cache is freed later,
-at one of three points: when the owning thread next has to get a cache for a
+at one of three points: When the owning thread next has to get a cache for a
 pool that it doesn't already hold one for, when that thread exits, or at
 process exit or when dlclose(3) unloads the library, if that thread is the one
 that runs the library's unload handler. Each free calls the free function that
-the pool was created with. None of these points is guaranteed to come: a thread
+the pool was created with. None of these points is guaranteed to come: A thread
 that keeps using the same few pools answers every request from the caches it
 already holds and never gets another one, so it can hold a dead cache for ever.
 A program that needs its allocator to see every free should join such threads.

@@ -57,7 +57,7 @@
 #define BENCH_QUEUE_N 200000
 
 /* The contended queue forms use a shorter repetition, for the same reason as
- * the cache benchmarks: a send and receive pair is a per-operation cost with
+ * the cache benchmarks: A send and receive pair is a per-operation cost with
  * no fixed cost around it, so many short repetitions describe the
  * distribution much better than ten long ones.
  *
@@ -162,7 +162,7 @@ static void q_drain(q_state_t *st) {
   cmessage out = {0};
   /* There's no channel arm here. A channel routes by thread identity, so the
    * teardown thread can't receive from the side its peer sent into, and no
-   * arm is needed anyway: the one case that uses a channel sends exactly as
+   * arm is needed anyway: The one case that uses a channel sends exactly as
    * many messages as its peer receives and stops the process on any other
    * result, so the channel is always empty at the destroy. A case that changes
    * that has to drain the channel from the peer's thread before that thread
@@ -277,7 +277,7 @@ static void dynq_roundtrip_run(void *state, size_t n) {
   bench_sink(st->payload);
 }
 
-/* A channel carries messages both ways and routes by thread identity: the
+/* A channel carries messages both ways and routes by thread identity: The
  * thread that creates a channel sends towards the other side and receives
  * from it, so one thread can't send a message and then receive that same
  * message. So this case always needs a second thread, and it's a producer and
@@ -385,7 +385,7 @@ static void circq_pc_run(void *state, size_t n) {
   if (pthread_create(&cons, NULL, pc_consumer, &arg) != 0) {
     ccircq_disable_sending(st->cq);
     pthread_join(prod, NULL);
-    /* Unwind first and only then stop the run: the producer has to be woken
+    /* Unwind first and only then stop the run: The producer has to be woken
      * and joined before anything else happens, and reporting the time that
      * took as a measurement would be worse than stopping. */
     bench_die("consumer thread could not be started");
@@ -470,7 +470,7 @@ static void glib_pool_submit_run(void *state, size_t n) {
   for (size_t i = 0; i < n; i++)
     g_thread_pool_push(st->tp, GINT_TO_POINTER(1), NULL);
   /* Parked on a short sleep and not a spin, for the reason this project's own
-     drain loops give: under an instrumented run one thread runs at a time, and
+     drain loops give: Under an instrumented run one thread runs at a time, and
      a yield-spin burns whole quanta the worker it waits for needs. */
   /* Bounded. A push that got silently dropped would otherwise leave this
      spinning for the life of the process instead of failing, the kind of hang
@@ -528,7 +528,7 @@ static void pool_submit_only_run(void *state, size_t n) {
  * queue never holds more than one message per thread and a waiting receiver
  * always has a sender ahead of it.
  *
- * The buffers move between threads: a zero-copy send hands ownership to the
+ * The buffers move between threads: A zero-copy send hands ownership to the
  * queue and a receive takes ownership of whatever comes out, which doesn't
  * have to be what this thread put in. The set of buffers is conserved, so
  * each thread parks whatever it ends up holding in its own slot and teardown

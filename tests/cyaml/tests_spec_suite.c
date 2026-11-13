@@ -51,7 +51,7 @@ TAU_MAIN()
 // lower bound would miss.
 #define EXPECTED_CASE_COUNT 354
 
-// One known deviation: the case id and why cyaml follows the reference parsers
+// One known deviation: The case id and why cyaml follows the reference parsers
 // there.
 typedef struct {
   const char *case_id;

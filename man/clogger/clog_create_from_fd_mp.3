@@ -151,7 +151,7 @@ SOCK_DGRAM, SOCK_SEQPACKET or SOCK_RDM socket, such as a UDP socket or
 a Unix datagram socket), which the logger detects when it opens.  Such
 a socket delivers each write as one message, so every record goes out
 as a message of its own, exactly as a synchronous logger sends it.  A
-record larger than the socket can carry fails alone: a "log record
+record larger than the socket can carry fails alone: A "log record
 truncated: 0 of <m> bytes written" record takes its place, and the
 records after it are still delivered.  When the receiver has no room
 the write waits for room, both where the system blocks the send and
@@ -165,7 +165,7 @@ synchronously, and only then stops the process.
 When a process ends with exit(3), or a return from main(), while an
 async logger is still open, an exit handler that the library registers
 when it loads drains every async logger of the process the way a
-CLOG_FATAL call does: the queue first, then the batch, with a "log
+CLOG_FATAL call does: The queue first, then the batch, with a "log
 record truncated: undelivered batch dropped (records=<n> bytes=<m>):
 the process stopped" record for what cannot be delivered.  The handler
 runs after every exit handler that the application registers later, so
@@ -198,7 +198,7 @@ its drain (from an exit handler that runs after the library's, or from
 a destructor) is written synchronously by the thread that logs it, and
 clog_close(3) from there still works.  A logger whose drain the budget
 cut off, because its writer thread did not answer in time, keeps its
-queue, and such a record can then be lost: an unbounded queue still
+queue, and such a record can then be lost: An unbounded queue still
 takes it, a bounded queue drops it at once (its sends stay off, full or
 not), clog_flush(3) returns at once, and clog_close(3) does not wait
 for the writer thread either but leaves the logger in place for the end
@@ -223,7 +223,7 @@ failed, and on a full disk they usually fail too.  The logger then
 keeps both and writes them in front of the next write that the output
 accepts.  An async logger also tries them at each flush of its writer
 thread, so they don't wait for a new record, and every logger tries
-them at exit(3) when nothing is written again: the newline first, then
+them at exit(3) when nothing is written again: The newline first, then
 one marker.  While a single loss waits, the marker carries its own
 text; for more than one it reads "log record truncated: <k> earlier
 losses (records=<n> bytes=<m>): write error <errno>", with the number
@@ -233,7 +233,7 @@ still waiting is not written, because it would continue the fragment on
 the same line, and it counts as one more loss.  So every line of the
 log holds at most one record, and every loss is named once the output
 has room again.  An error that no retry gets past, such as EPIPE from a
-pipe whose reader is gone, ends the wait: the output is gone, so the
+pipe whose reader is gone, ends the wait: The output is gone, so the
 logger gives up the newline and the marker.  The last clog_close(3) of
 the logger makes one more attempt within 100 milliseconds, and a loss
 that it cannot name then stays unnamed.

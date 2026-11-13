@@ -159,7 +159,7 @@ struct cthrpool_future {
   int refcount;
 };
 
-// The hot half of the handle table: handle to pointer, plus the pin that keeps
+// The hot half of the handle table: Handle to pointer, plus the pin that keeps
 // a pool alive during a call. A resolve writes nothing that another thread
 // reads, so submits from many threads don't contend on it.
 static ccol_pintable cthrpool_pintable;
@@ -185,7 +185,7 @@ typedef struct cthrpool_worker_slot {
 // shutdown_complete is set, and shutdown_cv broadcast, once the call that does
 // the shutdown has joined every worker; later shutdown calls wait for it.
 // foreign_since_fork is set only by the child fork handler, for every pool
-// inherited across fork(): its workers don't exist in this process, so nothing
+// inherited across fork(): Its workers don't exist in this process, so nothing
 // may join them. shutdown_cv and the trim fields sit last, away from the lines
 // that the submit and dequeue paths read.
 struct cthread_pool {
@@ -240,14 +240,14 @@ static __thread unsigned long cthrpool_mu_locks_taken;
 #endif
 
 #if CCOL_FORK_SAFETY_REQUIRED
-// The fork prepare handler: takes the table's write lock and the mu of every
+// The fork prepare handler: Takes the table's write lock and the mu of every
 // slot that is in_use or torn_down, so the fork happens while no other thread
 // holds any of them. fork() copies only the calling thread, so a lock another
 // thread holds at that moment would stay locked in the child for good. A
 // torn_down pool still has workers that can hold its mu. The default mutex type
 // tracks no owner, so the release handlers may unlock from any thread, but a
 // glibc rwlock checks the writer's thread ID, which differs in the child, so
-// the child reinitializes it. Futures aren't covered: they have no registry to
+// the child reinitializes it. Futures aren't covered: They have no registry to
 // walk, and each of their critical sections is a few instructions long.
 static void cthrpool_atfork_prepare(void) {
 #ifdef RUNNING_UNIT_TESTS
@@ -309,12 +309,12 @@ static void cthrpool_atfork_release_impl(bool is_child) {
   }
 }
 
-// The parent's fork handler: releases what cthrpool_atfork_prepare took.
+// The parent's fork handler: Releases what cthrpool_atfork_prepare took.
 static void cthrpool_atfork_release(void) {
   cthrpool_atfork_release_impl(false);
 }
 
-// The child's fork handler: releases what cthrpool_atfork_prepare took and
+// The child's fork handler: Releases what cthrpool_atfork_prepare took and
 // marks the inherited pools. It runs before fork() returns in the child, so
 // before any code there can reach the shutdown or destroy of an inherited
 // pool.
@@ -353,14 +353,14 @@ static cthread_pool *cthrpool_resolve(cthrpool h) {
 }
 
 // Drops the pin that cthrpool_resolve took, when a public call is done with the
-// pool. It touches nothing else: the pool can be freed right after, so nothing
+// pool. It touches nothing else: The pool can be freed right after, so nothing
 // may read raw once the pin is gone.
 static void cthrpool_resolve_unpin(cthread_pool *raw) {
   ccol_pintable_unpin(&cthrpool_pintable, raw->self_handle);
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test only: the next free list push fails like an allocation.
+// Test only: The next free list push fails like an allocation.
 static _Atomic bool g_cthrpool_fail_next_free_index_push = false;
 
 // Arms g_cthrpool_fail_next_free_index_push, so a test reaches the
@@ -468,7 +468,7 @@ static cthrpool cthrpool_handle_slot_acquire(cthread_pool *pool) {
 // The thread-specific key that tells a worker which pool it serves. Each worker
 // sets it once at start and never again, because a worker belongs to one pool
 // for its whole life. It lets a task that waits on, shuts down or destroys its
-// own pool be recognised: the join of the shutdown would otherwise get EDEADLK
+// own pool be recognised: The join of the shutdown would otherwise get EDEADLK
 // on the calling worker and carry on, and a destroy would free the pool under
 // that worker. live tells whether the key was created.
 static struct {
@@ -752,7 +752,7 @@ static inline void future_block_free(cthrpool_future *f) {
 }
 
 // Frees f when remaining is 0. It's the shared tail of every site that drops a
-// future reference: each decrements the count under f->mu, unlocks, and then
+// future reference: Each decrements the count under f->mu, unlocks, and then
 // calls this, and whichever thread sees 0 frees it.
 static void future_destroy_if_unreferenced(cthrpool_future *f, int remaining) {
   if (remaining == 0) {
@@ -800,7 +800,7 @@ static cthrpool_task *steal_queue(cthread_pool *pool) {
 }
 
 // Completes every task of a stolen list that no worker ran, so every accepted
-// task still gets exactly one completion: futures are cancelled and callback
+// task still gets exactly one completion: Futures are cancelled and callback
 // tasks get on_complete(arg, false). The caller doesn't hold pool->mu. While
 // the callbacks run, a frame on cthrpool_discarding_top makes this thread a
 // worker of pool, so a wait or shutdown of pool from a callback is a no-op and
@@ -832,7 +832,7 @@ static bool make_abs_deadline(uint64_t timeout_us, struct timespec *abs_out) {
   return ccol_deadline_after_us(timeout_us, abs_out);
 }
 
-// Test hooks: skip the worker mark, count running workers, and delay a worker's
+// Test hooks: Skip the worker mark, count running workers, and delay a worker's
 // exit.
 #ifdef RUNNING_UNIT_TESTS
 atomic_bool cthrpool__skip_worker_mark_for_tests;
@@ -1086,7 +1086,7 @@ cthrpool cthrpool_create_mp(size_t num_threads, size_t queue_capacity,
   return h;
 }
 
-// Test hooks: make the next timed wait for room report ETIMEDOUT after a real
+// Test hooks: Make the next timed wait for room report ETIMEDOUT after a real
 // wake, and record what the last timed wait of each thread did.
 #ifdef RUNNING_UNIT_TESTS
 atomic_bool cthrpool__timeout_after_wake_for_tests;
@@ -1101,7 +1101,7 @@ static __thread cthrpool__timed_wait_record cthrpool_timed_wait_record;
 // to wait until abs_deadline. A waiting submit from one of pool's own workers
 // gives ccol_container_full instead of waiting, since only the workers can free
 // a slot and all of them could end up waiting here. After a failed timed wait
-// the queue state decides, not the return code: the wait may have consumed a
+// the queue state decides, not the return code: The wait may have consumed a
 // dequeue's signal as its deadline passed. Always inlined, since each submit
 // passes a constant block.
 static inline __attribute__((always_inline)) ccol_retval
@@ -1165,7 +1165,7 @@ submit_wait_for_room_locked(cthread_pool *pool, int block,
 // critical section. When the list is empty it allocates outside the lock and
 // runs the checks again. A submitter that leaves after an allocation failure
 // passes the not_full signal on, since it may have used up the one meant for
-// another waiter. not_empty is signalled on every enqueue: skipping it when no
+// another waiter. not_empty is signalled on every enqueue: Skipping it when no
 // worker seems to wait makes a burst drain on fewer threads. A callback task
 // passes fn and on_complete, a future task fn_future and future (allocated by
 // the caller); the NULLs are constants, so each instantiation holds only its
@@ -1243,7 +1243,7 @@ static ccol_retval submit_future_pop_and_enqueue(
                                      block, abs_deadline);
 }
 
-// Queues a callback task for the three plain submits: resolves pool, checks fn,
+// Queues a callback task for the three plain submits: Resolves pool, checks fn,
 // computes the deadline for block == 2 (after those checks and before any node
 // is taken), submits and unpins.
 static inline __attribute__((always_inline)) ccol_retval submit_generic(
@@ -1600,7 +1600,7 @@ static void cthrpool_shutdown_drain_internal(cthread_pool *pool) {
 }
 
 // Runs every queued task, then stops and joins the workers; the public graceful
-// shutdown. A self-call is a full no-op and leaves every flag alone: the worker
+// shutdown. A self-call is a full no-op and leaves every flag alone: The worker
 // can't join itself, and a shutdown_started set here would stop a later
 // shutdown from outside from ever joining that worker.
 void cthrpool_shutdown_drain(cthrpool pool) {
@@ -1729,7 +1729,7 @@ static void cthrpool_teardown_clear_torn_down(uint32_t idx) {
 // before mu goes. The drain is idempotent under its own lock, so it's always
 // called.
 //
-// A pool inherited across fork() is handled apart: its primitives may be in use
+// A pool inherited across fork() is handled apart: Its primitives may be in use
 // by parent threads that don't exist here (destroying a condition variable
 // would hang on its waiter count), so only this process's private memory is
 // freed. The pin wait still runs, for resolves by other threads of this
@@ -1965,7 +1965,7 @@ void cthrpool_test_wrunlock_slot_table_for_tests(void) {
 
 // Tells whether any slot names a pool, so the table is never freed while a pool
 // or its destroy may still use it; the caller holds the write lock. It reads
-// ptr, not in_use: a destroy clears in_use first but still uses the table until
+// ptr, not in_use: A destroy clears in_use first but still uses the table until
 // its last step, and ptr stays set until then.
 static bool cthrpool_any_slot_live_locked(void) {
   size_t slot_count = cvector_elem_count(cthrpool_slot_table.slots);

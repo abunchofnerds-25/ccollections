@@ -12,7 +12,7 @@ C Collections (libccollections, \-lccollections)
 A ccache holds up to a fixed number of key-value entries and
 evicts the least recently used entry to make room for a new one. A
 hash map gives it O(1) lookup and a linked list O(1) eviction. A cache
-can sit in front of a remote store: a remote getter fills a miss, and
+can sit in front of a remote store: A remote getter fills a miss, and
 a remote setter writes each set through to the store before the cache
 changes.
 
@@ -70,7 +70,7 @@ clear the padding of their own copy of the key.
 .fi
 .SS "Concurrent operations on one key"
 .nf
-Getters that miss on the same key share one remote fetch: one getter
+Getters that miss on the same key share one remote fetch: One getter
 runs the remote getter, and the others wait and get its result.
 Setters of the same key run one at a time, and a getter of a key waits
 while a set of that key is in progress.

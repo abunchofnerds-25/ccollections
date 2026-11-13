@@ -17,7 +17,7 @@ up the stored value and delivers it through val_ptr. What happens on
 success depends on the value type that you declared when the cache
 was constructed:
 
-A val type other than char*: the stored value is converted to the
+A val type other than char*: The stored value is converted to the
 type of *val_ptr, as a plain C assignment would convert it. For
 example, a cache that stores int values and reads into a double *
 out-parameter converts the int to a double instead of copying the raw
@@ -27,7 +27,7 @@ cannot implicitly convert the cache's declared ValT to the type of
 *val_ptr, that is a compile error at this point, never a value that
 the macro silently reinterprets.
 
-A char* val type: the macro hands the ownership of the heap string
+A char* val type: The macro hands the ownership of the heap string
 straight to the caller through *(char **)val_ptr. The caller must free
 that pointer with the cache's custom free function if a custom
 allocator was configured at construction, and with free() if not.
@@ -54,7 +54,7 @@ name     Cache variable. The companion type variables, which come from
          converting the key type and the value type needs the
          companion variables name##__ccache_key_type_var and
          name##__ccache_val_type_var.
-key      Key expression: any expression that the compiler can convert
+key      Key expression: Any expression that the compiler can convert
          implicitly to KeyT.
 val_ptr  A pointer to the value type, NOT a cmap_pair *.
          For a val type other than char*, it gets the stored value
@@ -94,7 +94,7 @@ or Clang.
 The cache never hands out a pointer into its internal storage; it
 always copies the value out before it unlocks the segment's lock.
 The value type may be const-qualified, such as const int or a const
-struct type: the macro copies the value through a temporary of the
+struct type: The macro copies the value through a temporary of the
 type without its qualifiers, so val_ptr can point to a plain variable
 of that type.
 .fi

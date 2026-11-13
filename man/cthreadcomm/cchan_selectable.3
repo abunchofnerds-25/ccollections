@@ -22,7 +22,7 @@ picks which of the two queues to wrap:
 
 The queue is picked here, at the call site, so cselect() never
 needs to look inside the opaque cchan struct. The cchan
-pointer is not kept: the returned cselectable holds only the
+pointer is not kept: The returned cselectable holds only the
 ccircq pointer that was picked and the dir value, and it
 watches that one queue whichever thread later waits on it or runs a
 callback for it.
@@ -41,7 +41,7 @@ callback runs on a thread of the loop, which the channel treats as a
 worker no matter which thread built the selectable, so when the owner
 built it, a cchan_* call in the callback reaches the other queue.
 Take a selectable that the owner built for cselect_read, which
-watches workers_to_owner_cq: a cchan_try_recv() inside
+watches workers_to_owner_cq: A cchan_try_recv() inside
 on_readable receives from owner_to_workers_cq instead. It takes a
 message that the owner meant for its workers, and leaves the message
 that triggered the callback in its queue.

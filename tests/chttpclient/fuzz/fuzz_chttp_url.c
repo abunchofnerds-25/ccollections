@@ -23,7 +23,7 @@ SOFTWARE.
 */
 
 // The libFuzzer target for the URL and redirect layer of chttpclient.c. Its
-// input is in an attacker's hands too: a Location header comes from whatever
+// input is in an attacker's hands too: A Location header comes from whatever
 // server the previous hop reached, so a defect here can be a server-side
 // request forgery primitive and not only a crash.
 //

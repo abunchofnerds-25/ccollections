@@ -40,7 +40,7 @@ SOFTWARE.
 
 TAU_MAIN()
 
-// The capacity of chttp1_ctx_t: the headers and the body bytes kept from one
+// The capacity of chttp1_ctx_t: The headers and the body bytes kept from one
 // message, enough for every test message.
 #define MAX_HDRS 32
 #define BODY_CAP (64 * 1024)

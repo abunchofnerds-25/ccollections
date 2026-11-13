@@ -31,7 +31,7 @@ not an equal pointer.
 The length is the size that the map stores for that key:
   - For a char * key: strlen + 1.
   - For a key of a fixed size (an integer, a float, a double, a pointer
-    or a struct): the sizeof() of the type.
+    or a struct): The sizeof() of the type.
   - For a key that goes through the raw layer, for example
     chashmap_insert_elem(3): cmap_pair.size.
 So the procedure needs no terminator and no rule of its own to find the

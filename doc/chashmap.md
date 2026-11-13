@@ -1,4 +1,4 @@
-# chashmap: a hash map
+# chashmap: A hash map
 
 `chashmap` maps keys to values. You give it a key and it gives you the
 value stored for that key, in constant time on average however many entries
@@ -59,7 +59,7 @@ variables that record the two types, and that's how `chmap_insert` and the
 other macros know how to copy, hash and return your keys and values. The
 [design guide](design.md) explains this for the whole library.
 
-Any C type works as a key or a value: integers, `float`, `double`,
+Any C type works as a key or a value: Integers, `float`, `double`,
 `long double`, pointers, function pointers, structs and `char *` strings.
 You don't pick the internal layout, the map picks it when you create it.
 When both types are integers of eight bytes or less it uses a compact
@@ -87,7 +87,7 @@ void handle_request(void) {
 | delete a key | `chmap_remove(m, key)` |
 | count the entries | `chashmap_elem_count(m)` |
 
-`chmap_insert` is an "upsert": a new key is added and a key that is already
+`chmap_insert` is an "upsert": A new key is added and a key that is already
 there gets its value replaced. `chmap_get` returns the value, but it stops
 the program when the key isn't in the map, so only use it where a missing
 key is a bug. `chmap_get_ptr` returns `NULL` for a missing key, and for a
@@ -112,7 +112,7 @@ literal needs an extra pair of parentheses around it, since its commas
 would split the macro arguments otherwise:
 `chmap_insert(m, ((point){1, 2}), 7)`.
 
-## Strings: the owner of each string
+## Strings: The owner of each string
 
 When the key type or the value type is `char *`, the map stores a copy of
 the string and not your pointer. So you can reuse or free your buffer as
@@ -178,7 +178,7 @@ void bump(chmap scores, const char *who) {
 They must be the types you created the map with, and the compiler can't
 check that for you.
 
-## Example: count words
+## Example: Count words
 
 This program reads text from standard input and prints how many times each
 word occurs. Every word is inserted from the same buffer, which gets
@@ -232,7 +232,7 @@ $ echo "the cat sat on the mat. The end" | ./words
 It prints `the` (3) and `cat`, `sat`, `on`, `mat` and `end` (1) once each,
 in no defined order.
 
-## Example: a command dispatcher
+## Example: A command dispatcher
 
 A map from a command name to a function pointer replaces a long chain of
 `strcmp` calls. For an unknown command `chmap_get_ptr` returns `NULL`, and
@@ -326,7 +326,7 @@ a byte string with zeros in it, can't go through the macros, because the
 macros always treat a `char *` as a NUL-terminated string. Use the raw
 layer described below for those.
 
-## Example: an inventory with struct keys and owned values
+## Example: An inventory with struct keys and owned values
 
 The stock is keyed by (warehouse, sku). That key struct has padding, so the
 map gets hash and equality functions that read each member. Each value is a
@@ -434,7 +434,7 @@ it also takes binary keys of any length. `chashmap_get_elem_ref` fills a
 value, and you can change the value bytes through its `ptr` until the next
 insert, delete or resize of the map.
 
-## Example: count fields without a copy
+## Example: Count fields without a copy
 
 This program counts the distinct fields of a comma-separated line. Each key
 is a slice of the line passed as a pointer and a length, so nothing is

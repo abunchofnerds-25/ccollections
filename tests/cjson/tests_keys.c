@@ -24,7 +24,7 @@ SOFTWARE.
 
 // Parsing in a process with no thread-specific key left to give. A key
 // destructor of this module frees each thread's node pool and error buffer, so
-// a thread that can't arm the key must keep neither: every node goes straight
+// a thread that can't arm the key must keep neither: Every node goes straight
 // back to the allocator and a failed parse reports a fixed message. The key is
 // created once per process, so this runs in its own binary where no other cjson
 // call comes first. Under valgrind (memtest) a node or buffer left behind is
@@ -48,7 +48,7 @@ static pthread_key_t exhausted[MAX_TEST_KEYS];
 // have long before it used up every key.
 static __thread volatile int runtime_tls_probe;
 
-// What one thread saw: parses that worked, its pool size after the destroy,
+// What one thread saw: Parses that worked, its pool size after the destroy,
 // and whether a failed parse gave the fixed message.
 typedef struct {
   int parsed;

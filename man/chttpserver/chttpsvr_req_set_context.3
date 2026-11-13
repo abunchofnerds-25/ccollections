@@ -64,7 +64,7 @@ after its call to next returns.
 .SH THREAD SAFETY
 .nf
 A request belongs to one thread at a time, the one that runs its
-chain: a worker thread for a buffered route, and a streaming thread
+chain: A worker thread for a buffered route, and a streaming thread
 for a streaming route.  Call this function only on that thread and
 only while the chain runs.  It takes no lock.
 .fi

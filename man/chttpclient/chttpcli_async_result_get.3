@@ -13,8 +13,9 @@ chttpcli_async_result *chttpcli_async_result_get(cthrpool_future *f);
 .nf
 This is a thin wrapper over cthrpool_future_get that casts its void*
 result to chttpcli_async_result*. As with cthrpool_future_get, you can
-call it more than once on the same future: every later call returns the
-same result pointer, which the future owns until it is freed.
+call it more than once on the same future: Every later call returns the
+same result pointer. Freeing the future does not free the result; free
+it once with chttpcli_async_result_free.
 
 The result has two public fields:
   - rv holds the code that chttpcli_do would return for the same

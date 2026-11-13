@@ -22,14 +22,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-// cdebuglog: an opt-in diagnostic log buffer in RAM for chasing CI failures
+// cdebuglog: An opt-in diagnostic log buffer in RAM for chasing CI failures
 // that are hard to reproduce and sensitive to timing, like a hang that shows up
 // only under qemu-user. A fprintf(stderr, ...) costs one write(2) per line, and
 // under an emulator that cost can disturb the timing you are looking at. This
 // module appends lines to one shared buffer and writes it out in a few write()
 // calls.
 //
-// It's never part of the library build: the src wildcard of the root Makefile
+// It's never part of the library build: The src wildcard of the root Makefile
 // leaves it out, and everything below compiles to nothing unless both
 // RUNNING_UNIT_TESTS and CDEBUGLOG_ENABLED are defined. Every test Makefile
 // defines the first one, so the second keeps the call sites in clogger.c and

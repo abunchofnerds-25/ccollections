@@ -41,7 +41,7 @@ writes its error message into storage that belongs to its own thread. You
 need a lock for a container, a string or a DOM tree when two threads use it
 and at least one of them writes to it.
 
-### Example: a thread pool filling a shared map
+### Example: A thread pool filling a shared map
 
 The pool is thread-safe, so `main` submits tasks without a lock. The map
 isn't, so the tasks lock a mutex around the whole check-and-act sequence:
@@ -128,7 +128,7 @@ own:
 | `chttpclient` | internal locks; any request call can run at the same time as any other call, including a destroy |
 | `chttpserver` | its own reactor and worker threads; see its man pages |
 
-### Example: producers and a consumer
+### Example: Producers and a consumer
 
 A queue passes the ownership of each message from the sender to the
 receiver, so the threads don't share any other data:

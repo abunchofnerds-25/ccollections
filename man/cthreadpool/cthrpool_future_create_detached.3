@@ -17,7 +17,7 @@ itself a cthrpool worker, must call cthrpool_future_fulfill exactly once
 to deliver the result.
 
 On success the future has a reference count of 2, the same convention
-as with cthrpool_submit_future: the caller holds one reference, which
+as with cthrpool_submit_future: The caller holds one reference, which
 cthrpool_future_free releases, and the producer holds the other one,
 which cthrpool_future_fulfill releases. Each cthrpool_future_get call that
 runs on the future adds one more for its duration.

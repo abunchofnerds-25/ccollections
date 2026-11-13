@@ -102,7 +102,7 @@ TEST(cbst_maps, create_succeeds) {
 }
 
 // Raw-layer wrappers for an int -> int map, so the raw tests don't build pairs
-// by hand: insert, copy out, get a pointer to the value (0 on a hit, -1 on a
+// by hand: Insert, copy out, get a pointer to the value (0 on a hit, -1 on a
 // miss) and delete. Each gives the result of the raw call.
 int insert_int_to_int(cbstmap *cbmap, int key, int val) {
   return cbstmap_insert_elem(
@@ -2677,7 +2677,7 @@ static __attribute__((noinline)) int *cbmap_padded_lookup(cbmap m, int i) {
 #endif
 
 // A key of an unknown type compares byte for byte, padding included. Under GCC
-// the test fails without the clearing: the padding carries the stack pattern
+// the test fails without the clearing: The padding carries the stack pattern
 // and the lookups miss.
 TEST(padded_key, the_macros_clear_the_padding_of_their_key_copy) {
 #ifdef CBMAP_TEST_COMPILER_CLEARS_PADDING

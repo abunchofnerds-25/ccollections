@@ -22,13 +22,13 @@ allocator.
 
 cl decides the logger of the server, and it may be CLOG_NULL:
 
-- cl == CLOG_NULL: the server creates its own internal logger,
+- cl == CLOG_NULL: The server creates its own internal logger,
   which writes only FATAL messages to stderr.
-- cl != CLOG_NULL: the server derives a new logger from cl (see
+- cl != CLOG_NULL: The server derives a new logger from cl (see
   clog_derive) and tags it with the field component=http-server.
   The server uses and manages the derived logger, while the caller's
   cl handle doesn't change and stays the caller's.  When cl is
-  closed, or was never a valid handle, the function fails: it sets
+  closed, or was never a valid handle, the function fails: It sets
   err_str to "the parent logger is not open" and returns
   CHTTPSVR_NULL.  It does not end the process, which clog_derive
   does for such a handle.
@@ -80,7 +80,7 @@ and idle-timeout-sweep threads are not carried over into the child,
 so a started server that the child inherits can't accept new
 connections or process in-flight work there.  chttpsvr_stop()
 followed by chttpsvr_start() on that handle in the child doesn't
-bring it back either: the call reports ccol_success, but the server
+bring it back either: The call reports ccol_success, but the server
 still cannot serve, because it reuses the engine reference it held
 before the fork instead of building a new one.  A caller that wants
 none of this protection can compile it out with

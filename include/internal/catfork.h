@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal only: forced fork-handler registration of the modules that other
+// Internal only: Forced fork-handler registration of the modules that other
 // modules depend on. Prepare handlers run in the reverse of their registration
 // order, and every module registers lazily on first use. A module that holds
 // another module's locks inside its own (chttpserver and chttpclient do this

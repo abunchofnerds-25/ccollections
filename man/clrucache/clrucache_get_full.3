@@ -21,13 +21,13 @@ size. The caller must free val_out->ptr with the matching allocator:
 the custom free function if the caller configured a custom allocator,
 and free() if not.
 
-Cache hit: the entry moves to the most recently used position, and a
+Cache hit: The entry moves to the most recently used position, and a
 heap copy of its value is written into val_out.
 
-Cache miss and no remote getter: the function returns
+Cache miss and no remote getter: The function returns
 ccol_key_not_found.
 
-Cache miss with a remote getter: a placeholder entry is inserted and
+Cache miss with a remote getter: A placeholder entry is inserted and
 the remote getter is called outside the segment's lock. Concurrent get
 calls for the same key coalesce. Only the first caller runs the fetch,
 and all the others block until the result is ready and then get the
@@ -43,7 +43,7 @@ waiters.
 The call blocks while a set of the same key is in progress, and waits
 until the set has completed and the cache is consistent again. If the
 set fails and the key is then absent from the cache, the call goes on
-exactly like a get that started after the failed set: it runs the
+exactly like a get that started after the failed set: It runs the
 remote getter (or joins a fetch of the same key that has already
 started), and it reports ccol_key_not_found only when the cache has no
 remote getter.

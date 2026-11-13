@@ -209,7 +209,7 @@ typedef struct {
    cache and starts merging and splitting chunks on every release. */
 #define BENCH_POOL_BUFFER_SIZE 4096
 
-/* These objects have lifetimes that don't nest: a set of connections,
+/* These objects have lifetimes that don't nest: A set of connections,
    sessions or graph nodes frees its objects in an order that has nothing to do
    with the allocation order. A rolling replacement never exercises that,
    because there the entry just released is always the next one the pool hands
@@ -269,7 +269,7 @@ static void *pool_st_setup(size_t n) {
 }
 
 /* A rolling working set instead of allocating everything and then freeing
- * everything: a slot is freed right before it's allocated again. That's the
+ * everything: A slot is freed right before it's allocated again. That's the
  * shape people use a pool in, and the one that keeps its free list hot.
  *
  * The live set is the size of the pool's capacity and the pool has no
@@ -359,14 +359,14 @@ static void malloc_buffer_run(void *state, size_t n) {
   }
 }
 
-/* The scattered-lifetime variants: the slot replaced on each iteration is
+/* The scattered-lifetime variants: The slot replaced on each iteration is
    picked at random and not in order, so a released entry is rarely the next
    one handed back. Both arms draw from the same generator in the same
    sequence.
 
    These two write to the entry they get, which the other cases don't on
    purpose. What separates the two allocators here is how densely the live set
-   is packed: pool entries are one stride apart with nothing in between,
+   is packed: Pool entries are one stride apart with nothing in between,
    while every chunk from the system allocator carries its own header, so the
    same number of live objects spans more cache lines. You only see that
    difference from a caller that touches what it allocated, which any real one
@@ -457,7 +457,7 @@ static void malloc_alloc_free_run(void *state, size_t n) {
     size_t slot = i % st->count;
     free(st->slots[slot]);
     st->slots[slot] = malloc(BENCH_POOL_ELEM_SIZE);
-    /* Checked for the same reason as in the pool arm: a failing allocator
+    /* Checked for the same reason as in the pool arm: A failing allocator
      * costs much less than a working one, so an unchecked malloc arm would
      * keep measuring and win the comparison it belongs to. */
     if (!st->slots[slot]) bench_die("malloc returned NULL");
@@ -486,7 +486,7 @@ static void malloc_burst_run(void *state, size_t n) {
   }
 }
 
-/* The same workload with several threads: every thread shares one pool and
+/* The same workload with several threads: Every thread shares one pool and
  * one malloc heap, and each thread rolls its own part of the live set, which
  * doesn't overlap the others'. The threads have to share the subject under
  * test, since that's the point, but not the scratch array around it, so each
@@ -575,7 +575,7 @@ static void malloc_alloc_free_mt_run(void *state, size_t n) {
     size_t slot = i % st->per_thread;
     free(mine[slot]);
     mine[slot] = malloc(BENCH_POOL_ELEM_SIZE);
-    /* See malloc_alloc_free_run: an unchecked malloc arm keeps timing a
+    /* See malloc_alloc_free_run: An unchecked malloc arm keeps timing a
      * failing allocator and wins the comparison it's part of. */
     if (!mine[slot]) bench_die("malloc returned NULL");
     bench_sink(mine[slot]);

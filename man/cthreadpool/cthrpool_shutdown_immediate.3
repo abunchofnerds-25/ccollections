@@ -30,7 +30,7 @@ woken up and gets NULL.
 A second call, whether it comes after the first one or at the same
 time on another thread, does no shutdown work of its own, but it still
 blocks until the shutdown that is under way ends. So every caller gets
-the same guarantee: once the call returns, every worker thread has
+the same guarantee: Once the call returns, every worker thread has
 exited.
 .fi
 .SH PARAMETERS
@@ -47,7 +47,7 @@ cthrpool_submit_future returns NULL and stores ccol_not_permitted in its
 rv_out.
 
 If a cthrpool_shutdown_drain is already running, this call escalates the
-drain instead of simply joining it: it discards whatever is left in the
+drain instead of simply joining it: It discards whatever is left in the
 queue at that moment, cancels the futures of those tasks and calls
 on_complete(arg, false) for each of them that has one, exactly as if
 this call had started the shutdown. A task that the drain has already
@@ -56,7 +56,7 @@ started still finishes as usual.
 A call to cthrpool_shutdown_immediate on pool from inside a task running
 on one of pool's worker threads, or from the on_complete callback of
 that task, does nothing at all, for the reason cthrpool_shutdown_drain
-gives for the same case: a worker thread cannot join itself. The call
+gives for the same case: A worker thread cannot join itself. The call
 neither discards the queue nor blocks.
 .fi
 .SH "SEE ALSO"

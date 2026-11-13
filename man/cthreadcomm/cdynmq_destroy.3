@@ -63,7 +63,7 @@ this queue, because the destroy would wait for that very callback. It
 is a caller error, and the program stops through ccol__fatal_err().
 
 Do not hold an application lock across this call when one of those
-callbacks takes the same lock: the destroy waits for the callback while
+callbacks takes the same lock: The destroy waits for the callback while
 the callback waits for the lock.
 .fi
 .SH "SEE ALSO"

@@ -13,7 +13,7 @@ ccol_retval cchan_send(cchan *ch, cmessage *msg);
 .nf
 Sends a message through the channel, waiting as long as it takes for
 the queue to have free space. The queue is chosen from the thread that
-calls it: the owner thread sends to the cchan_owner_to_workers queue and
+calls it: The owner thread sends to the cchan_owner_to_workers queue and
 any other thread sends to the cchan_workers_to_owner queue. The data is
 not copied; its ownership moves to the channel once the message is in
 the queue.

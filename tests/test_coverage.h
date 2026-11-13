@@ -47,7 +47,7 @@ static inline void test_child_coverage_flush(void) {
 #endif
 }
 
-// What a forked child calls in place of _exit(): it flushes the coverage counts
+// What a forked child calls in place of _exit(): It flushes the coverage counts
 // first. Don't call it from a signal handler, since the flush isn't
 // async-signal-safe.
 static inline __attribute__((noreturn)) void test_child_exit(int code) {
@@ -56,7 +56,7 @@ static inline __attribute__((noreturn)) void test_child_exit(int code) {
 }
 
 #ifdef CCOL_TEST_COVERAGE
-// SIGABRT handler of a coverage build: dumps the counts and raises sig again at
+// SIGABRT handler of a coverage build: Dumps the counts and raises sig again at
 // its default action, so a child that aborts on purpose keeps its counts and
 // still dies by SIGABRT. It resets SIGALRM and sig to their defaults. The dump
 // can block on a lock that another thread held at the abort, so a 30 s SIGALRM

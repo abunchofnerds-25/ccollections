@@ -17,7 +17,7 @@ The value is stored exactly as given, with no check here.  When the
 server sends the response, a value outside the range of final status
 codes, 200 to 999, goes on the wire as 500 Internal Server Error,
 although the stored value stays what you set.  A 1xx falls in that
-case too: it is an interim status (RFC 9110 15.2), and a client that
+case too: It is an interim status (RFC 9110 15.2), and a client that
 got one as the response would keep waiting for a final status.  The
 server writes the interim "100 Continue" itself.
 .fi

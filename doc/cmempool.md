@@ -18,7 +18,7 @@ supply, with no heap at all. Every entry a pool hands out is aligned for
 any object type, the same as memory from `malloc()`.
 
 A pool is a good fit when your program creates and destroys lots of objects
-of one size or of a few sizes: network messages, game entities, parse
+of one size or of a few sizes: Network messages, game entities, parse
 nodes, job records. It isn't when the sizes are large and vary widely, or
 when you can't put a limit on how many objects are live at the same time,
 and a general-purpose allocator does a better job there.
@@ -77,7 +77,7 @@ int main(void) {
 The message is a static string, so don't free it.
 
 The pool gets its memory from `malloc` and `free`. To give it your own
-allocator, call `cmempool_create_mp()` instead: it takes the same arguments
+allocator, call `cmempool_create_mp()` instead: It takes the same arguments
 and a `ccol_memmgmt_procs *` just before the error pointer. Every
 constructor of this module comes in these two forms.
 
@@ -145,7 +145,7 @@ at some point and you should give it more entries. Free every fallback
 entry before you destroy the pool, because the destroy stops the program
 when one hasn't been freed; that entry would be a leak.
 
-## Example: bullets in a game loop
+## Example: Bullets in a game loop
 
 An arcade game creates lots of short-lived bullets every frame. A pool with
 no fallback turns "the screen is full" into a plain `NULL` and keeps all the
@@ -223,7 +223,7 @@ between threads.
 ## Sharing a pool between threads
 
 With `single_threaded = false` many threads can allocate and free at the
-same time. On the common path a thread-safe pool takes no lock at all: each
+same time. On the common path a thread-safe pool takes no lock at all: Each
 thread keeps a small private cache of entries and only touches the shared
 free list to refill or drain it, so throughput grows as you add threads
 instead of every thread waiting on one lock.
@@ -254,7 +254,7 @@ while many threads use the pool, are in
 [cmempool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/cmempool_create_mp.3.html) and
 [cmempool_total_capacity(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/cmempool_total_capacity.3.html).
 
-### Example: worker threads allocating job records
+### Example: Worker threads allocating job records
 
 ```c
 #include <ccollections/cmempool.h>
@@ -328,7 +328,7 @@ The last line of the output shows the count you set (1024 entries) and the
 memory the pool keeps for them, reserve included. Both are fixed when the
 pool is created.
 
-## Ranged pools: many sizes, one allocator
+## Ranged pools: Many sizes, one allocator
 
 A ranged pool covers a range of power-of-two sizes. You give it three
 exponents, for the smallest size, the largest size and the entry count of
@@ -351,10 +351,10 @@ possible is 16 bytes (exponent 4).
 
 When a tier has no free entries, the fallback policy decides what happens:
 
-- `crmempool_fallback_disabled`: try the larger tiers, then return `NULL`.
-- `crmempool_fallback_at_first_exhaustion`: the tier that fits the request serves
+- `crmempool_fallback_disabled`: Try the larger tiers, then return `NULL`.
+- `crmempool_fallback_at_first_exhaustion`: The tier that fits the request serves
   it from the heap as soon as that tier has no free entries.
-- `crmempool_fallback_at_last_exhaustion`: try the larger tiers, and use the heap
+- `crmempool_fallback_at_last_exhaustion`: Try the larger tiers, and use the heap
   only when every tier that can serve the request has no free entries.
 
 `crmempool_realloc_entry()` resizes an entry. If the entry already has
@@ -365,7 +365,7 @@ returns `NULL` and your original entry stays valid and stays yours.
 The free macro takes the ranged pool and not the tier, because the pool
 finds the tier from the address.
 
-### Example: a growable string in a ranged pool
+### Example: A growable string in a ranged pool
 
 ```c
 #include <ccollections/cmempool.h>
@@ -443,7 +443,7 @@ and are the first to drop below 8, so raise the count exponent or narrow
 the range to keep them at 8 or more (see
 [crmempool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/crmempool_create_mp.3.html)).
 
-## Pools without a heap: preallocated buffers
+## Pools without a heap: Preallocated buffers
 
 Some embedded and real-time code must not take entry storage from the heap,
 and there you build the pool on a buffer that you declare.
@@ -584,8 +584,8 @@ Ranged pool:
 
 Related guides:
 
-- [Memory management](memory.md): custom allocators, and containers that use
+- [Memory management](memory.md): Custom allocators, and containers that use
   a ranged pool
-- [Concurrency](concurrency.md): thread safety and the `fork()` policy
-- [Building](building.md): compile-time configuration, for example
+- [Concurrency](concurrency.md): Thread safety and the `fork()` policy
+- [Building](building.md): Compile-time configuration, for example
   `CMEMPOOL_COMPACT_LAYOUT`

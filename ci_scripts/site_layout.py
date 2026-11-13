@@ -16,13 +16,13 @@ if not SITE_URL.endswith("/"):
     SITE_URL += "/"
 REPO_URL = "https://github.com/abunchofnerds-25/ccollections"
 SITE_NAME = "C Collections"
-# The logo, from the site root: a 176 x 176 PNG with a transparent
+# The logo, from the site root: A 176 x 176 PNG with a transparent
 # background, so it sits on the light and the dark theme alike. It's the
 # header mark, the browser icon and the picture a shared link shows.
 LOGO = "assets/logo.png"
 LOGO_SIZE = 176
 
-# Shared links in the header of every page: label, path from the site root,
+# Shared links in the header of every page: Label, path from the site root,
 # or an absolute address.
 NAV = [
     ("Manual", "man/"),
@@ -35,7 +35,7 @@ def esc(text):
     return html.escape(text, quote=True)
 
 
-# Marks up C source with <span> classes that site.css colours: comments,
+# Marks up C source with <span> classes that site.css colours: Comments,
 # strings and characters, numbers, preprocessor lines, keywords, standard
 # types and every name that's called, which picks out the library's macros.
 # The front page and the EXAMPLES sections of the man pages use it. It's a

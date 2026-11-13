@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal only. An OpenSSL wrapper with no reactor of its own: it configures
+// Internal only. An OpenSSL wrapper with no reactor of its own: It configures
 // a TLS context (certificates, trust, ALPN, dispatch by server name) and
 // drives one connection's handshake, reads and writes step by step, without
 // blocking, in client and server mode. Only chttpclient.c and chttpserver.c
@@ -45,7 +45,7 @@ SOFTWARE.
 // ctls_conn_handshake_step().
 //
 // Resumption works for TLS 1.2 and 1.3, with or without a client certificate
-// and across an SNI dispatch: every SSL_CTX gets the same session id context,
+// and across an SNI dispatch: Every SSL_CTX gets the same session id context,
 // which OpenSSL needs to resume on a context with SSL_VERIFY_PEER. Each SSL_CTX
 // also gets partial and moving-buffer writes, TLS 1.2 as the minimum and no
 // compression. A configuration change builds new SSL_CTX objects (new cache,
@@ -59,10 +59,10 @@ SOFTWARE.
 #include <stddef.h>
 #include <sys/types.h>
 
-// A refcounted TLS configuration: certificates, trust store, ALPN protocols.
+// A refcounted TLS configuration: Certificates, trust store, ALPN protocols.
 typedef struct ctls_ctx ctls_ctx;
 
-// One connection: an SSL object and its BIO.
+// One connection: An SSL object and its BIO.
 typedef struct ctls_conn ctls_conn;
 
 // The result of ctls_conn_handshake_step(). WANT_READ and WANT_WRITE say which
@@ -109,7 +109,7 @@ static inline __attribute__((always_inline)) ctls_ctx *ctls_ctx_new(
 
 // Adds or replaces a certificate and key, which a server needs to serve and a
 // client needs for mutual TLS. A NULL or empty server_name sets the default
-// certificate: a client presents it, and a server uses it when the peer sends
+// certificate: A client presents it, and a server uses it when the peer sends
 // no SNI name or one that nothing matches. Any other name registers (or
 // replaces) a named certificate, matched case-insensitively against the SNI
 // name. "*.example.com" matches one label ("foo.example.com", not
@@ -128,7 +128,7 @@ static inline __attribute__((always_inline)) ctls_ctx *ctls_ctx_new(
 // pair OpenSSL won't serve, such as a weak key or digest) or
 // ccol_not_enough_memory. A failed rebuild gives ccol_not_enough_memory for an
 // allocation and ccol_http_tls_cert_load_failed otherwise. On any failure
-// nothing changes: every name keeps its old certificate and a new name isn't
+// nothing changes: Every name keeps its old certificate and a new name isn't
 // registered.
 ccol_retval ctls_ctx_cert_add(ctls_ctx *ctx, const char *server_name,
                               const char *cert_path, const char *key_path,
@@ -141,11 +141,11 @@ ccol_retval ctls_ctx_cert_add(ctls_ctx *ctx, const char *server_name,
 // (SSL_VERIFY_FAIL_IF_NO_PEER_CERT), see ctls_ctx_peer_cert_optional(). Calls
 // add up.
 //
-// The bundle must contribute at least one certificate: an empty file, a lone
+// The bundle must contribute at least one certificate: An empty file, a lone
 // key, a file that isn't PEM or one with only CRLs is refused, so verification
 // never runs against an empty store. CRLs in any bundle turn on revocation
 // checks for the whole chain (X509_V_FLAG_CRL_CHECK and _ALL, as nginx
-// ssl_crl does): each certificate below the anchor needs its issuer's CRL, and
+// ssl_crl does): Each certificate below the anchor needs its issuer's CRL, and
 // a revoked certificate, a missing or an expired CRL fails. The path must be a
 // regular file of at most 16 MB; anything else is refused at once.
 //
@@ -197,7 +197,7 @@ size_t ctls_ctx_alpn_count(const ctls_ctx *ctx);
 
 // Adds a reference to ctx, so it stays alive for a connection or a request in
 // flight; pair it with ctls_ctx_release(). Changing the configuration while
-// connections are live is fine independently of this count: the rebuild
+// connections are live is fine independently of this count: The rebuild
 // replaces the SSL_CTX objects, and each live connection holds a reference on
 // every SSL_CTX it can reach until ctls_conn_destroy(), so a handshake in
 // flight finishes with the configuration it started with.

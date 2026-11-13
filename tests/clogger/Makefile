@@ -68,7 +68,7 @@ FORCE:
 
 # consumer_view.o is built with different flags from the library objects, so
 # it has its own stamp holding the flags that really govern it. A stamp that
-# records somebody else's flags is worse than no stamp at all: a change to
+# records somebody else's flags is worse than no stamp at all: A change to
 # $(TEST_OPT) alone leaves $(SRC_CFLAGS) identical, so the stamp doesn't move
 # and the object survives a change to how it is built. With two separate
 # stamps, neither object gets rebuilt for a flag change that can't reach it.
@@ -108,7 +108,7 @@ build_tsan:
 
 # tests_sigpipe is a binary of its own because it needs SIGPIPE at its
 # default disposition, which the pipe tests of tests.c change for their whole
-# process. tests_sigxfsz is separate for the same reason: it needs SIGXFSZ at
+# process. tests_sigxfsz is separate for the same reason: It needs SIGXFSZ at
 # its default disposition, which tests.c ignores for its whole process, and
 # its own process must never open a logger before its forked scenarios run.
 # nesting_probe.c is compiled twice and never run. The first build nests the

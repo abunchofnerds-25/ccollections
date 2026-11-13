@@ -25,7 +25,7 @@ SOFTWARE.
 // libFuzzer harness for cyaml_parse_n(), the three serializers and
 // cyaml_clone(). It parses through the length-taking entry point, so the parser
 // reads the raw buffer as it is, NUL bytes included; a token that a NUL would
-// cut short is only reachable this way. Then it checks the round trip: the
+// cut short is only reachable this way. Then it checks the round trip: The
 // output of each serializer must parse again, a stream of two or more documents
 // must come back as the same documents, and a clone must serialize to exactly
 // the source's text. Every serializer and the clone must succeed on a tree the

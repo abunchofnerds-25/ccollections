@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal: test-only failure injection of the pin table, so the tests of the
+// Internal: Test-only failure injection of the pin table, so the tests of the
 // modules built on it reach their rollback paths. Only under
 // RUNNING_UNIT_TESTS.
 

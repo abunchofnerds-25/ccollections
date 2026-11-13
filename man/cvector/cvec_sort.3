@@ -26,7 +26,7 @@ procedure depends on the type alone, so cvec_sort carries a
 _Static_assert and such a call never builds. The diagnostic names the
 vector and points at cvector_sort_with_comparison_proc.
 
-These element types sort: every standard integer type in both
+These element types sort: Every standard integer type in both
 signednesses, bool (false before true), every enumerated type, float,
 double, long double, char*, const char*, signed char* and unsigned
 char*. Each of the char pointer types sorts as a NUL-terminated string in
@@ -39,7 +39,7 @@ enumerated type is compatible with one of the standard integer types, and
 the macro uses the comparison procedure of that type.
 
 The types refused at compile time are the ones with no default
-comparison procedure: a struct, a union, a pointer to anything other than
+comparison procedure: A struct, a union, a pointer to anything other than
 char, and a fixed-size char array such as char[64]. A vector of an enum
 type isn't one of them and sorts normally. Sort a refused element type
 with cvector_sort_with_comparison_proc and an explicit comparison
@@ -59,7 +59,7 @@ dereferenced.
 
 The code doesn't compile when the element type has no default comparison
 procedure; the diagnostic names the vector and points at
-cvector_sort_with_comparison_proc. cvec_find differs on purpose: it
+cvector_sort_with_comparison_proc. cvec_find differs on purpose: It
 accepts every element type and falls back to byte-wise equality, because
 equality can come from the bytes of an element but an order can't.
 

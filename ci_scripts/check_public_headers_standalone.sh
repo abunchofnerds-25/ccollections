@@ -4,7 +4,7 @@
 #
 # Compiling it on its own catches a header that only works because some other
 # header came first. Strict c11 catches a header that expands a GNU extension
-# at file scope: our macros use statement expressions and __typeof__, so code
+# at file scope: Our macros use statement expressions and __typeof__, so code
 # that USES them needs -std=gnu11, but a caller who just INCLUDES a header
 # mustn't be forced into that mode. -pedantic-errors makes every construct ISO
 # C11 doesn't allow (`, ##__VA_ARGS__`, an empty translation unit, ...) an
@@ -17,7 +17,7 @@
 # The source tree: -Iinclude and #include <NAME.h>, which is how the library
 # and its test suites include the headers.
 #
-# The installed layout: the headers in STAGE/include/ccollections/ as
+# The installed layout: The headers in STAGE/include/ccollections/ as
 # `make install` lays them out, reached the way an application reaches them,
 # with -ISTAGE/include and #include <ccollections/NAME.h>. Next to it there is
 # an application directory with a header of its own for every public name
@@ -31,7 +31,7 @@
 #   - if the probe's own <NAME.h> reaches a library header instead of the
 #     application copy, the application copy's marker stays undefined and the
 #     probe fails with #error.
-# That's the property the install depends on: an application can have its own
+# That's the property the install depends on: An application can have its own
 # common.h and neither side ever picks up the other's.
 #
 # Usage: check_public_headers_standalone.sh
@@ -85,7 +85,7 @@ compile() {
 	checked=$((checked + 1))
 }
 
-# installed_probe <output.c> <header names...>: writes a translation unit that
+# installed_probe <output.c> <header names...>: Writes a translation unit that
 # includes the library headers from the installed layout, then the application
 # header for every public name, and checks that each of those really is the
 # application copy.

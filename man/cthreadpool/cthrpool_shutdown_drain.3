@@ -17,14 +17,14 @@ thread. The call blocks until every worker has exited.
 
 After the call returns the pool accepts no new task, and
 cthrpool_destroy can free the pool struct. Calling it before
-cthrpool_destroy is optional: if the caller called neither this function
+cthrpool_destroy is optional: If the caller called neither this function
 nor cthrpool_shutdown_immediate(), cthrpool_destroy runs the same drain
 itself.
 
 A second call, whether it comes after the first one or at the same
 time on another thread, does no shutdown work of its own, but it still
 blocks until the shutdown that is under way ends. So every caller gets
-the same guarantee: once the call returns, every worker thread has
+the same guarantee: Once the call returns, every worker thread has
 exited.
 .fi
 .SH PARAMETERS
@@ -48,7 +48,7 @@ join itself, so going on could never wait for the calling thread to
 exit, only for every other worker.
 
 A cthrpool_shutdown_immediate call can come while this call is still
-draining. That call then takes over: it discards whatever is left in
+draining. That call then takes over: It discards whatever is left in
 the queue at that moment and cancels the futures of those tasks, and
 this call returns once every worker has exited.
 .fi

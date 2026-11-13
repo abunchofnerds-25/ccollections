@@ -22,9 +22,9 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-// Internal: a lock-free index from a handle to a pointer, with per-slot pins.
+// Internal: A lock-free index from a handle to a pointer, with per-slot pins.
 // It's the hot half of the generation-tagged slot tables of clogger,
-// clrucache, cthreadpool and chttpclient: a public call resolves its handle
+// clrucache, cthreadpool and chttpclient: A public call resolves its handle
 // here and keeps the object alive against a concurrent destroy. A resolve does
 // plain acquire loads and a pin writes only the calling thread's stripe, so
 // the call gets faster with more threads instead of bouncing a shared lock and
@@ -54,7 +54,7 @@
 #define CCOL_PIN_MAX_CHUNKS 1024u
 
 // How many indices the table can hold. The owning module must refuse to claim
-// an index at or above it: such an index can never publish, and if it reached
+// an index at or above it: Such an index can never publish, and if it reached
 // the module's free list every later acquire would pop it again and fail.
 #define CCOL_PIN_MAX_SLOTS ((size_t)CCOL_PIN_MAX_CHUNKS * CCOL_PIN_CHUNK_SLOTS)
 
@@ -77,7 +77,7 @@ typedef struct {
   char pad[CCOL_PIN_LINE - sizeof(_Atomic ptrdiff_t)];
 } ccol_pin_stripe;
 
-// One entry of the table: what a resolve reads for one index.
+// One entry of the table: What a resolve reads for one index.
 typedef struct {
   // (generation << 1) | live, in one word so one acquire load reads both.
   _Atomic uint64_t state;
@@ -93,7 +93,7 @@ typedef struct {
   ccol_pin_slot slots[CCOL_PIN_CHUNK_SLOTS];
 } ccol_pin_chunk;
 
-// The table: a directory of chunk pointers, filled in on first use.
+// The table: A directory of chunk pointers, filled in on first use.
 typedef struct {
   ccol_pin_chunk *_Atomic chunks[CCOL_PIN_MAX_CHUNKS];
 } ccol_pintable;
@@ -140,7 +140,7 @@ size_t ccol_pintable_pins_for(ccol_pintable *t, uint64_t handle);
 // freed, so a later resolve answers NULL.
 void ccol_pintable_dispose(ccol_pintable *t);
 
-// Drops every pin against idx. Only for a fork() child handler: a pin held by
+// Drops every pin against idx. Only for a fork() child handler: A pin held by
 // a thread that didn't survive the fork can never be released, and a destroy
 // would wait for it forever.
 void ccol_pintable_reset(ccol_pintable *t, uint32_t idx);

@@ -95,7 +95,7 @@ static void ctls_system_ca_globals_init(void) {
 // Frees the root key and the parsed default CA file at exit, so valgrind finds
 // nothing of ours left. It's registered after OpenSSL's own cleanup, so it
 // runs first; a destructor would run too late. It sets finalized in both
-// bundles: afterwards no root key is made, and a system-trust context parses
+// bundles: Afterwards no root key is made, and a system-trust context parses
 // the file for itself. A caller holding a key reference keeps it.
 static void ctls_process_state_at_exit(void) {
   ccol__call_once(ctls_root_key_bundle.once, ctls_root_key_globals_init);
@@ -307,7 +307,7 @@ static inline int ctls_sock_bio_fd(BIO *b) {
   return (int)(intptr_t)BIO_get_data(b);
 }
 
-// The BIO write: sends inl bytes with MSG_NOSIGNAL and sets the retry flag
+// The BIO write: Sends inl bytes with MSG_NOSIGNAL and sets the retry flag
 // when the socket would block. Gives the bytes sent or -1.
 static int ctls_sock_bio_write(BIO *b, const char *in, int inl) {
   errno = 0;
@@ -318,7 +318,7 @@ static int ctls_sock_bio_write(BIO *b, const char *in, int inl) {
   return ret;
 }
 
-// The BIO read: receives up to outl bytes, sets the retry flag when the
+// The BIO read: Receives up to outl bytes, sets the retry flag when the
 // socket would block or the EOF flag at end of stream, and feeds what it read
 // to the connection's record tracker, which the connection hands over through
 // the BIO's callback argument (this BIO has no callback). Gives the bytes
@@ -340,13 +340,13 @@ static int ctls_sock_bio_read(BIO *b, char *out, int outl) {
   return ret;
 }
 
-// The BIO puts: writes the string str through ctls_sock_bio_write().
+// The BIO puts: Writes the string str through ctls_sock_bio_write().
 static int ctls_sock_bio_puts(BIO *b, const char *str) {
   return ctls_sock_bio_write(b, str, (int)strlen(str));
 }
 
 // The BIO control call. It handles what OpenSSL's record layer and helpers
-// ask of a socket BIO: setting and getting the fd and the close flag, the EOF
+// ask of a socket BIO: Setting and getting the fd and the close flag, the EOF
 // flag (how an abrupt close is told from a retryable read), and the poll
 // descriptors behind SSL_get_rpoll_descriptor(). Everything else gives 0.
 static long ctls_sock_bio_ctrl(BIO *b, int cmd, long num, void *ptr) {
@@ -387,7 +387,7 @@ static long ctls_sock_bio_ctrl(BIO *b, int cmd, long num, void *ptr) {
   }
 }
 
-// The BIO constructor: starts with no fd and no flags.
+// The BIO constructor: Starts with no fd and no flags.
 static int ctls_sock_bio_create(BIO *b) {
   BIO_set_init(b, 0);
   BIO_set_data(b, NULL);
@@ -395,7 +395,7 @@ static int ctls_sock_bio_create(BIO *b) {
   return 1;
 }
 
-// The BIO destructor: closes the fd only when the BIO owns it (ours never do)
+// The BIO destructor: Closes the fd only when the BIO owns it (ours never do)
 // and clears the state.
 static int ctls_sock_bio_destroy(BIO *b) {
   if (!b) return 0;
@@ -497,7 +497,7 @@ size_t ctls__live_sock_bio_count_for_tests(void) {
 
 // Internal types
 //
-// One ALPN registration: the protocol name, its selection callback with its
+// One ALPN registration: The protocol name, its selection callback with its
 // udata, and the cleanup for that udata.
 typedef struct ctls_alpn_entry {
   char *name;
@@ -507,7 +507,7 @@ typedef struct ctls_alpn_entry {
   ctls_alpn_cleanup_fn on_cleanup;
 } ctls_alpn_entry;
 
-// One named certificate, dispatched by SNI: its stored PEM data (or the
+// One named certificate, dispatched by SNI: Its stored PEM data (or the
 // self-signed subject) and its own fully built SSL_CTX, rebuilt whenever the
 // trust store or the ALPN protocols of the context change.
 typedef struct ctls_named_cert {
@@ -545,7 +545,7 @@ struct ctls_ctx {
   bool default_self_signed;
   char *default_self_signed_name;
 
-  // Named certificates: a chmap from a lower-case hostname to a
+  // Named certificates: A chmap from a lower-case hostname to a
   // ctls_named_cert *.
   chmap named_certs;
   bool sni_callback_installed;
@@ -580,13 +580,13 @@ struct ctls_conn {
   const char *alpn_selected_name;
   size_t alpn_selected_len;
   // The connection's own copy of the agreed ALPN name (1 to 255 bytes), which
-  // alpn_selected_name points at. It's a copy because tls->alpn is mutable: a
+  // alpn_selected_name points at. It's a copy because tls->alpn is mutable: A
   // concurrent ctls_ctx_alpn_add() can free or move the stored names.
   char alpn_selected_buf[256];
   // The direction the last read or write that gave EWOULDBLOCK needs; see
   // ctls_conn_wants_write().
   bool last_io_wants_write;
-  // Our references on every SSL_CTX this connection can reach: the default
+  // Our references on every SSL_CTX this connection can reach: The default
   // context it was created on (pinned in the same ctx->lock section as
   // SSL_new()) and the named context an SNI dispatch installed (NULL when there
   // was none). OpenSSL holds its own references, but these make keeping them
@@ -629,7 +629,7 @@ long ctls__live_conn_ctx_pin_count_for_tests(void) {
   return atomic_load_explicit(&ctls_live_conn_ctx_pins, memory_order_relaxed);
 }
 #else
-// The same accounting in a build without tests: it does nothing.
+// The same accounting in a build without tests: It does nothing.
 static inline void ctls_account_ctx_pins(long delta) { (void)delta; }
 #endif
 
@@ -750,7 +750,7 @@ long ctls__system_ca_parses_for_tests(void) {
 
 // Parses the PEM buffer (pem, len) into its certificates and CRLs, for trust
 // bundles and the default CA file. OpenSSL 3 can lose an allocation without
-// ERR_R_MALLOC_FAILURE: it stops part way with an error queued, keeps a
+// ERR_R_MALLOC_FAILURE: It stops part way with an error queued, keeps a
 // certificate whose key failed to decode, or gives NULL. A block it can't read
 // looks the same, so in any of those cases the buffer is parsed again; the
 // same result twice is kept, a different one counts as out of memory. It sets
@@ -848,7 +848,7 @@ static STACK_OF(X509_INFO) * ctls_system_ca_load(bool *oom, bool *cacheable) {
 // reference, while a store is built. An object the store already holds counts
 // as added (X509_R_CERT_ALREADY_IN_HASH_TABLE is popped off the queue), so a
 // CA in two bundles never fails a rebuild. Any other failure is an allocation
-// failure: it gives false and leaves the reason queued.
+// failure: It gives false and leaves the reason queued.
 static bool ctls_store_add_info(X509_STORE *store, X509_INFO *info) {
   for (int pass = 0; pass < 2; ++pass) {
     if (pass == 0 ? !info->x509 : !info->crl) continue;
@@ -952,7 +952,7 @@ int ctls__trusted_cert_count_for_tests(ctls_ctx *ctx) {
 }
 #endif
 
-// Installs the platform trust anchors on store for ctls_apply_trust(): the
+// Installs the platform trust anchors on store for ctls_apply_trust(): The
 // default CA file when it exists and holds a certificate, otherwise OpenSSL's
 // hashed-directory lookup (SSL_CERT_DIR when the environment may be trusted,
 // else the built-in directory), whose files OpenSSL opens during handshakes.
@@ -977,7 +977,7 @@ typedef struct ctls_pw_ctx {
   const char *password;
 } ctls_pw_ctx;
 
-// The PEM password callback: copies the password from u (a ctls_pw_ctx) into
+// The PEM password callback: Copies the password from u (a ctls_pw_ctx) into
 // buf of size bytes, truncated to fit with its NUL, so an encrypted key can be
 // read. It gives the password length, or 0 when there's none.
 static int ctls_pem_passwd_cb(char *buf, int size, int rwflag, void *u) {
@@ -1061,7 +1061,7 @@ static X509 *ctls_create_self_signed(const char *server_name) {
 static const unsigned char ctls_session_id_context[] = "ccol-ctls";
 
 // Applies the settings every SSL_CTX of this module carries, and nothing
-// else: partial writes, moving write buffers, TLS 1.2 as the minimum, no
+// else: Partial writes, moving write buffers, TLS 1.2 as the minimum, no
 // compression and the session id context. Moving buffers let a server retry
 // a write from a copy of the unsent tail (OpenSSL otherwise fails with "bad
 // write retry"). Without the session id context, a server with
@@ -1079,7 +1079,7 @@ static bool ctls_apply_base_settings(SSL_CTX *ctx) {
              (unsigned int)(sizeof(ctls_session_id_context) - 1)) == 1;
 }
 
-// Installs a certificate chain and its key on ctx while it's built: a
+// Installs a certificate chain and its key on ctx while it's built: A
 // self-signed certificate for self_signed_name with the root key, or the PEM
 // cert_pem chain (leaf first; a chain certificate that fails to attach fails
 // the whole call) with the PEM key_pem, decrypted with pk_password. No
@@ -1231,7 +1231,7 @@ static int ctls_alpn_select_cb(SSL *ssl, const unsigned char **out,
   return SSL_TLSEXT_ERR_OK;
 }
 
-// Installs tls's ALPN protocols on ctx: the server selection callback, and the
+// Installs tls's ALPN protocols on ctx: The server selection callback, and the
 // client offer list in wire format. It sets *oom when its own allocation
 // fails (that leaves nothing on the error queue); the only other failure,
 // inside SSL_CTX_set_alpn_protos(), is an allocation too. Gives false on
@@ -1279,7 +1279,7 @@ static SSL_CTX *ctls_named_ctx_for_pattern(ctls_ctx *tls, char *pattern) {
 // Resolves a ClientHello's SNI name to the SSL_CTX of a named certificate, or
 // NULL. An exact match always wins over the one-label "*." wildcard, so a
 // host with its own certificate never gets the wildcard's whatever the order
-// of registration. Each half is one probe: the only wildcard candidate is
+// of registration. Each half is one probe: The only wildcard candidate is
 // "*." plus everything after the first dot, written in place over the copy.
 // The caller holds tls->lock.
 static SSL_CTX *ctls_find_named_ctx(ctls_ctx *tls, const char *sni_name) {
@@ -1316,7 +1316,7 @@ static void ctls_conn_pin_sni_ctx(ctls_conn *conn, SSL_CTX *installed) {
   ctls_account_ctx_pins(1);
 }
 
-// The SNI callback, run during SSL_accept(): moves the connection onto the
+// The SNI callback, run during SSL_accept(): Moves the connection onto the
 // SSL_CTX of the named certificate that matches the ClientHello's name, so
 // each host gets its own certificate. conn is resolved before taking
 // tls->lock, which keeps the ex_data mutex and that lock independent. The
@@ -1386,7 +1386,7 @@ static ccol_retval ctls_rebuild_failure(bool oom) {
 
 // Rebuilds the default SSL_CTX and every named certificate's SSL_CTX from the
 // configuration tls stores; every call that changes a context runs it under
-// tls->lock. It never patches an SSL_CTX in place: everything is built first
+// tls->lock. It never patches an SSL_CTX in place: Everything is built first
 // and committed together (old contexts freed, new ones installed), so a
 // failure leaves every old object serving as before. A caller that changed
 // the stored configuration first must restore it on failure, or the next
@@ -1469,7 +1469,7 @@ static ccol_retval ctls_ctx_rebuild_locked(ctls_ctx *tls) {
 
 // ctls_ctx construction and mutation
 //
-// Frees a named certificate entry: its PEM data, password, self-signed name
+// Frees a named certificate entry: Its PEM data, password, self-signed name
 // and built SSL_CTX, through tls's allocator.
 static void ctls_named_cert_destroy(ctls_ctx *tls, ctls_named_cert *nc) {
   if (!nc) return;
@@ -1857,7 +1857,7 @@ ccol_retval ctls_ctx_trust(ctls_ctx *ctx, const char *ca_bundle_path,
   return rv;
 }
 
-// Makes ctx trust the system CA store and turns on peer verification: under
+// Makes ctx trust the system CA store and turns on peer verification: Under
 // ctx->lock it sets verify_default_store and verify_peer and rebuilds,
 // restoring both flags when the rebuild fails.
 ccol_retval ctls_ctx_trust_system(ctls_ctx *ctx) {
@@ -1983,7 +1983,7 @@ void ctls_ctx_retain(ctls_ctx *ctx) {
   ccol__mutex_unlock(ctx->lock);
 }
 
-// Drops a reference to ctx and, at zero, frees everything it owns: the built
+// Drops a reference to ctx and, at zero, frees everything it owns: The built
 // contexts, the stored certificates and bundles, every named certificate
 // (walked without allocating, so a release under memory pressure still frees
 // them all), and the ALPN registrations after calling their cleanups. ctx is
@@ -2038,7 +2038,7 @@ void ctls_ctx_release(ctls_ctx *ctx) {
 // ctx->lock section, then releases the BIO method count after the lock. The
 // lock orders the connection's last use of a shared SSL_CTX before a rebuild,
 // which frees replaced contexts under the same lock, can destroy it. It
-// doesn't call SSL_shutdown(): holding the lock across a write to one peer
+// doesn't call SSL_shutdown(): Holding the lock across a write to one peer
 // would stall every create, destroy and configuration change of the context.
 // It updates the pin accounting only for pins really taken.
 static void ctls_conn_release_ssl(ctls_conn *conn) {
@@ -2064,7 +2064,7 @@ static void ctls_conn_release_ssl(ctls_conn *conn) {
   if (release_sock_bio) ctls_sock_bio_release();
 }
 
-// Undoes a connection that failed during its own construction: releases its
+// Undoes a connection that failed during its own construction: Releases its
 // SSL state and pins, drops the context reference ctls_conn_alloc() took, and
 // frees the record. The procs are copied by value first, because that release
 // may free the context and the procs copy it holds.
@@ -2300,7 +2300,7 @@ ctls_handshake_result ctls_conn_handshake_step(ctls_conn *conn) {
 }
 
 // Turns an SSL_read() or SSL_write() result ret into the read(2)-like result
-// of ctls_conn_read() and ctls_conn_write(): bytes, 0 for close_notify, or -1
+// of ctls_conn_read() and ctls_conn_write(): Bytes, 0 for close_notify, or -1
 // with errno. SSL_ERROR_SSL and SSL_ERROR_SYSCALL are ECONNRESET (a syscall
 // error never becomes a retry that could spin), and the "want" results are
 // EWOULDBLOCK with the direction stored in conn->last_io_wants_write. The
@@ -2435,7 +2435,7 @@ long ctls_conn_verify_result(const ctls_conn *conn) {
   return SSL_get_verify_result(conn->ssl);
 }
 
-// Tells whether conn's peer presented a certificate that verified: it needs
+// Tells whether conn's peer presented a certificate that verified: It needs
 // a finished handshake, SSL_VERIFY_PEER in the mode, a peer certificate and
 // X509_V_OK, because OpenSSL reports X509_V_OK for a peer that sent nothing.
 // A resumed session carries the answer of its original handshake.

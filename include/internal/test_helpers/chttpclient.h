@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal only: the test hooks of chttpclient. src/chttpclient.c defines them
+// Internal only: The test hooks of chttpclient. src/chttpclient.c defines them
 // and the chttpclient tests call them, to reach internal helpers and overflow
 // guards, force failures, hold a thread at a chosen point and read state the
 // public API doesn't show. They exist only when RUNNING_UNIT_TESTS is defined,
@@ -272,7 +272,7 @@ unsigned long chttp__tier1_continue_waits_for_tests(void);
 // Gives how many sweep ticks the process has run, so a test can count walks.
 unsigned long chttp__sweep_ticks_for_tests(void);
 
-// For each kind of timed work (0: an expired deadline, 1: a Happy Eyeballs
+// For each kind of timed work (0: An expired deadline, 1: A Happy Eyeballs
 // start), reset or read how often a walk acted on it and the largest gap
 // between the walk's planned instant and the due instant, so a test can check
 // the plan on a loaded machine. With a count of 0 the gap is INT64_MIN.
@@ -445,11 +445,11 @@ void chttpcli__release_idle_probe_hold_for_tests(void);
 // turns it off), so a test can race a destroy against it.
 void chttpcli__set_continue_carry_replay_delay_ms_for_tests(long ms);
 
-// Arms one stray write dispatch at a take: the take arms the write direction
+// Arms one stray write dispatch at a take: The take arms the write direction
 // under idle_lock before it builds the new hop and waits 200 ms.
 void chttpcli__arm_stray_write_at_take_for_tests(void);
 
-// Arms one stray write dispatch that races a take: the dispatch classifies the
+// Arms one stray write dispatch that races a take: The dispatch classifies the
 // ctx as IDLE, then the take moves it to WRITING and holds idle_lock for 200
 // ms. The second tells whether that happened, and disarms the hook.
 void chttpcli__arm_stray_write_before_take_for_tests(void);

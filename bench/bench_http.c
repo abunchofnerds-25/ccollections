@@ -27,7 +27,7 @@
  * @brief End-to-end benchmarks for chttpserver and chttpclient.
  *
  * These cases start a server on the loopback interface and drive it with
- * this library's own client, so one case measures the whole path: request
+ * this library's own client, so one case measures the whole path: Request
  * serialization, the loopback round trip through the kernel, the reactor's
  * readiness dispatch, routing, the handler on a worker thread, response
  * serialization and the client's parse. That's the number a user of this
@@ -142,11 +142,11 @@ static void *http_setup(size_t n) {
   /* CLOG_NULL means no logger. A logger here would put the cost of
    * formatting and writing one line per request inside a measurement that is
    * about the request path. */
-  /* Nothing frees this, and nothing may: these two constructors report
+  /* Nothing frees this, and nothing may: These two constructors report
    * through CCOL__ERR_STR, a static string the macro builds from __FILE__ and
    * __LINE__, so calling free() on it is undefined behavior and not just a
    * waste. The serializers' parse error strings belong to the library in the
-   * same way: each thread has its own and the next parse reuses it. */
+   * same way: Each thread has its own and the next parse reuses it. */
   char *err = NULL;
   st->srv = chttpsvr_create(CLOG_NULL, &err);
   if (st->srv == CHTTPSVR_NULL) {
@@ -261,7 +261,7 @@ static void http_do_posts(http_state_t *st, const unsigned char *body,
   }
 }
 
-/* A small body arrives with the headers: the ordinary API call. */
+/* A small body arrives with the headers: The ordinary API call. */
 static void http_post_small_run(void *state, size_t n) {
   http_state_t *st = state;
   http_do_posts(st, st->small_body, BENCH_HTTP_SMALL_BODY, n);

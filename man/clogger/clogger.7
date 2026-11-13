@@ -120,7 +120,7 @@ clog_create_from_fd_mp(3) and clog_create_from_file_mp(3) take an
 optional ccol_memmgmt_procs, and the root logger and every logger
 derived from it allocate the shared output state, the write buffers,
 the message buffers and the fields through it.  Two allocations belong
-to the library and not to one logger, so they don't go through it: the
+to the library and not to one logger, so they don't go through it: The
 symbol text of a backtrace, which backtrace_symbols(3) allocates with
 malloc(3), and the small identity cache (program name, process and
 thread ID, thread name) that each thread fills with malloc(3) on its
@@ -137,7 +137,7 @@ and a backtrace always follows its own record.  The level and the
 fields of a logger are synchronised apart from that lock.
 
 clog_close(3) is the exception, as it is for every handle type of the
-library: while it runs, no other thread may use or close the same
+library: While it runs, no other thread may use or close the same
 handle.  Closing one handle while a sibling handle (the root or another
 derived logger) logs is fine.
 .fi

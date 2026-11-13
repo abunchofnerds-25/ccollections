@@ -29,7 +29,7 @@ messages come and go.
 .fi
 .SH PARAMETERS
 .nf
-max_size     Maximum number of messages that the queue can hold: at
+max_size     Maximum number of messages that the queue can hold: At
              least 1, no larger than ccol_max_elem_count, and no larger
              than SIZE_MAX / sizeof(cmessage), above which the size
              of the backing array would overflow.
@@ -61,7 +61,7 @@ runs after them. None of these failures leaves anything allocated.
 All operations on this queue are thread-safe. When you are done with
 the queue, destroy it with ccircq_destroy().
 
-fork(2) and this queue can be combined in two supported ways: call
+fork(2) and this queue can be combined in two supported ways: Call
 fork(2) before you create the queue, or create it and then call fork(2)
 followed at once by exec(3). A program that keeps running with no
 exec(3) after the fork while a queue from before the fork is live is

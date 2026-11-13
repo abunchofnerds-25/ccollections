@@ -9,7 +9,7 @@ C Collections (libccollections, \-lccollections)
 .fi
 .SH DESCRIPTION
 .nf
-csort sorts any collection that you can index: a C array, a cvector, a
+csort sorts any collection that you can index: A C array, a cvector, a
 ring buffer or a container of your own. It is an iterative, bottom-up
 mergesort, so there is no recursion and a large input cannot overflow
 the stack.
@@ -65,7 +65,7 @@ of the element.
 .SS "Errors"
 .nf
 csort_sort(3) gives true on success, and also for a call that has
-nothing to do: a NULL collection, a length of 0 or 1, or an elem_size of
+nothing to do: A NULL collection, a length of 0 or 1, or an elem_size of
 0. It gives false for each of the failures listed above. A NULL getter
 or a NULL comparison function, for a collection that is not NULL and has
 2 or more elements, is a programming error, and the call asserts and

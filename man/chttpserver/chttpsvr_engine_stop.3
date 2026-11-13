@@ -23,7 +23,7 @@ completes.
 
 Before it tears the shared reactor down, the library quiesces every
 chttpsvr instance that is registered in the process, started or not,
-in exactly the way chttpsvr_destroy() does: it closes the listener,
+in exactly the way chttpsvr_destroy() does: It closes the listener,
 drains the in-flight requests, closes the idle and parked connections
 and the requests that wait for body memory, answers the queued
 streaming requests with 503, shuts the worker pools down and frees the
@@ -40,7 +40,7 @@ signal-handler shutdown pattern below is safe, even though it runs
 after the library has torn the engine down: srv is quiesced by then,
 so that call only frees the remaining memory of the server and
 repeats no teardown work.  Repeated destroy calls on the same handle
-are not made safe by this: a second chttpsvr_destroy(srv) on a handle
+are not made safe by this: A second chttpsvr_destroy(srv) on a handle
 that an earlier call destroyed is a fatal error, with abort() and
 SIGABRT, on this path as on every other one.
 

@@ -42,7 +42,7 @@ status_code_out Receives the HTTP status code when the call
 The same codes as chttpcli_do, with two differences. This function
 never returns ccol_msg_too_large, because
 chttpcli_set_max_response_body_size has no effect on a streaming
-request: the caller's write_fn decides how much memory it uses. It also
+request: The caller's write_fn decides how much memory it uses. It also
 returns ccol_http_transfer_aborted when write_fn returns anything other
 than len, since any such value, above len or below it, aborts the
 transfer.

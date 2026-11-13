@@ -22,7 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-// Compile-time probe: every public macro of this header nests inside the
+// Compile-time probe: Every public macro of this header nests inside the
 // argument of another public macro, and inside its own, under -Wshadow -Werror.
 // Each expansion names its temporaries uniquely, so a nested expansion never
 // hides a local of the outer one. The Makefile compiles this file with

@@ -137,7 +137,7 @@ typedef struct {
   pthread_t accept_tid;
   atomic_int running;
 
-  // The IPv6 listener is best effort: when the bind fails server_fd6 stays -1
+  // The IPv6 listener is best effort: When the bind fails server_fd6 stays -1
   // and port6 stays 0.
   atomic_int server_fd6;
   int port6;
@@ -178,7 +178,7 @@ static pthread_mutex_t g_conn_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Adds a connection thread to g_conn_threads under g_conn_mutex, so
 // stop_test_server can join it. It first reaps the entries that have already
-// stopped: the server runs for the whole process, and a stopped thread that
+// stopped: The server runs for the whole process, and a stopped thread that
 // nobody joined keeps its stack mapping, which can use up the address space of
 // a 32-bit build. A thread that doesn't fit is detached.
 static void register_conn_thread(pthread_t tid) {
@@ -1147,7 +1147,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   return true;
 }
 
-// What the slow-final route saw after its answer: the body bytes the client
+// What the slow-final route saw after its answer: The body bytes the client
 // sent, which must be 0, and a done counter it bumps after publishing them.
 static _Atomic int g_slow_final_body_bytes = 0;
 static _Atomic int g_slow_final_done = 0;
@@ -1201,7 +1201,7 @@ static void *srv_conn_thread(void *arg) {
   return r;
 }
 
-// Serves the connection whose fd is arg: reads request after request and hands
+// Serves the connection whose fd is arg: Reads request after request and hands
 // each to its route, for as long as the route keeps the connection open, then
 // closes the fd.
 static void *srv_conn_thread_body(void *arg) {
@@ -1487,7 +1487,7 @@ static void start_test_server(void) {
 
 static void test_wake_listener(int lfd);
 
-// Stops the mock server at exit, so no thread of it outlives the tests: stops
+// Stops the mock server at exit, so no thread of it outlives the tests: Stops
 // the accept loops, closes the listeners, removes the socket file and joins
 // every connection thread left in g_conn_threads.
 __attribute__((destructor)) static void stop_test_server(void) {
@@ -1558,7 +1558,7 @@ static const char *get_test_unix_socket_path(void) {
 }
 
 // Percent-encodes the filesystem path raw into buf, for the authority of a
-// http+unix:// URL: unreserved characters stay, every other byte ('/' included)
+// http+unix:// URL: Unreserved characters stay, every other byte ('/' included)
 // becomes %XX. It's the test-side copy of the library's static helper of the
 // same name, which the mock server's Unix redirects and make_unix_url need.
 static void percent_encode_unix_path(char *buf, size_t buf_size,
@@ -1813,7 +1813,7 @@ TEST(client_construction, create_and_destroy) {
 }
 
 // An allocator for the construction sweeps. It fails the call whose index is
-// g_cf_fail_at (-1: none), counts every call in g_cf_calls, records in
+// g_cf_fail_at (-1: None), counts every call in g_cf_calls, records in
 // g_cf_failed that it failed one, and keeps in g_cf_live the blocks it handed
 // out that nobody gave back, so a sweep can tell a clean failure from a leak.
 static atomic_int g_cf_calls;
@@ -1856,7 +1856,7 @@ static ccol_memmgmt_procs g_cf_mp = {.malloc = cf_malloc,
                                      .calloc = cf_calloc,
                                      .realloc = cf_realloc};
 
-// Arms the cf allocator for one step of a sweep: resets the call counter and
+// Arms the cf allocator for one step of a sweep: Resets the call counter and
 // the failed flag and makes the call with index fail_at fail.
 static void cf_arm(int fail_at) {
   atomic_store(&g_cf_calls, 0);
@@ -2372,7 +2372,7 @@ typedef struct {
   size_t len;
 } stream_sink_t;
 
-// The write_fn of the streaming tests: appends what fits of the chunk to the
+// The write_fn of the streaming tests: Appends what fits of the chunk to the
 // stream_sink_t in ctx and reports the whole chunk as taken.
 static size_t stream_sink_write(const void *data, size_t len, void *ctx) {
   stream_sink_t *s = (stream_sink_t *)ctx;
@@ -2516,7 +2516,7 @@ typedef struct {
   atomic_int ready;
 } probe_arg_t;
 
-// The racing caller of pool.do_returns_not_permitted_when_destroying: signals
+// The racing caller of pool.do_returns_not_permitted_when_destroying: Signals
 // ready, makes one GET and records the outcome in the probe_arg_t in arg.
 static void *probe_thread(void *arg) {
   probe_arg_t *a = (probe_arg_t *)arg;
@@ -3041,7 +3041,7 @@ TEST(custom_allocator, allocations_go_through_custom_procs) {
 // Body buffer out of memory
 //
 // An allocator whose realloc fails for 4096 bytes or more, so the body buffer
-// test can fail exactly the body growth: the buffer grows from 4096 while a
+// test can fail exactly the body growth: The buffer grows from 4096 while a
 // small GET never needs that much. Every other call goes to the C library.
 static void *bodybuf_oom_malloc(size_t sz) { return malloc(sz); }
 static void *bodybuf_oom_calloc(size_t n, size_t sz) { return calloc(n, sz); }
@@ -4949,7 +4949,7 @@ TEST(redirect_policy, body_stays_dropped_across_a_later_preserving_hop) {
   chttpcli_resp_free(resp);
 }
 
-// A caller-set Authorization header follows curl's rule: it's dropped at the
+// A caller-set Authorization header follows curl's rule: It's dropped at the
 // first hop whose origin differs from the original request, and sent again on a
 // hop that returns to that origin.
 TEST(credentials, explicit_authorization_header_carried_same_origin_redirect) {
@@ -5779,7 +5779,7 @@ typedef struct {
   int sleep_ms;
 } inact_sink_t;
 
-// The write_fn of the inactivity tests: sleeps sleep_ms, so the time spent in
+// The write_fn of the inactivity tests: Sleeps sleep_ms, so the time spent in
 // the callback can be checked against the inactivity timeout, then appends what
 // fits to the inact_sink_t in ctx and reports the whole chunk as taken.
 static size_t inact_write_fn(const void *data, size_t len, void *ctx) {
@@ -6139,7 +6139,7 @@ typedef struct {
   size_t len;
 } slow_final_sink_t;
 
-// The write_fn of the streaming slow-final cases: appends what fits to the
+// The write_fn of the streaming slow-final cases: Appends what fits to the
 // slow_final_sink_t in ctx and reports the whole chunk as taken.
 static size_t slow_final_write(const void *data, size_t len, void *ctx) {
   slow_final_sink_t *sink = (slow_final_sink_t *)ctx;
@@ -7835,7 +7835,7 @@ TEST(async_expect_continue, bodyless_request_not_affected) {
   chttpcli_destroy(cli);
 }
 
-// Async redirects: chains of several hops, the CHTTP_MAX_REDIRECTS cap and
+// Async redirects: Chains of several hops, the CHTTP_MAX_REDIRECTS cap and
 // relative Locations, plus the same method and body policy as Tier 1
 TEST(async_redirects, get_301_follows_to_final_resource) {
   chttpcli_construct(cli);
@@ -7925,7 +7925,7 @@ TEST(async_redirects, post_307_preserves_method_and_body) {
   chttpcli_destroy(cli);
 }
 
-// The Tier 2/3 side of the stale-header rule: every hop sends the request
+// The Tier 2/3 side of the stale-header rule: Every hop sends the request
 // headers again, so a downgrading hop must strip them too.
 TEST(async_redirects, stale_content_length_stripped_after_downgrade) {
   chttpcli_construct(cli);
@@ -8026,7 +8026,7 @@ TEST(async_redirects, stale_expect_stripped_after_downgrade) {
   chttpcli_destroy(cli);
 }
 
-// The Tier 2/3 side: a 307 or 308 after a downgrade must keep the earlier drop
+// The Tier 2/3 side: A 307 or 308 after a downgrade must keep the earlier drop
 // instead of going back to the original body of hop 0.
 TEST(async_redirects, body_stays_dropped_across_a_later_preserving_hop) {
   chttpcli_construct(cli);
@@ -8624,7 +8624,7 @@ TEST(async_idle_pool, concurrent_stale_eviction_races_dispatch_no_uaf) {
 }
 
 // An allocator that fails the one call with index g_hop_fail_at_call (any of
-// malloc, calloc and realloc; -1: never), to sweep every allocation of a hop on
+// malloc, calloc and realloc; -1: Never), to sweep every allocation of a hop on
 // a reused connection.
 static atomic_int g_hop_fail_call_index;
 static int g_hop_fail_at_call = -1;
@@ -8655,7 +8655,7 @@ static ccol_memmgmt_procs g_hop_fail_mp = {.malloc = hop_fail_malloc,
                                            .realloc = hop_fail_realloc};
 
 // An allocator that fails only a calloc whose n * sz equals
-// g_size_fail_target_size (0: never), so
+// g_size_fail_target_size (0: Never), so
 // async_idle_pool.chain_creation_oom_reports_not_enough_memory_not_generic can
 // fail the chain allocation alone. It picks the call by its size, so it doesn't
 // depend on how many other allocations run first.
@@ -10003,7 +10003,7 @@ typedef struct {
   atomic_bool done;
 } destroy_watchdog_arg_t;
 
-// The thread of destroy_completes_promptly: destroys the client in the
+// The thread of destroy_completes_promptly: Destroys the client in the
 // destroy_watchdog_arg_t in arg and sets done.
 static void *destroy_watchdog_thread(void *arg) {
   destroy_watchdog_arg_t *a = (destroy_watchdog_arg_t *)arg;
@@ -10434,18 +10434,18 @@ TEST(tls, set_tls_all_exit_paths_release_pin) {
 //
 // The body every TLS route answers with.
 #define TLS_TEST_BODY "{\"status\":\"ok\"}"
-// The size of the one TLS record /one-record-held-open sends: more than either
+// The size of the one TLS record /one-record-held-open sends: More than either
 // tier takes in one read, less than a record can carry. The route keeps its end
 // open for ONE_RECORD_HOLD_MS for the client to close.
 #define ONE_RECORD_TOTAL 12000
 #define ONE_RECORD_HOLD_MS 8000
 // g_tls_early_release ends the hold of /early-reject-hold. The other two record
-// how /one-record-held-open ended: the client closed it, or the hold ran out.
+// how /one-record-held-open ended: The client closed it, or the hold ran out.
 static atomic_int g_tls_early_release = 0;
 static atomic_int g_one_record_closed_by_client = 0;
 static atomic_int g_one_record_hold_expired = 0;
 
-// The mock TLS server: its context, its listener (atomic because the teardown
+// The mock TLS server: Its context, its listener (atomic because the teardown
 // writes it while the accept loop reads it), its port and thread, and the
 // certificate files. g_tls_cert_ready is false when the openssl command
 // couldn't make a certificate, and the TLS tests then skip themselves.
@@ -10873,7 +10873,7 @@ static int _start_tls_server(void) {
   return 0;
 }
 
-// Stops the mock TLS server: stops the accept loop and joins every thread in
+// Stops the mock TLS server: Stops the accept loop and joins every thread in
 // g_tls_conn_threads, so none still uses g_tls_ssl_ctx.
 static void _stop_tls_server(void) {
   if (g_tls_srv_fd < 0) return;
@@ -10891,7 +10891,7 @@ static void _stop_tls_server(void) {
   pthread_mutex_unlock(&g_tls_conn_mutex);
 }
 
-// The atexit handler of the TLS section: stops the server, frees
+// The atexit handler of the TLS section: Stops the server, frees
 // g_tls_ssl_ctx and removes the certificate.
 static void _tls_teardown(void) {
   _stop_tls_server();
@@ -11351,7 +11351,7 @@ TEST(async_tls, concurrent_https_requests_all_succeed) {
 #define TLS_DIR_INJECT_WRITE_WANTS_READ 1
 #define TLS_DIR_INJECT_READ_WANTS_WRITE 2
 
-// The ceiling of the warm-up hop, a safety net only: it runs a full handshake,
+// The ceiling of the warm-up hop, a safety net only: It runs a full handshake,
 // which can take a second under valgrind.
 #define TLS_DIR_WARMUP_TIMEOUT_MS 30000
 
@@ -12100,7 +12100,7 @@ TEST(tls_config_defaults, zero_initialised_config_verifies_everything) {
   REQUIRE_FALSE(just_a_cert.insecure_skip_hostname_check);
 }
 
-// Compared field by field: a compound literal leaves its padding unspecified,
+// Compared field by field: A compound literal leaves its padding unspecified,
 // so a memcmp fails for no reason. A new field must be added here too.
 TEST(tls_config_defaults, the_default_macro_matches_a_zeroed_struct) {
   chttp_tls_config from_macro = CHTTP_TLS_DEFAULT;
@@ -12351,7 +12351,7 @@ typedef struct {
 // The Location that /raw-location sends, byte for byte.
 static char g_hs_raw_location[512];
 
-// The accept loop of the scripted listener in arg: serves its routes one
+// The accept loop of the scripted listener in arg: Serves its routes one
 // connection at a time and counts accepts, redirs and redirs_with_credentials,
 // until running clears.
 static void *hs_loop(void *arg) {
@@ -12794,7 +12794,7 @@ TEST(redirect_header_scope, return_to_first_origin_sends_headers_again) {
   }
 }
 
-// A -> B -> B: the last hop matches the hop before it but not the first
+// A -> B -> B: The last hop matches the hop before it but not the first
 // request, so the headers stay off.
 TEST(redirect_header_scope, second_hop_on_foreign_origin_still_drops) {
   hs_srv_t a, b;
@@ -13098,7 +13098,7 @@ static int accepts_for_two_requests(int tier, hs_srv_t *srv, const char *path,
   return atomic_load(&srv->accepts) - before;
 }
 
-// RFC 9112 section 6.1: an HTTP/1.0 message with Transfer-Encoding has faulty
+// RFC 9112 section 6.1: An HTTP/1.0 message with Transfer-Encoding has faulty
 // framing, so the connection is never reused. The HTTP/1.1 control shows the
 // same measurement sees a reuse.
 TEST(response_framing, http10_transfer_encoding_is_never_kept_alive) {
@@ -14139,7 +14139,7 @@ TEST(tls_trailing_dot, a_fully_qualified_name_verifies_and_sends_sni) {
 //                      then one chunk "got <n>" and the end.
 //   ERS_LATE_REJECT    read 64 KiB, stop reading for 300 ms so the client's
 //                      send blocks, then 413 and hold without reading.
-//   ERS_SLOW_CONTINUE  per request: wait 250 ms, send 100 Continue, read the
+//   ERS_SLOW_CONTINUE  per request: Wait 250 ms, send 100 Continue, read the
 //                      body and answer 200 "ok".
 //   ERS_STREAM_ECHO_KA ERS_STREAM_ECHO with keep-alive, then 200 "ok" for every
 //                      later request.
@@ -14157,7 +14157,7 @@ enum {
 // The most connections one ers server serves; ers_stop joins their threads.
 #define ERS_MAX_CONNS 16
 
-// One early-response server: its listener, mode, counters and connection
+// One early-response server: Its listener, mode, counters and connection
 // threads. release ends the holds; mu guards conn_tids.
 typedef struct {
   int fd;
@@ -14411,7 +14411,7 @@ static bool ers_start(ers_srv_t *s, int mode) {
   return true;
 }
 
-// Stops an ers server: releases the holds, stops the accept loop and joins
+// Stops an ers server: Releases the holds, stops the accept loop and joins
 // every connection thread.
 static void ers_stop(ers_srv_t *s) {
   if (s->fd < 0) return;
@@ -15250,7 +15250,7 @@ static void open_watch_note(const char *path, bool cloexec) {
   pthread_mutex_unlock(&g_open_mu);
 }
 
-// Replaces fopen() for this binary: notes whether the mode has "e" and passes
+// Replaces fopen() for this binary: Notes whether the mode has "e" and passes
 // the call to the C library's fopen.
 FILE *fopen(const char *path, const char *mode) {
   static void *_Atomic real = NULL;
@@ -15267,7 +15267,7 @@ FILE *fopen(const char *path, const char *mode) {
   return ((FILE * (*)(const char *, const char *)) fn)(path, mode);
 }
 
-// Replaces open() for this binary: notes whether flags has O_CLOEXEC and
+// Replaces open() for this binary: Notes whether flags has O_CLOEXEC and
 // passes the call, with its mode when it takes one, to the C library.
 int open(const char *path, int flags, ...) {
   static void *_Atomic real = NULL;
@@ -15310,7 +15310,7 @@ static int open_watch_checked(const char *name, const char *path, int flags) {
 }
 
 // The two checking entry points, each defined under its symbol name through an
-// asm label: with 64-bit offsets glibc maps the C name __open_2 to __open64_2,
+// asm label: With 64-bit offsets glibc maps the C name __open_2 to __open64_2,
 // so a definition under that C name would define __open64_2 twice.
 int test_open_watch_open_2(const char *path, int flags) __asm__("__open_2");
 int test_open_watch_open_2(const char *path, int flags) {
@@ -15499,7 +15499,7 @@ TEST(expect_continue, pooled_continue_windows_over_sweep_ticks) {
 
 // A one-connection server for a_stale_sweep_snapshot_never_ends_a_later_window.
 // Request 1 waits for go1, gets "100 Continue" and a keep-alive 200. Request 2
-// never gets "100 Continue": the server records in body2_after_ms how long
+// never gets "100 Continue": The server records in body2_after_ms how long
 // after its head the first body byte came, then answers 200.
 typedef struct {
   int lfd;
@@ -15780,7 +15780,7 @@ TEST(client_construction, a_small_request_timeout_times_out_in_microseconds) {
   REQUIRE_LT(elapsed, 5000L);
 }
 
-// Scripted peers: framing, upgrade and reuse checks
+// Scripted peers: Framing, upgrade and reuse checks
 //
 // The most connections one scripted peer serves.
 #define SCRIPTED_PEER_MAX_CONNS 8
@@ -15858,7 +15858,7 @@ static void *scripted_peer_accept_main(void *arg) {
   return NULL;
 }
 
-// Starts sp with script fn, resetting its counters. rcvbuf (0: default) is set
+// Starts sp with script fn, resetting its counters. rcvbuf (0: Default) is set
 // on the listener before listen(), so every accepted socket inherits it.
 // Returns 0, or -1.
 static int scripted_peer_start(scripted_peer *sp, scripted_peer_fn fn,
@@ -17571,7 +17571,7 @@ static int connections_for_two_requests(int tier,
   return ok ? atomic_load(&sp.nconn) : -1;
 }
 
-// RFC 9112 section 9.6: a request that names "close" is the last on its
+// RFC 9112 section 9.6: A request that names "close" is the last on its
 // connection even when the response keeps it alive. The option is found in a
 // token list in any ASCII case.
 TEST(request_close, a_caller_close_option_ends_the_connection_in_every_tier) {
@@ -17587,7 +17587,7 @@ TEST(request_close, a_caller_close_option_ends_the_connection_in_every_tier) {
   }
 }
 
-// Control bytes in a request field value: every one except HTAB, and DEL, is
+// Control bytes in a request field value: Every one except HTAB, and DEL, is
 // refused at the setter and again when a caller-built map is serialized.
 TEST(request, set_header_rejects_control_bytes_in_value) {
   chttp_request *req =

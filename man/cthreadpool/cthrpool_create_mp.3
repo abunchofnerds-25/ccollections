@@ -65,7 +65,7 @@ Behind each submission there is a small internal task node, which the
 library recycles through a cache in each pool instead of allocating and
 freeing it through mprocs on every call. So a caller such as a tracking
 or measuring allocator cannot expect mprocs to see one allocation and
-one free for each submission: it sees a call only when the cache is
+one free for each submission: It sees a call only when the cache is
 empty or already full, and when the pool trims the cache. The cache
 keeps the nodes that the pool's recent traffic needed, so a burst of
 submissions as deep as an earlier one allocates no node. It holds at
@@ -82,12 +82,12 @@ cthrpool_pending_count call running at the same time) to stop, so the
 caller doesn't have to prove on its own that no other thread is still
 using the pool.
 
-fork(2) can be combined with cthreadpool in two supported ways: a
+fork(2) can be combined with cthreadpool in two supported ways: A
 fork(2) before a pool is created, or a pool created and then a fork(2)
 followed immediately by an exec(3). A child that keeps running with no
 exec(3) in between, while a pool created before the fork is live, is
 not a supported pattern.
-On top of that the library keeps a standing defence: a fresh call to
+On top of that the library keeps a standing defence: A fresh call to
 cthrpool_create_mp, cthrpool_submit, cthrpool_try_submit,
 cthrpool_timed_submit or cthrpool_destroy, or to one of the future, wait
 and shutdown variants, never hangs on a lock. That holds for a call

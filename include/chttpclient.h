@@ -122,21 +122,27 @@ typedef struct chttpcli_response {
   void *ccol__field_lines;
 } chttpcli_response;
 
-// Request lifecycle
-//
-// Creates a request; it's the one constructor behind chttp_request_create, for
-// callers with their own allocator. method is one of CHTTP_GET to CHTTP_OPTIONS
-// (CHTTP_ANY and any other value are refused). url, body->data and
-// body->content_type are copied, so you may free yours at once; body may be
-// NULL or &CHTTP_NO_BODY, and body->data may be NULL only when body->len is 0.
-// mprocs is your allocator or NULL. Gives the request, or NULL with *err_str
-// set (err_str may be NULL).
+// Request lifecycle.
+
+// Creates an HTTP request whose memory comes from mprocs (NULL for malloc and
+// free). method is one of CHTTP_GET to CHTTP_OPTIONS (CHTTP_ANY and any other
+// value are refused). url, body->data and body->content_type are copied, so you
+// may free yours at once; body may be NULL or &CHTTP_NO_BODY, and body->data
+// may be NULL only when body->len is 0. Gives the request, which you free with
+// chttp_request_free(), or NULL with a static string in *err_str (err_str may
+// be NULL) for a NULL url, a bad method or body, or a failed allocation.
 chttp_request *chttp_request_create_mp(chttp_method method, const char *url,
                                        const chttp_request_body *body,
                                        ccol_memmgmt_procs *mprocs,
                                        char **err_str);
 
-// Creates a request with the default allocator; see chttp_request_create_mp.
+// Creates an HTTP request with malloc. method is one of CHTTP_GET to
+// CHTTP_OPTIONS (CHTTP_ANY and any other value are refused). url, body->data
+// and body->content_type are copied, so you may free yours at once; body may be
+// NULL or &CHTTP_NO_BODY, and body->data may be NULL only when body->len is 0.
+// Gives the request, which you free with chttp_request_free(), or NULL with a
+// static string in *err_str (err_str may be NULL) for a NULL url, a bad method
+// or body, or a failed allocation.
 static inline __attribute__((always_inline)) chttp_request *
 chttp_request_create(chttp_method method, const char *url,
                      const chttp_request_body *body, char **err_str) {
@@ -148,115 +154,129 @@ chttp_request_create(chttp_method method, const char *url,
 // lower case. The name must be a token, and the value may hold no control byte
 // but a tab (CR and LF would split the request). Transfer-Encoding is refused,
 // since a request body always goes out whole with Content-Length. Gives
-// ccol_success, ccol_invalid_args or ccol_not_enough_memory.
+// ccol_success, ccol_invalid_args for a NULL argument or a refused name or
+// value, or ccol_not_enough_memory.
 ccol_retval chttp_request_set_header(chttp_request *req, const char *name,
                                      const char *value);
 
 // Looks up a request header by name, case ignored, so you can check what a
 // request will send. Gives the value, valid until the next
-// chttp_request_set_header on req, or NULL.
+// chttp_request_set_header() on req or until req is freed, or NULL when req or
+// name is NULL or the header isn't set.
 const char *chttp_request_get_header(const chttp_request *req,
                                      const char *name);
 
-// Frees a request and everything it owns. NULL is safe.
+// Frees a request from chttp_request_create() or chttp_request_create_mp() and
+// everything it owns (URL, body copy, headers). NULL is safe.
 void chttp_request_free(chttp_request *req);
 
-// Client constructors
-//
+// Client constructors.
+
 // Creates an HTTP client that allocates through mprocs (NULL for malloc and
 // free). It starts with the pool size of the CPU count, a 30 s connect timeout,
 // a 60 s inactivity timeout, no request timeout, no body cap and full TLS
 // verification against the system CA bundle; change them with the
-// chttpcli_set_* calls before the first request. Gives the handle, or
-// CHTTPCLI_NULL with a static string in *err_str (err_str may be NULL).
+// chttpcli_set_* calls before the first request. Gives the handle, which you
+// destroy with chttpcli_destroy(), or CHTTPCLI_NULL with a static string in
+// *err_str (err_str may be NULL).
 chttpcli chttpcli_create_mp(ccol_memmgmt_procs *mprocs, char **err_str);
 
-// Creates an HTTP client with the default allocator; see chttpcli_create_mp.
+// Creates an HTTP client that allocates with malloc. It starts with the pool
+// size of the CPU count, a 30 s connect timeout, a 60 s inactivity timeout, no
+// request timeout, no body cap and full TLS verification against the system CA
+// bundle; change them with the chttpcli_set_* calls before the first request.
+// Gives the handle, which you destroy with chttpcli_destroy(), or CHTTPCLI_NULL
+// with a static string in *err_str (err_str may be NULL).
 static inline __attribute__((always_inline)) chttpcli
 chttpcli_create(char **err_str) {
   return chttpcli_create_mp(NULL, err_str);
 }
 
-// Client configuration
-//
+// Client configuration.
+
 // Sets how many Tier 1 requests of cli may run at once (0 gives the CPU count),
 // so a client can bound its own load. A Tier 1 call beyond it blocks for a free
 // slot, within its request timeout. Tier 2 and Tier 3 aren't limited by it.
-// Gives ccol_success, or ccol_invalid_args for a bad handle.
+// Gives ccol_success, or ccol_invalid_args for a CHTTPCLI_NULL or stale handle.
 ccol_retval chttpcli_set_pool_size(chttpcli cli, size_t n);
 
-// Sets the connect timeout of cli in microseconds (0 for none). It covers the
-// name lookup, the TCP connect and, for https, the TLS handshake, as one
-// budget. A lookup can't be cancelled: Tier 1 gives ccol_timed_out once it
-// returns, Tiers 2 and 3 at the deadline itself. Applies to requests that start
-// later.
+// Sets the connect timeout of cli in microseconds (0 for none; a new client has
+// 30 s). It covers the name lookup, the TCP connect and, for https, the TLS
+// handshake, as one budget. A lookup can't be cancelled: Tier 1 gives
+// ccol_timed_out once it returns, Tiers 2 and 3 at the deadline itself. Applies
+// to requests that start later. Gives ccol_success, or ccol_invalid_args for a
+// CHTTPCLI_NULL or stale handle.
 ccol_retval chttpcli_set_connect_timeout(chttpcli cli, uint64_t us);
 
-// Sets the total timeout of cli's requests in microseconds (0 for none), from
-// the call until the last body byte. Every tier checks it before each read, so
-// a response not fully read by the deadline ends in ccol_timed_out even when
-// the rest is buffered. Time waiting for a pool slot counts.
+// Sets the total timeout of cli's requests in microseconds (0 for none, the
+// default), from the call until the last body byte. Every tier checks it before
+// each read, so a response not fully read by the deadline ends in
+// ccol_timed_out even when the rest is buffered. Time waiting for a pool slot
+// counts. Gives ccol_success, or ccol_invalid_args for a CHTTPCLI_NULL or stale
+// handle.
 ccol_retval chttpcli_set_request_timeout(chttpcli cli, uint64_t us);
 
-// Sets the inactivity timeout of cli in microseconds (0 for none): a request
-// ends with ccol_timed_out once it has waited this long on its connection with
-// no byte moving either way. Every byte restarts it, and time spent in a
-// streaming write_fn doesn't count. A server that takes longer to start its
-// response (a long poll) needs a larger value or 0.
+// Sets the inactivity timeout of cli in microseconds (0 for none; a new client
+// has 60 s): A request ends with ccol_timed_out once it has waited this long on
+// its connection with no byte moving either way. Every byte restarts it, and
+// time spent in a streaming write_fn doesn't count. A server that takes longer
+// to start its response (a long poll) needs a larger value or 0. Gives
+// ccol_success, or ccol_invalid_args for a CHTTPCLI_NULL or stale handle.
 ccol_retval chttpcli_set_inactivity_timeout(chttpcli cli, uint64_t us);
 
 // Caps a buffered response body of cli at max_bytes (0 for none), so a bad
 // server can't make you hold an unbounded body. A larger declared
 // Content-Length fails before the body is read, and any other body fails as it
 // crosses the cap, with ccol_msg_too_large. Streaming requests aren't affected;
-// their write_fn bounds their memory.
+// their write_fn bounds their memory. Gives ccol_success, or ccol_invalid_args
+// for a CHTTPCLI_NULL or stale handle.
 ccol_retval chttpcli_set_max_response_body_size(chttpcli cli, size_t max_bytes);
 
 // Sets cli's TLS configuration (see chttp_tls_config in chttp.h); NULL, or a
 // zeroed struct, means full verification against the system CA bundle and no
-// client certificate. The system bundle is read once per process. A certificate
-// needs its key, and insecure_skip_verify beside a CA bundle is refused, as two
-// conflicting policies. A file that doesn't exist yet isn't an error here:
-// requests that need TLS then fail with ccol_http_tls_cert_load_failed. Running
-// out of memory puts the defaults back and gives ccol_not_enough_memory. Pooled
-// connections made under the old settings aren't reused.
+// client certificate. The system bundle is read once per process. A file that
+// doesn't exist yet isn't an error here: Requests that need TLS then fail with
+// ccol_http_tls_cert_load_failed. Pooled connections made under the old
+// settings aren't reused. Gives ccol_success; ccol_invalid_args for a bad
+// handle, a certificate without its key (or a key without one), or
+// insecure_skip_verify beside a CA bundle, as two conflicting policies; or
+// ccol_not_enough_memory, which puts the defaults back.
 ccol_retval chttpcli_set_tls(chttpcli cli, const chttp_tls_config *tls);
 
-// Engine logger
-//
+// Engine settings. They apply to the shared engine of Tier 2 and Tier 3.
+
 // Installs a logger for the diagnostics of the shared Tier 2 and Tier 3 engine
 // (failed handshakes, connect errors), so you choose where they go. The engine
 // derives its own handle from cl, and the setting holds across engine restarts.
 // CLOG_NULL releases it, which is ccol_not_permitted while the engine runs or
-// stops (wait with chttpcli_engine_wait first). A closed or stale cl is
-// ccol_invalid_args.
+// stops (wait with chttpcli_engine_wait() first). Gives ccol_success,
+// ccol_invalid_args for a closed or stale cl (the engine keeps its logger), or
+// ccol_not_enough_memory.
 ccol_retval chttpcli_set_engine_logger(clog cl);
 
-// Engine memory management
-//
 // Sends the allocations of the shared Tier 2 and Tier 3 engine (its reactor,
 // dispatch state and lookup workers) to mp, or back to the default for NULL. It
-// applies to the next engine start and is ccol_not_permitted while one runs. mp
-// must stay valid until chttpcli_engine_wait returns after your last client.
+// applies to the next engine start. mp must stay valid until
+// chttpcli_engine_wait() returns after your last client. Gives ccol_success,
+// ccol_invalid_args for an mp with a NULL function pointer, or
+// ccol_not_permitted while the engine runs.
 ccol_retval chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs *mp);
 
-// Engine reactor thread count
-//
-// Sets how many threads the shared engine's reactor uses (0 for the CPU count;
-// 1 polls and dispatches on one thread), so you can size it. It applies to the
-// next engine start and is ccol_not_permitted while one runs.
+// Sets how many threads the shared Tier 2 and Tier 3 engine's reactor uses (0
+// for the CPU count; 1 polls and dispatches on one thread), so you can size it.
+// It applies to the next engine start. Gives ccol_success, or
+// ccol_not_permitted while the engine runs.
 ccol_retval chttpcli_set_engine_num_reactor_threads(size_t num_threads);
 
-// Engine wait
-//
-// Blocks until the shared engine has stopped completely and its threads are
-// joined, so the engine allocator and logger can go away safely. The engine
-// stops on its own once no client holds it. It returns at once when no engine
-// runs, and calling it from an engine thread (a write_fn) is a fatal error.
+// Blocks until the shared Tier 2 and Tier 3 engine has stopped completely and
+// its threads are joined, so the engine allocator and logger can go away
+// safely. The engine stops on its own once no client holds it. It returns at
+// once when no engine runs, and calling it from an engine thread (a write_fn)
+// is a fatal error.
 void chttpcli_engine_wait(void);
 
-// Client destruction
-//
+// Client destruction.
+
 // Destroys cli; use the chttpcli_destroy macro, which also clears the handle.
 // It waits for every request in flight on cli and closes its idle connections.
 // A handle that isn't live (stale, being destroyed elsewhere, garbage) is a
@@ -275,8 +295,12 @@ static inline __attribute__((always_inline)) void chttpcli__destroy_cleanup(
   }
 }
 
-// Destroys a client and sets the handle to CHTTPCLI_NULL. It waits for every
-// request in flight. cli is evaluated once and must be a modifiable lvalue.
+// Destroys the client cli and sets the variable to CHTTPCLI_NULL. It waits for
+// every request in flight on cli and closes its idle connections. A handle
+// that isn't live (stale, being destroyed elsewhere, garbage) is a fatal
+// error, and so is a destroy from inside one of cli's own requests or from any
+// engine thread (a write_fn), since it would wait for itself. Never destroy
+// the default client. cli is evaluated once and must be a modifiable lvalue.
 #define chttpcli_destroy(cli)  \
   ccol__chttpcli_destroy_impl( \
       cli, ccol__uniq(ccol__chttpcli_destroy_slot, __COUNTER__))
@@ -290,17 +314,23 @@ static inline __attribute__((always_inline)) void chttpcli__destroy_cleanup(
     *slot = CHTTPCLI_NULL;                     \
   } while (0)
 
-// Lifecycle macros
-//
-// Declares a client variable without a value.
+// Lifecycle macros.
+
+// Declares a chttpcli variable called name with no value; give it one with
+// chttpcli_create() and destroy it with chttpcli_destroy().
 #define chttpcli_declare(name) chttpcli name
 
-// Declares a client variable that is destroyed when the scope ends.
+// Declares a chttpcli variable called name, set to CHTTPCLI_NULL, that is
+// destroyed when it goes out of scope if it then holds a client. Give it a
+// value with chttpcli_create(). The scope-end destroy waits for the client's
+// requests in flight, and a stale handle there is a fatal error.
 #define chttpcli_declare_scoped(name) \
   chttpcli name ccol__destructor(chttpcli__destroy_cleanup) = CHTTPCLI_NULL;
 
-// Declares a client named name and creates it, calling ccol__fatal_err when the
-// create fails, for code that has no use for a failed create.
+// Declares a chttpcli variable called name and creates a client in it with
+// the default allocator and settings, for code that has no use for a failed
+// create: A failed create is a fatal error that names the variable and the
+// reason. Destroy it with chttpcli_destroy().
 #define chttpcli_construct(name)                                        \
   chttpcli name = CHTTPCLI_NULL;                                        \
   do {                                                                  \
@@ -312,7 +342,10 @@ static inline __attribute__((always_inline)) void chttpcli__destroy_cleanup(
     }                                                                   \
   } while (0)
 
-// Like chttpcli_construct, but the client is destroyed when the scope ends.
+// Declares a chttpcli variable called name and creates a client in it with
+// the default allocator and settings; the client is destroyed when the
+// variable goes out of scope, after its requests in flight end. A failed
+// create is a fatal error that names the variable and the reason.
 #define chttpcli_construct_scoped(name)                                      \
   chttpcli name ccol__destructor(chttpcli__destroy_cleanup) = CHTTPCLI_NULL; \
   do {                                                                       \
@@ -324,8 +357,8 @@ static inline __attribute__((always_inline)) void chttpcli__destroy_cleanup(
     }                                                                        \
   } while (0)
 
-// Request execution
-//
+// Request execution.
+
 // Runs req on cli synchronously and buffers the whole response, for the plain
 // blocking call. It waits for a pool slot, then follows up to 50 redirects
 // (301, 302 and 303 turn into a bodiless GET unless HEAD; 307 and 308 keep the
@@ -335,22 +368,28 @@ static inline __attribute__((always_inline)) void chttpcli__destroy_cleanup(
 // https:// or http+unix://, with optional userinfo that becomes a Basic
 // Authorization header. A reused connection that died before answering is
 // retried once when the request is safe to resend. *resp_out is NULL until a
-// success, and the response is yours to free with chttpcli_resp_free. Gives
-// ccol_success or a failure code (see chttpcli_do(3)).
+// success, and the response is yours to free with chttpcli_resp_free(). Gives
+// ccol_success, or a failure code such as ccol_invalid_args (a NULL argument,
+// a bad or stale cli), ccol_timed_out, ccol_http_invalid_url,
+// ccol_http_connection_failed, a TLS code, ccol_http_transfer_aborted or
+// ccol_msg_too_large (see chttpcli_do(3) for the full list).
 ccol_retval chttpcli_do(chttpcli cli, const chttp_request *req,
                         chttpcli_response **resp_out);
 
-// Runs req on cli synchronously and passes the body to write_fn in chunks, so a
-// large body needs no buffer. write_ctx goes to write_fn. *status_code_out (may
-// be NULL) gets the status after a success. Gives the codes of chttpcli_do,
-// except ccol_msg_too_large, plus ccol_http_transfer_aborted when write_fn
-// stops the transfer.
+// Runs req on cli synchronously and passes the response body to write_fn in
+// chunks, with write_ctx, so a large body needs no buffer; it follows
+// redirects and applies cli's timeouts like a buffered request.
+// *status_code_out (may be NULL) gets the status after a success. Gives
+// ccol_success, or a failure code such as ccol_invalid_args, ccol_timed_out,
+// ccol_http_invalid_url, ccol_http_connection_failed or a TLS code, and
+// ccol_http_transfer_aborted when write_fn returns anything but len; never
+// ccol_msg_too_large (see chttpcli_do(3)).
 ccol_retval chttpcli_do_streaming(chttpcli cli, const chttp_request *req,
                                   chttpcli_write_fn write_fn, void *write_ctx,
                                   int *status_code_out);
 
-// Async API (Tier 2)
-//
+// Async API (Tier 2).
+
 // What an async request's future gives: rv as chttpcli_do would give it, and
 // resp when rv is ccol_success. Free resp with chttpcli_resp_free, then this
 // with chttpcli_async_result_free.
@@ -363,111 +402,155 @@ typedef struct chttpcli_async_result {
 // Submits req to the shared async engine and returns at once, so a thread can
 // run many requests without blocking. The engine starts on first use, and the
 // whole request, redirects included, runs on its threads. req may be freed
-// right after the call. Gives a future (get the result with
-// chttpcli_async_result_get, free it once with cthrpool_future_free), or NULL
-// when the request can't be queued.
+// right after the call. Gives a future, or NULL when the request can't be
+// queued (a NULL req, a bad or stale cli, a malformed URL, unusable TLS, no
+// memory, or an engine that fails to start). Get the result with
+// chttpcli_async_result_get(), free its resp with chttpcli_resp_free() and the
+// result with chttpcli_async_result_free(), then free the future once with
+// cthrpool_future_free().
 cthrpool_future *chttpcli_do_async(chttpcli cli, const chttp_request *req);
 
-// Submits req like chttpcli_do_async, with the body passed to write_fn in
-// chunks. write_fn runs on an engine thread, so it must not block and must not
-// wait on another request of the engine. Gives a future, or NULL.
+// Submits req to the shared async engine and returns at once; the response
+// body goes to write_fn in chunks, with write_ctx. write_fn runs on an engine
+// thread, so it must not block and must not wait on another request of the
+// engine. Gives a future, or NULL when the request can't be queued (a NULL req
+// or write_fn, a bad or stale cli, a malformed URL, unusable TLS, no memory, or
+// an engine that fails to start). Get the result with
+// chttpcli_async_result_get(); its rv is ccol_http_transfer_aborted when
+// write_fn returns anything but len. Free the result with
+// chttpcli_async_result_free() and the future once with cthrpool_future_free().
 cthrpool_future *chttpcli_do_async_streaming(chttpcli cli,
                                              const chttp_request *req,
                                              chttpcli_write_fn write_fn,
                                              void *write_ctx);
 
 // Blocks until the future f of an async request is fulfilled and gives its
-// result, which the future owns. Calling it again gives the same pointer. Gives
-// NULL for a NULL or cancelled future.
+// result: rv holds what chttpcli_do() would give, and resp is set only when rv
+// is ccol_success (free it with chttpcli_resp_free()). Calling it again gives
+// the same pointer. Gives NULL for a NULL or cancelled future. Freeing the
+// future doesn't free the result; free it once with
+// chttpcli_async_result_free().
 chttpcli_async_result *chttpcli_async_result_get(cthrpool_future *f);
 
-// Frees a result from chttpcli_async_result_get. It frees neither result->resp
-// nor the future, which you free separately. It works after the client is
-// destroyed. NULL is safe.
+// Frees a result from chttpcli_async_result_get(). It frees neither
+// result->resp (use chttpcli_resp_free()) nor the future (use
+// cthrpool_future_free()). It works after the client is destroyed. NULL is
+// safe.
 void chttpcli_async_result_free(chttpcli_async_result *result);
 
-// Pooled sync API (Tier 3)
-//
-// Runs req on the shared async engine and blocks until it ends, with the call
-// shape of chttpcli_do, so many callers share a few engine threads instead of
-// one blocked thread each. *resp_out is NULL until a success. Gives the codes
-// of chttpcli_do.
+// Pooled sync API (Tier 3).
+
+// Runs req on cli through the shared async engine and blocks until it ends, so
+// many callers share a few engine threads instead of one blocked thread each.
+// Redirects, timeouts and retries work as for a Tier 1 request. *resp_out is
+// NULL until a success, and the response is yours to free with
+// chttpcli_resp_free(). Gives the codes of chttpcli_do(), such as
+// ccol_invalid_args, ccol_timed_out or ccol_http_connection_failed, and
+// ccol_not_enough_memory or ccol_unexpected_failure when the engine can't
+// start.
 ccol_retval chttpcli_do_pooled(chttpcli cli, const chttp_request *req,
                                chttpcli_response **resp_out);
 
-// Like chttpcli_do_pooled, with the body passed to write_fn in chunks on an
+// Runs req on cli through the shared async engine and blocks until it ends,
+// with the response body passed to write_fn in chunks, with write_ctx, on an
 // engine thread (it must not block). *status_code_out (may be NULL) gets the
-// status.
+// status. Gives the codes of chttpcli_do(), such as ccol_invalid_args or
+// ccol_timed_out, and ccol_http_transfer_aborted when write_fn returns
+// anything but len; never ccol_msg_too_large.
 ccol_retval chttpcli_do_pooled_streaming(chttpcli cli, const chttp_request *req,
                                          chttpcli_write_fn write_fn,
                                          void *write_ctx, int *status_code_out);
 
-// Default client and convenience API
-//
+// Default client and convenience API.
+
 // Gives the process's default client, created on first use and thread-safe, for
 // callers that need no client of their own. Configure it with the
-// chttpcli_set_* calls, but never destroy it: the library does at exit, and
-// afterwards this gives CHTTPCLI_NULL.
+// chttpcli_set_* calls, but never destroy it: The library does at exit, and
+// afterwards this gives CHTTPCLI_NULL. It also gives CHTTPCLI_NULL when the
+// first creation fails.
 chttpcli chttp_default_client(void);
 
-// Runs req with the default client, like chttpcli_do(chttp_default_client(),
-// req, resp_out).
+// Runs req synchronously with the process's default client and buffers the
+// whole response, following redirects. *resp_out is NULL until a success, and
+// the response is yours to free with chttpcli_resp_free(). Gives the codes of
+// chttpcli_do(), such as ccol_invalid_args, ccol_timed_out,
+// ccol_http_invalid_url or ccol_http_connection_failed.
 ccol_retval chttp_do(const chttp_request *req, chttpcli_response **resp_out);
 
-// Builds a request from method, url, body and headers, runs it with the default
-// client and frees it, for a one-call request. headers (may be NULL) is
-// borrowed, never consumed. Gives the codes of chttpcli_do; a bad method or a
-// body with NULL data and a non-zero len is ccol_invalid_args.
+// Builds a request from method, url, body and headers, runs it synchronously
+// with the default client and frees it, for a one-call request. headers (may
+// be NULL) is borrowed, never consumed. *resp_out is NULL until a success, and
+// the response is yours to free with chttpcli_resp_free(). Gives the codes of
+// chttpcli_do(); a NULL url or resp_out, a bad method, a body with NULL data
+// and a non-zero len, or a refused header is ccol_invalid_args, and a failed
+// allocation is ccol_not_enough_memory.
 ccol_retval chttp_run_query(chttp_method method, const char *url,
                             const chttp_request_body *body, chmap headers,
                             chttpcli_response **resp_out);
 
 // Runs a GET of url with the default client, the shortest way to fetch a URL.
-// *resp_out gets the response; gives the codes of chttpcli_do.
+// *resp_out is NULL until a success, and the response is yours to free with
+// chttpcli_resp_free(). Gives ccol_success or a failure code of chttpcli_do(),
+// such as ccol_http_invalid_url, ccol_timed_out or
+// ccol_http_connection_failed.
 ccol_retval chttp_get(const char *url, chttpcli_response **resp_out);
 
-// Runs a POST of body (may be NULL) to url with the default client. Gives the
-// codes of chttp_run_query.
+// Runs a POST of body (may be NULL for none) to url with the default client.
+// *resp_out is NULL until a success, and the response is yours to free with
+// chttpcli_resp_free(). Gives ccol_success or a failure code of chttpcli_do(),
+// such as ccol_http_invalid_url or ccol_timed_out; a body with NULL data and a
+// non-zero len is ccol_invalid_args.
 ccol_retval chttp_post(const char *url, const chttp_request_body *body,
                        chttpcli_response **resp_out);
 
-// Runs a PUT of body to url with the default client. Gives the codes of
-// chttp_run_query.
+// Runs a PUT of body (may be NULL for none) to url with the default client.
+// *resp_out is NULL until a success, and the response is yours to free with
+// chttpcli_resp_free(). Gives ccol_success or a failure code of chttpcli_do(),
+// such as ccol_http_invalid_url or ccol_timed_out; a body with NULL data and a
+// non-zero len is ccol_invalid_args.
 ccol_retval chttp_put(const char *url, const chttp_request_body *body,
                       chttpcli_response **resp_out);
 
-// Runs a DELETE of url with the default client. Gives the codes of
-// chttp_run_query.
+// Runs a DELETE of url, with no body, using the default client. *resp_out is
+// NULL until a success, and the response is yours to free with
+// chttpcli_resp_free(). Gives ccol_success or a failure code of chttpcli_do(),
+// such as ccol_http_invalid_url, ccol_timed_out or
+// ccol_http_connection_failed.
 ccol_retval chttp_delete(const char *url, chttpcli_response **resp_out);
 
-// Runs a PATCH of body to url with the default client. Gives the codes of
-// chttp_run_query.
+// Runs a PATCH of body (may be NULL for none) to url with the default client.
+// *resp_out is NULL until a success, and the response is yours to free with
+// chttpcli_resp_free(). Gives ccol_success or a failure code of chttpcli_do(),
+// such as ccol_http_invalid_url or ccol_timed_out; a body with NULL data and a
+// non-zero len is ccol_invalid_args.
 ccol_retval chttp_patch(const char *url, const chttp_request_body *body,
                         chttpcli_response **resp_out);
 
-// Response API
-//
+// Response API.
+
 // Looks up a response header by name, case ignored, for the common case of one
 // value per name. A repeated name gives every occurrence joined by ", ", except
 // Set-Cookie, which gives its first. Gives the value, valid until
-// chttpcli_resp_free, or NULL.
+// chttpcli_resp_free(), or NULL when the header is missing.
 const char *chttpcli_resp_header(const chttpcli_response *resp,
                                  const char *name);
 
 // Counts the field lines named name (case ignored) in resp, so you can read a
-// repeated header one by one. It's 0 for a missing name, a NULL argument or a
-// streaming response.
+// repeated header one by one with chttpcli_resp_header_at(). It's 0 for a
+// missing name, a NULL argument or a streaming response.
 size_t chttpcli_resp_header_count(const chttpcli_response *resp,
                                   const char *name);
 
-// Gives occurrence index (from 0, in wire order) of the header name in resp,
-// exactly as the server sent it, or NULL when index is out of range, an
-// argument is NULL or the response came from a streaming request.
+// Gives occurrence index (from 0, in wire order) of the header name (case
+// ignored) in resp, exactly as the server sent it and valid until
+// chttpcli_resp_free(), or NULL when index is out of range, an argument is NULL
+// or the response came from a streaming request.
 const char *chttpcli_resp_header_at(const chttpcli_response *resp,
                                     const char *name, size_t index);
 
-// Frees a response and everything it owns. NULL is safe. It uses the allocator
-// copy the response carries, so it works after the client is destroyed.
+// Frees a response from a client call and everything it owns (body, headers).
+// NULL is safe. It uses the allocator copy the response carries, so it works
+// after the client is destroyed.
 void chttpcli_resp_free(chttpcli_response *resp);
 
 #pragma GCC visibility pop

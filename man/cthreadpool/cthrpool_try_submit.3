@@ -15,7 +15,7 @@ ccol_retval cthrpool_try_submit(cthrpool pool,
 .SH DESCRIPTION
 .nf
 The same as cthrpool_submit, except that with a bounded queue it never
-blocks: when the queue is at capacity it returns ccol_container_full at
+blocks: When the queue is at capacity it returns ccol_container_full at
 once. With an unbounded queue it behaves exactly like cthrpool_submit.
 .fi
 .SH PARAMETERS

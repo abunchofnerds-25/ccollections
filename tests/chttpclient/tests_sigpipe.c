@@ -129,7 +129,7 @@ static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   return found;
 }
 #elif defined(__OpenBSD__)
-// The OpenBSD version: reads every thread's record, which holds the signals
+// The OpenBSD version: Reads every thread's record, which holds the signals
 // pending for that thread and for the process.
 static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   *threads_seen = 0;
@@ -146,7 +146,7 @@ static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   return found;
 }
 #elif defined(__APPLE__)
-// The macOS version: asks sigpending(), which is the whole answer because
+// The macOS version: Asks sigpending(), which is the whole answer because
 // macOS raises every SIGPIPE on the process. The thread count stands for the
 // threads read.
 static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
@@ -157,7 +157,7 @@ static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   return sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1;
 }
 #else
-// The Linux version: reads SigPnd and ShdPnd of every thread under
+// The Linux version: Reads SigPnd and ShdPnd of every thread under
 // /proc/self/task.
 static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   unsigned long long bit = 1ULL << (SIGPIPE - 1);
@@ -231,7 +231,7 @@ static void _drain_until_eof(int c) {
   }
 }
 
-// Runs a refusing_server: reads the head of a request that expects
+// Runs a refusing_server: Reads the head of a request that expects
 // 100-continue, answers 100 Continue and shuts its read side down. On a Unix
 // socket every later client write then fails with EPIPE (the error that raises
 // SIGPIPE), and since the client sends no body byte before the answer, its
@@ -264,7 +264,7 @@ static void *_refusing_server_main(void *arg) {
   return NULL;
 }
 
-// Starts a refusing_server for a test: binds it to a fresh socket path named
+// Starts a refusing_server for a test: Binds it to a fresh socket path named
 // after tag, builds its http+unix:// URL (the path needs no escape apart from
 // '/') and starts its thread. hold picks the holding mode. Tells whether it all
 // worked.
@@ -300,7 +300,7 @@ static bool _refusing_server_start(refusing_server *s, const char *tag,
   return s->thread_started;
 }
 
-// Stops a refusing_server at the end of a test: releases and joins its thread,
+// Stops a refusing_server at the end of a test: Releases and joins its thread,
 // closes the listener and removes the socket file.
 static void _refusing_server_stop(refusing_server *s) {
   atomic_store(&s->release, 1);

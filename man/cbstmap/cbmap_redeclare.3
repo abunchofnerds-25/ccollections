@@ -49,7 +49,7 @@ They are there so that typeof and the type-introspection macros can read
 the types from them, and they cost nothing in the generated code.
 
 Since it only declares variables, this macro is also how you reach a
-handle held in a struct field or a global: name it in each function that
+handle held in a struct field or a global: Name it in each function that
 works on that handle.
 
 An array key type or value type, such as int[2] or char[16], is a compile
@@ -61,7 +61,7 @@ elements. A struct that holds the array works.
 .SH WARNINGS
 .nf
 The declared value type can have a different width from the stored one.
-cbmap_get(3) and cbmap_get_ptr(3) catch that at run time: they describe
+cbmap_get(3) and cbmap_get_ptr(3) catch that at run time: They describe
 the size mismatch and stop the program through ccol__fatal_err(). They
 can't see a mismatch between two types of the same width, though, so the
 types given here are a promise that the caller keeps and the compiler

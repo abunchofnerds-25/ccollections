@@ -40,28 +40,36 @@ SOFTWARE.
 // outside these blocks stays internal.
 #pragma GCC visibility push(default)
 
-// The string is opaque and cstr is the handle.
+// The string type. It's opaque; code holds a cstr.
 typedef struct cstring cstring;
 
+// The handle of a growable, NUL-terminated string, a pointer to an opaque
+// cstring. Make one with cstr_construct() or cstring_create() and free it with
+// cstr_destroy() or cstring_destroy().
 typedef cstring *cstr;
 
-// Creates a string holding a copy of initial (NULL for an empty one), with the
-// allocator m_procs (NULL for malloc and free). It's the one constructor behind
-// every create function and cstr_construct form. The capacity is rounded up to
-// a power of two, 16 at least. Gives the handle, or NULL with *err set on
-// failure. Destroy it with cstring_destroy().
+// Creates a string holding a copy of initial (NULL for an empty one), with
+// your own allocator. m_procs is the allocator table, or NULL for malloc and
+// free; all four of its functions must be set, and the string keeps its own
+// copy of the table. The capacity is rounded up to a power of two, 16 at
+// least. Gives the handle, or NULL on failure with a library-owned error
+// string in *err when err isn't NULL. Destroy it with cstring_destroy().
 cstr cstring_create_full(const char *initial, ccol_memmgmt_procs *m_procs,
                          char **err);
 
-// Creates a string with the default allocator; the short form of
-// cstring_create_full().
+// Creates a string holding a copy of initial (NULL for an empty one), using
+// malloc and free. The capacity is rounded up to a power of two, 16 at least.
+// Gives the handle, or NULL on failure with a library-owned error string in
+// *err when err isn't NULL. Destroy it with cstring_destroy().
 static inline __attribute__((always_inline)) cstr
 cstring_create(const char *initial, char **err) {
   return cstring_create_full(initial, NULL, err);
 }
 
-// Creates a string with the default allocator and no error string, for callers
-// that only check for NULL.
+// Creates a string holding a copy of initial (NULL for an empty one), using
+// malloc and free, for callers that only check for NULL: It gives the handle,
+// or NULL when an allocation fails, with no error string. Destroy it with
+// cstring_destroy().
 static inline __attribute__((always_inline)) cstr
 cstring_new(const char *initial) {
   return cstring_create_full(initial, NULL, NULL);
@@ -71,16 +79,17 @@ cstring_new(const char *initial) {
 // allocate related memory the same way. Asserts on a NULL s.
 ccol_memmgmt_procs *cstring_get_mprocs(cstr s);
 
-// Internal: frees the string. Use cstring_destroy() instead.
+// Internal: Frees the string. Use cstring_destroy() instead.
 void cstring__destroy(cstr s);
 
 // Frees the string and sets s to NULL, so a second call is harmless. s must be
-// a modifiable lvalue and is evaluated once; NULL is fine.
+// a modifiable lvalue and is evaluated once; a NULL s does nothing. Pointers
+// from cstring_c_str() are invalid afterwards. It's a statement.
 #define cstring_destroy(s)    \
   ccol__cstring_destroy_impl( \
       s, ccol__uniq(ccol__cstring_destroy_slot, __COUNTER__))
 
-// Internal: the body of cstring_destroy(). slot comes from ccol__uniq(), so
+// Internal: The body of cstring_destroy(). slot comes from ccol__uniq(), so
 // destroy macros can nest without -Wshadow warnings.
 #define ccol__cstring_destroy_impl(s, slot) \
   do {                                      \
@@ -91,7 +100,7 @@ void cstring__destroy(cstr s);
     }                                       \
   } while (0)
 
-// Internal: destroys *sp and sets it to NULL. It's the cleanup function the
+// Internal: Destroys *sp and sets it to NULL. It's the cleanup function the
 // _scoped forms attach with ccol__destructor.
 static inline void cstring__destroy_cleanup(cstr *sp) {
   if (sp && *sp) {
@@ -113,20 +122,29 @@ char cstring_at(cstr s, size_t idx);
 // Says whether s has length 0. Asserts on a NULL s.
 bool cstring_is_empty(cstr s);
 
-// Appends str to s, growing the buffer when needed. It gives ccol_success,
-// ccol_invalid_args for a NULL str, ccol_container_full when the length would
-// overflow size_t, or ccol_not_enough_memory. Asserts on a NULL s.
+// Appends str to s, growing the buffer when needed; str may point into s. It
+// gives ccol_success, ccol_invalid_args for a NULL str, ccol_container_full
+// when the length would overflow size_t, or ccol_not_enough_memory, with s
+// unchanged on failure. Asserts on a NULL s.
 ccol_retval cstring_append(cstr s, const char *str);
 
-// Puts str in front of the content of s. Results as for cstring_append().
+// Puts str in front of the content of s, growing the buffer when needed. It
+// gives ccol_success, ccol_invalid_args for a NULL str, ccol_container_full
+// when the length would overflow size_t, or ccol_not_enough_memory, with s
+// unchanged on failure. Asserts on a NULL s.
 ccol_retval cstring_prepend(cstr s, const char *str);
 
-// Inserts str at pos (0 to the length), moving the rest to the right. Results
-// as for cstring_append(), plus ccol_invalid_args for pos past the end.
+// Inserts str at byte position pos (0 to the length), moving the rest to the
+// right; str may point into s. It gives ccol_success, ccol_invalid_args for a
+// NULL str or a pos past the end, ccol_container_full when the length would
+// overflow size_t, or ccol_not_enough_memory, with s unchanged on failure.
+// Asserts on a NULL s.
 ccol_retval cstring_insert(cstr s, size_t pos, const char *str);
 
-// Replaces the content of s with str. Results as for cstring_append();
-// ccol_container_full would need a str that fills the address space.
+// Replaces the content of s with a copy of str; str may point into s. It
+// gives ccol_success, ccol_invalid_args for a NULL str, or
+// ccol_not_enough_memory, with s unchanged on failure (ccol_container_full
+// would need a str that fills the address space). Asserts on a NULL s.
 ccol_retval cstring_set(cstr s, const char *str);
 
 // Empties s and tries to shrink its buffer back to 16 bytes; when that realloc
@@ -164,7 +182,8 @@ ccol_retval cstring_replace(cstr s, const char *needle,
 // s.
 int cstring_compare(cstr s, const char *str);
 
-// Says whether the content of s equals str. Asserts on a NULL s.
+// Says whether the content of s equals str; a NULL str gives false. Asserts on
+// a NULL s.
 bool cstring_equals(cstr s, const char *str);
 
 // Says whether s starts with prefix. An empty prefix matches, a NULL one
@@ -179,41 +198,50 @@ bool cstring_ends_with(cstr s, const char *suffix);
 // ccol_invalid_size when it isn't there or needle is NULL. Asserts on a NULL s.
 size_t cstring_find(cstr s, const char *needle);
 
-// Gives the index of the last needle in s (overlaps count: the last "aba" in
+// Gives the index of the last needle in s (overlaps count: The last "aba" in
 // "ababa" is at 2), the length of s for an empty needle, or ccol_invalid_size
-// when it isn't there or needle is NULL. From 256 bytes up the search runs
-// backwards in time linear in both lengths. A needle longer than 128 bytes may
-// take a temporary table of one size_t per byte from the allocator of s; if
-// that's refused the answer is the same but the time can be the product of the
-// lengths. Asserts on a NULL s.
+// when it isn't there or needle is NULL. When s has 256 bytes or more, the
+// search runs backwards in time linear in both lengths. A needle longer than
+// 128 bytes may take a temporary table of one size_t per byte from the
+// allocator of s; if that's refused the answer is the same but the time can be
+// the product of the lengths. Asserts on a NULL s.
 size_t cstring_rfind(cstr s, const char *needle);
 
 // Creates a string holding the bytes [start, start + length) of s, clamped to
-// its end; a start at or past the end gives an empty string. Gives NULL with
-// *err set when the allocation fails. You destroy the result. Asserts on a NULL
-// s.
+// its end; a start at or past the end gives an empty string. The new string
+// uses the allocator of s. Gives NULL, with a library-owned error string in
+// *err when err isn't NULL, when the allocation fails. You destroy the result.
+// Asserts on a NULL s.
 cstr cstring_substring(cstr s, size_t start, size_t length, char **err);
 
-// Creates an independent copy of s, or NULL with *err set on failure. You
-// destroy the result. Asserts on a NULL s.
+// Creates an independent copy of s that uses the allocator of s, or gives NULL
+// on failure with a library-owned error string in *err when err isn't NULL.
+// You destroy the result. Asserts on a NULL s.
 cstr cstring_copy(cstr s, char **err);
 
-// Splits s at every delimiter (not NULL or empty) into a cvec of new cstr, with
-// empty tokens at the ends kept. Gives NULL with *err set on failure. You
-// destroy every cstr and then the vector. Asserts on a NULL s.
+// Splits s at every delimiter (not NULL or empty) into a cvec of new cstr
+// tokens, with empty tokens kept; "a,,b" split at "," gives "a", "" and "b".
+// Gives NULL on failure, with a library-owned error string in *err when err
+// isn't NULL. You destroy every token and then the vector. Asserts on a NULL
+// s.
 cvec cstring_split(cstr s, const char *delimiter, char **err);
 
-// Declares an uninitialized cstr named s.
+// Declares a string handle named s without creating the string. s is
+// uninitialized; create the string with cstr_init() or cstr_init_mp() and free
+// it with cstr_destroy(). It's a declaration.
 #define cstr_declare(s) cstr s
 
-// Declares a cstr named s, starting as NULL, that is destroyed at the end of
-// its scope.
+// Declares a string handle named s, set to NULL. Create the string with
+// cstr_init() or cstr_init_mp(). Whatever string s holds is destroyed when s
+// goes out of scope, on every way out, so don't destroy it yourself and don't
+// return it. It's a declaration.
 #define cstr_declare_scoped(s) \
   cstr s ccol__destructor(cstring__destroy_cleanup) = NULL
 
-// cstr_init() and cstr_init_mp() create a string for a declared s, with the
-// default allocator or with mprocs, and stop the program when that fails. s is
-// assigned once, after the creation.
+// Creates a string holding a copy of initial (NULL for an empty one), using
+// malloc and free, and assigns it to s, which cstr_declare() or
+// cstr_declare_scoped() declared. s is assigned once, after the creation. A
+// failed creation prints the reason and ends the program. It's a statement.
 #define cstr_init(s, initial)                                                \
   do {                                                                       \
     char *cstr__init_err = NULL;                                             \
@@ -225,6 +253,11 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     (s) = cstr__init_s;                                                      \
   } while (0)
 
+// Creates a string holding a copy of initial (NULL for an empty one) and
+// assigns it to s, which cstr_declare() or cstr_declare_scoped() declared.
+// mprocs is the allocator table, or NULL for malloc and free; the string keeps
+// its own copy. A failed creation (an allocator with a NULL function included)
+// prints the reason and ends the program. It's a statement.
 #define cstr_init_mp(s, initial, mprocs)                              \
   do {                                                                \
     char *cstr__init_mp_err = NULL;                                   \
@@ -238,33 +271,46 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     (s) = cstr__init_mp_s;                                            \
   } while (0)
 
-// The cstr_construct forms declare and create s in one step; _mp takes an
-// allocator and _scoped destroys s at the end of its scope. Each stops the
-// program on failure.
+// Declares s and creates in it a string holding a copy of initial (NULL for an
+// empty one), using malloc and free. A failed creation prints the reason and
+// ends the program. Free the string with cstr_destroy().
 #define cstr_construct(s, initial) \
   cstr_declare(s);                 \
   cstr_init(s, initial)
 
+// Declares s and creates in it a string holding a copy of initial (NULL for an
+// empty one), using malloc and free. The string is destroyed when s goes out
+// of scope, on every way out, so don't destroy it yourself and don't return
+// it. A failed creation prints the reason and ends the program.
 #define cstr_construct_scoped(s, initial) \
   cstr_declare_scoped(s);                 \
   cstr_init(s, initial)
 
+// Declares s and creates in it a string holding a copy of initial (NULL for an
+// empty one). mprocs is the allocator table, or NULL for malloc and free; the
+// string keeps its own copy. A failed creation prints the reason and ends the
+// program. Free the string with cstr_destroy().
 #define cstr_construct_mp(s, initial, mprocs) \
   cstr_declare(s);                            \
   cstr_init_mp(s, initial, mprocs)
 
+// Declares s and creates in it a string holding a copy of initial (NULL for an
+// empty one). mprocs is the allocator table, or NULL for malloc and free; the
+// string keeps its own copy. The string is destroyed when s goes out of scope,
+// on every way out, so don't destroy it yourself and don't return it. A failed
+// creation prints the reason and ends the program.
 #define cstr_construct_mp_scoped(s, initial, mprocs) \
   cstr_declare_scoped(s);                            \
   cstr_init_mp(s, initial, mprocs)
 
-// Destroys s and sets it to NULL; the typed name of cstring_destroy().
+// Frees the string and sets s to NULL, so a second call is harmless. s must be
+// a modifiable lvalue and is evaluated once; a NULL s does nothing. It's a
+// statement.
 #define cstr_destroy(s) cstring_destroy((s))
 
-// cstr_append(), cstr_prepend(), cstr_insert(), cstr_set() and cstr_replace()
-// call the cstring function of the same name and stop the program when it
-// fails. Each local has a name that only its macro uses: a caller argument of
-// the same name would bind to the uninitialized local, and for the size_t pos
-// of cstr_insert that compiles without a warning.
+// Appends str to s, growing the buffer when needed; str may point into s. A
+// NULL str, a length that would overflow size_t or a failed allocation prints
+// the error code and ends the program. Asserts on a NULL s. It's a statement.
 #define cstr_append(s, str)                                                \
   do {                                                                     \
     ccol_retval cstr__append_r = cstring_append((s), (str));               \
@@ -274,6 +320,9 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                      \
   } while (0)
 
+// Puts str in front of the content of s, growing the buffer when needed. A
+// NULL str, a length that would overflow size_t or a failed allocation prints
+// the error code and ends the program. Asserts on a NULL s. It's a statement.
 #define cstr_prepend(s, str)                                                 \
   do {                                                                       \
     ccol_retval cstr__prepend_r = cstring_prepend((s), (str));               \
@@ -283,6 +332,10 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                        \
   } while (0)
 
+// Inserts str into s at byte position pos (0 to the length), moving the rest
+// to the right; str may point into s. A NULL str, a pos past the end, a length
+// that would overflow size_t or a failed allocation prints the error code and
+// ends the program. Asserts on a NULL s. It's a statement.
 #define cstr_insert(s, pos, str)                                           \
   do {                                                                     \
     ccol_retval cstr__insert_r = cstring_insert((s), (pos), (str));        \
@@ -292,6 +345,9 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                      \
   } while (0)
 
+// Replaces the whole content of s with a copy of str; str may point into s. A
+// NULL str or a failed allocation prints the error code and ends the program.
+// Asserts on a NULL s. It's a statement.
 #define cstr_set(s, str)                                             \
   do {                                                               \
     ccol_retval cstr__set_r = cstring_set((s), (str));               \
@@ -301,6 +357,11 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                \
   } while (0)
 
+// Replaces every non-overlapping needle in s with replacement; a replacement
+// that contains needle is fine, and a needle that isn't there changes nothing.
+// A NULL or empty needle, a NULL replacement, a length overflow or a failed
+// allocation prints the error code and ends the program. Asserts on a NULL s.
+// It's a statement.
 #define cstr_replace(s, needle, replacement)                                 \
   do {                                                                       \
     ccol_retval cstr__replace_r =                                            \
@@ -311,13 +372,15 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                        \
   } while (0)
 
-// Reserves at least cap bytes in s and stops the program when that fails. cap
-// is evaluated once, so the message shows the value really used.
+// Makes room in s for at least cap bytes, the '\0' included, rounded up to a
+// power of two (16 at least), so later appends don't reallocate. It never
+// shrinks. cap is evaluated once. A size that is too large or a failed
+// allocation prints an error and ends the program. It's a statement.
 #define cstr_reserve(s, cap)        \
   ccol__cstr_reserve_impl(s, (cap), \
                           ccol__uniq(ccol__cstr_reserve_cap, __COUNTER__))
 
-// Internal: the body of cstr_reserve(), with a ccol__uniq() temporary so it can
+// Internal: The body of cstr_reserve(), with a ccol__uniq() temporary so it can
 // nest in any public macro.
 #define ccol__cstr_reserve_impl(s, cap, cstr__reserve_cap)                    \
   do {                                                                        \
@@ -329,8 +392,10 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                         \
   } while (0)
 
-// Evaluates to a new string holding [start, start + len) of s and stops the
-// program when the creation fails. Each argument is evaluated once.
+// Evaluates to a new cstr holding the bytes [start, start + len) of s,
+// clamped to its end; a start at or past the end gives an empty string. The
+// new string uses the allocator of s, and you destroy it. Each argument is
+// evaluated once. A failed allocation prints the reason and ends the program.
 #define cstr_substring(s, start, len)                                         \
   ccol__cstr_substring_impl(                                                  \
       s, (start), (len), ccol__uniq(ccol__cstr_substring_start, __COUNTER__), \
@@ -338,7 +403,7 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
       ccol__uniq(ccol__cstr_substring_err, __COUNTER__),                      \
       ccol__uniq(ccol__cstr_substring_result, __COUNTER__))
 
-// Internal: the body of cstr_substring(), with ccol__uniq() temporaries so it
+// Internal: The body of cstr_substring(), with ccol__uniq() temporaries so it
 // can nest in any public macro.
 #define ccol__cstr_substring_impl(s, start, len, cstr__substring_start,     \
                                   cstr__substring_len, cstr__substring_err, \
@@ -359,23 +424,77 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     cstr__substring_result;                                                 \
   })
 
-// Short names for the cstring functions, for code that uses the cstr macros.
-// Each evaluates to what its function gives.
+// Evaluates to the length of s in bytes, without the '\0', as a size_t.
+// Asserts on a NULL s.
 #define cstr_length(s) cstring_length((s))
+
+// Evaluates to the NUL-terminated content of s as a const char *, for any API
+// that takes a C string. The pointer is valid until the next change to s.
+// Asserts on a NULL s.
 #define cstr_c_str(s) cstring_c_str((s))
+
+// Evaluates to the byte at idx of s as a char, or '\0' when idx is out of
+// range. Asserts on a NULL s.
 #define cstr_at(s, idx) cstring_at((s), (idx))
+
+// Evaluates to true when s holds no bytes. Asserts on a NULL s.
 #define cstr_is_empty(s) cstring_is_empty((s))
+
+// Empties s and tries to shrink its buffer back to 16 bytes, so you can fill
+// it again; when the shrink fails the capacity stays, but the length is 0
+// anyway. Asserts on a NULL s.
 #define cstr_reset(s) cstring_reset((s))
+
+// Turns the ASCII lower-case letters of s into upper case in place. Every other
+// byte stays, whatever the locale. Asserts on a NULL s.
 #define cstr_to_upper(s) cstring_to_upper((s))
+
+// Turns the ASCII upper-case letters of s into lower case in place. Every other
+// byte stays, whatever the locale. Asserts on a NULL s.
 #define cstr_to_lower(s) cstring_to_lower((s))
+
+// Removes white space at both ends of s in place: The six ASCII bytes space,
+// tab, LF, VT, FF and CR, whatever the locale, so a byte above 0x7F (a piece
+// of UTF-8) is never cut. Asserts on a NULL s.
 #define cstr_trim(s) cstring_trim((s))
+
+// Compares s with str as strcmp() does and evaluates to a negative, zero or
+// positive int; a NULL str gives 1. Asserts on a NULL s.
 #define cstr_compare(s, str) cstring_compare((s), (str))
+
+// Evaluates to true when the content of s equals str; a NULL str gives false.
+// Asserts on a NULL s.
 #define cstr_equals(s, str) cstring_equals((s), (str))
+
+// Evaluates to true when s starts with pfx. An empty pfx matches, a NULL one
+// doesn't. Asserts on a NULL s.
 #define cstr_starts_with(s, pfx) cstring_starts_with((s), (pfx))
+
+// Evaluates to true when s ends with sfx. An empty sfx matches, a NULL one
+// doesn't. Asserts on a NULL s.
 #define cstr_ends_with(s, sfx) cstring_ends_with((s), (sfx))
+
+// Evaluates to the index of the first needle in s, 0 for an empty needle, or
+// ccol_invalid_size when it isn't there or needle is NULL. Asserts on a NULL
+// s.
 #define cstr_find(s, needle) cstring_find((s), (needle))
+
+// Evaluates to the index of the last needle in s (overlaps count: The last
+// "aba" in "ababa" is at 2), the length of s for an empty needle, or
+// ccol_invalid_size when it isn't there or needle is NULL. Asserts on a NULL
+// s.
 #define cstr_rfind(s, needle) cstring_rfind((s), (needle))
+
+// Evaluates to a new, independent copy of s that uses the allocator of s, or
+// to NULL on failure with a library-owned error string in *err when err isn't
+// NULL. You destroy the copy. Asserts on a NULL s.
 #define cstr_copy(s, err) cstring_copy((s), (err))
+
+// Splits s at every occurrence of delim (not NULL or empty) and evaluates to a
+// cvec of new cstr tokens, with empty tokens kept; "a,,b" split at "," gives
+// "a", "" and "b". On failure it gives NULL, with a library-owned error string
+// in *err when err isn't NULL. You destroy every token and then the vector.
+// Asserts on a NULL s.
 #define cstr_split(s, delim, err) cstring_split((s), (delim), (err))
 
 #pragma GCC visibility pop

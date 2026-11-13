@@ -38,7 +38,7 @@ level, in any combination, and a scalar adds none.  The parser has
 the same limit, and only the construction API (cjson_list_push() and
 cjson_dictionary_set()) can build a deeper tree, since it has no
 depth bound of its own.  The limit is a policy and has nothing to do
-with the stack size of the calling thread: the serializer walks the
+with the stack size of the calling thread: The serializer walks the
 nesting with an explicit worklist on the heap, so a tree at the
 limit uses the same small, fixed amount of native stack as a flat
 one.  An ordinary tree never comes near this depth.

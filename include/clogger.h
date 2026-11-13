@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// clogger: a structured, thread-safe logger with rotation, optional async
+// clogger: A structured, thread-safe logger with rotation, optional async
 // batching and three formats (logfmt, JSON lines, RFC 5424 syslog). A logfmt
 // record looks like
 //
@@ -78,7 +78,7 @@ typedef enum {
   CLOG_OFF = 7
 } clog_level;
 
-// Defaults a rotation config falls back to: rotate at 10 MiB, rotate daily,
+// Defaults a rotation config falls back to: Rotate at 10 MiB, rotate daily,
 // keep 7 rotated files.
 #define CLOG_DEFAULT_MAX_FILE_SIZE ((int64_t)(10 * 1024 * 1024))
 
@@ -92,7 +92,7 @@ typedef enum {
 // compress_rotated each rotated file becomes <rotated>.gz on a background
 // thread; a failed compression keeps the uncompressed file, and a static link
 // needs -lz. The members are fixed-width (bytes, microseconds) so the layout
-// doesn't depend on _FILE_OFFSET_BITS or _TIME_BITS. Example: rotate at 50 MiB,
+// doesn't depend on _FILE_OFFSET_BITS or _TIME_BITS. Example: Rotate at 50 MiB,
 // keep 14 gzipped files:
 //
 //   clog_rotation_cfg cfg = {.size_rotation_enabled = true,
@@ -110,7 +110,7 @@ typedef struct clog_rotation_cfg {
   bool compress_rotated;
 } clog_rotation_cfg;
 
-// Defaults of an async config: flush at 64 KiB, and at least every 200 ms.
+// Defaults of an async config: Flush at 64 KiB, and at least every 200 ms.
 #define CLOG_DEFAULT_ASYNC_FLUSH_BUFFER_SIZE (64UL * 1024UL)
 
 #define CLOG_DEFAULT_ASYNC_FLUSH_INTERVAL_US ((uint64_t)200000ULL)
@@ -143,7 +143,7 @@ typedef struct clog_async_cfg {
 
 struct clogger;
 
-// A logger handle: an index and a generation packed in a uint64_t, not a
+// A logger handle: An index and a generation packed in a uint64_t, not a
 // pointer, so never cast it to or from void *. A create call gives it and
 // clog_close() ends it. CLOG_NULL (zero) is "no logger", so if (!lg) works.
 typedef uint64_t clog;
@@ -157,12 +157,18 @@ typedef uint64_t clog;
 // for malloc), except the backtrace symbols and the per-thread identity cache,
 // which use malloc. Gives the handle, or CLOG_NULL on an allocation failure,
 // bad mprocs or min_level, an fd that is closed or read-only, or a call after
-// the library's exit destructor.
+// the library's exit destructor. Close the handle with clog_close().
 clog clog_create_from_fd_mp(int fd, clog_level min_level,
                             const clog_async_cfg *async_cfg,
                             ccol_memmgmt_procs *mprocs);
 
-// clog_create_from_fd_mp() with the default allocator.
+// Creates a logger that writes to the open, writable fd (stdout, a pipe, a
+// socket), using malloc for its memory. The logger doesn't own fd, clog_close()
+// doesn't close it, and it has no rotation. min_level must be a clog_level
+// value; async_cfg turns on async logging (NULL for synchronous). Gives the
+// handle, or CLOG_NULL on an allocation failure, a bad min_level, an fd that is
+// closed or read-only, or a call after the library's exit destructor. Close the
+// handle with clog_close().
 static inline __attribute__((always_inline)) clog clog_create_from_fd(
     int fd, clog_level min_level, const clog_async_cfg *async_cfg) {
   return clog_create_from_fd_mp(fd, min_level, async_cfg, NULL);
@@ -170,24 +176,34 @@ static inline __attribute__((always_inline)) clog clog_create_from_fd(
 
 // Creates a logger that appends to the file at path, creating it with mode 0644
 // under the umask. cfg turns on rotation (NULL for none), async_cfg async
-// logging, and mprocs picks the allocator as for clog_create_from_fd_mp(). With
+// logging (NULL for synchronous), and every allocation goes through mprocs
+// (NULL for malloc), except the backtrace symbols and the per-thread identity
+// cache, which use malloc. With
 // rotation on, the logger keeps the directory open, so a relative path keeps
 // naming the same file after a chdir(), and each new live file gets the mode,
 // owner and group of the file it replaces. One file has one target per process
-// whenever a logger of it rotates: opening a file that a logger of this process
+// whenever a logger of it rotates: Opening a file that a logger of this process
 // already writes joins that target like clog_derive(), or gives CLOG_NULL when
 // either config or the allocator differs. The time interval of a non-empty file
 // counts from when the file began (the newest rotated generation, else its
 // birth time, else its mtime). A failed rotation is retried on a later write,
 // at least a second later. Gives the handle, or CLOG_NULL on a bad path or
 // min_level, an allocation failure, a conflicting logger, or a call after the
-// library's exit destructor.
+// library's exit destructor. Close the handle with clog_close().
 clog clog_create_from_file_mp(const char *path, clog_level min_level,
                               const clog_rotation_cfg *cfg,
                               const clog_async_cfg *async_cfg,
                               ccol_memmgmt_procs *mprocs);
 
-// clog_create_from_file_mp() with the default allocator.
+// Creates a logger that appends to the file at path (created with mode 0644
+// under the umask), using malloc for its memory. cfg turns on rotation (NULL
+// for none) and async_cfg async logging (NULL for synchronous). With rotation
+// on, a relative path keeps naming the same file after a chdir(), and opening a
+// file that a rotating logger of this process already writes joins that target
+// like clog_derive(), or gives CLOG_NULL when a config or the allocator
+// differs. Gives the handle, or CLOG_NULL on a bad path or min_level, an
+// allocation failure, a conflicting logger, or a call after the library's exit
+// destructor. Close the handle with clog_close().
 static inline __attribute__((always_inline)) clog clog_create_from_file(
     const char *path, clog_level min_level, const clog_rotation_cfg *cfg,
     const clog_async_cfg *async_cfg) {
@@ -205,27 +221,30 @@ void clog_close(clog logger);
 // starts with a copy of its level and fields; afterwards each keeps its own.
 // Use it to add context for a component. Rotation goes on while any handle of
 // the target is open. Close it with clog_close(). Gives the handle, or
-// CLOG_NULL on an allocation failure.
+// CLOG_NULL on an allocation failure. A CLOG_NULL, stale or closed parent is
+// fatal.
 clog clog_derive(clog parent);
 
 // Blocks until an async logger has handed the OS every record queued before the
 // call, including a partly full batch; does nothing for a synchronous logger.
-// It can return with work left: when the queue can't take the flush request (a
+// It can return with work left: When the queue can't take the flush request (a
 // rare allocation failure), and when a write stops with an error a later flush
-// can outlast, which keeps those bytes for that flush.
+// can outlast, which keeps those bytes for that flush. A CLOG_NULL, stale or
+// closed handle is fatal.
 void clog_flush(clog logger);
 
 // Sets logger's minimum level. Returns ccol_success, or ccol_invalid_args for a
 // value clog_level doesn't name (the level stays). A bad handle is fatal.
 ccol_retval clog_set_level(clog logger, clog_level level);
 
-// Gives logger's minimum level.
+// Gives logger's minimum level; records below it are dropped. A CLOG_NULL,
+// stale or closed handle is fatal.
 clog_level clog_get_level(clog logger);
 
 // Output format of a target, shared by every handle of it; the default is
 // logfmt. JSON writes one object per line. Syslog writes RFC 5424 and works
 // only for an fd logger (a file logger refuses it). Every format writes valid
-// UTF-8: a bad byte becomes U+FFFD and a C1 control the escape \u0080 to
+// UTF-8: A bad byte becomes U+FFFD and a C1 control the escape \u0080 to
 // \u009f. Syslog escapes control bytes and backslashes in MSG, SD-PARAM-VALUEs
 // and backtrace frames, and '"' and ']' in values; MSG has no BOM (MSG-ANY).
 typedef enum {
@@ -239,7 +258,9 @@ typedef enum {
 // syslog on a file logger (the format stays). A bad handle is fatal.
 ccol_retval clog_set_format(clog logger, clog_format fmt);
 
-// Gives the output format of logger's target.
+// Gives the output format of logger's target (logfmt, JSON or syslog), which
+// every handle of the target shares. A CLOG_NULL, stale or closed handle is
+// fatal.
 clog_format clog_get_format(clog logger);
 
 // Syslog facilities (RFC 5424) for clog_set_facility(); the default is
@@ -283,7 +304,8 @@ typedef enum {
 // 5424. A bad handle is fatal.
 ccol_retval clog_set_facility(clog logger, clog_syslog_facility facility);
 
-// Gives the syslog facility of logger's target.
+// Gives the syslog facility of logger's target, CLOG_SYSLOG_USER unless
+// clog_set_facility() changed it. A CLOG_NULL, stale or closed handle is fatal.
 clog_syslog_facility clog_get_facility(clog logger);
 
 // Adds a key=value field to every later record of logger, or replaces its
@@ -295,10 +317,14 @@ clog_syslog_facility clog_get_facility(clog logger);
 // handle is fatal.
 ccol_retval clog_set_field(clog logger, const char *key, const char *value);
 
-// Removes field key from logger; does nothing when it isn't there.
+// Removes the field named key from logger, so later records don't carry it;
+// does nothing when it isn't there or key is NULL. Derived loggers keep their
+// own fields. A CLOG_NULL, stale or closed handle is fatal.
 void clog_remove_field(clog logger, const char *key);
 
-// Removes every field of logger.
+// Removes every key=value field of logger, so later records carry none.
+// Derived loggers keep their own fields. A CLOG_NULL, stale or closed handle is
+// fatal.
 void clog_clear_fields(clog logger);
 
 // What the library may do about SIGPIPE and SIGXFSZ, the two signals a log
@@ -333,42 +359,65 @@ ccol_retval clog_set_signal_policy(clog_signal_policy policy);
 // isn't Linux, FreeBSD, OpenBSD or macOS.
 ccol_retval ccol_set_thread_name(const char *thread_name);
 
-// Internal: the function behind the clog_<level>() macros, which pass the call
+// Internal: The function behind the clog_<level>() macros, which pass the call
 // site and whether to add a backtrace. Use the macros.
 void clog__write(clog logger, clog_level level, const char *file, int line,
                  const char *func, bool with_backtrace, const char *fmt, ...)
     __attribute__((format(printf, 7, 8)));
 
-// Log a printf-style message (the arguments after the handle l) at one level,
-// with the source file, line and function of the call. The format is the first
-// variadic argument, so clog_info(l, "ready") is plain C11. They expand to a
-// call of clog__write(); a record below l's level is dropped at once.
-// clog_error and clog_alert add a backtrace.
+// Logs a printf-style message at the TRACE level, the most detailed one: l is
+// the logger, then the format and its arguments. The record carries the source
+// file, line and function of the call, and is dropped at once when l's minimum
+// level is above TRACE. A CLOG_NULL, stale or closed l is fatal.
 #define clog_trace(l, ...) \
   clog__write((l), CLOG_TRACE, __FILE__, __LINE__, __func__, false, __VA_ARGS__)
 
+// Logs a printf-style message at the DEBUG level: l is the logger, then the
+// format and its arguments. The record carries the source file, line and
+// function of the call, and is dropped at once when l's minimum level is above
+// DEBUG. A CLOG_NULL, stale or closed l is fatal.
 #define clog_debug(l, ...) \
   clog__write((l), CLOG_DEBUG, __FILE__, __LINE__, __func__, false, __VA_ARGS__)
 
+// Logs a printf-style message at the INFO level, for example
+// clog_info(lg, "listening on %d", port). The record carries the source file,
+// line and function of the call, and is dropped at once when lg's minimum
+// level is above INFO. A CLOG_NULL, stale or closed logger is fatal.
 #define clog_info(l, ...) \
   clog__write((l), CLOG_INFO, __FILE__, __LINE__, __func__, false, __VA_ARGS__)
 
+// Logs a printf-style message at the WARN level: l is the logger, then the
+// format and its arguments. The record carries the source file, line and
+// function of the call, and is dropped at once when l's minimum level is above
+// WARN. A CLOG_NULL, stale or closed l is fatal.
 #define clog_warn(l, ...) \
   clog__write((l), CLOG_WARN, __FILE__, __LINE__, __func__, false, __VA_ARGS__)
 
+// Logs a printf-style message at the ERROR level, followed by a backtrace of
+// the call as tab-indented lines (link with -rdynamic for symbol names). l is
+// the logger, then the format and its arguments. The record carries the source
+// file, line and function, and is dropped at once when l's minimum level is
+// above ERROR. A CLOG_NULL, stale or closed l is fatal.
 #define clog_error(l, ...) \
   clog__write((l), CLOG_ERROR, __FILE__, __LINE__, __func__, true, __VA_ARGS__)
 
+// Logs a printf-style message at the ALERT level, for a problem somebody must
+// act on now, followed by a backtrace of the call as tab-indented lines (link
+// with -rdynamic for symbol names). The record carries the source file, line
+// and function, and is dropped at once when l's minimum level is above ALERT.
+// A CLOG_NULL, stale or closed l is fatal.
 #define clog_alert(l, ...) \
   clog__write((l), CLOG_ALERT, __FILE__, __LINE__, __func__, true, __VA_ARGS__)
 
-// Logs at FATAL with a backtrace, whatever the level, then ends the process
-// with exit(EXIT_FAILURE); it never returns. The exit drain then lets other
-// async loggers and queued compressions finish. One 5 second budget from the
-// first fatal call bounds the whole stop, this record's writes to a pipe,
-// socket or terminal included (the wait for the logger may run 100 ms past it).
-// A record that can't go out in time is lost and a line on stderr says so. A
-// write to a regular file has no bound.
+// Logs a printf-style message at FATAL, with the source location and a
+// backtrace, whatever l's level, then ends the process with exit(EXIT_FAILURE);
+// it never returns. The exit drain then lets other async loggers and queued
+// compressions finish. One 5 second budget from the first fatal call bounds the
+// whole stop, this record's writes to a pipe, socket or terminal included (the
+// wait for the logger may run 100 ms past it). A record that can't go out in
+// time is lost and a line on stderr says so. A write to a regular file has no
+// bound. A CLOG_NULL, stale or closed l ends the process with a fatal error
+// and no record.
 #define clog_fatal(l, ...) \
   clog__write((l), CLOG_FATAL, __FILE__, __LINE__, __func__, true, __VA_ARGS__)
 

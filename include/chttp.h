@@ -49,7 +49,7 @@ typedef enum chttp_method {
   CHTTP_PATCH,
   CHTTP_HEAD,
   CHTTP_OPTIONS,
-  // A wildcard for registering a server handler: it matches all seven methods
+  // A wildcard for registering a server handler: It matches all seven methods
   // above. It's never the method of a real request, so chttpsvr_req_method()
   // never gives it back. A client request refuses it (chttp_request_create()
   // gives NULL, chttp_run_query() gives ccol_invalid_args), as any value
@@ -87,25 +87,25 @@ static inline const char *chttp_method_str(chttp_method m) {
 
 // HTTP status codes, named so handlers and callers needn't write bare numbers.
 //
-// 1xx: informational
+// 1xx: Informational
 #define CHTTP_STATUS_CONTINUE 100
 #define CHTTP_STATUS_SWITCHING_PROTOCOLS 101
 
-// 2xx: success
+// 2xx: Success
 #define CHTTP_STATUS_OK 200
 #define CHTTP_STATUS_CREATED 201
 #define CHTTP_STATUS_ACCEPTED 202
 #define CHTTP_STATUS_NO_CONTENT 204
 #define CHTTP_STATUS_PARTIAL_CONTENT 206
 
-// 3xx: redirection
+// 3xx: Redirection
 #define CHTTP_STATUS_MOVED_PERMANENTLY 301
 #define CHTTP_STATUS_FOUND 302
 #define CHTTP_STATUS_NOT_MODIFIED 304
 #define CHTTP_STATUS_TEMPORARY_REDIRECT 307
 #define CHTTP_STATUS_PERMANENT_REDIRECT 308
 
-// 4xx: client errors
+// 4xx: Client errors
 #define CHTTP_STATUS_BAD_REQUEST 400
 #define CHTTP_STATUS_UNAUTHORIZED 401
 #define CHTTP_STATUS_FORBIDDEN 403
@@ -120,7 +120,7 @@ static inline const char *chttp_method_str(chttp_method m) {
 #define CHTTP_STATUS_UNPROCESSABLE 422
 #define CHTTP_STATUS_TOO_MANY_REQUESTS 429
 
-// 5xx: server errors
+// 5xx: Server errors
 #define CHTTP_STATUS_INTERNAL_ERROR 500
 #define CHTTP_STATUS_NOT_IMPLEMENTED 501
 #define CHTTP_STATUS_BAD_GATEWAY 502
@@ -142,7 +142,7 @@ static inline const char *chttp_method_str(chttp_method m) {
 // A ca_bundle_path holds one or more PEM CA certificates and may hold CRLs
 // beside them (a file with CRLs only is refused). With a CRL in the bundle,
 // revocation is checked for the whole chain the peer presents, as nginx
-// ssl_crl does: each certificate below the anchor needs a CRL of its issuer,
+// ssl_crl does: Each certificate below the anchor needs a CRL of its issuer,
 // and a revoked certificate, a missing CRL or an expired CRL fails the
 // handshake. Without a CRL nothing is checked for revocation. The bundle is
 // read when the configuration is applied, so a renewed CRL takes effect at the
@@ -157,7 +157,7 @@ typedef struct chttp_tls_config {
   // it's set and the system store otherwise. True accepts any certificate from
   // any peer, so whoever can intercept the connection can read and change it;
   // it's for tests against throwaway servers, never for production. True also
-  // turns off the hostname check: a hostname matched against an unverified
+  // turns off the hostname check: A hostname matched against an unverified
   // certificate proves nothing, so there's no way to ask for the hostname check
   // without the chain check. chttpcli_set_tls() refuses true together with a
   // ca_bundle_path (ccol_invalid_args).
@@ -169,9 +169,9 @@ typedef struct chttp_tls_config {
   // narrowest ca_bundle_path you can. No effect when insecure_skip_verify is
   // true.
   bool insecure_skip_hostname_check;
-  // Server only, and only beside ca_bundle_path. False enforces mutual TLS: a
+  // Server only, and only beside ca_bundle_path. False enforces mutual TLS: A
   // client with no certificate, or one that doesn't verify, fails the
-  // handshake. True only asks for one: a certificate that's presented must
+  // handshake. True only asks for one: A certificate that's presented must
   // verify, but a client without one is accepted, and a handler tells the cases
   // apart with chttpsvr_req_peer_cert_verified(). chttpclient ignores it.
   bool client_cert_optional;
@@ -199,36 +199,53 @@ typedef struct chttp_request_body {
   const char *content_type;
 } chttp_request_body;
 
-// A request body that holds nothing, for requests that send no body.
+// A request body that holds nothing and sets no Content-Type, for client
+// requests that send no body.
 #define CHTTP_NO_BODY \
   ((chttp_request_body){.data = NULL, .len = 0, .content_type = NULL})
 
 // Builds a chttp_request_body compound literal from data d, length n and
-// content type ct, so a body can be passed inline. The JSON, text and form
-// shorthands fill in the content type. Each argument is evaluated once.
+// content type ct (NULL sends no Content-Type), so a body can be passed inline
+// to the client calls. The request copies the bytes, so d may be freed once
+// the request is created. Each argument is evaluated once.
 #define CHTTP_BODY(d, n, ct) \
   ((chttp_request_body){.data = (d), .len = (n), .content_type = (ct)})
 
+// Builds a request body of n bytes at d with Content-Type application/json,
+// for the client calls. The request copies the bytes, so d may be freed once
+// the request is created. Each argument is evaluated once.
 #define CHTTP_JSON_BODY(d, n) CHTTP_BODY((d), (n), "application/json")
 
+// Builds a request body of n bytes at d with Content-Type text/plain, for the
+// client calls. The request copies the bytes, so d may be freed once the
+// request is created. Each argument is evaluated once.
 #define CHTTP_TEXT_BODY(d, n) CHTTP_BODY((d), (n), "text/plain")
 
+// Builds a request body of n bytes at d with Content-Type
+// application/x-www-form-urlencoded (an HTML form), for the client calls. The
+// request copies the bytes, so d may be freed once the request is created.
+// Each argument is evaluated once.
 #define CHTTP_FORM_BODY(d, n) \
   CHTTP_BODY((d), (n), "application/x-www-form-urlencoded")
 
-// Base64 and Basic auth
-//
+// Base64 and Basic auth.
+
 // Encodes len bytes of data as RFC 4648 base64 ('+' and '/', '=' padding), the
 // variant HTTP and Basic auth use, for callers that build header values. mp
 // is your allocator or NULL. data may be NULL only when len is 0. It gives a
 // new NUL-terminated string, with its length (without the NUL) in *out_len
 // when out_len isn't NULL, or NULL when the allocation fails, data is NULL
-// with len > 0, or the encoded size would overflow size_t.
+// with len > 0, or the encoded size would overflow size_t. The caller frees
+// the string with the free function of mp (free() when mp is NULL).
 char *chttp_base64_encode_mp(ccol_memmgmt_procs *mp, const void *data,
                              size_t len, size_t *out_len);
 
-// Encodes like chttp_base64_encode_mp(), for callers that use the default
-// allocator.
+// Encodes len bytes of data as RFC 4648 base64 ('+' and '/', '=' padding), the
+// variant HTTP and Basic auth use. data may be NULL only when len is 0. Gives a
+// new NUL-terminated string that the caller frees with free(), with its length
+// (without the NUL) in *out_len when out_len isn't NULL, or NULL when the
+// allocation fails, data is NULL with len > 0, or the encoded size would
+// overflow size_t.
 static inline __attribute__((always_inline)) char *chttp_base64_encode(
     const void *data, size_t len, size_t *out_len) {
   return chttp_base64_encode_mp(NULL, data, len, out_len);
@@ -244,12 +261,18 @@ static inline __attribute__((always_inline)) char *chttp_base64_encode(
 // new buffer, or NULL when the input is malformed or the allocation fails. The
 // buffer ends with a NUL for convenience, but the data may hold NULs of its
 // own, so take the size from *out_len (out_len may be NULL), never from
-// strlen().
+// strlen(). The caller frees the buffer with the free function of mp (free()
+// when mp is NULL).
 void *chttp_base64_decode_mp(ccol_memmgmt_procs *mp, const char *b64_input,
                              size_t *out_len);
 
-// Decodes like chttp_base64_decode_mp(), for callers that use the default
-// allocator.
+// Decodes the NUL-terminated RFC 4648 base64 string b64_input (not NULL). Its
+// length must be a multiple of 4, '=' may only be the last one or two
+// characters, and the unused bits of a padded final group must be zero, so
+// "QQ==" gives "A" and "QR==" is refused. Gives a new buffer that the caller
+// frees with free(), or NULL when the input is malformed or the allocation
+// fails. The buffer ends with a NUL, but the data may hold NULs of its own, so
+// take the size from *out_len (out_len may be NULL), never from strlen().
 static inline __attribute__((always_inline)) void *chttp_base64_decode(
     const char *b64_input, size_t *out_len) {
   return chttp_base64_decode_mp(NULL, b64_input, out_len);
@@ -259,18 +282,24 @@ static inline __attribute__((always_inline)) void *chttp_base64_decode(
 // without the "Authorization: " part, so a caller can authenticate a request
 // with chttp_request_set_header(req, "authorization", ...) or its chttpsvr
 // equivalent. Neither string may be NULL; both may be empty. The username
-// must not hold a colon: the recipient cuts at the first colon, so such a
+// must not hold a colon: The recipient cuts at the first colon, so such a
 // user-id can't be sent unambiguously and is refused rather than turned into
 // another identity. The password may hold colons. A control byte (0x00 to
 // 0x1F, or 0x7F) in either is refused, as RFC 7617 section 2 requires; other
 // bytes, UTF-8 included, are encoded as they are. mp is your allocator or
-// NULL. It gives a new string, or NULL for a failed allocation or a refused
+// NULL. It gives a new string that the caller frees with the free function of
+// mp (free() when mp is NULL), or NULL for a failed allocation or a refused
 // input.
 char *chttp_basic_auth_mp(ccol_memmgmt_procs *mp, const char *username,
                           const char *password);
 
-// Builds a Basic auth value like chttp_basic_auth_mp(), for callers that use
-// the default allocator.
+// Builds the RFC 7617 header value "Basic <base64(username:password)>",
+// without the "Authorization: " part, for chttp_request_set_header(req,
+// "authorization", ...). Neither string may be NULL; both may be empty. A colon
+// in the username, or a control byte (0x00 to 0x1F, or 0x7F) in either, is
+// refused; the password may hold colons and UTF-8 is encoded as it is. Gives a
+// new string that the caller frees with free(), or NULL for a failed allocation
+// or a refused input.
 static inline __attribute__((always_inline)) char *chttp_basic_auth(
     const char *username, const char *password) {
   return chttp_basic_auth_mp(NULL, username, password);

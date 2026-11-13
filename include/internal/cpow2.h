@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal: the power-of-two rounding that cvector, cstring and chashmap use
+// Internal: The power-of-two rounding that cvector, cstring and chashmap use
 // to size their own storage. Users get it through cvector_reserve(),
 // cstring_reserve(), chashmap_create() and chashmap_reset(), never by this
 // name, so the header isn't installed and its symbol isn't exported.

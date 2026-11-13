@@ -54,7 +54,7 @@ that has no __builtin_clear_padding, such as Clang, the padding bytes of
 the macro's copies are unspecified; search for a padded struct with
 cvector_find(3) and a comparator that reads the members.
 cvec_find compiles for every element type, but cvec_sort is different on
-purpose: an order can't come from the bytes of an element the way
+purpose: An order can't come from the bytes of an element the way
 equality can, so cvec_sort has no fallback and rejects such an element
 type at compile time.
 

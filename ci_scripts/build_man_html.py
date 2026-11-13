@@ -6,7 +6,7 @@
 #   build_man_html.py <output directory>
 #
 # It first runs `mandoc -T lint -W error` over every page and stops when that
-# finds anything. An error there is a defect of the installed page too: a
+# finds anything. An error there is a defect of the installed page too: A
 # line of text that starts with ' or . is a control line in troff, and `man`
 # drops it without a word.
 #
@@ -284,22 +284,24 @@ def render(mandoc, pages, key, outdir, version):
 
     ref = "%s(%s)" % key
     what = summary_of(page)
+    # A NAME line starts its summary in lower case, as man pages do; after
+    # the colon that joins it to a name it starts in upper case.
+    said = what[:1].upper() + what[1:]
     mod = module_title(module)
     if key[1] == "7":
-        title = "%s: %s | %s" % (mod, what, L.SITE_NAME)
+        title = "%s: %s | %s" % (mod, said, L.SITE_NAME)
         heading = mod
     else:
         title = "%s - %s | %s" % (ref, what, L.SITE_NAME)
         heading = names_of(page, key)
     if key[1] == "7":
-        desc = describe("%s. The %s module of %s, a C11 library: %s." %
-                        (what[:1].upper() + what[1:].rstrip("."), mod,
-                         L.SITE_NAME, "concepts, rules and the list of its "
-                         "functions"))
+        desc = describe("%s. The %s module of %s, a GNU C11 library: %s." %
+                        (said.rstrip("."), mod, L.SITE_NAME,
+                         "Concepts, rules and the list of its functions"))
     else:
         desc = describe("%s: %s. Manual page from the %s module of %s, a "
-                        "C11 library." % (ref, what.rstrip("."), mod,
-                                          L.SITE_NAME))
+                        "GNU C11 library." % (ref, said.rstrip("."), mod,
+                                              L.SITE_NAME))
     crumbs = [("Manual", "man/")]
     ov = overview_key(pages, module)
     if key[1] == "7" or ov is None:
@@ -309,7 +311,7 @@ def render(mandoc, pages, key, outdir, version):
         crumbs.append((ref, None))
     path = "man/%s/%s.html" % (module, page["file"])
     article = {"@context": "https://schema.org", "@type": "TechArticle",
-               "headline": "%s: %s" % (ref, what), "description": desc,
+               "headline": "%s: %s" % (ref, said), "description": desc,
                "url": L.SITE_URL + path,
                "isPartOf": {"@type": "WebSite", "name": L.SITE_NAME,
                             "url": L.SITE_URL},

@@ -88,7 +88,7 @@ target. The NAME section of the target lists every alias so that whatis and
 apropos can find each one.
 
 A family of related constants works differently. The CHTTP_STATUS_*
-constants of chttp.h are such a family: they have no behavior of their own
+constants of chttp.h are such a family: They have no behavior of their own
 and a reader wants to see the whole table at once. They share one page,
 man/chttp/CHTTP_STATUS.3, whose NAME section lists every constant so that
 apropos and whatis can find each one. The individual names have no redirect

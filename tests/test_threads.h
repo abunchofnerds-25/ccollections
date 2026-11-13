@@ -46,7 +46,7 @@ SOFTWARE.
 #endif
 
 #ifdef __OpenBSD__
-// Reads the kern.proc records of this process into *out: one for the process
+// Reads the kern.proc records of this process into *out: One for the process
 // (p_tid -1) and one per thread. test_thread_count() uses it on OpenBSD. It
 // gives the record count or -1; the caller frees *out. The buffer has room for
 // 16 threads that start between the two sysctl calls.

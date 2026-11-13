@@ -105,7 +105,7 @@ ccol_invalid_args  policy is not one of the two values above.
 You may call this at any time, from any thread, before or after any
 logger exists.  The policy governs every write and every open that
 starts after the call, including those of the async writer threads
-that already run: under CLOG_SIGNALS_UNTOUCHED such a thread unblocks
+that already run: Under CLOG_SIGNALS_UNTOUCHED such a thread unblocks
 SIGPIPE and SIGXFSZ again before its next write, and under
 CLOG_SIGNALS_AUTO it blocks them again.  A thread that its creator
 started with one of the two signals already blocked keeps it blocked

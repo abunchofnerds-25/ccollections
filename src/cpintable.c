@@ -22,7 +22,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-// Internal: the lock-free handle index with per-slot pins (see cpintable.h).
+// Internal: The lock-free handle index with per-slot pins (see cpintable.h).
 
 #include "internal/cpintable.h"
 
@@ -84,19 +84,19 @@ static ccol_pin_slot *pin_slot_lookup(ccol_pintable *t, uint32_t idx) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: makes the next publish fail before it stores anything.
+// Test hook: Makes the next publish fail before it stores anything.
 static atomic_bool pin_force_publish_failure;
 
-// Test hook: makes the next stripe-block allocation of a publish fail.
+// Test hook: Makes the next stripe-block allocation of a publish fail.
 static _Atomic bool pin_force_stripe_alloc_failure = false;
 
-// Test hook: makes the next stripe-block allocation of a publish fail, the only
+// Test hook: Makes the next stripe-block allocation of a publish fail, the only
 // way to get a published chunk whose slot never went live.
 void ccol__pintable_force_next_stripe_alloc_failure_for_tests(void) {
   atomic_store(&pin_force_stripe_alloc_failure, true);
 }
 
-// Test hook: makes the next publish fail before it stores anything, so the
+// Test hook: Makes the next publish fail before it stores anything, so the
 // tests of the owning modules reach their rollback paths.
 void ccol__pintable_force_next_publish_failure_for_tests(void) {
   atomic_store(&pin_force_publish_failure, true);
@@ -148,7 +148,7 @@ bool ccol_pintable_publish(ccol_pintable *t, uint32_t idx, uint32_t gen,
 // Clears the live bit of idx so no new pin can find it; a destroy calls it
 // under the owning module's writer lock before waiting for the pins. The
 // generation stays, so this occupancy's handle differs from the next one's.
-// The store is seq_cst: it pairs with the pin in ccol_pintable_pin().
+// The store is seq_cst: It pairs with the pin in ccol_pintable_pin().
 void ccol_pintable_retire(ccol_pintable *t, uint32_t idx) {
   ccol_pin_slot *slot = pin_slot_lookup(t, idx);
   if (!slot) return;
@@ -210,7 +210,7 @@ void ccol_pintable_unpin(ccol_pintable *t, uint64_t handle) {
 
 // Gives the pins outstanding against idx, which a destroy waits to reach 0.
 // It sums the stripes (seq_cst loads) in an unsigned accumulator and clamps
-// the signed total at 0: one stripe may read negative, and stripes can drift
+// the signed total at 0: One stripe may read negative, and stripes can drift
 // apart without bound while their sum stays right, so a signed partial sum
 // could overflow.
 size_t ccol_pintable_pins(ccol_pintable *t, uint32_t idx) {

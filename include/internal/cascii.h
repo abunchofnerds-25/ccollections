@@ -51,7 +51,7 @@ static inline int ccol_ascii_toupper(int c) {
 
 // Says whether c is ASCII white space; cstring_trim() uses it so the locale
 // can't change what counts as space. True for the six bytes that isspace()
-// reports in the C locale: space, '\t', '\n', '\v', '\f' and '\r'. No other
+// reports in the C locale: Space, '\t', '\n', '\v', '\f' and '\r'. No other
 // byte counts as white space, whatever the locale says.
 static inline int ccol_ascii_isspace(int c) {
   return c == ' ' || (c >= '\t' && c <= '\r');

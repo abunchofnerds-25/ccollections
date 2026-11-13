@@ -79,7 +79,7 @@ typedef struct {
 /* ------------------------------------------------------------------------ */
 
 /* snprintf reports the length it would have written and not the length it
- * wrote, so don't add its return value straight onto an offset: as soon as
+ * wrote, so don't add its return value straight onto an offset: As soon as
  * anything truncates, the offset goes past the end of the buffer, and the
  * expression for the remaining space wraps to a huge size_t that tells the
  * next call it may write far past the end. Every append below goes through
@@ -277,7 +277,7 @@ static void cyaml_serialize_run(void *state, size_t n) {
 /* ------------------------------------------------------------------------ */
 
 #ifdef BENCH_HAVE_JANSSON
-/* The serialize arm's fixture: the same bytes every other case in this group
+/* The serialize arm's fixture: The same bytes every other case in this group
  * uses, parsed into jansson's own DOM so that only the serializer is timed
  * below, just as cjson_dom_setup does for the case this one is compared
  * with. */
@@ -296,7 +296,7 @@ static void *jansson_dom_setup(size_t n) {
 /* Both flags are there to make the two sides emit the same bytes, since a
  * serializer's cost follows how much it writes.
  *
- * JSON_COMPACT matches the shape of cjson_serialize's output: by default
+ * JSON_COMPACT matches the shape of cjson_serialize's output: By default
  * jansson puts a space after every comma and colon, and cjson emits no extra
  * whitespace. JSON_REAL_PRECISION(15) matches how cjson renders a double,
  * trying 15 significant digits and only widening to 17 when that doesn't
@@ -321,7 +321,7 @@ static void jansson_parse_run(void *state, size_t n) {
   for (size_t i = 0; i < n; i++) {
     json_error_t err;
     json_t *root = json_loads(st->text, 0, &err);
-    /* Fatal, exactly like the c_collections arms: the harness divides the
+    /* Fatal, exactly like the c_collections arms: The harness divides the
      * elapsed time by the full count either way, and a failing parse is far
      * cheaper than one that works, so a quiet stop would report a flattering
      * figure for the library this one is compared with. */

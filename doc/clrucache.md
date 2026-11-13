@@ -124,7 +124,7 @@ compiler, or with the raw functions, zero every byte of the key with
 [clrucache_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_create_full.3.html) has the
 details.
 
-## Read-through: filling the cache on a miss
+## Read-through: Filling the cache on a miss
 
 With a remote getter, a miss calls the getter to fetch the value. The
 getter gets the key as a `cmap_pair` (`ptr` and `size`). It either
@@ -292,7 +292,7 @@ max_connections = 100
 The getter and the setter run while the cache holds no lock, so they can
 use the same cache for *other* keys. They must not get or set the key they
 are serving, since the thread would then wait for itself, and they must not
-destroy the cache. The eviction callback is different: it runs while the
+destroy the cache. The eviction callback is different: It runs while the
 cache holds a lock and must not call the cache at all. Evictions on two
 threads can run it at the same time, so any state it keeps needs its own
 protection.
@@ -514,8 +514,8 @@ Inspecting:
 
 Related guides:
 
-- [How the library is designed](design.md): typed macros, lifecycle macros,
+- [How the library is designed](design.md): Typed macros, lifecycle macros,
   `redeclare`, error handling and scoped variables
-- [Memory management](memory.md): custom allocators
-- [Concurrency](concurrency.md): thread safety and the `fork()` policy
-- [chashmap](chashmap.md): a hash map with no size limit
+- [Memory management](memory.md): Custom allocators
+- [Concurrency](concurrency.md): Thread safety and the `fork()` policy
+- [chashmap](chashmap.md): A hash map with no size limit

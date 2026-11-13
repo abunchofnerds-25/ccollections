@@ -26,7 +26,7 @@ name  Variable name to declare.
 .nf
 It needs GCC or Clang, because it uses __attribute__((cleanup)).
 When the drain behavior matters, run a shutdown yourself before the
-end of scope: the shutdown that the destroy runs on its own drains the
+end of scope: The shutdown that the destroy runs on its own drains the
 queue, and that drain can take any amount of time when the tasks are
 long.
 .fi

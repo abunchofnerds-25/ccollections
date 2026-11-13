@@ -90,7 +90,7 @@ enum {
   CHILD_REAPER_RAN_AT_FORK = 19,
 };
 
-// The TLS server: its scratch directory, certificate, key and port, the pids of
+// The TLS server: Its scratch directory, certificate, key and port, the pids of
 // the server and of the process that started it, and the state of _setup().
 static char g_dir[128];
 static char g_cert[192];
@@ -143,7 +143,7 @@ static void _serve_connection(SSL_CTX *ctx, int fd) {
 
 static void _teardown(void);
 
-// Runs the server process that every case talks to: accepts connections on lfd
+// Runs the server process that every case talks to: Accepts connections on lfd
 // and serves each one in a child of its own. A failed accept doesn't end the
 // loop (a server that left would keep its listener open and later tests would
 // hang); only a listener that can't be used does. It never returns;
@@ -178,7 +178,7 @@ static void _server_main(int lfd) {
   }
 }
 
-// Starts the TLS server that every case needs: makes a self-signed certificate
+// Starts the TLS server that every case needs: Makes a self-signed certificate
 // for 127.0.0.1, binds a listener on an ephemeral port and forks the server
 // process. It sets g_port, g_server_pid, g_parent_pid and g_ready, runs once,
 // and leaves g_ready false on a failure. The teardown is an atexit handler
@@ -334,7 +334,7 @@ static bool _tier3_get(chttpcli cli, const char *url) {
   return ok;
 }
 
-// The ordinary exit case: runs Tier 2 and Tier 3 on a client the child
+// The ordinary exit case: Runs Tier 2 and Tier 3 on a client the child
 // destroys, then Tier 2 on the default client, whose pooled connection holds
 // the engine when the child exits. Sets g_scenario_code and calls exit().
 static void _child_full(void) {
@@ -403,7 +403,7 @@ static void _child_exit_in_flight(void) {
   exit(CHILD_OK);
 }
 
-// The prefork case: a process uses the async engine, destroys its last client
+// The prefork case: A process uses the async engine, destroys its last client
 // and forks with no handle left. The handle of the reaper that stopped the
 // engine stays unjoined until the next acquire (a build with fork handlers
 // joins it at the fork). glibc gives that reaper's descriptor to a thread the
@@ -430,7 +430,7 @@ static void *_blocker(void *arg) {
 // enough for glibc to hand the cached descriptor out.
 #define PREFORK_MAX_THREADS 128
 
-// Runs the grandchild of the prefork case: starts blockers until one takes
+// Runs the grandchild of the prefork case: Starts blockers until one takes
 // stale_reaper's ID (required on glibc), makes its requests, releases and joins
 // the blockers, and reports on report_fd.
 static void _forked_child_main(pthread_t stale_reaper, int report_fd) {
@@ -476,7 +476,7 @@ static void _forked_child_main(pthread_t stale_reaper, int report_fd) {
 
 static bool _under_valgrind(void);
 
-// Runs the child of the prefork case: uses the engine, destroys its client,
+// Runs the child of the prefork case: Uses the engine, destroys its client,
 // forks the grandchild and waits for its report with a bound, so a hang fails
 // the case instead of the binary. Reports on g_report_fd.
 static void _child_prefork_after_engine_stop(void) {
@@ -535,7 +535,7 @@ static void _child_prefork_after_engine_stop(void) {
 // that inherits the mutex held hangs on its first Tier 2 request, so the fork
 // must wait for the teardown to finish.
 
-// Runs the forked child of the held-reap case: makes a Tier 2 and a Tier 3
+// Runs the forked child of the held-reap case: Makes a Tier 2 and a Tier 3
 // request (which hang if the child inherited the engine mutex held) and reports
 // on report_fd.
 static void _forked_child_requests(int report_fd) {
@@ -622,13 +622,13 @@ static void _child_fork_during_reap(void) {
   test_child_exit(0);
 }
 
-// A fork while the reaper still runs after its teardown: it has cleared the
+// A fork while the reaper still runs after its teardown: It has cleared the
 // stopping state, closed the fallback logger and waits there with no lock held.
 // Closing the logger frees through the engine's allocator, so a child forked
 // here can inherit an allocator lock (ours or a sanitizer's) held. The fork
 // must wait until the reaper has ended and been joined.
 
-// Runs the forked child of the reaper-tail case: checks from the inherited
+// Runs the forked child of the reaper-tail case: Checks from the inherited
 // counters that every reaper was joined, then makes a Tier 2 and a Tier 3
 // request and reports on report_fd.
 static void _forked_child_after_reaper_tail(int report_fd) {
@@ -650,7 +650,7 @@ static void _forked_child_after_reaper_tail(int report_fd) {
   test_child_exit(0);
 }
 
-// Runs the child of the reaper-tail case: destroys the last client with the
+// Runs the child of the reaper-tail case: Destroys the last client with the
 // reaper's tail held, waits until the hold has started, forks and reports on
 // g_report_fd. The fork joins the reaper first, so it returns only once the
 // hold is over.

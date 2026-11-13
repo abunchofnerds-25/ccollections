@@ -26,13 +26,13 @@ A pointer to the new BST map on success, NULL on failure.
 .SH NOTES
 .nf
 The default comparison depends on the key type:
-  char: the platform's native char comparison, signed or unsigned to
+  char: The platform's native char comparison, signed or unsigned to
   match how char behaves on this platform.
-  The other signed integer types: a signed integer comparison.
-  The unsigned integer types: an unsigned integer comparison.
-  float, double and long double: a numeric comparison, in which a NaN key
+  The other signed integer types: A signed integer comparison.
+  The unsigned integer types: An unsigned integer comparison.
+  float, double and long double: A numeric comparison, in which a NaN key
   sorts above every non-NaN key and equal to every other NaN key.
-  ccol_string: a lexicographic order equivalent to strcmp.
+  ccol_string: A lexicographic order equivalent to strcmp.
 
 The map keeps the AVL balance, |height(left) - height(right)| <= 1, so
 every operation is O(log n).

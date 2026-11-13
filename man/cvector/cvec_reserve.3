@@ -21,7 +21,7 @@ The capacity grows to the next power of two at or above
 new_capacity_count, with a floor of 4 elements, so you usually get more
 than you asked for. A request at or below the current capacity does
 nothing, and this call never shrinks the capacity. The element count
-doesn't change: the new space is capacity, not elements, and you reach it
+doesn't change: The new space is capacity, not elements, and you reach it
 only by pushing into it.
 .fi
 .SH PARAMETERS
@@ -32,7 +32,7 @@ new_capacity_count  Minimum number of elements to reserve
 .SH NOTES
 .nf
 The macro stops the program through ccol__fatal_err() when the
-reservation fails: when the allocation fails, when the capacity is more
+reservation fails: When the allocation fails, when the capacity is more
 than ccol_max_elem_count, or when the capacity times the element size
 overflows a size_t.
 

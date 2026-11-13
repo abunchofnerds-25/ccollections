@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// INTERNAL ONLY: the test hooks of cthreadpool. src/cthreadpool.c defines them
+// INTERNAL ONLY: The test hooks of cthreadpool. src/cthreadpool.c defines them
 // so a test can force failures, hold the slot table and read pool state that
 // the public API doesn't show. They exist only when RUNNING_UNIT_TESTS is
 // defined, which the shipped library never does.
@@ -54,7 +54,7 @@ extern atomic_long cthrpool__live_futures_for_tests;
 // half built is counted too.
 extern atomic_long cthrpool__future_blocks_for_tests;
 
-// The creation steps that cthrpool__arm_fault_for_tests can make fail: the five
+// The creation steps that cthrpool__arm_fault_for_tests can make fail: The five
 // primitive inits of cthrpool_create_mp, and the allocation and two primitive
 // inits of a future.
 typedef enum {
@@ -133,7 +133,7 @@ size_t cthrpool__pending_resolve_count_for_tests(cthread_pool *pool);
 int cthrpool__timedwait_not_full_for_tests(cthread_pool *pool,
                                            const struct timespec *abs);
 
-// What the last timed wait for room on the calling thread did: whether it
+// What the last timed wait for room on the calling thread did: Whether it
 // waited, its CLOCK_MONOTONIC deadline, when it started waiting and, when it
 // gave up, whether that was a timeout and when. Only a read through
 // cthrpool__timed_wait_record_for_tests() clears it.

@@ -43,7 +43,7 @@ The macro declares the buffer with the alignment that every entry of
 The buffer has exactly the size that
   crmempool_create_from_preallocated_buffer_mp() requires for the
   same parameters
-A _Static_assert rejects three cases at compile time: parameters that
+A _Static_assert rejects three cases at compile time: Parameters that
   would make the required buffer size overflow size_t, a
   number_of_smallest_size_elems_power_of_two below
   largest_size_power_of_two - smallest_size_power_of_two, and a

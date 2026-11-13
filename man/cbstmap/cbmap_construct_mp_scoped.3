@@ -65,7 +65,7 @@ A struct that holds the array works.
 .SH WARNINGS
 .nf
 The handle must not outlive its scope. Don't return it or store it
-anywhere that lives longer than the scope: the cleanup attribute frees the
+anywhere that lives longer than the scope: The cleanup attribute frees the
 map when the scope exits, and the stored handle would then name a freed
 map.
 .fi

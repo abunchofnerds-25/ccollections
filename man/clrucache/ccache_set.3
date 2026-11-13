@@ -22,7 +22,7 @@ cache stores the double value 5.0, not a 4-byte copy of the int's bit
 pattern. The compiler must be able to convert the val and key
 expressions implicitly to the cache's declared ValT and KeyT, and an
 expression that it cannot convert is a compile error at this point.
-A character-pointer KeyT or ValT is the exception: the macro keeps the
+A character-pointer KeyT or ValT is the exception: The macro keeps the
 pointer type of the expression, so a const char * key or value for a
 char * cache needs no cast.
 
@@ -48,9 +48,9 @@ name  Cache variable. It must be a plain variable, declared with
       the KeyT and the ValT for the conversion above come from. name
       cannot be any other expression, for example a read of a struct
       member.
-key   Key expression: any expression that the compiler can convert
+key   Key expression: Any expression that the compiler can convert
       implicitly to KeyT.
-val   Value expression: any expression that the compiler can convert
+val   Value expression: Any expression that the compiler can convert
       implicitly to ValT.
 .fi
 .SH RETURN VALUE
@@ -70,6 +70,10 @@ ccol_not_enough_memory   An allocation failed (the copy of the new
                          value, or the record of a new key). The
                          remote setter was not called, and nothing
                          changed for the key.
+ccol_container_full      The cache's internal bookkeeping reached its
+                         maximum element count while the macro stored
+                         a completely new key. A real program cannot
+                         reach this.
 .fi
 .SH NOTES
 .nf

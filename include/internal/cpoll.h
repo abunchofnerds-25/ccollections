@@ -142,11 +142,11 @@ typedef union ccol_poll_event {
 #define CCOL_POLL_HUP 0x010u
 #define CCOL_POLL_RDHUP 0x2000u
 #define CCOL_POLL_ONESHOT (1u << 30)
-// Flag for a MOD whose CCOL_POLL_IN differs from the previous mask: the read
+// Flag for a MOD whose CCOL_POLL_IN differs from the previous mask: The read
 // filter is deleted and created again, since kqueue keeps its trigger flags.
 #define CCOL_POLL_READ_MODE_CHANGE (1u << 29)
 
-// Marks that ccol_poll_wait() leaves for ccol_poll_refine(): a read filter
+// Marks that ccol_poll_wait() leaves for ccol_poll_refine(): A read filter
 // EOF, an error it reported, data still queued, and a report from a socket's
 // error-only read filter (which, without EOF, is a pending socket error).
 #define CCOL__POLL_EOF (1u << 28)
@@ -155,7 +155,7 @@ typedef union ccol_poll_event {
 #define CCOL__POLL_ERR_ONLY_FILTER (1u << 25)
 
 // The udata bit that marks the error-only read filter. Every caller tag has it
-// clear: an event loop entry is a user-space address and cselect() uses bit 63
+// clear: An event loop entry is a user-space address and cselect() uses bit 63
 // with a descriptor or a small index.
 #define CCOL__POLL_UDATA_ERR_ONLY ((uint64_t)1 << 62)
 
@@ -168,7 +168,7 @@ typedef union ccol_poll_event {
 #define CCOL__POLL_LOWAT_NEVER INT_MAX
 
 // ThreadSanitizer intercepts epoll but not kevent(), so a TSan build states
-// the ordering itself: a release on the kqueue before each change and an
+// the ordering itself: A release on the kqueue before each change and an
 // acquire after each wait that returns events. Without it every object reached
 // through an event's udata looks like a race. Only that build compiles this.
 #if defined(__has_feature)
@@ -277,13 +277,13 @@ static inline bool ccol__poll_fdinfo_listener(int fd, ccol_poll_fdinfo *fi) {
 // epoll_ctl() on kqueue. DEL deletes both filters and succeeds when either
 // existed. Otherwise both filter changes go in one kevent() call with
 // EV_RECEIPT, and a delete of a missing filter (ENOENT) isn't an error. For an
-// error-only mask: a socket that also wants OUT uses the write filter alone; a
+// error-only mask: A socket that also wants OUT uses the write filter alone; a
 // listener arms no read filter (it would report every pending connection); any
 // other socket gets the low-water mark with EV_CLEAR; a write end uses its
 // write filter and a read end its read filter, both with EV_CLEAR. An OpenBSD
 // anonymous pipe always uses the read filter, since OpenBSD doesn't wake a
 // write filter armed before the reader closes. An EV_CLEAR filter is never
-// one-shot: an event that refines to nothing would leave it disabled for good.
+// one-shot: An event that refines to nothing would leave it disabled for good.
 // A write filter that switches EV_CLEAR on or off is recreated. Updates the
 // write filter bits of *info.
 static inline int ccol_poll_ctl(int kq, int op, int fd,
@@ -404,7 +404,7 @@ static inline int ccol_poll_ctl(int kq, int op, int fd,
 }
 
 // epoll_wait() on kqueue. kevent() writes straight into evs and each record
-// is translated in place: a read report gives IN (or EOF marks), a write report
+// is translated in place: A read report gives IN (or EOF marks), a write report
 // gives OUT, with ERR or HUP at its EOF. No call is made on any fd.
 static inline int ccol_poll_wait(int kq, ccol_poll_event *evs, int max,
                                  int timeout_ms) {

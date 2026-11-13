@@ -49,7 +49,7 @@ An elem_size smaller than sizeof(uintptr_t) is rounded up so that it
 The macro then rounds the stride of each element up to the same
   alignment, and then to a power of two unless both the library and
   this translation unit were built with -DCMEMPOOL_COMPACT_LAYOUT=1.
-  This setting must match the library's, and the build checks it: a
+  This setting must match the library's, and the build checks it: A
   buffer declared here names an object that the library defines under
   the name of the setting it was built with, so a mismatch shows up as
   an undefined reference at link time (to
@@ -63,7 +63,7 @@ The macro then rounds the stride of each element up to the same
 The status bytes, one for each element, sit after the elements in the
   same buffer, so the pool needs no separate allocation of its own
 elem_count must be nonzero. A _Static_assert rejects two cases at
-  compile time: an elem_count of zero, and an elem_count times the
+  compile time: An elem_count of zero, and an elem_count times the
   rounded and aligned elem_size that would overflow size_t
 .fi
 .SH EXAMPLES

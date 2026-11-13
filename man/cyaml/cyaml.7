@@ -69,7 +69,7 @@ would give, so "!!str 42" is the string "42".  !!bool, !!int and
 !!float check the text of their scalar and the parse fails when it
 doesn't match, while !!null accepts any text.  A custom tag forces no
 type, so the node keeps its implicit type.  A bare "!" is the
-non-specific tag: a plain scalar under it is a string whatever its
+non-specific tag: A plain scalar under it is a string whatever its
 text ("! 42" is the string "42"), a collection keeps its kind, and no
 node carries the tag.  A written tag that resolves to "!" alone, such
 as "!<!>", is a parse error.
@@ -115,7 +115,7 @@ is a mapping with one entry, so "[foo: bar]" equals "[{foo: bar}]".
 An explicit "[? key: value]" entry is accepted.
 
 Plain, single-quoted and double-quoted scalars, each of which can
-continue over several lines: a line break becomes a space, and a
+continue over several lines: A line break becomes a space, and a
 blank line becomes a newline.  A plain scalar never starts with an
 indicator character, so "a: ]" and "- ,x" are parse errors outside a
 flow collection.  Inside a flow collection a plain scalar ends at

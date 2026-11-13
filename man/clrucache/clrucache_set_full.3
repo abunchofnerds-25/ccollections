@@ -18,7 +18,7 @@ Pairs key_pair with val_pair in the cache.
 If the caller gave a remote setter at construction, it is called
 synchronously, outside the segment's lock, before the cache is
 updated. If the setter fails, the function returns
-ccol_unexpected_failure and nothing changes for that key: the existing
+ccol_unexpected_failure and nothing changes for that key: The existing
 value stays, and so does the key's exact position in the eviction
 order of its segment. So a set that stored nothing gets no protection
 from eviction, and it cannot take from another key its place as the

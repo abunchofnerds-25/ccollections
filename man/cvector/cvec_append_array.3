@@ -17,7 +17,7 @@ allocation failure doesn't need to test a return value.
 
 It copies elem_count elements from arr_ptr onto the end of v in one bulk
 copy and grows the capacity at most once, not once per element. The append
-is all or nothing: either every element lands in the vector or the vector
+is all or nothing: Either every element lands in the vector or the vector
 stays exactly as it was.
 
 The elements are copied byte for byte from arr_ptr, so arr_ptr must point

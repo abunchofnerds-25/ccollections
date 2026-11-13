@@ -26,7 +26,7 @@ name  The cache variable to destroy. The macro sets it to
 .nf
 Calling it when name is CCACHE_NULL is safe, and it does
 nothing.
-A call on a stale handle is a FATAL ERROR: it calls abort() and raises
+A call on a stale handle is a FATAL ERROR: It calls abort() and raises
 SIGABRT, and it is never a silent double-free. A handle is stale when
 an earlier call destroyed it, or when another thread destroys it at
 the same time. A forged value or garbage is a fatal error too. The

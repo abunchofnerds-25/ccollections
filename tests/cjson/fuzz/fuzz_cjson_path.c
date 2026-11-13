@@ -24,7 +24,7 @@ SOFTWARE.
 
 // A libFuzzer target for the path grammar of cjson (dot-separated keys, #N list
 // indices, the \. and \\ escapes) that cjson_get(), cjson_set() and
-// cjson_delete() read. The input is split on its first NUL byte: the part
+// cjson_delete() read. The input is split on its first NUL byte: The part
 // before it is parsed as JSON (it shares seed material with fuzz_cjson_parse),
 // and the part after it is the path, byte for byte. An input with no NUL or an
 // empty path adds nothing and is skipped.
@@ -33,7 +33,7 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-// The entry point libFuzzer calls with each input: parses the JSON half, then
+// The entry point libFuzzer calls with each input: Parses the JSON half, then
 // gets, sets and deletes the path half on it. The last byte of the input picks
 // the C type that cjson_set() receives, so a saved crash replays the same
 // branch.

@@ -15,7 +15,7 @@ Declares a cjson handle named var_name, sets it to NULL and attaches
 a cleanup attribute to it.  When var_name goes out of scope, the
 cleanup frees the tree that the variable holds, exactly as
 cjson_destroy() does.  It runs at the end of the enclosing block on
-every way out of it: a normal exit, break, continue, return and
+every way out of it: A normal exit, break, continue, return and
 goto.
 
 Only store a tree that the caller owns in the variable, such as the

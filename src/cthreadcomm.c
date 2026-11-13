@@ -104,7 +104,7 @@ static void eventfd_drain(int efd) { ccol_wakefd_drain(efd); }
 
 // Wakes one waiter node. Every send, receive, state change and cascade step
 // wakes a listener through it. The caller holds the owning queue's mutex.
-// *ready is the only record of an outstanding wake: the first notify after the
+// *ready is the only record of an outstanding wake: The first notify after the
 // owner cleared it sets it and delivers (an eventfd write, or a signal when the
 // node has no eventfd), and later ones deliver nothing, so a busy queue costs
 // one write per dispatch. The eventfd write happens under sel_mtx with the
@@ -171,7 +171,7 @@ static bool sel_list_longer_than(const ccol_sel_waiter *head, uint32_t k) {
 // through every linked waiter. It's for a message or a free slot, where waking
 // more than one is a thundering herd. *rotor is NULL (start at *head) or a node
 // of this list; sel_unlink_waiter_locked keeps that true. The rotation matters
-// because a loop registration stays linked and new waiters prepend: without it
+// because a loop registration stays linked and new waiters prepend: Without it
 // the newest registration would get every notify and an older one whose sibling
 // keeps the queue drained would never be called. The caller holds the queue's
 // mutex.
@@ -192,7 +192,7 @@ static void notify_all_sel_waiters(ccol_sel_waiter *head) {
 
 // The thread-specific key that holds the queue whose loop callback runs on the
 // calling thread, or NULL. One key answers that for every queue. live says the
-// key exists: creation can fail, and a value set on a key we don't own would
+// key exists: Creation can fail, and a value set on a key we don't own would
 // reach another component's destructor. ceventloop_create_mp refuses to build a
 // loop while live is false, so only an existing key is ever set. The key is
 // deleted when the loop slot table is released, so dlopen() and dlclose()
@@ -221,7 +221,7 @@ static bool queue_dispatch_marker_available(void) {
 // Test-only count of upcoming thread mark stores that fail as without memory.
 static _Atomic uint32_t g_mark_set_failures = 0;
 
-// Test-only: arms the failing mark stores.
+// Test-only: Arms the failing mark stores.
 void ceventloop__test_fail_next_marks(uint32_t count) {
   atomic_store(&g_mark_set_failures, count);
 }
@@ -278,7 +278,7 @@ static bool queue_dispatch_marker_is(const void *queue) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: whether the calling thread runs a callback of queue, the answer
+// Test-only: Whether the calling thread runs a callback of queue, the answer
 // the queue destroy uses.
 bool ceventloop__test_dispatches_queue(const void *queue) {
   return queue_dispatch_marker_is(queue);
@@ -317,7 +317,7 @@ static void queue_wait_for_dispatch_refs(_Atomic size_t *refs,
 // of every live ccircq and cdynmq (a cchan is two ccircqs), so the fork
 // handlers can lock them all before fork() and unlock them after. A queue owns
 // no thread and no kernel object, so after the unlock its state is valid in the
-// child. The registry has no fork handlers of its own: two independent sets
+// child. The registry has no fork handlers of its own: Two independent sets
 // would run in an order that depends on which subsystem the process used first,
 // and could lock a queue's mutex after a registration's wait_mtx, the reverse
 // of notify_waiter's order. One merged set, cthreadcomm_atfork_prepare and its
@@ -325,7 +325,7 @@ static void queue_wait_for_dispatch_refs(_Atomic size_t *refs,
 // its registrations and before their wait_mtx, which matches every nesting in
 // this file.
 #if CCOL_FORK_SAFETY_REQUIRED
-// One registry entry: a live queue's mutex and the address of that queue's
+// One registry entry: A live queue's mutex and the address of that queue's
 // registry_idx, which always holds the entry's position.
 typedef struct {
   ccol__mutex *mutex;
@@ -426,7 +426,7 @@ static void queue_mutex_registry_remove(ccol__mutex *m, size_t *index) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: checks that every entry's registry_idx names its position, and
+// Test-only: Checks that every entry's registry_idx names its position, and
 // gives the entry count and the probes removes made, so a test can prove a
 // remove is O(1).
 bool ccol__queue_mutex_registry_check_for_tests(size_t *count,
@@ -557,7 +557,7 @@ static bool verify_circular_queue_create_inputs(size_t max_size,
 }
 
 // Creates a circular queue, the constructor behind ccircq_create() and both
-// directions of a cchan: the struct, its message array, the mutex and the two
+// directions of a cchan: The struct, its message array, the mutex and the two
 // monotonic condition variables, with sends on. Gives the queue, or NULL with
 // *err_str set. Registering the mutex for fork safety is the last step, so its
 // failure unwinds like any allocation failure.
@@ -699,7 +699,7 @@ void ccircq__destroy(ccircq *cq) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: locks and unlocks cq's mutex directly.
+// Test-only: Locks and unlocks cq's mutex directly.
 void ccircq__test_lock_mutex_for_tests(ccircq *cq) {
   ccol__mutex_lock(cq->mutex);
 }
@@ -708,7 +708,7 @@ void ccircq__test_unlock_mutex_for_tests(ccircq *cq) {
   ccol__mutex_unlock(cq->mutex);
 }
 
-// Test-only: whether a cselect() waiter is linked into the read list, read
+// Test-only: Whether a cselect() waiter is linked into the read list, read
 // under the mutex, so a test can wait for one in a bounded loop.
 bool ccircq__test_has_sel_read_waiter_for_tests(ccircq *cq) {
   ccol__mutex_lock(cq->mutex);
@@ -717,7 +717,7 @@ bool ccircq__test_has_sel_read_waiter_for_tests(ccircq *cq) {
   return has_waiter;
 }
 
-// Test-only: counts the waiters of the read list under the mutex.
+// Test-only: Counts the waiters of the read list under the mutex.
 size_t ccircq__test_sel_read_waiter_count_for_tests(ccircq *cq) {
   ccol__mutex_lock(cq->mutex);
   size_t n = 0;
@@ -726,7 +726,7 @@ size_t ccircq__test_sel_read_waiter_count_for_tests(ccircq *cq) {
   return n;
 }
 
-// Test-only: the blocked reader and writer counts, read under the mutex, so a
+// Test-only: The blocked reader and writer counts, read under the mutex, so a
 // test can wait until a thread really parked.
 size_t ccircq__waiting_readers_for_tests(ccircq *cq) {
   ccol__mutex_lock(cq->mutex);
@@ -835,26 +835,26 @@ ccol_retval ccircq_try_send(ccircq *cq, cmessage *msg) {
 static void recvfrom_cq(ccircq *cq, cmessage *target_buf);
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only state of the forced wait error of ccircq_timed_send: the armed
+// Test-only state of the forced wait error of ccircq_timed_send: The armed
 // flag, the "also race" flag, and the message that the imitated concurrent
 // receive took out.
 static _Atomic bool g_circq_send_force_condvar_wait_error = false;
 static _Atomic bool g_circq_send_force_condvar_wait_error_also_race = false;
 static cmessage g_circq_send_race_freed_msg = {0};
 
-// Test-only: arms the forced wait error of the next timed send.
+// Test-only: Arms the forced wait error of the next timed send.
 void ccircq__test_force_next_send_condvar_wait_error(void) {
   atomic_store(&g_circq_send_force_condvar_wait_error, true);
 }
 
-// Test-only: arms the forced wait error together with an imitated receive that
+// Test-only: Arms the forced wait error together with an imitated receive that
 // frees a slot under the same mutex.
 void ccircq__test_force_next_send_condvar_wait_error_racing_ready(void) {
   atomic_store(&g_circq_send_force_condvar_wait_error, true);
   atomic_store(&g_circq_send_force_condvar_wait_error_also_race, true);
 }
 
-// Test-only: hands out, once, the message the imitated receive took.
+// Test-only: Hands out, once, the message the imitated receive took.
 cmessage ccircq__test_take_race_freed_msg(void) {
   cmessage m = g_circq_send_race_freed_msg;
   g_circq_send_race_freed_msg = (cmessage){0};
@@ -976,7 +976,7 @@ static void recvfrom_cq(ccircq *cq, cmessage *target_buf) {
   notify_one_sel_waiter(&cq->sel_write_waiters_head, &cq->sel_write_rotor);
 }
 
-// Checks the arguments of every circular queue receive: neither the queue nor
+// Checks the arguments of every circular queue receive: Neither the queue nor
 // the buffer may be NULL.
 static bool verify_recvfrom_cq_zc_params(ccircq *cq, cmessage *target_buf) {
   if (!cq || !target_buf) {
@@ -1034,12 +1034,12 @@ ccol_retval ccircq_try_recv(ccircq *cq, cmessage *target_buf) {
 static _Atomic bool g_circq_recv_force_condvar_wait_error = false;
 static _Atomic bool g_circq_recv_force_condvar_wait_error_also_race = false;
 
-// Test-only: arms the forced wait error of the next timed receive.
+// Test-only: Arms the forced wait error of the next timed receive.
 void ccircq__test_force_next_recv_condvar_wait_error(void) {
   atomic_store(&g_circq_recv_force_condvar_wait_error, true);
 }
 
-// Test-only: arms the forced wait error together with an imitated send of a
+// Test-only: Arms the forced wait error together with an imitated send of a
 // sentinel under the same mutex.
 void ccircq__test_force_next_recv_condvar_wait_error_racing_ready(void) {
   atomic_store(&g_circq_recv_force_condvar_wait_error, true);
@@ -1157,7 +1157,7 @@ typedef struct dllist_node {
 
 // The dynamic queue. It's unbounded, so it has readers to wake but no blocked
 // writer and no write_cond. The other fields mean what they mean in struct
-// ccircq: everything is guarded by mutex except the atomic dispatch_refs.
+// ccircq: Everything is guarded by mutex except the atomic dispatch_refs.
 struct cdynmq {
   ccol__mutex mutex;
   ccol__cond_var read_cond;
@@ -1264,7 +1264,7 @@ static void destroy_dq_dllist(cdynmq *dq) {
   dq->tail = NULL;
 }
 
-// Creates a dynamic queue, the constructor behind cdynmq_create(): the struct,
+// Creates a dynamic queue, the constructor behind cdynmq_create(): The struct,
 // its mutex and a monotonic read_cond, empty and with sends on. Gives the
 // queue, or NULL with *err_str set. Registering the mutex for fork safety is
 // the last step, so its failure unwinds like any allocation failure.
@@ -1333,7 +1333,7 @@ cdynmq *cdynmq_create_mp(ccol_memmgmt_procs *mmgmt_procs, char **err_str) {
 }
 
 // Destroys a dynamic queue for cdynmq_destroy(), with the checks of
-// ccircq__destroy(): it asserts on a linked waiter or a detached registration,
+// ccircq__destroy(): It asserts on a linked waiter or a detached registration,
 // waits for running dispatches, then asserts on queued messages, and frees the
 // nodes.
 void cdynmq__destroy(cdynmq *dq) {
@@ -1372,7 +1372,7 @@ void cdynmq__destroy(cdynmq *dq) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: the blocked reader count, read under the mutex.
+// Test-only: The blocked reader count, read under the mutex.
 size_t cdynmq__waiting_readers_for_tests(cdynmq *dq) {
   ccol__mutex_lock(dq->mutex);
   size_t n = dq->readers_waiting;
@@ -1459,7 +1459,7 @@ static ccol_retval recvfrom_dq(cdynmq *dq, cmessage *target_buf) {
   return retval;
 }
 
-// Checks the arguments of every dynamic queue receive: neither the queue nor
+// Checks the arguments of every dynamic queue receive: Neither the queue nor
 // the buffer may be NULL.
 static bool verify_recvfrom_dq_zc_params(cdynmq *dq, cmessage *target_buf) {
   if (!dq || !target_buf) {
@@ -1516,12 +1516,12 @@ ccol_retval cdynmq_try_recv(cdynmq *dq, cmessage *target_buf) {
 static _Atomic bool g_dynmq_recv_force_condvar_wait_error = false;
 static _Atomic bool g_dynmq_recv_force_condvar_wait_error_also_race = false;
 
-// Test-only: arms the forced wait error of the next timed receive.
+// Test-only: Arms the forced wait error of the next timed receive.
 void cdynmq__test_force_next_recv_condvar_wait_error(void) {
   atomic_store(&g_dynmq_recv_force_condvar_wait_error, true);
 }
 
-// Test-only: arms the forced wait error together with an imitated send of a
+// Test-only: Arms the forced wait error together with an imitated send of a
 // sentinel under the same mutex.
 void cdynmq__test_force_next_recv_condvar_wait_error_racing_ready(void) {
   atomic_store(&g_dynmq_recv_force_condvar_wait_error, true);
@@ -1628,7 +1628,7 @@ size_t cdynmq_msg_count(cdynmq *dq) {
 
 // Channel
 
-// A channel: two circular queues and the thread ID of the owner, which routes
+// A channel: Two circular queues and the thread ID of the owner, which routes
 // every call.
 struct cchan {
   ccol__thread_id owner_tid;
@@ -1637,7 +1637,7 @@ struct cchan {
   ccol_memmgmt_procs *m_procs;
 };
 
-// Creates a channel for two-way traffic between an owner and its workers: its
+// Creates a channel for two-way traffic between an owner and its workers: Its
 // two circular queues, and the calling thread recorded as the owner. Gives the
 // channel, or NULL with *err_str set.
 cchan *cchan_create_mp(size_t max_size, ccol_memmgmt_procs *mmgmt_procs,
@@ -1700,7 +1700,7 @@ void cchan__destroy(cchan *ch) {
   }
 }
 
-// Sends on the caller's direction: the owner to owner_to_workers_cq, any other
+// Sends on the caller's direction: The owner to owner_to_workers_cq, any other
 // thread to workers_to_owner_cq. The thread ID comparison is all the routing.
 ccol_retval cchan_send(cchan *ch, cmessage *msg) {
   if (!ch) {
@@ -1742,7 +1742,7 @@ ccol_retval cchan_timed_send(cchan *ch, cmessage *msg, uint64_t timeout_us) {
   return ccircq_timed_send(ch->workers_to_owner_cq, msg, timeout_us);
 }
 
-// Receives on the caller's direction: the owner from workers_to_owner_cq, any
+// Receives on the caller's direction: The owner from workers_to_owner_cq, any
 // other thread from owner_to_workers_cq.
 ccol_retval cchan_recv(cchan *ch, cmessage *target_buf) {
   if (!ch) {
@@ -1858,7 +1858,7 @@ static bool queue_sel_is_ready(cselectable *sel);
 // Unlinks the waiter node of selectables[i] from its queue, taking the queue's
 // mutex, drains the node's eventfd for reuse and marks the slot done
 // (sel_mtx = NULL). When the queue is still ready the wake goes on to another
-// waiter in the same critical section: a producer wakes exactly one waiter, and
+// waiter in the same critical section: A producer wakes exactly one waiter, and
 // a waiter that leaves for another reason (deadline, another selectable won,
 // an error) would otherwise use that wake up while a message sits in the
 // queue. An fd selectable has nothing to unlink.
@@ -1894,7 +1894,7 @@ static void deregister_all_sel_waiters(size_t n, ccol_sel_waiter *nodes,
 }
 
 // Gives a selectable for the channel queue that the calling thread reads from
-// or writes to: for cselect_read the owner watches workers_to_owner_cq and a
+// or writes to: For cselect_read the owner watches workers_to_owner_cq and a
 // worker owner_to_workers_cq, for cselect_write the other way round. A NULL ch
 // gives a selectable with a NULL queue.
 cselectable cchan_selectable(cchan *ch, cselect_dir dir) {
@@ -2019,7 +2019,7 @@ typedef struct {
   bool has_queues;
 } sel_fd_state;
 
-// Frees what sel_fd_state_init() and sel_setup_epoll() allocated: the block of
+// Frees what sel_fd_state_init() and sel_setup_epoll() allocated: The block of
 // pairs, pfds and fd_ready, and the event buffer.
 static void sel_fd_state_free(sel_fd_state *fs) {
   free(fs->pairs);
@@ -2042,7 +2042,7 @@ static size_t sel_rotation_start(size_t n) {
 }
 
 // Turns the events of the last poll wait into fs->fd_ready for
-// sel_wait_epoll(): the flag of every fd selectable whose direction an event
+// sel_wait_epoll(): The flag of every fd selectable whose direction an event
 // satisfies is set and the rest cleared. Each event is refined with the
 // combined mask of its fd group; queue eventfd events and events that refine to
 // nothing set no flag. Gives true when any flag is set.
@@ -2084,18 +2084,18 @@ static int sel_fd_pair_cmp(const void *a, const void *b) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: the number of the cselect allocation that fails, 0 when none.
+// Test-only: The number of the cselect allocation that fails, 0 when none.
 static _Atomic uint32_t g_sel_fail_alloc_at = 0;
 
-// Test-only: how many poll sets cselect_timed() created.
+// Test-only: How many poll sets cselect_timed() created.
 static _Atomic uint64_t g_sel_poll_sets_created = 0;
 
-// Test-only: arms the failing allocation.
+// Test-only: Arms the failing allocation.
 void cselect__test_fail_alloc(uint32_t index) {
   atomic_store(&g_sel_fail_alloc_at, index);
 }
 
-// Test-only: reads the count of poll sets.
+// Test-only: Reads the count of poll sets.
 uint64_t cselect__test_poll_sets_created(void) {
   return atomic_load(&g_sel_poll_sets_created);
 }
@@ -2198,7 +2198,7 @@ static int sel_poll_fds(sel_fd_state *fs, size_t n, cselectable *selectables) {
   return 0;
 }
 
-// Builds what a call needs to block: the event buffer, a poll set with one
+// Builds what a call needs to block: The event buffer, a poll set with one
 // level-triggered registration per fd (the selectables of one fd are combined
 // into one registration with the OR of their masks, since a second ADD of the
 // same fd fails), and an eventfd for each queue waiter. Grouping sorts the
@@ -2257,10 +2257,10 @@ static ccol_retval sel_setup_epoll(size_t n, cselectable *selectables,
   return ccol_success;
 }
 
-// Phase 1: scans the selectables in rotation order from start and stops at the
+// Phase 1: Scans the selectables in rotation order from start and stops at the
 // first ready one. With fds it first polls them once without waiting, and a
 // ready fd competes like a ready queue. A queue is only peeked at, under its
-// mutex: a ready one also forwards a wake to its next waiter (this caller
+// mutex: A ready one also forwards a wake to its next waiter (this caller
 // consumes nothing and is about to leave), and one that isn't ready gets its
 // node linked. Write readiness is room or sends off. Gives the found index, -1
 // when nothing is ready and every queue node is linked, or -2 when the poll
@@ -2347,19 +2347,19 @@ typedef enum {
 } sel_condvar_outcome;
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: makes the next timed condition wait of sel_wait_condvar() give
+// Test-only: Makes the next timed condition wait of sel_wait_condvar() give
 // EINVAL without waiting (no correct deadline can cause that).
 static _Atomic bool g_sel_force_condvar_wait_error = false;
 
-// Test-only: with the flag above, also sets *ready under the same mutex, as a
+// Test-only: With the flag above, also sets *ready under the same mutex, as a
 // producer whose notify lands just before the error.
 static _Atomic bool g_sel_force_condvar_wait_error_also_marks_ready = false;
 
-// Test-only: how many of the next capped waits (INT_MAX ms) of sel_wait_epoll
+// Test-only: How many of the next capped waits (INT_MAX ms) of sel_wait_epoll
 // return 0 at once.
 static _Atomic uint32_t g_sel_short_capped_waits = 0;
 
-// Test-only: sets and reads the count of capped waits that end at once.
+// Test-only: Sets and reads the count of capped waits that end at once.
 void cselect__test_short_next_capped_waits(uint32_t count) {
   atomic_store(&g_sel_short_capped_waits, count);
 }
@@ -2382,7 +2382,7 @@ static int sel_poll_wait_for_tests(int epfd, ccol_poll_event *evs, int cap,
   return ccol_poll_wait(epfd, evs, cap, timeout_ms);
 }
 
-// Test-only: arm the forced condition wait error, with or without the ready
+// Test-only: Arm the forced condition wait error, with or without the ready
 // flag.
 void cselect__test_force_next_condvar_wait_error(void) {
   atomic_store(&g_sel_force_condvar_wait_error, true);
@@ -2393,12 +2393,12 @@ void cselect__test_force_next_condvar_wait_error_racing_ready(void) {
   atomic_store(&g_sel_force_condvar_wait_error_also_marks_ready, true);
 }
 
-// Test-only: the armed delay between a timed-out condition wait and the
+// Test-only: The armed delay between a timed-out condition wait and the
 // deregister step, and how many times a thread entered it.
 static _Atomic uint32_t g_sel_timed_out_deregister_delay_us = 0;
 static _Atomic uint64_t g_sel_timed_out_deregister_delays = 0;
 
-// Test-only: arms the delay and reads the entry count.
+// Test-only: Arms the delay and reads the entry count.
 void cselect__test_delay_next_timed_out_deregister_us(uint32_t us) {
   atomic_store(&g_sel_timed_out_deregister_delay_us, us);
 }
@@ -2407,7 +2407,7 @@ uint64_t cselect__test_timed_out_deregister_delay_count(void) {
   return atomic_load(&g_sel_timed_out_deregister_delays);
 }
 
-// Test-only: takes the armed delay once and counts it.
+// Test-only: Takes the armed delay once and counts it.
 static void sel_timed_out_deregister_test_delay(void) {
   uint32_t us = atomic_exchange(&g_sel_timed_out_deregister_delay_us, 0u);
   if (us == 0) return;
@@ -2418,7 +2418,7 @@ static void sel_timed_out_deregister_test_delay(void) {
 }
 #endif
 
-// Phase 2 of cselect_timed() without fds: waits on sel_cond until a producer
+// Phase 2 of cselect_timed() without fds: Waits on sel_cond until a producer
 // sets *ready or the deadline passes, and clears *ready before it returns. A
 // wait with no deadline always gives SEL_CONDVAR_READY. With a deadline,
 // ETIMEDOUT gives SEL_CONDVAR_TIMED_OUT and any other error
@@ -2474,13 +2474,13 @@ typedef enum {
   SEL_EPOLL_FAILURE,
 } sel_epoll_outcome;
 
-// Phase 2 with fds: waits on the poll set until something is ready or the
+// Phase 2 with fds: Waits on the poll set until something is ready or the
 // deadline passes. The remaining time is recomputed before every wait, rounded
 // up and capped at INT_MAX ms; a wait that returns nothing before the deadline
 // waits again, and after it the call deregisters and gives ccol_timed_out. When
 // only queue eventfds fired (or fd events that refine to nothing) it gives
 // SEL_EPOLL_CONTINUE for Phase 3. Otherwise the ready fd first in rotation
-// order from start wins: it deregisters, sets *ready_index and *out_retval and
+// order from start wins: It deregisters, sets *ready_index and *out_retval and
 // gives SEL_EPOLL_BREAK. A system error gives SEL_EPOLL_FAILURE with the nodes
 // still linked.
 static sel_epoll_outcome sel_wait_epoll(
@@ -2537,7 +2537,7 @@ static sel_epoll_outcome sel_wait_epoll(
 // Each iteration has three phases. Phase 1 scans in rotation order and links a
 // waiter node into every queue that isn't ready (sel_phase1_scan_register). The
 // first time a call with fds must block, it unlinks, builds the poll set and
-// the queue eventfds and scans again, so no wake is lost. Phase 2 waits: on
+// the queue eventfds and scans again, so no wake is lost. Phase 2 waits: On
 // sel_cond without fds (a producer sets *ready under sel_mtx before it
 // signals), on the poll set with fds, where queue notifies arrive as eventfd
 // writes. Phase 3 unlinks every node, forwarding a wake from a queue that is
@@ -2696,7 +2696,7 @@ struct ceventloop_reg_s {
   _Atomic int refcount;
   _Atomic bool removed;
 
-  // Set between ceventloop_pause and ceventloop_resume: the registration keeps
+  // Set between ceventloop_pause and ceventloop_resume: The registration keeps
   // its slot, count and generation but leaves the fd's interest mask, which
   // every re-arm recomputes from live state. Always false for a queue
   // registration.
@@ -2712,7 +2712,7 @@ struct ceventloop_reg_s {
 
   // The stripe of the entry, the generation and the public handle, all written
   // once before the registration is wired. They're read from here and never
-  // through owning_entry, because a stale reg can outlive its entry: the two
+  // through owning_entry, because a stale reg can outlive its entry: The two
   // have separate deferred-free lists. A dispatch hands self_handle to every
   // callback, so a callback can act on its registration before the add returns.
   size_t stripe_idx;
@@ -2729,7 +2729,7 @@ struct ceventloop_reg_s {
   // in the middle of using the reg.
   _Atomic size_t pending_resolve_count;
 
-  // For a queue registration: the persistent bridge eventfd, -1 for an fd. A
+  // For a queue registration: The persistent bridge eventfd, -1 for an fd. A
   // queue wake is recorded under wait_mtx in wait_ready, which is true exactly
   // while a wake is pending on bridge_efd; queue_reg_consume_wake clears both
   // right before a dispatch, so one write covers every send up to it. Nothing
@@ -2811,7 +2811,7 @@ struct event_entry {
   event_entry *pending_free_next;
 };
 
-// One lock stripe of a loop's registry: a mutex, the fd index of its real fds
+// One lock stripe of a loop's registry: A mutex, the fd index of its real fds
 // and the list of its queue registrations. An fd (or a queue's bridge eventfd)
 // belongs to one stripe for life, so no operation holds two stripe locks.
 typedef struct ceventloop_stripe {
@@ -2918,7 +2918,7 @@ struct ceventloop__s {
 
   // A wake descriptor that pings the poller between batches. ceventloop_remove
   // pings it for a registration with on_removed, so the notice comes promptly
-  // on an idle loop. It's only for latency: the bounded retry timeout of the
+  // on an idle loop. It's only for latency: The bounded retry timeout of the
   // poller is what guarantees a pending reclaim runs.
   int reclaim_wake_efd;
 
@@ -3017,7 +3017,7 @@ struct ceventloop__s {
 // The prepare handler of fork(). fork() copies only the calling thread, so a
 // lock that another thread holds would stay locked for ever in the child; this
 // takes every lock of the module first, so fork() happens when nobody holds
-// one. The order matches every nesting in this file: the queue registry mutex
+// one. The order matches every nesting in this file: The queue registry mutex
 // and the loop table lock (write side), then for each live loop its
 // shutdown_lock, reg_slot_rwlock (write side) and stripe locks, then every
 // queue mutex once, then every queue registration's wait_mtx. Entry dispatch
@@ -3149,12 +3149,12 @@ static void cthreadcomm_atfork_release_impl(bool is_child) {
   ccol__mutex_unlock(queue_mutex_registry.mutex);
 }
 
-// The parent fork handler: releases every lock the prepare handler took.
+// The parent fork handler: Releases every lock the prepare handler took.
 static void cthreadcomm_atfork_release(void) {
   cthreadcomm_atfork_release_impl(false);
 }
 
-// The child fork handler: releases the locks and detaches every inherited loop
+// The child fork handler: Releases the locks and detaches every inherited loop
 // from the parent (see cthreadcomm_atfork_release_impl). It runs before fork()
 // returns, so before any code of the child can reach these loops.
 static void cthreadcomm_atfork_child_release(void) {
@@ -3188,18 +3188,18 @@ static struct ceventloop__s *ceventloop_resolve(ceventloop h) {
   return raw;
 }
 
-// Drops the pin of ceventloop_resolve(). A bare atomic decrement: the destroy
+// Drops the pin of ceventloop_resolve(). A bare atomic decrement: The destroy
 // polls the count, so there's no waiter to signal.
 static void ceventloop_resolve_unpin(struct ceventloop__s *raw) {
   atomic_fetch_sub(&raw->pending_resolve_count, 1);
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: makes the next push onto the loop free list fail as without
+// Test-only: Makes the next push onto the loop free list fail as without
 // memory, to reach the lost-index recovery.
 static _Atomic bool g_fail_next_loop_free_index_push = false;
 
-// Test-only: arms the failing free list push.
+// Test-only: Arms the failing free list push.
 void ceventloop__force_next_free_index_push_failure_for_tests(void) {
   atomic_store(&g_fail_next_loop_free_index_push, true);
 }
@@ -3301,7 +3301,7 @@ static size_t stripe_index_for_fd(struct ceventloop__s *loop, int fd) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: exposes stripe_index().
+// Test-only: Exposes stripe_index().
 size_t ceventloop__test_stripe_index(size_t num_stripes, int fd) {
   return stripe_index(num_stripes, fd);
 }
@@ -3408,7 +3408,7 @@ static size_t *queue_sel_detached_count(cselectable *sel) {
 // this callback. The caller holds the stripe lock under which it just found the
 // registration not removed, and the remove sets that flag under the same lock,
 // so once the remove returns no reference can be claimed. Only a dispatch about
-// to run its callback claims one (on a pool worker, when the job starts): a
+// to run its callback claims one (on a pool worker, when the job starts): A
 // queued job holding one could make a destroy on a worker wait for a job stuck
 // behind that same worker.
 static void queue_dispatch_ref_acquire(cselectable *sel) {
@@ -3423,7 +3423,7 @@ static size_t queue_sel_msg_count(cselectable *sel) {
 }
 
 // Consumes a queue registration's outstanding wake right before its dispatch
-// runs: it clears wait_ready, takes the hop count into *hops and drains the
+// runs: It clears wait_ready, takes the hop count into *hops and drains the
 // bridge eventfd in one critical section under wait_mtx. notify_waiter() works
 // under the same mutex, so a notify lands either before (its message is there
 // for the callback) or after (it writes again). When queue_count isn't NULL it
@@ -3467,20 +3467,20 @@ typedef struct {
 } ceventloop_reg_slot;
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: makes the next registration slot acquire fail, which the shared
+// Test-only: Makes the next registration slot acquire fail, which the shared
 // allocator can't do in isolation.
 static _Atomic bool g_force_next_reg_slot_acquire_failure = false;
 
-// Test-only: the loop's registration count when the forced failure fired. A 0
+// Test-only: The loop's registration count when the forced failure fired. A 0
 // proves the slot is taken before the registration is wired.
 static _Atomic size_t g_forced_slot_acquire_failure_reg_count_snapshot = 0;
 
-// Test-only: arms the forced slot failure.
+// Test-only: Arms the forced slot failure.
 void ceventloop__test_force_next_reg_slot_acquire_failure(void) {
   atomic_store(&g_force_next_reg_slot_acquire_failure, true);
 }
 
-// Test-only: reads the snapshot.
+// Test-only: Reads the snapshot.
 size_t ceventloop__test_last_forced_slot_acquire_failure_reg_count(void) {
   return atomic_load(&g_forced_slot_acquire_failure_reg_count_snapshot);
 }
@@ -3489,12 +3489,12 @@ size_t ceventloop__test_last_forced_slot_acquire_failure_reg_count(void) {
 // initializer, since Clang 11 refuses one on an atomic function pointer.
 static void (*_Atomic g_evl_add_before_return_hook)(void);
 
-// Test-only: installs the hook, NULL to remove it.
+// Test-only: Installs the hook, NULL to remove it.
 void ceventloop__test_set_add_before_return_hook(void (*hook)(void)) {
   atomic_store(&g_evl_add_before_return_hook, hook);
 }
 
-// Test-only: resolves the loop once, write-locks its reg_slot_rwlock and gives
+// Test-only: Resolves the loop once, write-locks its reg_slot_rwlock and gives
 // the pinned loop, so a test can hold the lock across a fork(). The unlock
 // takes that pointer, since resolving again could deadlock against a fork that
 // holds the table lock while it waits for this one.
@@ -3505,7 +3505,7 @@ void *ceventloop__test_wrlock_reg_slot_for_tests(ceventloop loop) {
   return raw;
 }
 
-// Test-only: unlocks what the call above locked and drops its pin.
+// Test-only: Unlocks what the call above locked and drops its pin.
 void ceventloop__test_wrunlock_reg_slot_for_tests(void *resolved_loop) {
   struct ceventloop__s *raw = (struct ceventloop__s *)resolved_loop;
   if (!raw) return;
@@ -3515,15 +3515,15 @@ void ceventloop__test_wrunlock_reg_slot_for_tests(void *resolved_loop) {
 #endif
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: makes the next registration free list push fail.
+// Test-only: Makes the next registration free list push fail.
 static _Atomic bool g_fail_next_reg_free_index_push = false;
 
-// Test-only: arms the failing push.
+// Test-only: Arms the failing push.
 void ceventloop__force_next_reg_free_index_push_failure_for_tests(void) {
   atomic_store(&g_fail_next_reg_free_index_push, true);
 }
 
-// Test-only: how many registration slots the loop has ever allocated.
+// Test-only: How many registration slots the loop has ever allocated.
 size_t ceventloop__reg_slot_count_for_tests(ceventloop loop) {
   struct ceventloop__s *raw = ceventloop_resolve(loop);
   if (!raw) return 0;
@@ -3626,11 +3626,11 @@ static ceventloop_reg_s *ceventloop_reg_resolve(struct ceventloop__s *loop,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: the armed sleep of the next unpin, between its read of removed
+// Test-only: The armed sleep of the next unpin, between its read of removed
 // and its decrement, which lets a test land a remove inside that window.
 static _Atomic uint32_t g_delay_next_reg_resolve_unpin_ms = 0;
 
-// Test-only: arms the unpin delay.
+// Test-only: Arms the unpin delay.
 void ceventloop__test_delay_next_reg_resolve_unpin_ms(uint32_t ms) {
   atomic_store(&g_delay_next_reg_resolve_unpin_ms, ms);
 }
@@ -3695,10 +3695,10 @@ static void ceventloop_reg_slot_release(struct ceventloop__s *loop,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: makes the next wait mutex init of a queue registration fail.
+// Test-only: Makes the next wait mutex init of a queue registration fail.
 static _Atomic bool g_fail_next_reg_sync_init = false;
 
-// Test-only: arms the failing init.
+// Test-only: Arms the failing init.
 void ceventloop__test_fail_next_reg_sync_init(void) {
   atomic_store(&g_fail_next_reg_sync_init, true);
 }
@@ -3750,7 +3750,7 @@ static ceventloop_reg_s *ceventloop_reg_create(struct ceventloop__s *loop,
   return reg;
 }
 
-// Frees a registration: it calls on_removed when the registration was ever
+// Frees a registration: It calls on_removed when the registration was ever
 // wired (owning_entry set), so the notice comes exactly once for every real
 // registration, then destroys wait_mtx and wait_cond and closes the bridge
 // eventfd of a queue registration. It's the only place that tears those down,
@@ -3874,7 +3874,7 @@ static ccol_retval ceventloop_add_fd(struct ceventloop__s *loop, size_t idx,
   return ccol_success;
 }
 
-// Says whether the queue sel names is ready for sel's direction: a message
+// Says whether the queue sel names is ready for sel's direction: A message
 // for read, room or sends off for write. It's the one definition of ready for a
 // queue, used by the add, the cascade and the deregister paths so they never
 // disagree. The caller holds the queue's mutex.
@@ -3891,7 +3891,7 @@ static bool queue_sel_is_ready(cselectable *sel) {
              : (dq->writing_disabled || dq->msg_count < ccol_max_elem_count);
 }
 
-// Wires a queue registration for ceventloop_add: it creates the bridge
+// Wires a queue registration for ceventloop_add: It creates the bridge
 // eventfd, adds it to the poll set and links the registration's waiter node
 // into the queue's list for good, so every send, receive and state change of
 // the queue wakes it. A queue that is already ready gets a wake through
@@ -3935,7 +3935,7 @@ static ccol_retval ceventloop_add_queue(struct ceventloop__s *loop,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: the armed delay of the next cascade step and the counts of steps
+// Test-only: The armed delay of the next cascade step and the counts of steps
 // begun and finished.
 static _Atomic uint32_t g_queue_cascade_test_delay_us = 0;
 static _Atomic uint64_t g_queue_cascade_begun_for_tests = 0;
@@ -3951,7 +3951,7 @@ static _Atomic uint64_t g_queue_cascade_finished_for_tests = 0;
 // successor (or the head) with wake_hops + 1, and stops once the hops reach the
 // list length, so listeners that all decline don't wake each other for ever. A
 // modify that changed the direction counts as no progress. The stripe lock is
-// held across the removed check and the queue's mutex: a removed registration
+// held across the removed check and the queue's mutex: A removed registration
 // may name a queue that's already destroyed, and the remove sets the flag under
 // the same lock, while a live one keeps the queue destroy asserting. The caller
 // holds the entry's dispatch lock and the collection's refcount.
@@ -4014,12 +4014,12 @@ static void ceventloop_queue_cascade_notify_next(struct ceventloop__s *loop,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: arms the cascade delay.
+// Test-only: Arms the cascade delay.
 void ceventloop__test_delay_next_queue_cascade_us(uint32_t us) {
   atomic_store(&g_queue_cascade_test_delay_us, us);
 }
 
-// Test-only: reads the counts of cascade steps begun and finished.
+// Test-only: Reads the counts of cascade steps begun and finished.
 void ceventloop__test_queue_cascade_counts(uint64_t *begun,
                                            uint64_t *finished) {
   if (begun) *begun = atomic_load(&g_queue_cascade_begun_for_tests);
@@ -4027,7 +4027,7 @@ void ceventloop__test_queue_cascade_counts(uint64_t *begun,
 }
 #endif
 
-// Checks the selectable that ceventloop_add got: a known type and direction,
+// Checks the selectable that ceventloop_add got: A known type and direction,
 // an fd of at least 0 or a non-NULL queue. Gives ccol_success or
 // ccol_invalid_args.
 static ccol_retval ceventloop_validate_add_args(struct ceventloop__s *loop,
@@ -4051,7 +4051,7 @@ static ccol_retval ceventloop_validate_add_args(struct ceventloop__s *loop,
 // Registers sel with the loop and gives the new handle, or CEVENTLOOP_REG_NULL
 // with *err_str naming the failure class. It resolves the loop, builds the
 // registration, takes its handle slot first and only then wires it into the
-// fd or queue registry under the stripe lock: once wired it can be dispatched,
+// fd or queue registry under the stripe lock: Once wired it can be dispatched,
 // and a failure reported after that point could let the caller free an arg that
 // a callback is about to use. That order also matches the fork prepare handler
 // (reg_slot_rwlock before stripe locks). An fd's stripe comes from the fd, a
@@ -4428,7 +4428,7 @@ static void ceventloop_push_entry_free_node(struct ceventloop__s *loop,
                                          entry));
 }
 
-// Retires an entry that ceventloop_remove fully unregistered: marks it removed,
+// Retires an entry that ceventloop_remove fully unregistered: Marks it removed,
 // stamps defer_gen and queues it for the reclaim. It can't be freed at once,
 // because a batch the poller already fetched, or a running pool job, can still
 // point at it.
@@ -4463,7 +4463,7 @@ static void ceventloop_defer_reg_free(struct ceventloop__s *loop,
 // registration once its pending_resolve_count is 0, since its slot was released
 // at the remove. Each list is taken whole with one exchange and the rest pushed
 // back without a new stamp, so a busy loop can't starve an item. Gives true
-// when something stays pending, which makes the poller use a bounded wait: the
+// when something stays pending, which makes the poller use a bounded wait: The
 // ping from the last unpin may not come.
 static bool ceventloop_reclaim_pending_frees(struct ceventloop__s *loop) {
   uint64_t reached = atomic_load(&loop->poller_batch_gen);
@@ -4532,12 +4532,12 @@ static void ceventloop_free_all_pending(struct ceventloop__s *loop) {
   }
 }
 
-// Phase 1 of a remove: unlinks reg from the registry and marks it removed,
+// Phase 1 of a remove: Unlinks reg from the registry and marks it removed,
 // under the stripe lock, without touching the refcount. For an fd it clears
 // reg's slot and either retires the entry (DEL when still added, out of the
 // index, deferred) or re-arms it for the other direction. For a queue the
 // splice of the waiter node, the removed store and the hand-on of a pending
-// wake happen in one critical section of the queue's mutex: split in two, a
+// wake happen in one critical section of the queue's mutex: Split in two, a
 // cascade step could read a frozen next pointer of a node whose successor
 // another remove already reclaimed. A node a shutdown already detached only
 // lowers the queue's detached count. Then the bridge eventfd leaves the set and
@@ -4601,7 +4601,7 @@ static bool ceventloop_remove_unlink(struct ceventloop__s *raw,
   return true;
 }
 
-// Phase 2 of a remove, after the slot release: lowers reg_count, drops the
+// Phase 2 of a remove, after the slot release: Lowers reg_count, drops the
 // registration's own reference (deferring it when that was the last), and
 // always pings the poller. Only the poller reclaims, and nothing else wakes it
 // on an idle loop, so without the ping deferred entries would keep bridge
@@ -4748,7 +4748,7 @@ static inline void ccol_fd_item_fill(dispatch_item *item, ceventloop_reg_s *reg,
 
 // Calls the callback an item asks for, with the registration's own handle.
 // Both dispatch paths use it. It checks removed and paused again right before
-// the call, because the collection check is not enough: a remove or pause can
+// the call, because the collection check is not enough: A remove or pause can
 // finish between collection and this call (a long wait on the pool path), and
 // the remover may already have freed arg.
 static void ceventloop_run_callback(ceventloop loop, dispatch_item *item) {
@@ -4773,7 +4773,7 @@ static void ceventloop_run_callback(ceventloop loop, dispatch_item *item) {
 // Drops the reference a collection took on reg. When it was the last one and
 // reg is removed, it defers reg and pings the poller, since on a worker this
 // may be the call that makes reg reclaimable and the poller wouldn't know.
-// Nothing is read off reg after the defer: no resolve pin holds it, so the
+// Nothing is read off reg after the defer: No resolve pin holds it, so the
 // poller may free it at once.
 static void ceventloop_release_after_dispatch(struct ceventloop__s *loop,
                                               ceventloop_reg_s *reg) {
@@ -4798,7 +4798,7 @@ static void queue_dispatch_run_callback(struct ceventloop__s *loop,
 // poller collects and runs callbacks itself. A NULL entry is the shutdown
 // eventfd, which is never drained so every wait keeps seeing it. Otherwise it
 // holds the entry's dispatch lock for the whole dispatch and the stripe lock
-// only for the collection: it refines an fd event (safe there, since the fd is
+// only for the collection: It refines an fd event (safe there, since the fd is
 // open while the entry isn't removed), routes it per direction through the
 // shared rule, or consumes a queue registration's wake and claims its dispatch
 // reference. Each collected registration gets a refcount; callbacks run with no
@@ -4901,7 +4901,7 @@ typedef struct event_entry_with_job {
   dispatch_job job;
 } event_entry_with_job;
 
-// Gives the size of one entry allocation of loop: with a dispatch pool the
+// Gives the size of one entry allocation of loop: With a dispatch pool the
 // entry carries its job.
 static size_t ceventloop_entry_alloc_size(const struct ceventloop__s *loop) {
   return loop->dispatch_pool ? sizeof(event_entry_with_job)
@@ -4967,7 +4967,7 @@ static bool ceventloop_job_marked(const struct ceventloop__s *loop) {
          ceventloop_job_mark_fallback == (const void *)loop;
 }
 
-// The poller's half of a dispatch on a loop with a dispatch pool: collects an
+// The poller's half of a dispatch on a loop with a dispatch pool: Collects an
 // entry's items under the stripe lock (no dispatch lock; there's one poller)
 // and submits the entry's own job to the pool. An event for an entry whose job
 // is still queued or running is dropped, because a callback that calls modify
@@ -5064,7 +5064,7 @@ static bool ceventloop_poller_collect(struct ceventloop__s *loop,
 // removed, and only then claims the queue reference and consumes the wake (the
 // queue of a removed registration may be gone); after the callback come the
 // cascade step and the release. Then it re-arms the entry and drops its
-// refcount together under the stripe lock, re-arm first: a reclaim needs the
+// refcount together under the stripe lock, re-arm first: A reclaim needs the
 // refcount at 0, and the poller must never see the re-arm without the drop, or
 // it would discard a new event that one-shot has already spent.
 static void ceventloop_dispatch_job_fn(void *arg) {
@@ -5111,7 +5111,7 @@ static void ceventloop_dispatch_job_fn(void *arg) {
   ceventloop_job_unmark(fell_back);
 }
 
-// The poller's wait limit while a reclaim is pending: the guarantee that the
+// The poller's wait limit while a reclaim is pending: The guarantee that the
 // reclaim runs, since a ping can be missed. 50 ms costs one wake and one list
 // scan per interval, only while something is pending.
 #define CEVENTLOOP_RECLAIM_RETRY_MS 50
@@ -5576,7 +5576,7 @@ static void ceventloop_detach_queue_regs(struct ceventloop__s *loop) {
   }
 }
 
-// Stops a resolved loop: the shutdown and teardown paths use it. A call from
+// Stops a resolved loop: The shutdown and teardown paths use it. A call from
 // the loop's poller or one of its dispatch workers gives ccol_not_permitted,
 // since it would join itself. The first caller (under shutdown_lock) sets
 // shutting_down, writes shutdown_efd, which nothing drains, so the poller
@@ -5792,7 +5792,7 @@ void ceventloop__destroy(ceventloop loop) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test-only: how many jobs wait in or run on the loop's dispatch pool.
+// Test-only: How many jobs wait in or run on the loop's dispatch pool.
 size_t ceventloop__dispatch_pool_pending_count_for_tests(ceventloop loop) {
   struct ceventloop__s *raw = ceventloop_resolve(loop);
   if (!raw || !raw->dispatch_pool) {
@@ -5804,7 +5804,7 @@ size_t ceventloop__dispatch_pool_pending_count_for_tests(ceventloop loop) {
   return n;
 }
 
-// Test-only: the poller's thread ID, so a test can prove the guards don't
+// Test-only: The poller's thread ID, so a test can prove the guards don't
 // recognise the poller by its ID.
 ccol__thread_id ceventloop__poller_thread_for_tests(ceventloop loop) {
   struct ceventloop__s *raw = ceventloop_resolve(loop);
@@ -5816,7 +5816,7 @@ ccol__thread_id ceventloop__poller_thread_for_tests(ceventloop loop) {
   return id;
 }
 
-// Test-only: whether the calling thread carries loop's job mark.
+// Test-only: Whether the calling thread carries loop's job mark.
 bool ceventloop__test_runs_on_loop_thread(ceventloop loop) {
   struct ceventloop__s *raw = ceventloop_resolve(loop);
   if (!raw) return false;
@@ -5825,7 +5825,7 @@ bool ceventloop__test_runs_on_loop_thread(ceventloop loop) {
   return marked;
 }
 
-// Test-only: how many waits the poller has finished, to spot a busy spin.
+// Test-only: How many waits the poller has finished, to spot a busy spin.
 uint64_t ceventloop__poller_iterations_for_tests(ceventloop loop) {
   struct ceventloop__s *raw = ceventloop_resolve(loop);
   if (!raw) return 0;
@@ -5834,7 +5834,7 @@ uint64_t ceventloop__poller_iterations_for_tests(ceventloop loop) {
   return n;
 }
 
-// Test-only: how many entries the reclaim has freed.
+// Test-only: How many entries the reclaim has freed.
 uint64_t ceventloop__entries_reclaimed_for_tests(ceventloop loop) {
   struct ceventloop__s *raw = ceventloop_resolve(loop);
   if (!raw) return 0;
@@ -5844,7 +5844,7 @@ uint64_t ceventloop__entries_reclaimed_for_tests(ceventloop loop) {
   return n;
 }
 
-// Test-only: sets poller_batch_gen, so a test can check a deferred free across
+// Test-only: Sets poller_batch_gen, so a test can check a deferred free across
 // a 32-bit boundary.
 void ceventloop__set_poller_batch_gen_for_tests(ceventloop loop,
                                                 uint64_t value) {
@@ -5854,7 +5854,7 @@ void ceventloop__set_poller_batch_gen_for_tests(ceventloop loop,
   ceventloop_resolve_unpin(raw);
 }
 
-// Test-only: resolves a handle without a pin, so a test has no unpin to forget
+// Test-only: Resolves a handle without a pin, so a test has no unpin to forget
 // (a forgotten one would hang every later destroy).
 struct ceventloop__s *ceventloop__resolve_for_tests(ceventloop h) {
   ccol__call_once(ceventloop_slot_table.once,
@@ -5874,7 +5874,7 @@ struct ceventloop__s *ceventloop__resolve_for_tests(ceventloop h) {
   return raw;
 }
 
-// Test-only: how many slots the loop table holds, freed ones included.
+// Test-only: How many slots the loop table holds, freed ones included.
 size_t ceventloop__slot_table_capacity_for_tests(void) {
   ccol__call_once(ceventloop_slot_table.once,
                   ceventloop_slot_table_init_globals);
@@ -5885,7 +5885,7 @@ size_t ceventloop__slot_table_capacity_for_tests(void) {
   return n;
 }
 
-// Test-only: holds a real pin on h until the test sets *release, after setting
+// Test-only: Holds a real pin on h until the test sets *release, after setting
 // *pinned, so a test can prove a destroy waits for pins.
 bool ceventloop__resolve_pin_until_for_tests(ceventloop h, atomic_int *pinned,
                                              atomic_int *release) {
@@ -5898,7 +5898,7 @@ bool ceventloop__resolve_pin_until_for_tests(ceventloop h, atomic_int *pinned,
   return true;
 }
 
-// Test-only: write-locks and unlocks the loop table directly, so a thread other
+// Test-only: Write-locks and unlocks the loop table directly, so a thread other
 // than the forking one can hold it across a fork(). The lock registers the fork
 // handlers first, as every library path does.
 void ceventloop__test_wrlock_slot_table_for_tests(void) {

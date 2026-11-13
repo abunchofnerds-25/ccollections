@@ -23,7 +23,7 @@
 #      includes a header, which is even worse than a clash at link time.
 #
 # Layer 3 reads the compiler's debug information rather than the header text.
-# A regular expression over an enum body can't do the job: it reports the
+# A regular expression over an enum body can't do the job: It reports the
 # first word of every doc comment inside the body as an enumerator and drops
 # enumerators written in a shape it doesn't know. A namespace gate that
 # reports problems that aren't there is worse than a gap you know about, so
@@ -55,7 +55,7 @@ if [ "$FORMAT" = elf ]; then
 fi
 
 # We read the archive as well as the shared object and fail, rather than skip,
-# when the archive isn't there: in a green log a missing artifact and a clean
+# when the archive isn't there: In a green log a missing artifact and a clean
 # one look the same, and this artifact ships too.
 AR_LIB="${2:-libccollections.a}"
 [ -e "$AR_LIB" ] || {
@@ -119,7 +119,7 @@ if [ -n "$bad_syms" ]; then
   fail=1
 fi
 
-# The status of nm is checked on its own too, for the same reason: an artifact
+# The status of nm is checked on its own too, for the same reason: An artifact
 # we can't read, or one that isn't an archive, gives an empty symbol list and
 # we'd report a fully prefixed archive after examining nothing. The header
 # line of an archive member, like "libccollections.a[cvector.o]:", has only
@@ -141,7 +141,7 @@ else
 fi
 # A name with a dot in it isn't a C identifier, so no C declaration can name
 # it and no application symbol written in C can collide with it. The compiler
-# makes such names for its own helpers: on i386 GCC and Clang emit the PIC
+# makes such names for its own helpers: On i386 GCC and Clang emit the PIC
 # thunks __x86.get_pc_thunk.<reg> as hidden COMDAT globals in every object
 # that needs one, and the linker keeps one copy of each. The archive scan
 # leaves out those names and nothing else, so every name the library source
@@ -183,7 +183,7 @@ for h in $headers; do
 done
 
 # ---------------------------------------------------------------------------
-# Layer 3: enum enumerators and struct/union/enum tags, read out of DWARF
+# Layer 3: Enum enumerators and struct/union/enum tags, read out of DWARF
 # ---------------------------------------------------------------------------
 # We compile one translation unit that includes every installed header, with
 # -g3 -fno-eliminate-unused-debug-types so the debug information also
@@ -301,7 +301,7 @@ FILENAME == linefile {
   } else if (mode == "file" && n >= 3) {
     # The directory is the first token of its column, and the file name is
     # the LAST column, because the shape of this table depends on the
-    # compiler: with DWARF 5 a compiler can record an MD5 of each file, which
+    # compiler: With DWARF 5 a compiler can record an MD5 of each file, which
     # readelf prints inside the directory column, and clang records it while
     # gcc does not. Do not read the whole column, and do not assume that the
     # name is in column three; either form drops every one of our own headers
@@ -310,7 +310,7 @@ FILENAME == linefile {
     dir = first_token(f[2])
     base = value(f[n])
     fname[idx] = base
-    # Both halves are necessary: the directory proves that this is not a
+    # Both halves are necessary: The directory proves that this is not a
     # system header with the same base name, and the name list proves that
     # this is a header that we install and not an internal header that the
     # compiler reached through some other path.

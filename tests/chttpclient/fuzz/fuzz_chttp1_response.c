@@ -67,7 +67,7 @@ static const chttp1_settings g_settings = {
     .on_message_complete = on_message_complete,
 };
 
-// The libFuzzer entry point: parses data[0..size) as a response, fed in random
+// The libFuzzer entry point: Parses data[0..size) as a response, fed in random
 // fragments, to find crashes and leaks. It then calls chttp1_parser_finish(),
 // which runs the completion of an EOF-framed body (no Content-Length, not
 // chunked) that execute alone never confirms. Always gives 0.

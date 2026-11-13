@@ -26,7 +26,7 @@
 // The map hashes and compares a long double by value (its padding bytes are
 // often not initialized) and folds -0.0 into 0.0 for float and double, so a
 // module that must agree with the map about which keys are the same key has
-// to ask the map. The segment chooser of clrucache is one: two keys that the
+// to ask the map. The segment chooser of clrucache is one: Two keys that the
 // map sees as one must land in the same segment.
 
 #ifndef CCOL_CHASHKEY_H

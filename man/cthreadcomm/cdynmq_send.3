@@ -13,7 +13,7 @@ ccol_retval cdynmq_send(cdynmq *dq, cmessage *msg);
 .nf
 Puts the message at the tail of the dynamic queue and returns at once.
 The queue has no size limit, so there is never a wait for free space,
-and this is the only send call of the dynamic queue: there is no
+and this is the only send call of the dynamic queue: There is no
 blocking send and no send with a timeout.
 
 On success the ownership of msg->data moves to the queue, and msg->data

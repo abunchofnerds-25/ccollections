@@ -19,7 +19,7 @@ capacity.
 
 The calling thread becomes the owner of the channel, and its ID is
 stored. Every later cchan_ call compares the ID of its own thread
-with that one and routes itself from the result: the owner sends to
+with that one and routes itself from the result: The owner sends to
 cchan_owner_to_workers and receives from cchan_workers_to_owner, and
 every other thread does the opposite. That's why those calls take no
 direction argument.
@@ -34,7 +34,7 @@ is what the cchan_create() macro passes.
 .nf
 max_size     Maximum number of messages that each direction can hold.
              Because one circular queue holds each direction, the bound
-             of ccircq_create_mp(3) applies: at
+             of ccircq_create_mp(3) applies: At
              least 1, no larger than ccol_max_elem_count, and no larger
              than SIZE_MAX / sizeof(cmessage).
 mmgmt_procs  Custom memory management procedures, or NULL to use the
@@ -70,7 +70,7 @@ Once the owner exits, the OS can hand the same ID to a new, unrelated
 thread, and the channel would then treat that thread as the owner too
 without reporting anything.
 
-fork(2) and a cchan can be combined in two supported ways: call
+fork(2) and a cchan can be combined in two supported ways: Call
 fork(2) before you create the cchan, or create it and then call
 fork(2) followed at once by exec(3). A program that keeps running with
 no exec(3) after the fork while a cchan from before the fork is

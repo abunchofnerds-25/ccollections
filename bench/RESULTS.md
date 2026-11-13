@@ -34,7 +34,7 @@ The harness pinned each worker to one logical CPU per physical core. It
 took whole cores before sibling threads and only used the performance cores,
 so no worker ran on an efficiency core. Six physical performance cores carry
 twelve threads, so a case that asks for more than six workers puts two
-workers on some pairs of sibling threads: each four-thread case has its
+workers on some pairs of sibling threads: Each four-thread case has its
 cores to itself, while the eight-thread and twelve-thread cases share cores.
 Threads that a case starts for itself, like the workers of a thread pool or
 the writer thread of an asynchronous logger, may run on any of the
@@ -97,7 +97,7 @@ A row in brackets is another library doing the nearest equivalent thing,
 which isn't always the identical thing. Where the two sides really differ,
 this list names the difference and doesn't correct for it, because a
 correction would measure something that neither library does. The
-differences don't all point the same way: the first two below cost this
+differences don't all point the same way: The first two below cost this
 library time it wouldn't spend otherwise, and the last two save it time that
 the other side spends.
 
@@ -116,7 +116,7 @@ of them distinct).
   almost nothing per entry, 15 allocations and 42 reallocations over the
   same inserts.
 - The uthash rows allocate their entry nodes once, in the untimed setup. On
-  the integer-key rows that costs neither side anything per entry: over the
+  the integer-key rows that costs neither side anything per entry: Over the
   same 100000 inserts `chashmap` makes 14 allocations and uthash makes 13,
   all of them from table growth inside the timed loop and none from
   per-entry work. On the string-key rows the difference is real. A string

@@ -983,12 +983,12 @@ TEST(cmempools, double_free_of_dynamic_entry_with_another_still_live_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// The guard allocator: every block starts right after a page the process can't
+// The guard allocator: Every block starts right after a page the process can't
 // read, so a read in front of a pool's first entry dies with SIGSEGV in any
 // build. Only single-threaded forked children use it, so it takes no lock.
 // MP_GUARD_MAX_BLOCKS is how many blocks it tracks.
 #define MP_GUARD_MAX_BLOCKS 32
-// One tracked block of the guard allocator: user address, mapping, size.
+// One tracked block of the guard allocator: User address, mapping, size.
 static struct {
   void *user;
   void *base;
@@ -1106,7 +1106,7 @@ TEST(cmempools, free_of_another_pools_entry_asserts_without_reading_it) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// Forked-child body of the ranged foreign-pointer test: holds a live dynamic
+// Forked-child body of the ranged foreign-pointer test: Holds a live dynamic
 // entry under policy, then frees (or reallocs, with through_realloc) an entry
 // of another pool, which must abort without reading through it.
 static void mp_ranged_foreign_child(crmempool_fallback_policy policy,
@@ -1780,7 +1780,7 @@ TEST(r_mempools, simple_allocations) {
 }
 
 // Checks the tier formula at every size boundary of a 7-tier pool, through the
-// capacity each tier reports: it must change exactly at each power of two,
+// capacity each tier reports: It must change exactly at each power of two,
 // never a byte early or late.
 TEST(r_mempools, pool_index_boundaries_exhaustive) {
   SCOPED_R_MEMPOOL(rmp) =
@@ -2772,7 +2772,7 @@ TEST(
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-// The counting allocator of the next tests: a realloc that needs no move must
+// The counting allocator of the next tests: A realloc that needs no move must
 // reach the allocator zero times, which they assert instead of timing
 // anything.
 static atomic_size_t mp_rc_allocs;
@@ -4201,7 +4201,7 @@ TEST(r_mempools, concurrent_realloc_stress) {
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-// The allocation-failure sweep: the sweep procs fail the nth allocation of
+// The allocation-failure sweep: The sweep procs fail the nth allocation of
 // any kind after _mp_arm(n), so every unwinding path of the constructors runs.
 // g_mp_alloc_seen counts calls and g_mp_fail_at is the failing call (0 is
 // off).
@@ -4214,7 +4214,7 @@ static bool _mp_should_fail(void) {
   if (at == 0) return false;
   return (atomic_fetch_add(&g_mp_alloc_seen, 1) + 1) == at;
 }
-// The sweep procs: each fails when _mp_should_fail() says so.
+// The sweep procs: Each fails when _mp_should_fail() says so.
 static void *_mp_sweep_malloc(size_t n) {
   return _mp_should_fail() ? NULL : malloc(n);
 }
@@ -4346,7 +4346,7 @@ TEST(cmempool_oom, a_pool_built_under_a_late_failure_still_serves_entries) {
   REQUIRE_TRUE(usable);
 }
 
-// Thread-cache tests: their failures are silent (memory grows or the cache
+// Thread-cache tests: Their failures are silent (memory grows or the cache
 // stops working), so they assert on the library's own counters. This is the
 // pool size most of them use.
 #define MP_CACHE_POOL_ELEMS 512
@@ -4373,7 +4373,7 @@ typedef struct {
   bool ok;
 } rmp_dyn_stress_arg_t;
 
-// The start gate of the dynamic stress: workers count in, then wait for go,
+// The start gate of the dynamic stress: Workers count in, then wait for go,
 // so thread creation doesn't compete with the work.
 static atomic_int rmp_dyn_arrived;
 static atomic_bool rmp_dyn_go;
@@ -4628,7 +4628,7 @@ TEST(cmempools, magazine_slots_are_reclaimed_across_thread_churn) {
 // magazine before asking makes the count climb to one per operation.
 static atomic_size_t mp_deny_allocs;
 
-// The counting procs: every allocation bumps mp_deny_allocs.
+// The counting procs: Every allocation bumps mp_deny_allocs.
 static void *mp_deny_malloc(size_t size) {
   atomic_fetch_add(&mp_deny_allocs, 1);
   return malloc(size);
@@ -4733,7 +4733,7 @@ static __thread unsigned long mp_test_locks_taken;
 // Set by a constructor after the first access to mp_test_locks_taken, because
 // emulated TLS (OpenBSD) takes a mutex on that first access.
 static atomic_bool mp_test_lock_count_ready;
-// State the wrapper reads for the deadlock test: the outer pool sits at the
+// State the wrapper reads for the deadlock test: The outer pool sits at the
 // start of one ARM_INNER_STRIDE entry of the inner pool, and thread B marks
 // itself by its ID (its TLS is gone in a key destructor on macOS) before the
 // wrapper watches for its lock on the outer pool.
@@ -4969,7 +4969,7 @@ static void *mp_nested_big[MP_NESTED_MAX_BIG];
 static pthread_mutex_t mp_nested_big_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic size_t mp_nested_backing_allocs;
 
-// The nested procs: allocations up to MP_NESTED_BACKING_ELEM come from the
+// The nested procs: Allocations up to MP_NESTED_BACKING_ELEM come from the
 // backing pool (counted), larger ones from malloc; free sends each back where
 // it came from; realloc is never used.
 static void *mp_nested_malloc(size_t n) {
@@ -5025,7 +5025,7 @@ static void *mp_nested_realloc(void *p, size_t n) {
   return NULL;
 }
 
-// Thread body: allocates and frees one entry of the front pool and gives the
+// Thread body: Allocates and frees one entry of the front pool and gives the
 // pool back as a success marker.
 static void *mp_nested_worker(void *arg) {
   cmempool *front = arg;
@@ -5070,7 +5070,7 @@ TEST(cmempools, exit_drain_takes_magazines_that_a_nested_free_builds) {
   REQUIRE_EQ(backing_mags, backing_mags_before);
 }
 
-// The reap re-entry test: pool X's allocator destroys pool Y and allocates
+// The reap re-entry test: Pool X's allocator destroys pool Y and allocates
 // from pool Q in the middle of a lookup walk, whose own reap then frees Y's
 // magazine. Y's allocator zeroes and keeps freed blocks, so a walk that read on
 // through Y's freed magazine would miss M's magazine. Every pool struct is
@@ -5108,7 +5108,7 @@ static void *mp_reap_realloc(void *p, size_t n) {
 
 static void mp_reap_free(void *p) { free(p); }
 
-// Y's free: zeroes the block (at least MP_REAP_ALIGN bytes) and keeps it
+// Y's free: Zeroes the block (at least MP_REAP_ALIGN bytes) and keeps it
 // instead of freeing it.
 static void mp_reap_quarantine_free(void *p) {
   if (!p) return;
@@ -5121,7 +5121,7 @@ static void mp_reap_quarantine_free(void *p) {
   }
 }
 
-// X's free: once armed, destroys Y and allocates from Q, so the lookup walk is
+// X's free: Once armed, destroys Y and allocates from Q, so the lookup walk is
 // re-entered, then frees.
 static void mp_reap_hook_free(void *p) {
   if (mp_reap_hook_armed) {
@@ -5222,7 +5222,7 @@ TEST(cmempools, a_reap_that_reenters_the_lookup_restarts_the_walk) {
   REQUIRE_EQ(arg.m_mags, (size_t)1);
 }
 
-// The overshoot measurement: many threads race to empty a cached pool, and
+// The overshoot measurement: Many threads race to empty a cached pool, and
 // the total excess over the advertised count is reported every run but
 // asserted only with CCOL_MP_BOUND_GATE=1, on a measured, quiet machine. The
 // correct and wrong refill formulas overlap as soon as the machine is busy,
@@ -5239,7 +5239,7 @@ typedef struct {
   size_t taken;
 } mp_bound_arg_t;
 
-// The start gate of the measurement: the main thread waits for the threads it
+// The start gate of the measurement: The main thread waits for the threads it
 // really started, then releases them together.
 static _Atomic int mp_bound_ready;
 static _Atomic bool mp_bound_go;
@@ -5561,7 +5561,7 @@ static __thread int g_arm_is_a;
 static void *_Atomic g_arm_held[8];
 
 // The outer pool's allocator, drawing from the inner pool. A's first call runs
-// under the outer pool's lock: it lets B exit, waits (bounded, 20 s) until B's
+// under the outer pool's lock: It lets B exit, waits (bounded, 20 s) until B's
 // drain goes for the outer lock, records whether they met, and only then arms
 // the inner pool.
 static void *arm_malloc(size_t s) {
@@ -5597,7 +5597,7 @@ static void arm_free(void *p) {
   if (p) cmempool_free_entry(g_arm_inner, p);
 }
 
-// Thread B: takes every entry of the outer pool through its cache, waits for
+// Thread B: Takes every entry of the outer pool through its cache, waits for
 // the go and exits, which drains that cache.
 static void *arm_thread_b(void *a) {
   (void)a;
@@ -5609,7 +5609,7 @@ static void *arm_thread_b(void *a) {
   return NULL;
 }
 
-// Thread A: its first allocation from the full outer pool takes the fallback,
+// Thread A: Its first allocation from the full outer pool takes the fallback,
 // so the inner pool arms this thread with the outer lock held.
 static void *arm_thread_a(void *a) {
   (void)a;

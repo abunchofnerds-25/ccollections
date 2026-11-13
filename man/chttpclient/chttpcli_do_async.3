@@ -70,7 +70,7 @@ The client drops each of them and keeps reading on the same connection
 for the real response, so the future is never fulfilled with a 1xx
 status as the final answer. RFC 8297's "103 Early Hints" is the most
 common example in practice. "101 Switching Protocols" is the
-exception: this client never asks for an upgrade, so a 101 fulfills
+exception: This client never asks for an upgrade, so a 101 fulfills
 the future with ccol_http_transfer_aborted, as in chttpcli_do. A
 response that arrives in the same read as a "100 Continue" is read
 before any byte of the body goes out, as in chttpcli_do(3). A
@@ -80,7 +80,7 @@ request with req->expect_continue set sends "Expect: 100-continue"
 the server's interim response, exactly as chttpcli_do does. That
 wait is part of this function's non-blocking dispatch and never a
 blocking call. The client does not accept an endless stream of interim
-responses either: once it has dropped 64 interim responses in a row on
+responses either: Once it has dropped 64 interim responses in a row on
 one hop, the future is fulfilled with ccol_http_transfer_aborted
 instead of waiting for ever. The cap counts separately in two phases,
 the wait for "100 Continue" and the read of the final response after
@@ -141,7 +141,7 @@ runs first. That handler waits for a stop in progress, destroys the
 default client when no call is running on it and stops an engine that
 nothing holds, so that no engine thread is left to race OpenSSL's
 cleanup. Two cases keep the engine running at exit, and the handler
-then does nothing: a request in flight (this includes an exit() from
+then does nothing: A request in flight (this includes an exit() from
 inside a write_fn and a request whose lookup is running), and a client
 that the application never destroyed, whose pooled connections hold
 the engine. Destroy every client before the process returns from main.

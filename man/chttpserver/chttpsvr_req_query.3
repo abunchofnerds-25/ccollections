@@ -35,14 +35,14 @@ same request.
 .nf
 The function can't tell a lack of memory, while the query string is
 parsed or while the result array grows, from a key that is really
-absent: both give NULL and a count of 0.  After a NULL, call
+absent: Both give NULL and a count of 0.  After a NULL, call
 chttpsvr_req_query_oom(req) to find out which one it was, or use
 chttpsvr_req_query_one for a key with one value, since that function
 returns ccol_not_enough_memory when it runs out of memory.
 
 A component of the query string that has a "=" with an empty key in
 front of it, for example "?=hello", is a real pair that you can look
-up: the key "" maps to the value "hello".  A completely empty
+up: The key "" maps to the value "hello".  A completely empty
 component is different, and the parser skips it instead of reading it
 as an entry with an empty key and an empty value.  A component is
 completely empty when there is nothing at all between two "&"

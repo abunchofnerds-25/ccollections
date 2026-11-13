@@ -93,7 +93,7 @@ static size_t effective_max_idle_origins(void) {
 // How long we wait for a "100 Continue" before sending the body anyway. It's
 // the default of curl's CURLOPT_EXPECT_100_TIMEOUT_MS.
 #define CHTTP_100_CONTINUE_WAIT_US UINT64_C(1000000)
-// Happy Eyeballs' Connection Attempt Delay (RFC 8305 section 5): with several
+// Happy Eyeballs' Connection Attempt Delay (RFC 8305 section 5): With several
 // addresses, we start on the next one when the attempts in flight give no
 // result for this long. Go's net.Dialer uses the same value.
 #define CHTTP_CONNECT_ATTEMPT_DELAY_MS 250L
@@ -206,7 +206,7 @@ typedef struct {
 } chttp_bodybuf;
 
 // Every occurrence, in wire order, of each field name that appears more than
-// once in one response. data holds one record per occurrence: a
+// once in one response. data holds one record per occurrence: A
 // chttp_field_rec, then "name\0value\0" with the name lower-cased, padded to 4
 // bytes. The records of one name are chained through next, and index is an
 // open-addressing table with one slot per repeated name (first and last
@@ -218,7 +218,7 @@ typedef struct {
   uint32_t next;
 } chttp_field_rec;
 
-// One index slot: the first and last record of a name's chain.
+// One index slot: The first and last record of a name's chain.
 typedef struct {
   uint32_t head;
   uint32_t tail;
@@ -335,7 +335,7 @@ static bool chttpcli_any_slot_live_locked(void);
 static void chttpcli_release_slot_table_locked(void);
 static void chttpcli_release_slot_table_if_deferred_locked(void);
 
-// The hot half of the slot table: it maps a handle to a client pointer and
+// The hot half of the slot table: It maps a handle to a client pointer and
 // holds the pin that keeps the client alive during a call. A resolve runs on
 // every request and writes nothing other threads read.
 static ccol_pintable chttpcli_pintable;
@@ -358,7 +358,7 @@ static void chttpcli_slot_table_init_globals(void) {
 // async counter, which has its own lock.
 struct chttpclient {
   ccol__mutex lock;
-  // The concurrency limiter: at most pool_cap requests in flight.
+  // The concurrency limiter: At most pool_cap requests in flight.
   ccol__cond_var available;
 
   size_t pool_cap;
@@ -408,7 +408,7 @@ struct chttpclient {
 };
 
 // One frame of the per-thread stack of clients with a request running on this
-// thread: a Tier 1 call for its whole length, or the write_fn of a streaming
+// thread: A Tier 1 call for its whole length, or the write_fn of a streaming
 // Tier 2 or Tier 3 request on an engine thread. Frames live on the pusher's C
 // stack. chttpcli__destroy walks the stack, because destroying a client that
 // has a frame here would wait for this very call to end; it makes that a fatal
@@ -1896,7 +1896,7 @@ static int ccol_cond_var_init_monotonic(ccol__cond_var *cv) {
 #ifdef RUNNING_UNIT_TESTS
 // Low-level socket and TLS I/O
 //
-// A test hook that fakes the TLS case a cooperating peer can't produce: an
+// A test hook that fakes the TLS case a cooperating peer can't produce: An
 // SSL_write that must read first, or an SSL_read that must write first (a
 // renegotiation or a badly timed KeyUpdate). The mode picks the direction, and
 // the flags record whether a call was blocked and whether the waiting code
@@ -1908,7 +1908,7 @@ static int ccol_cond_var_init_monotonic(ccol__cond_var *cv) {
 static _Atomic int g_tls_dir_inject_mode = CHTTP_TLS_DIR_INJECT_OFF;
 static _Atomic bool g_tls_dir_blocked = false;
 static _Atomic bool g_tls_dir_released = false;
-// A guard against a hang only: after this many refused attempts the injection
+// A guard against a hang only: After this many refused attempts the injection
 // stops refusing without marking itself released, so a broken test fails
 // instead of hanging.
 #define CHTTP_TLS_DIR_INJECT_MAX_BLOCKS 256
@@ -2173,7 +2173,7 @@ typedef struct {
 
 // The candidate addresses of one TCP target. They keep the resolver's RFC 6724
 // order and addr_list_interleave then alternates the families (RFC 8305 section
-// 4). Every tier connects with Happy Eyeballs: the first candidate starts at
+// 4). Every tier connects with Happy Eyeballs: The first candidate starts at
 // once, the next one when the attempts in flight have had no result for the
 // attempt delay or one fails, the first to connect wins and the connect timeout
 // bounds the whole race.
@@ -2294,7 +2294,7 @@ static int addr_connect_start(const chttp_resolved_addr *a, bool *in_progress) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// A test hook: an attempt on an address in this set gets one end of a socket
+// A test hook: An attempt on an address in this set gets one end of a socket
 // pair with a full send buffer and a quiet peer instead of a TCP socket, which
 // looks exactly like a connect whose SYN is dropped. The peer ends (stored as
 // fd + 1, 0 for an empty slot) stay open until the set is emptied.
@@ -2433,7 +2433,7 @@ void chttp__set_name_lookup_delay_ms_for_tests(unsigned ms) {
 static _Atomic bool g_sweep_fd_wait_pending_for_tests = false;
 
 // What the armed hold saw, for explaining a failure on a system that can't be
-// debugged: the ctxs the sweep showed it, why each was turned away, the last
+// debugged: The ctxs the sweep showed it, why each was turned away, the last
 // one's fd and state, and how the lookup's wait ended. Arming resets them.
 static atomic_ulong g_sweep_fd_wait_seen_for_tests;
 static atomic_ulong g_sweep_fd_wait_not_armed_for_tests;
@@ -2759,7 +2759,7 @@ ccol_retval chttp__tls_client_create_code_for_tests(const char *host,
 }
 
 // Runs a full TLS handshake over a socket pair, so a test can check SNI and
-// name verification: the client verifies host against ca_path, the server
+// name verification: The client verifies host against ca_path, the server
 // offers default_cert and named_cert under the SNI name named_as. Gives true
 // when both sides finish.
 bool chttp__tls_client_handshake_for_tests(
@@ -3114,7 +3114,7 @@ static chttp_header_presence scan_header_presence(chmap headers, bool *failed) {
 }
 
 // True when a request that went out in full on a reused connection that died
-// without an answer may be sent again: an idempotent method (GET, HEAD,
+// without an answer may be sent again: An idempotent method (GET, HEAD,
 // OPTIONS, PUT, DELETE) or an Idempotency-Key or X-Idempotency-Key header, as
 // in Go.
 static bool request_is_replayable(chttp_method method,
@@ -3238,7 +3238,7 @@ static void ob_append_cstr(chttp_outbuf *b, const char *s) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Let a test drive ob_append: one drives the overflow guard with a made-up
+// Let a test drive ob_append: One drives the overflow guard with a made-up
 // length and a counting allocator, the other grows from a capacity whose
 // doubling would pass SIZE_MAX. Both give whether b->oom was set.
 bool chttp__ob_append_overflow_guard_for_tests(ccol_memmgmt_procs *mp,
@@ -3263,8 +3263,8 @@ bool chttp__ob_append_cap_overflow_for_tests(ccol_memmgmt_procs *mp,
 
 // Which caller-set headers a redirect hop leaves off. Every tier judges each
 // hop against the first request's origin, never the previous hop (curl's rule).
-// DROP_CREDENTIALS: scheme, host or port differ, so Authorization, Cookie,
-// Cookie2 and WWW-Authenticate go. DROP_HOST: the host differs, so a caller-set
+// DROP_CREDENTIALS: Scheme, host or port differ, so Authorization, Cookie,
+// Cookie2 and WWW-Authenticate go. DROP_HOST: The host differs, so a caller-set
 // Host goes too.
 #define CHTTP_REDIRECT_DROP_CREDENTIALS 0x1u
 #define CHTTP_REDIRECT_DROP_HOST 0x2u
@@ -3551,7 +3551,7 @@ static size_t sink_buffered(const void *data, size_t len, void *ctx) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Let a test drive sink_buffered: its overflow guard with a made-up length, and
+// Let a test drive sink_buffered: Its overflow guard with a made-up length, and
 // a growth from a capacity whose doubling would pass SIZE_MAX.
 bool chttp__sink_buffered_overflow_guard_for_tests(ccol_memmgmt_procs *mp,
                                                    size_t fake_len) {
@@ -4529,7 +4529,7 @@ static _Atomic bool g_force_reaper_spawn_fail_for_tests = false;
 static _Atomic unsigned g_reaper_abandoned_count_for_tests = 0;
 
 // -1 until a shutdown of an abandoned ctx has run, then 1 if it ran with the
-// ctx's idle_lock held and 0 if not. Only 1 is safe: after the unlock a
+// ctx's idle_lock held and 0 if not. Only 1 is safe: After the unlock a
 // dispatch can close the fd and the number can name another socket.
 static _Atomic int g_abandon_shutdown_under_lock_for_tests = -1;
 
@@ -4554,7 +4554,7 @@ static void reaper_spawn_hook_for_tests(void) {
 #endif
 
 // Hands the engine teardown to a new reaper thread, with a few retries, when
-// the last reference goes away. The teardown can't run inline: on a dispatch
+// the last reference goes away. The teardown can't run inline: On a dispatch
 // thread or a DNS worker it would join itself. When no thread can be had, the
 // engine stays up with no reference and g_engine_reap_abandoned set, and the
 // sweep retries. The handle (cli_engine_bundler.reaper) is published in the
@@ -4964,7 +4964,7 @@ typedef struct {
   _Atomic bool sink_closed;
   _Atomic bool in_sink;
 
-  // The request as submitted: headers, body and content type. body_dropped is
+  // The request as submitted: Headers, body and content type. body_dropped is
   // set once a redirect turns the request into a bodiless GET.
   chmap req_headers;
   void *body_data;
@@ -5048,8 +5048,8 @@ static void async_sink_close(chttp_async_chain *chain) {
 // See the async Happy Eyeballs section.
 typedef struct chttp_connect_race_s chttp_connect_race;
 
-// The values of ctx->flip_watch. ON_INPUT: the send waits for room, and a
-// response arriving turns the registration to reading. ON_ROOM: a paused duplex
+// The values of ctx->flip_watch. ON_INPUT: The send waits for room, and a
+// response arriving turns the registration to reading. ON_ROOM: A paused duplex
 // send waits for input, and room turns it to writing. See async_upload_pause.
 #define CHTTP_FLIP_NONE 0
 #define CHTTP_FLIP_ON_INPUT 1
@@ -5084,13 +5084,13 @@ typedef struct chttp_async_ctx_s {
   bool is_ipv6;
   char *path_and_query;
   char *origin_key;
-  // The retry-once and pooling bookkeeping: whether the connection came from
+  // The retry-once and pooling bookkeeping: Whether the connection came from
   // the pool, whether any byte was read, and the interim responses skipped.
   bool reused;
   bool any_bytes_read;
   size_t interim_responses_seen;
   struct timespec last_used;
-  // Duplex upload state: a paused send, the direction the sweep watches
+  // Duplex upload state: A paused send, the direction the sweep watches
   // (CHTTP_FLIP_*), a response that began while sending, and when to look for
   // input next.
   bool upload_paused;
@@ -5132,7 +5132,7 @@ typedef struct chttp_async_ctx_s {
   chttp_deadline connect_deadline;
   ccol__mutex deadline_lock;
   chttp_deadline overall_deadline;
-  // abandoned: the sweep fulfilled this live hop's future. timed_out: the sweep
+  // abandoned: The sweep fulfilled this live hop's future. timed_out: The sweep
   // marked it and shut its fd down. Both are written without a lock.
   _Atomic bool abandoned;
   _Atomic bool timed_out;
@@ -5152,7 +5152,7 @@ typedef struct chttp_async_ctx_s {
   _Atomic bool continue_decided;
   _Atomic bool continue_msg_started;
   chttp_deadline continue_deadline;
-  // retry_unsafe: the body went out after a "100 Continue", so it is never sent
+  // retry_unsafe: The body went out after a "100 Continue", so it is never sent
   // again. replayable and request_close come from the request.
   bool retry_unsafe;
   bool replayable;
@@ -5174,7 +5174,7 @@ typedef struct chttp_async_ctx_s {
 // striped by ctx address, so registering costs one stripe lock.
 #define CHTTP_DEADLINE_SWEEP_STRIPES 16
 
-// One stripe of the registry: a lock and a doubly linked list of ctxs.
+// One stripe of the registry: A lock and a doubly linked list of ctxs.
 typedef struct {
   ccol__mutex mutex;
   chttp_async_ctx *head;
@@ -5219,7 +5219,7 @@ unsigned long chttp__sweep_ticks_for_tests(void) {
 // uses it.
 static uint64_t g_sweep_walk_plan_ns_for_tests;
 
-// For each kind of timed work (0: an expired deadline, 1: a Happy Eyeballs
+// For each kind of timed work (0: An expired deadline, 1: A Happy Eyeballs
 // start), how often a walk acted on it and the largest gap between the walk's
 // planned instant and the due instant, so a test can check the plan on a loaded
 // machine.
@@ -5255,7 +5255,7 @@ unsigned long chttp__sweep_due_for_tests(int kind, int64_t *max_late_ns) {
 #endif
 
 // Gives the registry stripe of ctx, so register and unregister lock the same
-// stripe without storing it: the pointer is folded to 32 bits and hashed with a
+// stripe without storing it: The pointer is folded to 32 bits and hashed with a
 // multiply read from the high bits.
 static size_t deadline_stripe_index_for_ctx(const chttp_async_ctx *ctx) {
   uintptr_t p = (uintptr_t)ctx;
@@ -5323,7 +5323,7 @@ static uint64_t monotonic_now_ns(void) {
   return timespec_to_ns(&now);
 }
 
-// Tells the sweep that it has work at at_ns: lowers g_sweep_next_ns, and wakes
+// Tells the sweep that it has work at at_ns: Lowers g_sweep_next_ns, and wakes
 // the sleeping sweep to replan when that's earlier than g_sweep_planned_ns
 // (never from the sweep thread itself). Every path that sets a deadline calls
 // it; the common case costs one atomic load.
@@ -5787,7 +5787,7 @@ static void client_deadline_sweep_once(void) {
   }
 }
 
-// Runs the sweep thread: it sleeps until g_sweep_next_ns, and at most the
+// Runs the sweep thread: It sleeps until g_sweep_next_ns, and at most the
 // interval after the end of its previous walk. A wake for an earlier deadline
 // only replans; the walk runs once the planned instant has come, so requests
 // that start in a row don't cost a walk each.
@@ -5858,7 +5858,7 @@ static void client_deadline_sweep_stop_and_join(void) {
 
 // Fork safety
 //
-// Takes every lock of this module before fork(): it waits for a stopping engine
+// Takes every lock of this module before fork(): It waits for a stopping engine
 // and joins its reaper (which keeps running after it clears stopping and may
 // hold an allocator lock), then takes the engine mutex, the sweep mutex and
 // every stripe lock, so no lock of this module is held by a thread the child
@@ -6043,7 +6043,7 @@ static void async_chain_retain(chttp_async_chain *chain) {
 }
 
 // Drops one hop reference. The last one is the one reliable place to end the
-// request: it fulfils the future as a backstop (a no-op when a hop already
+// request: It fulfils the future as a backstop (a no-op when a hop already
 // did), takes the chain off cli's async count under async_count_lock and wakes
 // a waiting destroy, frees the chain and drops its engine reference.
 static void async_chain_release(chttp_async_chain *chain) {
@@ -6222,13 +6222,13 @@ static void async_fulfill_success(chttp_async_ctx *ctx) {
 // caps as Tier 1. A pooled connection stays registered with the reactor, so an
 // IDLE dispatch notices a close or stray bytes and evicts it.
 //
-// Test hooks: fail the push of an offer, fail the reactivation of a taken
+// Test hooks: Fail the push of an offer, fail the reactivation of a taken
 // connection, and force a hard read error.
 static _Atomic bool g_force_offer_push_fail_for_tests = false;
 static _Atomic bool g_force_reactivate_fail_for_tests = false;
 static _Atomic bool g_force_async_hard_read_error_for_tests = false;
 
-// Test hooks for the write-direction fall-through of async_on_writable_impl: a
+// Test hooks for the write-direction fall-through of async_on_writable_impl: A
 // sweep flip that lands on a ctx that already moved on to reading. The first
 // forces such a stray write arm, the second does it for an idle ctx, and the
 // counter counts how often the stray arm was undone.
@@ -6421,7 +6421,7 @@ static bool async_idle_pool_take(struct chttpclient *cli,
 
 // Offers a finished connection back to the idle pool. false means the ctx was
 // left completely untouched and the caller closes it. true means the pool owns
-// it: it's in state IDLE with no chain, holds its own engine reference, and is
+// it: It's in state IDLE with no chain, holds its own engine reference, and is
 // off the deadline registry. The state change happens under idle_lock and
 // deadline_lock, so the sweep can never judge it half made.
 static bool async_idle_pool_offer(chttp_async_ctx *ctx) {
@@ -6587,7 +6587,7 @@ static void async_connect_failed(chttp_async_ctx *ctx) {
   async_ctx_finish(ctx);
 }
 
-// Ends a hop's connection once its response is consumed: offers the connection
+// Ends a hop's connection once its response is consumed: Offers the connection
 // to the idle pool when reusable and the request didn't ask for close,
 // otherwise closes it.
 static void async_finish_connection(chttp_async_ctx *ctx, bool reusable) {
@@ -6668,7 +6668,7 @@ static void async_room_watch_stop(chttp_async_ctx *ctx) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// While armed, the next hop that turns to reading gets no dispatch: its
+// While armed, the next hop that turns to reading gets no dispatch: Its
 // registration is paused right away, as if the dispatch pool could never run
 // it, so a test can check that the request timeout still holds.
 static _Atomic bool g_stall_next_read_for_tests = false;
@@ -6826,7 +6826,7 @@ static bool async_upload_should_pause(chttp_async_ctx *ctx,
   return async_input_pending(ctx);
 }
 
-// True when a paused send may continue: no message started since the last
+// True when a paused send may continue: No message started since the last
 // discarded one, or the one that did is a 2xx final response with its header
 // block in.
 static inline bool async_upload_may_resume(const chttp_async_ctx *ctx) {
@@ -6996,7 +6996,7 @@ static void async_plain_try_write(chttp_async_ctx *ctx) {
 
 static void async_handle_redirect(chttp_async_ctx *ctx, bool reusable);
 
-// What async_dispatch_kind found: an active hop, an idle pooled connection, or
+// What async_dispatch_kind found: An active hop, an idle pooled connection, or
 // a hop already completed.
 typedef enum {
   CHTTP_ASYNC_DISPATCH_ACTIVE,
@@ -7004,7 +7004,7 @@ typedef enum {
   CHTTP_ASYNC_DISPATCH_ABANDONED,
 } chttp_async_dispatch_kind;
 
-// Classifies a dispatch of ctx, for every dispatch callback: it reads
+// Classifies a dispatch of ctx, for every dispatch callback: It reads
 // ctx->state and checks hop_completed again, both under idle_lock, because an
 // unlocked read can see a take half done. ABANDONED covers a hop that completed
 // between the caller's unlocked check and this one.
@@ -7017,7 +7017,7 @@ static chttp_async_dispatch_kind async_dispatch_kind(chttp_async_ctx *ctx) {
   return idle ? CHTTP_ASYNC_DISPATCH_IDLE : CHTTP_ASYNC_DISPATCH_ACTIVE;
 }
 
-// Handles a dispatch that finds hop_completed already true: it runs a teardown
+// Handles a dispatch that finds hop_completed already true: It runs a teardown
 // that an application-thread path left for the dispatch (pending_app_teardown),
 // and does nothing for a stray dispatch.
 static void async_ctx_handle_if_abandoned(chttp_async_ctx *ctx) {
@@ -7036,7 +7036,7 @@ static void async_on_readable_impl(ceventloop loop, ceventloop_reg reg,
                                    cselectable *sel, chttp_async_ctx *ctx);
 
 // Tells, once per hop on a connection from the idle pool, whether it's really
-// empty before the first request byte goes out: a MSG_PEEK (or a TLS read) must
+// empty before the first request byte goes out: A MSG_PEEK (or a TLS read) must
 // find no input and no EOF, and the IDLE dispatch must not have taken input
 // (idle_tainted). A take can beat the dispatch that would evict it, so the hop
 // checks for itself. false sends the hop to the retry path.
@@ -7071,7 +7071,7 @@ static void async_drive_write(chttp_async_ctx *ctx) {
 }
 
 // Finishes a write-direction dispatch for a ctx with nothing of ours to flush
-// there: it turns the registration back to reading (or leaves an idle ctx
+// there: It turns the registration back to reading (or leaves an idle ctx
 // alone), reading the state again under idle_lock so a take that moved the ctx
 // to WRITING is never driven half-built.
 static void async_writable_rest(chttp_async_ctx *ctx) {
@@ -7092,7 +7092,7 @@ static void async_writable_rest(chttp_async_ctx *ctx) {
     async_ctx_finish(ctx);
 }
 
-// Handles a write-direction dispatch: the connect result, the TLS handshake,
+// Handles a write-direction dispatch: The connect result, the TLS handshake,
 // the request send, a stray flip from the sweep, and a TLS read that asked for
 // the write direction. It returns at once for a completed hop and adopts reg
 // first, since this can be the very first dispatch.
@@ -7215,7 +7215,7 @@ static void async_on_writable_impl(ceventloop loop, ceventloop_reg reg,
 }
 
 // Thin ceventloop callbacks that cast arg back to the ctx and call the _impl
-// function. They take no reference: the reactor's dispatch lock and the single
+// function. They take no reference: The reactor's dispatch lock and the single
 // teardown point keep the ctx alive during a dispatch.
 static void async_on_writable(ceventloop loop, ceventloop_reg reg,
                               cselectable *sel, void *arg) {
@@ -7428,7 +7428,7 @@ static void async_awaiting_continue_on_data(chttp_async_ctx *ctx,
   }
 }
 
-// Handles a read-direction dispatch: an idle pooled connection (evicted on any
+// Handles a read-direction dispatch: An idle pooled connection (evicted on any
 // input or EOF), the TLS handshake, the 100-continue wait and the response
 // read, with the TLS layer drained before a wait. It reaps a teardown left for
 // the dispatch, and checks the request deadline before each read.
@@ -7670,7 +7670,7 @@ static void async_on_readable(ceventloop loop, ceventloop_reg reg,
   async_on_readable_impl(loop, reg, sel, (chttp_async_ctx *)arg);
 }
 
-// Handles an error or hang-up dispatch: evicts an idle connection, ends a
+// Handles an error or hang-up dispatch: Evicts an idle connection, ends a
 // failed connect, and otherwise ends the hop with a transfer or connect error
 // (a timeout when the sweep marked it), retrying a reused connection once.
 static void async_on_error_impl(ceventloop loop, ceventloop_reg reg,
@@ -7837,7 +7837,7 @@ static chttp_async_ctx *async_race_decide_locked(
   return ctx;
 }
 
-// An attempt's dispatch: a connected attempt wins and hands its fd to the ctx;
+// An attempt's dispatch: A connected attempt wins and hands its fd to the ctx;
 // a failed one makes way for the next candidate, and the last failure ends the
 // hop.
 static void async_race_on_event(ceventloop loop, ceventloop_reg reg,
@@ -7957,7 +7957,7 @@ static void async_race_detach(chttp_async_ctx *ctx) {
   async_race_release(r);
 }
 
-// Connects a fresh hop: resolves a TCP target or builds the unix address, then
+// Connects a fresh hop: Resolves a TCP target or builds the unix address, then
 // makes one non-blocking connect (or starts the race) and registers the fd. It
 // runs on a DNS pool worker for a named target, inline for a literal or a unix
 // target. It checks timed_out before and after the lookup, so a hop the sweep
@@ -8031,7 +8031,7 @@ static void async_connect_task(void *arg) {
   async_connect_register(ctx, fd);
 }
 
-// Starts the connect of a fresh hop: a name lookup goes to the DNS pool, since
+// Starts the connect of a fresh hop: A name lookup goes to the DNS pool, since
 // getaddrinfo() blocks, and anything else runs async_connect_task inline.
 static ccol_retval async_connect_begin(chttp_async_ctx *ctx) {
   if (ctx->is_unix || host_is_ip_literal(ctx->host)) {
@@ -8482,7 +8482,7 @@ static void async_handle_redirect(chttp_async_ctx *ctx, bool reusable) {
 }
 
 // Runs the Tier 2 and Tier 3 checks before anything is queued, so a bad request
-// fails at once with the same code as in Tier 1: valid cli and req, a URL that
+// fails at once with the same code as in Tier 1: Valid cli and req, a URL that
 // parses into *url_out (freed by the caller after success), and usable TLS for
 // https.
 static ccol_retval chttp_async_preflight_check(struct chttpclient *cli,
@@ -8741,7 +8741,7 @@ void chttpcli__tls_dir_inject_for_tests(int mode) {
 }
 
 // Read the state of the TLS direction injection, so a test can see that the
-// code waited in the right direction: whether the block was released, the
+// code waited in the right direction: Whether the block was released, the
 // interest in the other direction seen while it was pending, and how many
 // attempts it refused (a caller that ignores the reported direction spins and
 // drives that count up).
@@ -8983,7 +8983,7 @@ void chttpcli__set_continue_carry_replay_delay_ms_for_tests(long ms) {
   atomic_store(&g_continue_carry_replay_delay_ms_for_tests, ms);
 }
 
-// Arm the stray write dispatch at a take: either the take arms the write
+// Arm the stray write dispatch at a take: Either the take arms the write
 // direction under idle_lock and waits 200 ms, or it arms it before taking
 // idle_lock, waits for the dispatch to classify the ctx as IDLE, then moves it
 // to WRITING. The last one tells whether that hold happened.
@@ -9032,7 +9032,7 @@ cthrpool_future *chttpcli_do_async(chttpcli h, const chttp_request *req) {
   return f;
 }
 
-// Submits a streaming request to the async engine (Tier 2): the body goes to
+// Submits a streaming request to the async engine (Tier 2): The body goes to
 // write_fn on an engine thread, so a large body needs no buffer. Gives the
 // future, or NULL on failure.
 cthrpool_future *chttpcli_do_async_streaming(chttpcli h,
@@ -9099,7 +9099,7 @@ ccol_retval chttpcli_do_pooled(chttpcli h, const chttp_request *req,
 }
 
 // Runs a streaming request through the async engine and blocks on it, the
-// streaming form of chttpcli_do_pooled: the body goes to write_fn on an engine
+// streaming form of chttpcli_do_pooled: The body goes to write_fn on an engine
 // thread, and *status_code_out gets the final status.
 ccol_retval chttpcli_do_pooled_streaming(chttpcli h, const chttp_request *req,
                                          chttpcli_write_fn write_fn,

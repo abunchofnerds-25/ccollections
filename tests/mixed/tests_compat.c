@@ -36,7 +36,7 @@ SOFTWARE.
 // invalidation pin only the positive guarantees, because reading a pointer
 // the library invalidated is undefined behaviour.
 //
-// Every category here fails against a library that breaks it: calling
+// Every category here fails against a library that breaks it: Calling
 // on_complete before the task, dropping the destroy of a child on a failed
 // cjson insert, allocating a vector buffer with malloc(), leaking a finished
 // iterator, or handing out a shared copy from chashmap_get_elem_ref(). Run
@@ -63,7 +63,7 @@ TAU_MAIN()
 // A counting allocator
 //
 // It counts what the library allocates and frees through it, and it knows its
-// own blocks: a free of a pointer it never handed out stops the process, so a
+// own blocks: A free of a pointer it never handed out stops the process, so a
 // container that mixes allocators can't pass as correct. It's single-threaded
 // (the registry has no lock), so give it only to objects driven from one
 // thread.
@@ -172,9 +172,9 @@ static ccol_memmgmt_procs g_ca_procs = {.malloc = ca_malloc,
 // Gives &g_ca_procs, the procs a test passes to a _mp constructor.
 static ccol_memmgmt_procs *ca_procs(void) { return &g_ca_procs; }
 
-// Promise: no enumerator changes its numeric value within 1.x
+// Promise: No enumerator changes its numeric value within 1.x
 //
-// The expectations are literals on purpose: comparing an enumerator with itself
+// The expectations are literals on purpose: Comparing an enumerator with itself
 // holds under any renumbering.
 TEST(compat_enum_values, ccol_retval_t_enumerators_keep_their_numeric_values) {
   REQUIRE_EQ((int)ccol_success, 0);
@@ -200,7 +200,7 @@ TEST(compat_enum_values, ccol_data_type_enumerators_keep_their_numeric_values) {
   REQUIRE_EQ((int)ccol_signed_char, 16);
 }
 
-// Promise: when the library calls an allocator that the caller gives
+// Promise: When the library calls an allocator that the caller gives
 //
 // These tests assert only that the count isn't zero and that it balances, never
 // the count itself, because a new algorithm may change the counts.
@@ -305,7 +305,7 @@ TEST(compat_allocator, a_refused_allocation_is_reported_rather_than_fatal) {
   REQUIRE_EQ(g_ca.live_count, (size_t)0);
 }
 
-// Promise: the ownership rules for keys, values and nodes
+// Promise: The ownership rules for keys, values and nodes
 //
 // The test writes over the caller's buffers after the insert, so a map that
 // kept the caller's pointer would give back the new text. It reads with
@@ -471,9 +471,9 @@ TEST(compat_ownership,
   REQUIRE_EQ(g_ca.live_count, (size_t)0);
 }
 
-// Promise: which operations invalidate an iterator or a borrowed pointer
+// Promise: Which operations invalidate an iterator or a borrowed pointer
 //
-// Only the positive half can be tested: reading a pointer that the library
+// Only the positive half can be tested: Reading a pointer that the library
 // invalidated is undefined behaviour, so a test of that direction would check
 // the sanitizer and not the contract.
 TEST(compat_pointer_stability, a_reference_survives_lookups_of_other_keys) {
@@ -621,7 +621,7 @@ TEST(compat_iterators, abandoning_an_iterator_early_returns_its_memory) {
   REQUIRE_EQ(g_ca.live_count, (size_t)0);
 }
 
-// Promise: the order callbacks run in, and the thread each runs on
+// Promise: The order callbacks run in, and the thread each runs on
 //
 // clrucache eviction: ev_cb records the evicted keys (at most EV_MAX), and
 // whether it ever ran outside a set call or off the main thread. EV_MAX is how
@@ -739,7 +739,7 @@ TEST(compat_callbacks, the_eviction_callback_runs_synchronously_on_the_caller) {
   REQUIRE_FALSE(ran_off_thread);
 }
 
-// clrucache remote setter: what it answers, how often it ran, and the cache.
+// clrucache remote setter: What it answers, how often it ran, and the cache.
 static bool g_setter_should_succeed;
 static size_t g_setter_calls;
 static ccache g_setter_cache;
@@ -863,7 +863,7 @@ TEST(compat_callbacks, on_complete_runs_after_its_task_and_on_a_worker) {
   REQUIRE_EQ(atomic_load(&g_complete_ran), 1);
 }
 
-// State of the discard test: counts of on_complete calls, the gate that holds
+// State of the discard test: Counts of on_complete calls, the gate that holds
 // the only worker, and whether the blocker task started.
 static atomic_int g_discard_calls;
 static atomic_int g_discard_ran_true;

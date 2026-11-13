@@ -44,33 +44,35 @@ struct cvector;
 struct chashmap;
 struct cbstmap;
 
-// Creates an iterator at the first element of v; ccol_begin() calls it for a
-// cvec. Gives NULL for an empty vector or a failed allocation (with *err set).
-// The key is the element's index and the value points straight into the
-// buffer. A NULL v iterates as an empty vector, like the two map versions, so
-// a field that was never created can be iterated without a NULL check.
-// Changing the vector invalidates the iterator, and ccol_iter_next() frees it
-// at the end; use ccol_iter_destroy() to stop early.
+// Creates an iterator at the first element of v, for walking a vector without
+// the typed macros. The key is the element's index (a size_t) and the value
+// points straight into the buffer. An empty or NULL v gives NULL with *err set
+// to NULL, so a vector that was never created iterates as an empty one; a
+// failed allocation gives NULL with a library-owned error string in *err.
+// Changing the vector invalidates the iterator. ccol_iter_next() frees it
+// after the last element; call ccol_iter_destroy() to stop early.
 cmap_iterator *cvector_begin_iter(struct cvector *v, char **err);
 
-// Creates an iterator at the first element of chm; ccol_begin() calls it for
-// a chmap. Gives NULL for an empty or NULL map or a failed allocation (with
-// *err set). A separate-chaining map iterates newest first and an
-// open-addressing map in slot order. Changing the map invalidates the
-// iterator. It frees itself at the end; use ccol_iter_destroy() to stop
-// early.
+// Creates an iterator at the first entry of chm, for walking a hash map
+// without the typed macros. An empty or NULL map gives NULL with *err set to
+// NULL; a failed allocation gives NULL with a library-owned error string in
+// *err. The order isn't sorted and depends on the key and value types, as
+// chashmap_begin_iter(3) describes. Changing the map invalidates the
+// iterator. ccol_iter_next() frees it after the last entry; call
+// ccol_iter_destroy() to stop early.
 cmap_iterator *chashmap_begin_iter(struct chashmap *chm, char **err);
 
-// Creates an iterator at the smallest key of cbm, and the walk visits the keys
-// in ascending order; ccol_begin() calls it for a cbmap. Gives NULL for an
-// empty or NULL map or a failed allocation (with *err set). Changing the map
-// invalidates the iterator. It frees itself at the end; use
+// Creates an iterator at the smallest key of cbm, for walking an ordered map in
+// ascending key order without the typed macros. An empty or NULL map gives
+// NULL with *err set to NULL; a failed allocation gives NULL with a
+// library-owned error string in *err. Changing the map invalidates the
+// iterator. ccol_iter_next() frees it after the last entry; call
 // ccol_iter_destroy() to stop early.
 cmap_iterator *cbstmap_begin_iter(struct cbstmap *cbm, char **err);
 
 // The unified iterator API
 
-// Internal: frees *it and sets it to NULL; the cleanup handler of
+// Internal: Frees *it and sets it to NULL; the cleanup handler of
 // ccol_iter_declare(), so an iterator left by an early break isn't leaked. It
 // frees through the iterator's own free function, so the right allocator is
 // used.
@@ -81,10 +83,11 @@ static inline void ccol__iterator_destroy_cleanup(cmap_iterator **it) {
   }
 }
 
-// Declares the iterator it for a container declared with a _declare or
-// _construct macro, together with the typed companions that
-// ccol_iter_key_ptr() and ccol_iter_val_ptr() read to give typed pointers.
-// The iterator is freed at the end of the scope.
+// Declares the iterator variable it, set to NULL, for a cvec, chmap or cbmap
+// container that a _declare, _construct or _redeclare macro declared, so that
+// ccol_iter_key_ptr() and ccol_iter_val_ptr() give pointers of the right
+// types. An iterator left in it when it goes out of scope is freed, so a
+// break out of the loop leaks nothing. It's a declaration.
 //
 //   ccol_iter_declare(vec, it);
 //   for (it = ccol_begin(vec); it; it = ccol_iter_next(it))
@@ -96,20 +99,23 @@ static inline void ccol__iterator_destroy_cleanup(cmap_iterator **it) {
       __attribute__((unused)) = NULL;                                       \
   cmap_iterator *it ccol__destructor(ccol__iterator_destroy_cleanup) = NULL
 
-// Internal: calls the iterator's own next function and gives its result; the
+// Internal: Calls the iterator's own next function and gives its result; the
 // body of ccol_iter_next(), written as a function so the argument is evaluated
 // once.
 static inline cmap_iterator *ccol__iter_next(cmap_iterator *it) {
   return it->ccol__next_fn(it);
 }
 
-// Moves the iterator on and evaluates to its new value, for the step of a
-// loop. After the last element it frees the iterator and gives NULL.
+// Moves the iterator it to the next element and evaluates to it, for the step
+// of a loop; it is evaluated once. After the last element it frees the
+// iterator and gives NULL, so assign the result back: It = ccol_iter_next(it).
 #define ccol_iter_next(it) ccol__iter_next(it)
 
-// Evaluates to a const KeyT * to the current key: the index for a cvec, the
-// key for a map. A char * key of a map lives in the accessor itself, so its
-// address is &key_pair->ptr.
+// Evaluates to a const pointer to the current key, typed after the key type of
+// the container: A const size_t * to the index for a cvec, a const KeyT * for
+// a map. For a char * key it points to the stored char *, so *ptr is the
+// string. it must come from ccol_iter_declare(). Valid until the iterator
+// moves or the container changes.
 #define ccol_iter_key_ptr(it)                                          \
   ({                                                                   \
     const __typeof__(*it##__ccol_iter_key_type_var) *ccol__iter_k;     \
@@ -122,7 +128,7 @@ static inline cmap_iterator *ccol__iter_next(cmap_iterator *it) {
     ccol__iter_k;                                                      \
   })
 
-// Internal: converts p to the result type of ccol_iter_val_ptr(). For a
+// Internal: Converts p to the result type of ccol_iter_val_ptr(). For a
 // character-pointer value type it adds const, because the iterator names the
 // accessor slot whose size describes the stored string; you can edit the
 // string in place but not store a new pointer the map didn't size. Every
@@ -139,7 +145,7 @@ static inline cmap_iterator *ccol__iter_next(cmap_iterator *it) {
                                   const *)(p),                                 \
       default: (p))
 
-// Internal: evaluates to the address of the current value for
+// Internal: Evaluates to the address of the current value for
 // ccol_iter_val_ptr(). For a character-pointer value type it's the accessor
 // slot &val_pair->ptr, otherwise val_pair->ptr. No branch casts const away,
 // so ccol_iter_val_ptr() is clean under -Wcast-qual.
@@ -155,8 +161,10 @@ static inline cmap_iterator *ccol__iter_next(cmap_iterator *it) {
 
 // Evaluates to a ValT * to the current value, for reading or changing it in
 // place; writing through it changes the container. For a character-pointer
-// value type it's ValT const *: edit the string in place, or use the
-// container's insert to store another one.
+// value type it's ValT const *, so *ptr is the stored string: Edit its bytes
+// in place, or use the container's insert to store another one. it must come
+// from ccol_iter_declare(). Valid until the iterator moves or the container
+// changes.
 #define ccol_iter_val_ptr(it)                                              \
   ({                                                                       \
     __typeof__(ccol__iter_value_ptr_result(                                \
@@ -171,11 +179,13 @@ static inline cmap_iterator *ccol__iter_next(cmap_iterator *it) {
   })
 
 // Frees the iterator and sets it to NULL, for a loop you leave before the end.
-// it must be a modifiable lvalue and is evaluated once.
+// it must be a modifiable lvalue and is evaluated once; a NULL it does
+// nothing. Don't call it after ccol_iter_next() gave NULL, since the iterator
+// is already freed then. It's a statement.
 #define ccol_iter_destroy(it) \
   ccol__iter_destroy_impl(it, ccol__uniq(ccol__iter_destroy_slot, __COUNTER__))
 
-// Internal: the body of ccol_iter_destroy(). It takes the address of it once
+// Internal: The body of ccol_iter_destroy(). It takes the address of it once
 // into slot, a name from ccol__uniq(), so destroy macros can nest without
 // -Wshadow warnings.
 #define ccol__iter_destroy_impl(it, slot) \
@@ -187,12 +197,13 @@ static inline cmap_iterator *ccol__iter_next(cmap_iterator *it) {
     }                                     \
   } while (0)
 
-// The value of an iterator past the end, for code that compares against it.
+// The value of an iterator past the end (NULL), for code that compares an
+// iterator against it.
 #define ccol_end NULL
 
 // ccol_begin and ccol_for_each
 
-// Internal: call the begin function of each container; ccol_begin() selects
+// Internal: Call the begin function of each container; ccol_begin() selects
 // one with _Generic. They take void * so every branch type-checks for any
 // container.
 static inline __attribute__((always_inline)) cmap_iterator *ccol__cvec_begin(
@@ -208,11 +219,11 @@ static inline __attribute__((always_inline)) cmap_iterator *ccol__cbmap_begin(
   return cbstmap_begin_iter((struct cbstmap *)v, err);
 }
 
-// Starts an iteration over a cvec, chmap or cbmap, picking the begin function
-// at compile time so one spelling works for every container. Evaluates to the
-// first iterator, or NULL for an empty container; a failed allocation calls
-// ccol__fatal_err(). There's no default association, so any other handle type
-// is a compile error. Pair it with ccol_iter_declare().
+// Starts an iteration over a cvec, chmap or cbmap; one spelling works for
+// every container. Evaluates to an iterator at the first element, or NULL for
+// an empty or NULL container. A failed allocation prints the reason and ends
+// the program. Any other handle type is a compile error. Assign the result to
+// an iterator from ccol_iter_declare(), and step with ccol_iter_next().
 #define ccol_begin(container)                                          \
   ({                                                                   \
     char *ccol__err = NULL;                                            \
@@ -226,9 +237,12 @@ static inline __attribute__((always_inline)) cmap_iterator *ccol__cbmap_begin(
     ccol__it;                                                          \
   })
 
-// Declares it and runs the body for every element of the container, the
-// shortest way to write a whole loop. Commas in the body are fine. Don't
-// change the container inside the body.
+// Declares the iterator it and runs the body (the last argument) once for
+// every element of a cvec, chmap or cbmap, the shortest way to write a whole
+// loop. Inside the body use ccol_iter_key_ptr(it) and ccol_iter_val_ptr(it).
+// Commas in the body are fine, and a break leaks nothing. Don't change the
+// container inside the body. A failed allocation at the start prints the
+// reason and ends the program.
 //
 //   ccol_for_each(my_vec, it, {
 //     printf("[%zu] = %d\n", *ccol_iter_key_ptr(it), *ccol_iter_val_ptr(it));

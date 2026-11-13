@@ -15,7 +15,7 @@ This function frees a chttpcli_async_result that
 chttpcli_async_result_get returned. It does NOT free result->resp,
 so when result->rv == ccol_success you have to free that first, with
 its own call to chttpcli_resp_free. It does NOT free the future
-either: pair it with exactly one separate cthrpool_future_free call,
+either: Pair it with exactly one separate cthrpool_future_free call,
 before or after this one (the order does not matter). The result keeps
 its own copy of the client's allocator, so this call is valid before
 or after chttpcli_destroy of that client.

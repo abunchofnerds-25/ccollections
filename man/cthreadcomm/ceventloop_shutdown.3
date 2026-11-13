@@ -13,7 +13,7 @@ ccol_retval ceventloop_shutdown(ceventloop loop);
 .nf
 Tells the poller thread of loop to stop and waits until it has joined
 that thread. With num_reactor_threads > 1 it then drains and joins every
-dispatch worker thread as well. The drain is graceful: every job that
+dispatch worker thread as well. The drain is graceful: Every job that
 is already queued or running finishes, and nothing is cancelled. Either
 way, no dispatch can be in flight once the call returns.
 
@@ -64,7 +64,7 @@ to another thread, or do it after the callback returns.
 .SH THREAD SAFETY
 .nf
 Safe to call from several threads at the same time, as long as none
-of them is one of loop's own threads: the poller thread and, with
+of them is one of loop's own threads: The poller thread and, with
 num_reactor_threads > 1, the dispatch worker threads.
 .fi
 .SH "SEE ALSO"

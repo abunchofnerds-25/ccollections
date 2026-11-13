@@ -2,7 +2,7 @@
 # Checks that a process can still fork() after it loads the library with
 # dlopen(), uses a module that registers pthread_atfork() handlers and then
 # unloads the library again. It also checks two things about the library's
-# thread-specific keys: a thread that used a thread-safe memory pool and
+# thread-specific keys: A thread that used a thread-safe memory pool and
 # outlives the dlclose() has to exit cleanly, and the dlopen()/dlclose()
 # cycles have to give back every key they took.
 #
@@ -12,7 +12,7 @@
 # an address where nothing is mapped. glibc closes that hole by registering
 # each handler against the __dso_handle of the object that calls
 # pthread_atfork(). That's the reason a shared object links its
-# pthread_atfork() from libc_nonshared.a: the handle belongs to the caller, and
+# pthread_atfork() from libc_nonshared.a: The handle belongs to the caller, and
 # glibc takes those handlers back when it unloads that object. The library
 # depends on this behaviour, so we prove it on the real built artifact rather
 # than assume it.
@@ -55,7 +55,7 @@ SO="${1:-}"
 # The library's thread-local block has a budget. A library that uses the
 # initial-exec model anywhere carries the STATIC_TLS flag, and a dlopen() then
 # has to fit its whole thread-local block into a reserve the loader shares
-# among all the libraries a process loads late: about 1.6 KiB with glibc, and
+# among all the libraries a process loads late: About 1.6 KiB with glibc, and
 # 128 bytes on FreeBSD unless LD_STATIC_TLS_EXTRA raises it, which a FreeBSD
 # program that loads this library with dlopen() has to do (the probe below
 # does; see include/internal/ctlsmodel.h). A budget of 512 bytes leaves most

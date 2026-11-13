@@ -20,7 +20,7 @@ insertion order as with cjson_serialize(3).
 .SH RETURN VALUE
 .nf
 A null-terminated string on the heap, from the root node's allocator.
-Free it the same way as the result of cjson_serialize(3): with
+Free it the same way as the result of cjson_serialize(3): With
 cjson_serialize_free() when the tree uses the default allocator, and
 with cjson_serialize_free_mp() when it uses a custom one.
 .fi

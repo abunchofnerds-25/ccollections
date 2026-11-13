@@ -51,7 +51,7 @@ logger  Logger handle to close.
 .SH NOTES
 .nf
 Do not call clog_close() while another thread makes any call with the
-same handle: a clog_<level> macro, clog_set_level, clog_set_field and
+same handle: A clog_<level> macro, clog_set_level, clog_set_field and
 the functions next to it, clog_derive, or another clog_close().  You
 must make sure that every other use of a handle has stopped before you
 close it.  This rule does not cover a sibling handle that keeps logging

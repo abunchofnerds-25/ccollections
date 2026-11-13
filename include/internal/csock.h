@@ -32,7 +32,7 @@ SOFTWARE.
 // keeps MSG_NOSIGNAL). When the flags need a second call, both calls run inside
 // the close-on-exec gate of common.h, so a fork() from another thread can't
 // hand a child the socket before it's closed on exec. Every new socket of the
-// library should come from here: a socket() call with the Linux flags doesn't
+// library should come from here: A socket() call with the Linux flags doesn't
 // build on macOS, and one without them loses these properties everywhere.
 
 #ifndef CCOL_INTERNAL_CSOCK_H
@@ -180,7 +180,7 @@ static inline int ccol_socketpair_nb(int domain, int type, int protocol,
 // How many of len bytes one send(2) can hand to a blocking fd without waiting.
 // After POLLOUT a stream socket has room for at least SO_SNDLOWAT bytes, so we
 // give that many, or 0 when there's no room (the caller reports EAGAIN). Any
-// other socket type gets len: a macOS datagram socket never queues in its send
+// other socket type gets len: A macOS datagram socket never queues in its send
 // buffer, so a datagram goes out whole or fails with ENOBUFS. An error or a
 // hang-up also gives len, so the send itself reports it. Linux has no real
 // SO_SNDLOWAT and its POLLOUT means a quarter of the buffer is free, so the

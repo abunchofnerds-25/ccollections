@@ -124,7 +124,7 @@ build: $(SRC_OBJS) tests_locale
 # The locale_folding tests run the server under a Turkish LC_CTYPE, where
 # strncasecmp() and tolower() fold 'I' to a letter other than 'i'. They use
 # this private copy of tr_TR.UTF-8, found through LOCPATH. The step is best
-# effort: without localedef (macOS has none) or the tr_TR locale source, the
+# effort: Without localedef (macOS has none) or the tr_TR locale source, the
 # directory stays empty and those tests print that they skipped.
 tests_locale:
 	mkdir -p tests_locale
@@ -150,7 +150,7 @@ test_tsan: build_tsan
 
 # A separate ThreadSanitizer build of tests_engine_stop.c, done exactly like
 # build_tsan and test_tsan above. Of the six binaries in this directory this
-# one has by far the most fork and thread races: reaper against destroy,
+# one has by far the most fork and thread races: Reaper against destroy,
 # start against stop, listener against dispatch, and a concurrent destroy
 # against engine_stop. Each one is driven by dedicated white-box hooks that
 # arm, wait and release, and since those hooks exist to produce data races

@@ -85,7 +85,7 @@ else at a name of that shape.  A second rotation inside the same second
 takes a collision suffix, _0001, _0002 and so on, zero-padded to four
 digits, and a number above 9999 takes the digits it needs, such as
 _10000.  Every rotation takes a name above every rotated name before
-it: a later rotation inside the same second takes the next number,
+it: A later rotation inside the same second takes the next number,
 never a name that a deletion freed.  A logger that starts in a
 directory which already holds rotated generations (see below) numbers
 its rotations above the newest of them, so a process that restarts
@@ -141,7 +141,7 @@ then on the live file is a regular file that the logger made, and the
 link, which is not a generation, stays where the rotation put it.
 
 The timestamp and the collision number of each rotated name decide
-which rotated files are the oldest: the names are ordered by the
+which rotated files are the oldest: The names are ordered by the
 timestamp and then by the number, compared as a number.  Every rotation
 takes a name above all the names before it, so that order is the order
 of the rotations, and the deletion always keeps the newest generations.
@@ -391,7 +391,7 @@ failed, and on a full disk they usually fail too.  The logger then
 keeps both and writes them in front of the next write that the output
 accepts.  An async logger also tries them at each flush of its writer
 thread, so they don't wait for a new record, and every logger tries
-them at exit(3) when nothing is written again: the newline first, then
+them at exit(3) when nothing is written again: The newline first, then
 one marker.  While a single loss waits, the marker carries its own
 text; for more than one it reads "log record truncated: <k> earlier
 losses (records=<n> bytes=<m>): write error <errno>", with the number
@@ -401,7 +401,7 @@ still waiting is not written, because it would continue the fragment on
 the same line, and it counts as one more loss.  So every line of the
 log holds at most one record, and every loss is named once the output
 has room again.  An error that no retry gets past, such as EPIPE from a
-pipe whose reader is gone, ends the wait: the output is gone, so the
+pipe whose reader is gone, ends the wait: The output is gone, so the
 logger gives up the newline and the marker.  The last clog_close(3) of
 the logger makes one more attempt within 100 milliseconds, and a loss
 that it cannot name then stays unnamed.

@@ -12,7 +12,7 @@ bool chttpsvr_req_query_oom(const chttpsvr_req *req);
 .SH DESCRIPTION
 .nf
 Returns true when an allocation for the query string of this request
-failed for lack of memory.  Two allocations can fail like that: the
+failed for lack of memory.  Two allocations can fail like that: The
 growth of the result array inside chttpsvr_req_query, and the shared
 parse of the query string, which runs once and which
 chttpsvr_req_query and chttpsvr_req_query_one start lazily on their

@@ -24,7 +24,7 @@ connections, which you set with chttpcli_create_mp by the usual _mp
 convention. That allocator is separate from this one, which only
 affects how the single shared reactor is built.
 
-You can call this function at only two points: before the reactor
+You can call this function at only two points: Before the reactor
 first starts in this process (before the first call to
 chttpcli_do_async or chttpcli_do_async_streaming anywhere), or
 after the engine has stopped completely. The engine stops once every

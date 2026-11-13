@@ -15,7 +15,7 @@ Puts an allocated entry back on the pool's free list and sets the
 caller's pointer to NULL.
 
 The caller names the pool, and the macro does not find it from the
-entry. Free an entry to the pool it came from: passing a different pool
+entry. Free an entry to the pool it came from: Passing a different pool
 is a caller error, and it is fatal.
 
 The pool decides from the address alone whether the entry is its own
@@ -47,7 +47,7 @@ pool without a cache. cmempool_create_mp(3) explains how to size a
 pool.
 
 The cache makes no difference to the detection of corruption or of a
-double free: an entry in a cache is marked free, so a second free of
+double free: An entry in a cache is marked free, so a second free of
 it is caught exactly as it would be without the cache. The one
 exception is two threads that free the same entry at the same instant.
 The double-free check runs outside the lock, so one of the two threads

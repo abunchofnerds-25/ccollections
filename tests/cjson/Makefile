@@ -60,7 +60,7 @@ memtest: build build_c23 build_keys
 # cjson_set and cjson_delete read. Both need clang, because libFuzzer is a Clang
 # and LLVM feature. The `fuzz` target of tests/cyaml/Makefile and the
 # `fuzz_request` and `fuzz_response` targets of tests/chttpclient/Makefile have
-# the same shape and the same reason for .PHONY: a fuzz/corpus_parse and a
+# the same shape and the same reason for .PHONY: A fuzz/corpus_parse and a
 # fuzz/corpus_path directory exist on disk, and without .PHONY Make takes a
 # bare `fuzz_parse` or `fuzz_path` target as already satisfied and skips the
 # recipe completely. Run ./fuzz_cjson_parse fuzz/corpus_parse

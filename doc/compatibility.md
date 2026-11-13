@@ -37,7 +37,7 @@ A program linked against `libccollections.so.2` runs with every later
 - No exported symbol is removed, and no exported symbol changes its
   signature.
 - No public struct changes its size or its layout. That rules out a change
-  that looks harmless too: a configuration struct that you fill by value,
+  that looks harmless too: A configuration struct that you fill by value,
   like `chttpsvr_config`, `chttp_tls_config`, `clog_rotation_cfg` or
   `clog_async_cfg`, never gets a new field in `2.x`. A new field changes
   the size of the struct and breaks every program that allocates one, so

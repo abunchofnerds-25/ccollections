@@ -86,7 +86,7 @@ musl also refuses to `dlopen()` a library that uses the initial-exec
 thread-local model, so the library uses the general model there (see
 [Loading the library with dlopen](#loading-the-library-with-dlopen)). That
 makes the thread-safe path of `cmempool` about 1.45 times slower than with
-initial-exec, but it is much faster than musl's own `malloc`: about
+initial-exec, but it is much faster than musl's own `malloc`: About
 0.4 of its time for a 64-byte block on one thread, and under a hundredth of
 it with several threads, where musl's allocator contends on one lock. So on
 musl the pool is well worth using even with the slower model. A
@@ -155,7 +155,7 @@ flags.
 If your program links with `libccollections.so` the usual way, you can
 skip this section.
 
-The library has several fast paths per thread: the per-thread cache of
+The library has several fast paths per thread: The per-thread cache of
 `cmempool`, a per-thread slot through which the library finds the object
 behind a `clogger`, `clrucache`, `cthreadpool` or `chttpclient` handle, the
 date cache of `chttpserver` and the per-thread state of `clogger`.
@@ -207,7 +207,7 @@ unload, because a thread pool, logger, event loop or HTTP client whose
 threads are running can't keep working once its code is gone (that is true
 of any shared library). And if the memory they hold matters to you, join
 the threads that used the library. Some modules keep state for each thread
-and free it when that thread exits: the cache of a thread-safe `cmempool`
+and free it when that thread exits: The cache of a thread-safe `cmempool`
 pool, the node pools of `cjson` and `cyaml`, the error buffer of `cjson` and
 the thread identity that `clogger` writes into each record. Once the code
 is unloaded the library can't free that state for a thread that keeps

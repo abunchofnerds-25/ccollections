@@ -42,15 +42,15 @@ record, and you don't have to copy them into an aligned local variable
 first
 Average O(1) complexity
 Frees the memory of the key and of the value
-Open addressing: shrinks when the load factor < 0.25 (scale 0.5x). A
+Open addressing: Shrinks when the load factor < 0.25 (scale 0.5x). A
 grow on insert always leaves the live load above 0.25, so a delete
 never shrinks a table straight back after an insert has grown it
-Open addressing: the delete moves the later entries of the same
+Open addressing: The delete moves the later entries of the same
 cluster back into the gap (backward-shift deletion) and leaves no
 marker for a deleted slot. Entries of that cluster can change slot, so
 every pointer from chashmap_get_elem_ref(3) or chmap_get_ptr(3) is
 invalid after the delete, as after any other change to the map
-Separate chaining: shrinks when elem_count < (bucket_count + 1) / 8 (scale 0.25x)
+Separate chaining: Shrinks when elem_count < (bucket_count + 1) / 8 (scale 0.25x)
 For a float or double key, chmap_construct(3) gives the key equality
 contract (bitwise, except that -0.0 becomes 0.0)
 For a long double key, chmap_construct(3) gives the key equality contract

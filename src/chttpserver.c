@@ -69,7 +69,7 @@ SOFTWARE.
 typedef struct chttpsvr_mw_node chttpsvr_mw_node;
 
 // One middleware entry of a router's singly linked list. next is a plain
-// pointer: readers walk the list under the read lock of routes_lock and writers
+// pointer: Readers walk the list under the read lock of routes_lock and writers
 // append under the write lock, so the lock orders the two sides.
 struct chttpsvr_mw_node {
   chttpsvr_middleware_fn fn;
@@ -77,7 +77,7 @@ struct chttpsvr_mw_node {
   chttpsvr_mw_node *next;
 };
 
-// A compiled route: the pattern split into segments, the names of its {name}
+// A compiled route: The pattern split into segments, the names of its {name}
 // segments, and the handler to call.
 typedef struct chttpsvr_route {
   chttp_method method;
@@ -179,7 +179,7 @@ typedef struct chttpsvr_qparams {
 #define CHTTPSVR_DEFAULT_MEMORY_WAIT_MS 30000u
 #define CHTTPSVR_DEFAULT_STREAM_QUEUE_TIMEOUT_MS 5000u
 
-// A hard cap, in ms, on the total time of a write the library makes itself: a
+// A hard cap, in ms, on the total time of a write the library makes itself: A
 // rejection response or the "100 Continue" interim line. It applies whatever
 // max_response_write_duration_ms says, because that knob can be 0 and a peer
 // reading one byte at a time could otherwise keep such a write, its descriptor
@@ -275,7 +275,7 @@ typedef struct chttpsvr_conn {
   conn_state state;
   chttp1_parser parser;
 
-  // Per-request scratch fields. path is the raw, percent-encoded path: matching
+  // Per-request scratch fields. path is the raw, percent-encoded path: Matching
   // splits on a literal '/' and decodes each segment on its own, so a %2F
   // inside a {param} stays one segment and a bad %XX in one segment is a 404,
   // not a 400. decoded_path is filled once a route matched and is what
@@ -465,7 +465,7 @@ typedef struct {
   chttpsvr_ctx_pair pairs[];
 } chttpsvr_ctx_more;
 
-// What a handler or middleware gets: a view over the connection plus the
+// What a handler or middleware gets: A view over the connection plus the
 // worker's own chttp1_stream, which exists only while one worker drives one
 // request. The first context value is stored inline (key NULL while there is
 // none); the rest go into ctx_more, which destroy_req_scratch frees.
@@ -523,7 +523,7 @@ static void chttpsvr_atfork_child_release(void);
 // because every handle lookup needs the table. It sets
 // chttpsvr_slot_table_entered, initializes the table's mutex and vectors, and
 // ends the process if any of that fails. The handlers of cthreadcomm,
-// cthreadpool and clogger are forced to register first: prepare handlers run in
+// cthreadpool and clogger are forced to register first: Prepare handlers run in
 // reverse order, so ours runs first and takes our locks before theirs, which is
 // the order every ordinary call nests them in (engine_acquire holds
 // srv_engine_bundler.mutex while it creates the event loop and the logger).
@@ -995,7 +995,7 @@ static struct {
   // destroys the reactor again when the fallback can't be allocated.
   clog log;
   // The logger chttpsvr_set_engine_logger() derived, or CLOG_NULL. It outlives
-  // every engine: each start logs through it and each reaper leaves it open.
+  // every engine: Each start logs through it and each reaper leaves it open.
   // Only a later chttpsvr_set_engine_logger(), process exit or unload closes
   // it.
   clog user_log;
@@ -1059,7 +1059,7 @@ static void listener_dispatch_race_hook_wait_if_armed(bool at_entry);
 static void quiesce_teardown_race_hook_wait_if_armed(void);
 #endif
 
-// Quiesces every server still in servers_bundler: stop listening, drain, close
+// Quiesces every server still in servers_bundler: Stop listening, drain, close
 // connections, destroy the pools and drop the engine reference. The engine
 // reaper calls it before it destroys the reactor, because after a
 // chttpsvr_engine_stop() the servers may be fully live, and the reactor and the
@@ -1143,7 +1143,7 @@ static int idle_sweep_init_wake_cv(void) {
 }
 
 // Initializes the engine, registry and sweep locks once, before any engine
-// function uses them; a failure is fatal. We leave SIGPIPE alone: every plain
+// function uses them; a failure is fatal. We leave SIGPIPE alone: Every plain
 // write sends with MSG_NOSIGNAL through chttp1_stream, and every TLS write goes
 // through the ctls socket BIO, which does the same.
 static void engine_globals_init(void) {
@@ -1254,7 +1254,7 @@ static void *engine_reaper_fn(void *arg) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: a delay in ms between creating the reaper and recording its
+// Test hook: A delay in ms between creating the reaper and recording its
 // thread, so the reaper can run to its end inside that window.
 static _Atomic unsigned g_spawn_reaper_delay_ms_for_tests = 0;
 void chttpsvr__set_spawn_reaper_delay_for_tests(unsigned ms) {
@@ -1263,7 +1263,7 @@ void chttpsvr__set_spawn_reaper_delay_for_tests(unsigned ms) {
 #endif
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: while set, creating the reaper thread fails and spawn_reaper runs
+// Test hook: While set, creating the reaper thread fails and spawn_reaper runs
 // the reaper inline.
 static _Atomic bool g_force_reaper_thread_create_fail_for_tests = false;
 void chttpsvr__force_reaper_thread_create_fail_for_tests(bool force) {
@@ -1438,7 +1438,7 @@ static void engine_wait_until_stopped(void) {
 // only on an ordinary thread, never in a signal handler. Under
 // srv_engine_bundler.mutex it zeroes reactor_refs and sets stopping, then
 // spawns the reaper. It does nothing when no reactor runs, when gen isn't the
-// running generation, or when stopping is set: a repeated or overlapping stop,
+// running generation, or when stopping is set: A repeated or overlapping stop,
 // such as a second SIGTERM, would otherwise start two reapers that destroy the
 // same reactor, which is fatal.
 static void engine_force_stop_now(uintptr_t gen) {
@@ -1484,7 +1484,7 @@ static struct {
   pid_t pid;
 } g_engine_stop_watcher = {0};
 
-// Forgets the engine a fork() child inherited: the reactor handle, its
+// Forgets the engine a fork() child inherited: The reactor handle, its
 // references and generation, the fallback logger and the reaper and watcher
 // flags, with none of their threads. Without this the child's servers would use
 // a reactor with no poller and its waits would never end, so the child starts
@@ -1517,7 +1517,7 @@ static void engine_forget_inherited_locked(void) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: returns the process that created the running reactor, or 0, so a
+// Test hook: Returns the process that created the running reactor, or 0, so a
 // test can check that a fork() child runs a reactor of its own.
 pid_t chttpsvr__engine_reactor_pid_for_tests(void) {
   ccol__call_once(srv_engine_bundler.once, engine_globals_init);
@@ -1552,7 +1552,7 @@ static void engine_join_finished_reaper(void) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: returns true while a spawned reaper thread is still unjoined, so a
+// Test hook: Returns true while a spawned reaper thread is still unjoined, so a
 // test can check that the watcher joins it.
 bool chttpsvr__engine_reaper_unjoined_for_tests(void) {
   ccol__call_once(srv_engine_bundler.once, engine_globals_init);
@@ -1564,7 +1564,7 @@ bool chttpsvr__engine_reaper_unjoined_for_tests(void) {
 #endif
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: a delay in ms the watcher waits after each wakeup before it acts
+// Test hook: A delay in ms the watcher waits after each wakeup before it acts
 // on a stop request.
 static _Atomic unsigned g_engine_stop_watcher_delay_ms_for_tests = 0;
 void chttpsvr__set_engine_stop_watcher_delay_for_tests(unsigned ms) {
@@ -1602,7 +1602,7 @@ static void *engine_stop_watcher_fn(void *arg) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: while set, creating the watcher thread fails.
+// Test hook: While set, creating the watcher thread fails.
 static _Atomic bool g_force_watcher_thread_create_fail_for_tests = false;
 void chttpsvr__force_watcher_thread_create_fail_for_tests(bool force) {
   atomic_store(&g_force_watcher_thread_create_fail_for_tests, force);
@@ -1682,7 +1682,7 @@ static void engine_force_stop(void) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: raises sig on this thread while it holds srv_engine_bundler.mutex,
+// Test hook: Raises sig on this thread while it holds srv_engine_bundler.mutex,
 // to prove that a signal handler which calls chttpsvr_engine_stop() never
 // deadlocks. Such a handler deadlocks here if that call ever takes the mutex or
 // creates a thread.
@@ -1714,7 +1714,7 @@ static bool parked_needs_kernel_query(struct chttpserver *srv,
                                       struct timespec now,
                                       struct timespec now_slow);
 #ifdef RUNNING_UNIT_TESTS
-// Test counters: how many kernel queries judged a parked connection, and how
+// Test counters: How many kernel queries judged a parked connection, and how
 // many of those the sweep made while holding idle_mutex (that must stay 0).
 static _Atomic size_t g_parked_queries_for_tests = 0;
 static _Atomic size_t g_parked_queries_locked_for_tests = 0;
@@ -1729,7 +1729,7 @@ static void parked_query_note_for_tests(void) {
     atomic_fetch_add_explicit(&g_parked_queries_locked_for_tests, 1,
                               memory_order_relaxed);
 }
-// Test hook: reads the two counters above into *total and *locked.
+// Test hook: Reads the two counters above into *total and *locked.
 void chttpsvr__parked_queries_for_tests(size_t *total, size_t *locked) {
   *total = atomic_load(&g_parked_queries_for_tests);
   *locked = atomic_load(&g_parked_queries_locked_for_tests);
@@ -1774,7 +1774,7 @@ size_t chttpsvr__doubling_growth_cap_for_tests(size_t cap, size_t elem_size,
 #endif
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: the next servers_register() that has to add a server fails, as if
+// Test hook: The next servers_register() that has to add a server fails, as if
 // the growth of the array failed. The tests use it to reach the failed-start
 // cleanup of chttpsvr_start. The setter only stores the flag.
 static _Atomic bool g_servers_register_fail_for_tests = false;
@@ -1855,7 +1855,7 @@ static void servers_unregister(struct chttpserver *srv) {
 // Takes raw out of the server registry and drops its engine reference, for a
 // chttpsvr_start() that took both and then failed. Without it a failed start
 // keeps the shared reactor alive and chttpsvr_engine_wait() blocks for ever.
-// acquired_here must be the need_acquire of that start: a failed restart of a
+// acquired_here must be the need_acquire of that start: A failed restart of a
 // server that an earlier start registered keeps its registration and its
 // reference, or the reactor could go away under its live connections. It reads
 // and clears raw->contributed_to_engine and raw->engine_gen under raw->mutex
@@ -1889,7 +1889,7 @@ static void chttpsvr_undo_start_registration(struct chttpserver *raw,
 // Resumes the listener registration of srv once current_connections is below
 // max_connections again. listener_on_readable pauses the listener at the cap so
 // the reactor doesn't spin on a backlog it can't accept, and this lifts the
-// pause. Only the sweep calls it: a resume straight from conn_free would touch
+// pause. Only the sweep calls it: A resume straight from conn_free would touch
 // srv after the decrement that drain_and_close_all_connections waits for, and
 // the destroy could free srv under it. It reads srv->listen_reg under
 // srv->mutex. A paused listener therefore resumes within one tick.
@@ -1987,7 +1987,7 @@ bool chttpsvr__conn_idle_timed_out_for_tests(struct timespec now,
 }
 #endif
 
-// Runs one sweep tick for srv: it resumes a paused listener, closes the idle
+// Runs one sweep tick for srv: It resumes a paused listener, closes the idle
 // connections past the idle or header-phase limit, and ends the parked
 // connections that parked_expired judges expired (a parked body gets a 408,
 // anything else is closed). It's the only place that enforces those limits,
@@ -2129,7 +2129,7 @@ static size_t sweep_server(struct chttpserver *srv, struct timespec now) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test counters of how the sweep thread stopped: woken by the stop, or only
+// Test counters of how the sweep thread stopped: Woken by the stop, or only
 // after its tick wait ran out. g_idle_sweep_stop_ns_for_tests is the
 // CLOCK_MONOTONIC instant of the last stop, guarded by
 // idle_sweep_bundler.wake_mu. The getter reads both counters.
@@ -2142,7 +2142,7 @@ void chttpsvr__idle_sweep_exits_for_tests(size_t *woken, size_t *timed_out) {
 }
 #endif
 
-// The body of the shared sweep thread: it calls sweep_server for every
+// The body of the shared sweep thread: It calls sweep_server for every
 // registered server once per tick until stop_flag is set. The idle,
 // header-phase and parked limits and the listener resumes all depend on it. It
 // waits on wake_cv until the tick deadline or a stop; the stop sets stop_flag
@@ -2523,7 +2523,7 @@ static int hex_nibble(char c) {
 // strings. '+' becomes a space when plus_as_space is set (query strings) and
 // stays as it is otherwise (paths). It works in place with dst == src. Returns
 // the decoded length, or -1 for a malformed escape or an escape that decodes to
-// NUL: every caller treats the result as a C string, so "foo%00bar" would
+// NUL: Every caller treats the result as a C string, so "foo%00bar" would
 // otherwise compare equal to the route segment "foo".
 static ssize_t percent_decode(char *dst, const char *src, bool plus_as_space) {
   size_t si = 0, di = 0;
@@ -2775,7 +2775,7 @@ static void free_route_data(chttpsvr_route *r, ccol_memmgmt_procs *mp) {
   ccol__mem_free(mp, r->param_names);
 }
 
-// The outcome of a route search: a match, a path that matches with another
+// The outcome of a route search: A match, a path that matches with another
 // method (405), an allocation failure, or no match (404).
 typedef enum {
   ROUTE_MATCH_OK,
@@ -2883,7 +2883,7 @@ static void seg_cache_free(seg_cache *cache) {
 
 // Returns the decoded value of segment idx, decoding it on the first call and
 // keeping it in the cache, so the routes and prefixes that ask share one
-// decode. NULL means the segment can't match anything: it's empty or its
+// decode. NULL means the segment can't match anything: It's empty or its
 // encoding is malformed. The cache owns the result until seg_cache_free;
 // *len_out gets its length. *oom_out is set on an allocation failure. That
 // failure is remembered like the other outcomes and never retried, which is
@@ -3043,7 +3043,7 @@ static void free_param_values(char **pv, int count, ccol_memmgmt_procs *mp);
 // the root last. If the root went first, a pattern like "/{a}/{b}" would answer
 // paths inside a mount and its middleware (an authenticator, say) would be
 // skipped.
-// The most specific mount that owns the path owns the request: only routers on
+// The most specific mount that owns the path owns the request: Only routers on
 // that same prefix may answer, and when none of their routes matches, the 404
 // or 405 comes back with that owner as the router so its middleware runs for
 // the rejection too.
@@ -3466,7 +3466,7 @@ static __thread chttpsvr_date_cache_state chttpsvr_date_cache
 #endif
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: any value other than INT64_MIN replaces the clock in
+// Test hook: Any value other than INT64_MIN replaces the clock in
 // chttpsvr_date_now, so a test can cross a second boundary without sleeping.
 static _Atomic int64_t g_date_override_for_tests = INT64_MIN;
 void chttpsvr__set_date_override_for_tests(int64_t sec) {
@@ -3602,7 +3602,7 @@ shrink_timeout_to_deadline_inl(struct timespec *deadline, bool *deadline_set,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: returns what shrink_timeout_at decides, and the timeout it shrinks
+// Test hook: Returns what shrink_timeout_at decides, and the timeout it shrinks
 // to, for a deadline that is already set, so a test can check the rounding
 // without a clock.
 bool chttpsvr__shrink_timeout_at_for_tests(struct timespec deadline,
@@ -3623,7 +3623,7 @@ static bool shrink_timeout_to_deadline(struct timespec *deadline,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: the next response_write_deadline_ok reports an expired deadline
+// Test hook: The next response_write_deadline_ok reports an expired deadline
 // whatever the clock says, then disarms itself. A rejection's small header
 // block always goes out in one write, so a test can't get a real expired
 // deadline for it any other way.
@@ -3666,7 +3666,7 @@ static bool response_write_deadline_ok(chttpsvr_conn *conn,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: the next handler response write sends only its first n bytes and
+// Test hook: The next handler response write sends only its first n bytes and
 // then acts as if the socket were full, so a test can end a partial write
 // inside the head or the body and watch the parked rest resume. Disarms itself
 // after one use.
@@ -3827,7 +3827,7 @@ static bool send_response(chttp1_stream *stream, chttpsvr_resp *resp,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: with 0 < n < 25, the next write_interim_continue writes exactly n
+// Test hook: With 0 < n < 25, the next write_interim_continue writes exactly n
 // bytes of the line for real and then fails as if its deadline expired. Socket
 // buffering gives no reliable way to get a real short write of 25 bytes.
 // Disarms itself after one use.
@@ -3837,7 +3837,7 @@ void chttpsvr__force_short_interim_write_for_tests(size_t n) {
 }
 #endif
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: the next interim line written without waiting sends its first n
+// Test hook: The next interim line written without waiting sends its first n
 // bytes (n may be 0) and then acts as if the socket were full, so a test can
 // watch the rest wait in a parked connection. SIZE_MAX means not armed.
 static _Atomic size_t g_force_interim_park_after_for_tests = SIZE_MAX;
@@ -3952,7 +3952,7 @@ static bool reject_status_runs_middleware(int status) {
          status == CHTTP_STATUS_PAYLOAD_TOO_LARGE;
 }
 
-// Copies the effective middleware chain into dispatch: the root router's chain,
+// Copies the effective middleware chain into dispatch: The root router's chain,
 // then router's when it's a sub-router. The copy lets the chain run after
 // srv->routes_lock is released, while routes or middleware can be added. router
 // is the matched route's router, the sub-router that owns a 404 or 405 path, or
@@ -4001,7 +4001,7 @@ static inline __attribute__((always_inline)) void conn_drop_body(
 }
 
 // Frees what the request holds that nobody reads once its response is being
-// written: the body, the path, the query, the header fields and the path
+// written: The body, the path, the query, the header fields and the path
 // parameter values. A connection calls it when it starts to wait for a slow
 // reader or to linger, because such a wait holds no thread and no memory limit
 // could cover what it keeps. Its body reservation goes back to the server's
@@ -4031,7 +4031,7 @@ static __attribute__((noinline, cold)) void conn_drop_request_state(
   conn->matched_param_values = NULL;
 }
 
-// Resets conn for its next request: it frees the previous request's state and
+// Resets conn for its next request: It frees the previous request's state and
 // sets every per-request field to its default. conn_create runs it for the
 // first request and the keep-alive path between every two requests; without the
 // free of the param values, every request but the last would leak them. The
@@ -4040,7 +4040,7 @@ static __attribute__((noinline, cold)) void conn_drop_request_state(
 // keep-alive gap.
 // The parser is re-initialized in place, because a struct assignment would copy
 // its 8 KiB line buffer every time. It reads the server's max_header_bytes and
-// max_body_size: the parser's max_chunk_size_override is set to max_body_size,
+// max_body_size: The parser's max_chunk_size_override is set to max_body_size,
 // so one huge declared chunk is refused at once instead of tying up a worker
 // while it waits for bytes that never come. A max_body_size of 0 leaves it at
 // 0, which is also "no cap" there. The body reservation goes back to the server
@@ -4122,7 +4122,7 @@ static chttpsvr_conn *conn_create(struct chttpserver *srv, int fd,
   return conn;
 }
 
-// Frees a connection once its last lifetime reference is gone: it unlinks conn
+// Frees a connection once its last lifetime reference is gone: It unlinks conn
 // from the idle and diverted lists, destroys its TLS state, closes the fd and
 // frees everything it owns. It can run on the reactor thread from
 // conn_on_removed. The decrement of srv->current_connections comes last, after
@@ -4293,7 +4293,7 @@ static int http1_on_request_line(chttp1_parser *p, const char *method,
   return 0;
 }
 
-// Parser callback for one header field of the request: it copies name and value
+// Parser callback for one header field of the request: It copies name and value
 // into conn->hdr_names and conn->hdr_values, growing both arrays as needed.
 // chttpsvr_req_header reads those arrays later. A failed allocation sets
 // conn->req_rejected with a 500 status before returning 1, so the client gets
@@ -4350,7 +4350,7 @@ static int http1_on_header(chttp1_parser *p, const char *name, size_t name_len,
 }
 
 // Parser callback that runs once the request headers are complete. It decides
-// what happens to the request: it rejects (sets conn->req_rejected and
+// what happens to the request: It rejects (sets conn->req_rejected and
 // conn->reject_status, returns -1) a transfer coding other than chunked with
 // 501, an unmatched path or method with 404 or 405, a declared Content-Length
 // above max_body_size on a buffered route with 413, and any allocation failure
@@ -4468,7 +4468,7 @@ static int http1_on_headers_complete(chttp1_parser *p) {
   return CHTTP1_HEADERS_DIVERT_BODY;
 }
 
-// First buffer capacity of a Content-Length body: the 8 KiB that can come with
+// First buffer capacity of a Content-Length body: The 8 KiB that can come with
 // the headers plus one 8 KiB read window of drain_body. It is also what such a
 // body reserves before a worker reads it (see body_first_reserve).
 #define CHTTPSVR_BODY_FIRST_CAP ((size_t)16384)
@@ -4637,7 +4637,7 @@ static cthrpool srv_current_pool(struct chttpserver *srv, srv_pool_kind k) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: holds the nth worker submit of conn_start_diverted, after it read
+// Test hook: Holds the nth worker submit of conn_start_diverted, after it read
 // the pool and before it submits, so a test can restart the server inside that
 // window. retried counts the submits that srv_submit_retry moved to a newer
 // pool.
@@ -4647,7 +4647,7 @@ static struct {
   _Atomic bool go;
   _Atomic size_t retried;
 } g_divert_submit_hook;
-// Test controls of g_divert_submit_hook: arm it for the nth next submit, read
+// Test controls of g_divert_submit_hook: Arm it for the nth next submit, read
 // the retry count, ask whether a submit is held, and let it go.
 void chttpsvr__arm_divert_submit_hook_for_tests(int nth) {
   atomic_store(&g_divert_submit_hook.entered, false);
@@ -4727,11 +4727,11 @@ static void release_in_flight(struct chttpserver *srv) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: while it's set, every pause in conn_pause_reg takes the
+// Test hook: While it's set, every pause in conn_pause_reg takes the
 // failed-pause path, and the counter counts the removals that path makes.
 static _Atomic bool g_force_pause_fail_for_tests = false;
 static _Atomic size_t g_pause_fallback_count_for_tests = 0;
-// Test controls: turn the forced pause failure on or off, and read how many
+// Test controls: Turn the forced pause failure on or off, and read how many
 // removals it caused.
 void chttpsvr__force_pause_fail_for_tests(bool force) {
   atomic_store(&g_force_pause_fail_for_tests, force);
@@ -4767,11 +4767,11 @@ static void conn_pause_reg(chttpsvr_conn *conn) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: when set, the next rejection skips reject_pool and takes the
+// Test hook: When set, the next rejection skips reject_pool and takes the
 // inline answer of conn_reject_via_pool, as when that pool is full. It clears
 // itself after one use.
 static _Atomic bool g_force_reject_inline_for_tests = false;
-// Test control: arms or disarms the forced inline rejection.
+// Test control: Arms or disarms the forced inline rejection.
 void chttpsvr__force_reject_inline_for_tests(bool force) {
   atomic_store(&g_force_reject_inline_for_tests, force);
 }
@@ -4779,7 +4779,7 @@ void chttpsvr__force_reject_inline_for_tests(bool force) {
 
 // Hands conn to reject_pool so its rejection response (status already in
 // conn->reject_status) is written there, with the middleware, and never on the
-// calling thread. Both rejection paths use it: the reactor's 404, 405 and 500
+// calling thread. Both rejection paths use it: The reactor's 404, 405 and 500
 // through conn_dispatch_reject, and the 503 or 500 of conn_start_diverted. The
 // caller must already have incremented srv->in_flight_requests.
 // When reject_pool is gone (teardown), its bounded queue is full or the submit
@@ -5013,17 +5013,17 @@ static void conn_reject_and_close(chttpsvr_conn *conn, bool run_middleware) {
 // across its own window.
 static _Atomic size_t g_reject_task_run_count_for_tests = 0;
 
-// Test hook: makes the first stream prepare of task_worker count as failed, so
+// Test hook: Makes the first stream prepare of task_worker count as failed, so
 // a test reaches the body_unavailable fallback that a real allocation failure
 // there takes. A sized allocator failure can't reach it, because
 // conn_start_diverted makes an allocation of the same size first.
 static _Atomic bool g_force_stream_prepare_fail_for_tests = false;
-// Test control: arms or disarms the forced stream prepare failure.
+// Test control: Arms or disarms the forced stream prepare failure.
 void chttpsvr__force_stream_prepare_fail_for_tests(bool force) {
   atomic_store(&g_force_stream_prepare_fail_for_tests, force);
 }
 
-// Test hook: once armed, chttpsvr_start blocks right after it has the engine
+// Test hook: Once armed, chttpsvr_start blocks right after it has the engine
 // reference and registered with servers_bundler, before any more reactor work,
 // so a test can land a concurrent chttpsvr_engine_stop in that exact window. It
 // fires once per arm. This and the other parking hooks below share one shape:
@@ -5048,7 +5048,7 @@ static void start_race_hook_init_globals(void) {
         "chttpsvr test hook: failed to initialize condition variable");
 }
 
-// Test controls of g_start_race_hook: arm it, wait until a caller is parked in
+// Test controls of g_start_race_hook: Arm it, wait until a caller is parked in
 // it, and release the caller.
 void chttpsvr__arm_start_race_hook_for_tests(void) {
   ccol__call_once(g_start_race_hook.once, start_race_hook_init_globals);
@@ -5094,7 +5094,7 @@ static void start_race_hook_wait_if_armed(void) {
   ccol__mutex_unlock(g_start_race_hook.mutex);
 }
 
-// Test hook: once armed, chttpsvr_start blocks after it set
+// Test hook: Once armed, chttpsvr_start blocks after it set
 // contributed_to_engine and before engine_acquire, the window where
 // engine_acquire can see the engine stopping and return without waiting. A test
 // uses it to exercise the retry of the "currently stopping" branch every time.
@@ -5117,7 +5117,7 @@ static void engine_stopping_race_hook_init_globals(void) {
         "chttpsvr test hook: failed to initialize condition variable");
 }
 
-// Test controls of g_engine_stopping_race_hook: arm it, wait until a caller is
+// Test controls of g_engine_stopping_race_hook: Arm it, wait until a caller is
 // parked in it, and release the caller.
 void chttpsvr__arm_engine_stopping_race_hook_for_tests(void) {
   ccol__call_once(g_engine_stopping_race_hook.once,
@@ -5169,7 +5169,7 @@ static void engine_stopping_race_hook_wait_if_armed(void) {
   ccol__mutex_unlock(g_engine_stopping_race_hook.mutex);
 }
 
-// Test hook: once armed, chttpsvr_start blocks right after chttpsvr_resolve
+// Test hook: Once armed, chttpsvr_start blocks right after chttpsvr_resolve
 // succeeded, so its resolve pin is live, and before any other check. A test
 // uses it to place that pin ahead of the pending_resolve_count wait of a
 // concurrent quiesce_server_once, which would deadlock if chttpsvr_start then
@@ -5193,7 +5193,7 @@ static void start_resolve_race_hook_init_globals(void) {
         "chttpsvr test hook: failed to initialize condition variable");
 }
 
-// Test controls of g_start_resolve_race_hook: arm it, wait until a caller is
+// Test controls of g_start_resolve_race_hook: Arm it, wait until a caller is
 // parked in it, and release the caller.
 void chttpsvr__arm_start_resolve_race_hook_for_tests(void) {
   ccol__call_once(g_start_resolve_race_hook.once,
@@ -5245,7 +5245,7 @@ static void start_resolve_race_hook_wait_if_armed(void) {
   ccol__mutex_unlock(g_start_resolve_race_hook.mutex);
 }
 
-// Test hook: once armed, chttpsvr_stop_internal blocks after it entered
+// Test hook: Once armed, chttpsvr_stop_internal blocks after it entered
 // CHTTPSVR_LC_STOPPING and unlocked raw->mutex, and before it removes and
 // closes the old listener, so a test can land a concurrent chttpsvr_start in
 // the window that state guards.
@@ -5268,7 +5268,7 @@ static void stop_race_hook_init_globals(void) {
         "chttpsvr test hook: failed to initialize condition variable");
 }
 
-// Test controls of g_stop_race_hook: arm it, wait until a caller is parked in
+// Test controls of g_stop_race_hook: Arm it, wait until a caller is parked in
 // it, and release the caller.
 void chttpsvr__arm_stop_race_hook_for_tests(void) {
   ccol__call_once(g_stop_race_hook.once, stop_race_hook_init_globals);
@@ -5314,7 +5314,7 @@ static void stop_race_hook_wait_if_armed(void) {
   ccol__mutex_unlock(g_stop_race_hook.mutex);
 }
 
-// Test signal for the CHTTPSVR_LC_STOPPING wait of chttpsvr_start: it tells a
+// Test signal for the CHTTPSVR_LC_STOPPING wait of chttpsvr_start: It tells a
 // test that the call reached its wait, and never blocks. A parking hook would
 // be unsafe there, because the caller holds raw->mutex, which
 // chttpsvr_stop_internal needs to leave that state, so a slow release would
@@ -5337,7 +5337,7 @@ static void start_stopping_wait_signal_init_globals(void) {
         "chttpsvr test hook: failed to initialize condition variable");
 }
 
-// Test controls of g_start_stopping_wait_signal: arm it, and wait until
+// Test controls of g_start_stopping_wait_signal: Arm it, and wait until
 // chttpsvr_start has fired it.
 void chttpsvr__arm_start_stopping_wait_signal_for_tests(void) {
   ccol__call_once(g_start_stopping_wait_signal.once,
@@ -5373,7 +5373,7 @@ static void start_stopping_wait_signal_fire_if_armed(void) {
   ccol__mutex_unlock(g_start_stopping_wait_signal.mutex);
 }
 
-// Test hook: once armed, engine_force_stop_quiesce_all blocks after it pinned
+// Test hook: Once armed, engine_force_stop_quiesce_all blocks after it pinned
 // the first registered server through servers_bundler_pins and unlocked
 // servers_bundler.mutex, and before quiesce_server_once. A test lands a
 // concurrent chttpsvr_destroy on that server there, where only the pin keeps
@@ -5397,7 +5397,7 @@ static void reaper_race_hook_init_globals(void) {
         "chttpsvr test hook: failed to initialize condition variable");
 }
 
-// Test controls of g_reaper_race_hook: arm it, wait until a caller is parked in
+// Test controls of g_reaper_race_hook: Arm it, wait until a caller is parked in
 // it, and release the caller.
 void chttpsvr__arm_reaper_race_hook_for_tests(void) {
   ccol__call_once(g_reaper_race_hook.once, reaper_race_hook_init_globals);
@@ -5443,7 +5443,7 @@ static void reaper_race_hook_wait_if_armed(void) {
   ccol__mutex_unlock(g_reaper_race_hook.mutex);
 }
 
-// Test hook: once armed, quiesce_server_once blocks after it won the quiesce
+// Test hook: Once armed, quiesce_server_once blocks after it won the quiesce
 // (CHTTPSVR_QS_QUIESCING, pins drained, srv->mutex unlocked) and before any
 // teardown work. A test forks there to exercise the child-side fixup of
 // chttpsvr_atfork_release_impl for a server in that state.
@@ -5466,7 +5466,7 @@ static void quiesce_teardown_race_hook_init_globals(void) {
         "chttpsvr test hook: failed to initialize condition variable");
 }
 
-// Test controls of g_quiesce_teardown_race_hook: arm it, wait until a caller is
+// Test controls of g_quiesce_teardown_race_hook: Arm it, wait until a caller is
 // parked in it, and release the caller.
 void chttpsvr__arm_quiesce_teardown_race_hook_for_tests(void) {
   ccol__call_once(g_quiesce_teardown_race_hook.once,
@@ -5520,7 +5520,7 @@ static void quiesce_teardown_race_hook_wait_if_armed(void) {
 
 static void timespec_add_ms(struct timespec *ts, unsigned ms);
 
-// Test hook: once armed, it pauses the CHTTPSVR_QS_QUIESCING backoff of
+// Test hook: Once armed, it pauses the CHTTPSVR_QS_QUIESCING backoff of
 // chttpsvr_start after it joined quiesce_waiters and released its resolve pin,
 // and before it takes raw->mutex again. A test runs a quiesce and a destroy to
 // the end around it to show raw survives; if quiesce_waiters were raised after
@@ -5556,7 +5556,7 @@ static void start_quiescing_unpinned_race_hook_init_globals(void) {
         "chttpsvr test hook: failed to initialize condition variable");
 }
 
-// Test control: arms g_start_quiescing_unpinned_race_hook for the next
+// Test control: Arms g_start_quiescing_unpinned_race_hook for the next
 // chttpsvr_start that takes the backoff.
 void chttpsvr__arm_start_quiescing_unpinned_race_hook_for_tests(void) {
   ccol__call_once(g_start_quiescing_unpinned_race_hook.once,
@@ -5568,7 +5568,7 @@ void chttpsvr__arm_start_quiescing_unpinned_race_hook_for_tests(void) {
   ccol__mutex_unlock(g_start_quiescing_unpinned_race_hook.mutex);
 }
 
-// Test control of g_start_quiescing_unpinned_race_hook: waits until a paused
+// Test control of g_start_quiescing_unpinned_race_hook: Waits until a paused
 // chttpsvr_start() has reached the hook. Returns true once it has, and false
 // after 10 seconds, so a regression that never reaches the hook fails the test
 // instead of hanging the whole binary (the call runs on the main test thread).
@@ -5593,7 +5593,7 @@ bool chttpsvr__wait_start_quiescing_unpinned_race_hook_entered_for_tests(void) {
   return entered;
 }
 
-// Test control of g_start_quiescing_unpinned_race_hook: lets the paused
+// Test control of g_start_quiescing_unpinned_race_hook: Lets the paused
 // chttpsvr_start() go on.
 void chttpsvr__release_start_quiescing_unpinned_race_hook_for_tests(void) {
   ccol__call_once(g_start_quiescing_unpinned_race_hook.once,
@@ -5624,7 +5624,7 @@ static void start_quiescing_unpinned_race_hook_wait_if_armed(void) {
   ccol__mutex_unlock(g_start_quiescing_unpinned_race_hook.mutex);
 }
 
-// Test hook: once armed, the next quiesce_server_once() pass that claims a
+// Test hook: Once armed, the next quiesce_server_once() pass that claims a
 // server signals right after it sets quiesce_state to CHTTPSVR_QS_QUIESCING. It
 // only signals and never blocks. It fires while the pass holds srv->mutex, so
 // its mutex is a leaf lock. A test that pauses a chttpsvr_start() with its pin
@@ -5658,7 +5658,7 @@ static void quiesce_claimed_signal_init_globals(void) {
         "chttpsvr test hook: failed to initialize condition variable");
 }
 
-// Test control: arms g_quiesce_claimed_signal for the next pass that claims a
+// Test control: Arms g_quiesce_claimed_signal for the next pass that claims a
 // server.
 void chttpsvr__arm_quiesce_claimed_signal_for_tests(void) {
   ccol__call_once(g_quiesce_claimed_signal.once,
@@ -5669,7 +5669,7 @@ void chttpsvr__arm_quiesce_claimed_signal_for_tests(void) {
   ccol__mutex_unlock(g_quiesce_claimed_signal.mutex);
 }
 
-// Test control: waits up to 10 seconds for the armed signal to fire and returns
+// Test control: Waits up to 10 seconds for the armed signal to fire and returns
 // whether it did. It disarms the hook on the way out, so a missed signal can't
 // fire later in an unrelated pass.
 bool chttpsvr__wait_quiesce_claimed_signal_entered_for_tests(void) {
@@ -5706,7 +5706,7 @@ static void quiesce_claimed_signal_fire_if_armed(void) {
 }
 
 // Test hook that blocks listener_on_readable() at one of two points picked by
-// the arm call: right after it pins srv through listener_dispatch_pins, or at
+// the arm call: Right after it pins srv through listener_dispatch_pins, or at
 // its very first statement, before the pin. A test lands a concurrent
 // chttpsvr_destroy() while a listener dispatch is really in flight and checks
 // whether the destroy waits for the pin. It has the shape of
@@ -5743,7 +5743,7 @@ static void listener_dispatch_race_hook_arm(bool at_entry) {
   ccol__mutex_unlock(g_listener_dispatch_race_hook.mutex);
 }
 
-// Test controls of g_listener_dispatch_race_hook: arm it after the pin or at
+// Test controls of g_listener_dispatch_race_hook: Arm it after the pin or at
 // the entry, wait until a dispatch is held, and release it.
 void chttpsvr__arm_listener_dispatch_race_hook_for_tests(void) {
   listener_dispatch_race_hook_arm(false);
@@ -5794,7 +5794,7 @@ static void listener_dispatch_race_hook_wait_if_armed(bool at_entry) {
 }
 #endif
 
-// Task of reject_pool: sends a rejection and closes the connection on one of
+// Task of reject_pool: Sends a rejection and closes the connection on one of
 // that pool's threads, so a slow client can't stall the reactor. It releases
 // the request's in_flight_requests slot only after the close completed (see
 // release_in_flight). srv is read first, because conn_reject_and_close frees
@@ -5846,7 +5846,7 @@ static bool conn_feed_bytes(chttpsvr_conn *conn, const char *buf, size_t n) {
   return false;
 }
 
-// Drives the reactor-owned part of a connection: the TLS handshake if there is
+// Drives the reactor-owned part of a connection: The TLS handshake if there is
 // one, then the reads of the header block, until the request is diverted to a
 // worker or rejected. A parked connection goes to conn_linger_step or
 // conn_resume_parked instead. The handshake arms the header-phase budget, so a
@@ -6015,7 +6015,7 @@ static void conn_on_error(ceventloop loop, ceventloop_reg reg, cselectable *sel,
 #define CHTTPSVR_RCVLOWAT_LIMIT 16384
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hooks for the slow-client code: a clock offset that only slow_clock adds
+// Test hooks for the slow-client code: A clock offset that only slow_clock adds
 // (so a test can expire a limit without sleeping), process-wide counts of
 // resume dispatches and parks (also per kind of park), and a switch that turns
 // SO_RCVLOWAT off. The functions below read or set them.
@@ -6061,7 +6061,7 @@ static void stream_claim_hook_init_globals(void) {
       ccol__cond_var_init(g_stream_claim_hook.cv) != 0)
     ccol__fatal_err("chttpsvr: stream claim hook init failed");
 }
-// Test controls of g_stream_claim_hook: arm it at a point, wait up to
+// Test controls of g_stream_claim_hook: Arm it at a point, wait up to
 // timeout_ms for a task to be held there (returns whether one was), and release
 // it.
 void chttpsvr__arm_stream_claim_hook_for_tests(int where) {
@@ -6226,7 +6226,7 @@ static void rate_window_start(chttpsvr_conn *conn, uint64_t bytes_so_far) {
   conn->rate_active = true;
 }
 
-// The time of the current phase that counts against the client: time since its
+// The time of the current phase that counts against the client: Time since its
 // start minus the time the server held it back.
 static long long rate_elapsed_ms(const chttpsvr_conn *conn,
                                  struct timespec now) {
@@ -6234,7 +6234,7 @@ static long long rate_elapsed_ms(const chttpsvr_conn *conn,
 }
 
 // How long a phase that moved bytes stays above a floor of rate bytes per
-// second: the grace period or the time those bytes buy, whichever is longer.
+// second: The grace period or the time those bytes buy, whichever is longer.
 // Saturates instead of overflowing.
 static long long rate_allowed_ms(unsigned rate, unsigned grace,
                                  uint64_t bytes) {
@@ -6416,7 +6416,7 @@ static void conn_stamp_claim(chttpsvr_conn *conn) {
 }
 
 // Takes the time conn spent in the worker pool's queue since its claim off
-// every limit of the phase it resumes: the rate floor, the gap and the total
+// every limit of the phase it resumes: The rate floor, the gap and the total
 // read or write deadline. A client whose bytes already arrived is never charged
 // for how long the server took to get to them.
 static void conn_uncharge_queue_wait(chttpsvr_conn *conn, struct timespec now,
@@ -6445,7 +6445,7 @@ static bool mem_fits_locked(struct chttpserver *srv, size_t need) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: the highest mem_in_use any server reached since the last reset,
+// Test hook: The highest mem_in_use any server reached since the last reset,
 // for the test of the progress rule's bound.
 static _Atomic size_t g_mem_peak_for_tests = 0;
 size_t chttpsvr__mem_peak_for_tests(void) {
@@ -6457,7 +6457,7 @@ void chttpsvr__mem_peak_reset_for_tests(void) {
 #endif
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: since the last reset, the most a reserved body buffer ever held
+// Test hook: Since the last reset, the most a reserved body buffer ever held
 // beyond its reservation, with the old and new blocks of a growth counted
 // together. body_growth_note_for_tests updates it at each growth.
 static _Atomic size_t g_body_overshoot_for_tests = 0;
@@ -6648,14 +6648,14 @@ static void mem_dispatch(chttpsvr_conn *conn) {
 // of a reservation is itself waiting, nothing could ever free memory, so the
 // progress rule lets the head go past the limit until its body is freed; only
 // one connection is exempt at a time (srv->mem_exempt_active).
-// This can't deadlock: a holder outside the list is a body arriving, a refusal
+// This can't deadlock: A holder outside the list is a body arriving, a refusal
 // or a running handler, and each ends and frees its body, which calls this
 // again; with no holder outside, the head goes through. The overshoot stays
 // below twice max_body_size (or twice one declared length when that is 0). A
 // handler that waits for another request is the one dependency the server can't
 // see; that request waits until its memory deadline or until a handler returns.
 // srv->wait_mutex is never held across a dispatch, and only one admission loop
-// runs at a time: a call that finds one running sets mem_admit_again and
+// runs at a time: A call that finds one running sets mem_admit_again and
 // returns.
 static void mem_admit(struct chttpserver *srv) {
   ccol__mutex_lock(srv->wait_mutex);
@@ -6862,7 +6862,7 @@ static void stream_unlink_locked(struct chttpserver *srv, chttpsvr_conn *c) {
 static void stream_token_task(void *arg);
 static void stream_queue_flush(struct chttpserver *srv);
 
-// What a stream_token_task receives: its server, and the stream_gen of the run
+// What a stream_token_task receives: Its server, and the stream_gen of the run
 // it was counted for in sq_tokens.
 typedef struct {
   struct chttpserver *srv;
@@ -6882,7 +6882,7 @@ static void stream_token_start(struct chttpserver *srv) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: counts the streaming tasks submitted by every server of the
+// Test hook: Counts the streaming tasks submitted by every server of the
 // process.
 static _Atomic size_t g_stream_tokens_started_for_tests = 0;
 
@@ -6891,7 +6891,7 @@ size_t chttpsvr__stream_tokens_started_for_tests(void) {
 }
 #endif
 
-// One step of stream_token_start: counts and submits one task when the
+// One step of stream_token_start: Counts and submits one task when the
 // conditions above hold, and returns true when it did. The pool is read after
 // stream_gen, so a task counted for one run never goes to an earlier run's
 // pool. When no pool takes the task (a pool in shutdown, no running server, a
@@ -6983,7 +6983,7 @@ static void stream_enqueue(chttpsvr_conn *conn) {
   stream_token_start(srv);
 }
 
-// One streaming-pool task: it takes the oldest queued request, runs it through
+// One streaming-pool task: It takes the oldest queued request, runs it through
 // task_worker and takes the next, until the queue is empty. Taking a request is
 // a claim under srv->wait_mutex, as in the sweep, so one of the two answers it
 // and never both; a request whose deadline passed while it waited gets a 503
@@ -7055,7 +7055,7 @@ static void stream_queue_flush(struct chttpserver *srv) {
   }
 }
 
-// The part of a sweep tick that no idle list reaches: requests waiting for body
+// The part of a sweep tick that no idle list reaches: Requests waiting for body
 // memory and streaming requests waiting for a thread. Every expired one is
 // claimed out of its list under srv->wait_mutex, chained through that list's
 // link field with no cap per tick, and answered with a 503 after the unlock. A
@@ -7115,7 +7115,7 @@ static void sweep_parked_waits(struct chttpserver *srv,
 }
 
 // What a Content-Length body of declared bytes, of which carry came with the
-// headers, reserves before a worker reads it: the capacity its buffer reaches
+// headers, reserves before a worker reads it: The capacity its buffer reaches
 // under body_grow_target's rule to hold the carry-over plus one 8 KiB read,
 // never more than declared. Every later growth is reserved as the bytes come in
 // (see drain_body_socket_read).
@@ -7156,7 +7156,7 @@ static __attribute__((noinline, cold)) bool conn_divert_gate(
   return true;
 }
 
-// The socket half of drain_body, once the carry-over is used up: reads the
+// The socket half of drain_body, once the carry-over is used up: Reads the
 // socket without waiting. When the socket has nothing it sets
 // conn->park_pending to CONN_PARK_BODY and returns -1, and the caller parks the
 // connection. Before reading it makes sure the body memory reservation covers
@@ -7208,7 +7208,7 @@ static __attribute__((noinline, cold)) ssize_t drain_body_socket_read(
   return n;
 }
 
-// Parks conn: arms its registration for the direction the park of the given
+// Parks conn: Arms its registration for the direction the park of the given
 // kind needs (read for a body or a linger, the direction the write wants for a
 // write park), sets conn->park and adds conn to the parked list. Every park
 // path ends here, so a parked connection holds no thread while the reactor
@@ -7271,7 +7271,7 @@ static bool conn_park_arm(chttpsvr_conn *conn, uint8_t kind) {
 // arriving or that must wait for body memory (conn->park_pending says which).
 // Afterwards the connection holds no thread and no in_flight_requests slot, and
 // the reactor or a memory admission hands it to a worker again. Nothing in the
-// stream needs keeping: the body reader only reads the socket once the
+// stream needs keeping: The body reader only reads the socket once the
 // carry-over is empty, and a pipelined request can only follow a complete body.
 // A memory wait goes onto the server's memory wait queue and runs mem_admit. A
 // body park trims the body reservation down to the buffer it holds (a body with
@@ -7348,14 +7348,14 @@ static __attribute__((noinline, cold)) void conn_resume_parked(
 #define CHTTPSVR_LINGER_STEP_BYTES ((size_t)256 * 1024)
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: counts the lingering closes that started, and its reader.
+// Test hook: Counts the lingering closes that started, and its reader.
 static _Atomic size_t g_linger_count_for_tests = 0;
 size_t chttpsvr__linger_count_for_tests(void) {
   return atomic_load(&g_linger_count_for_tests);
 }
 #endif
 
-// Tells whether conn's client may still send bytes the server hasn't read: the
+// Tells whether conn's client may still send bytes the server hasn't read: The
 // rest of a body, pipelined bytes in the carry-over, or bytes already queued in
 // the socket (FIONREAD). The close paths use it to pick a lingering close over
 // a plain one.
@@ -7422,7 +7422,7 @@ static __attribute__((noinline, cold)) void conn_linger(chttpsvr_conn *conn) {
 #endif
 }
 
-// Handles a lingering connection the reactor claimed on readiness: throws away
+// Handles a lingering connection the reactor claimed on readiness: Throws away
 // what arrived, then parks it again, or closes it once the client closed or
 // conn->linger_deadline passed.
 static __attribute__((noinline, cold)) void conn_linger_step(
@@ -7555,7 +7555,7 @@ static int send_response_continue(chttp1_stream *stream, chttpsvr_conn *conn) {
   }
 }
 
-// Worker thread: body read, handler and response.
+// Worker thread: Body read, handler and response.
 //
 // What drain_body returns, and only then, when the body stopped arriving or
 // must wait for memory and the caller has to park the connection instead of
@@ -7748,7 +7748,7 @@ ccol_retval chttpsvr_req_stream_error(const chttpsvr_req *req) {
   return ccol_success;
 }
 
-// Finishes a request whose response went out or was given up: it frees the
+// Finishes a request whose response went out or was given up: It frees the
 // stream and the request scratch, then closes, lingers, parks a half-written
 // response, or hands a kept-alive connection back to the reactor. task_worker,
 // task_resume and the parked-write paths all end here; it is inlined so an
@@ -7872,7 +7872,7 @@ static inline __attribute__((always_inline)) void task_tail(
   release_in_flight(srv);
 }
 
-// Ends a request whose body is read: frees the body, decides keep-alive
+// Ends a request whose body is read: Frees the body, decides keep-alive
 // (complete message, client allows it, body not too large, server not draining)
 // and sends the response, then calls task_tail. A response never waits for a
 // slow reader on this thread; a full socket parks the connection. Nothing is
@@ -7897,7 +7897,7 @@ static inline __attribute__((always_inline)) void task_finish(
   task_tail(conn, srv, stream, req, prepared, keep_alive, sent);
 }
 
-// Worker task for a newly diverted request: reads the body of a buffered route,
+// Worker task for a newly diverted request: Reads the body of a buffered route,
 // runs the middleware chain and the handler, and ends through task_finish. A
 // request still queued when a teardown started (srv_draining) gets a 503 with
 // Connection: close instead of a handler.
@@ -8037,7 +8037,7 @@ static void task_read_body_and_finish(chttpsvr_conn *conn,
 // sweep only looks once a second, and takes the queue wait off the client's
 // clocks. Then it continues a parked interim line (task_continue_interim), a
 // parked response (task_continue_write), or a parked body
-// (task_read_body_and_finish). The stream starts empty: a body only parks with
+// (task_read_body_and_finish). The stream starts empty: A body only parks with
 // an empty carry-over, and a parked response's pipelined bytes wait on the
 // connection.
 static void task_resume(void *arg) {
@@ -8209,7 +8209,7 @@ static void task_continue_interim(chttpsvr_conn *conn, struct chttpserver *srv,
   task_read_body_and_finish(conn, srv, &stream, false);
 }
 
-// Listener: accept and socket options.
+// Listener: Accept and socket options.
 //
 // Shortest gap in seconds between two accept-failure log lines of one server,
 // so a lasting failure can't flood the log.
@@ -8277,7 +8277,7 @@ bool chttpsvr__accept_errno_is_resource_exhaustion_for_tests(int e) {
 }
 #endif
 
-// Rate limit for the accept loop's diagnostics: returns true at most once per
+// Rate limit for the accept loop's diagnostics: Returns true at most once per
 // CHTTPSVR_ACCEPT_ERR_LOG_INTERVAL_SEC for srv, and records the moment in
 // srv->last_accept_err_log when it does. Only the listener's own dispatch
 // touches those fields.
@@ -8321,19 +8321,19 @@ static void listener_log_accept_err_rate_limited(struct chttpserver *srv,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test counters for the two listener pauses: how often an allocation failure
+// Test counters for the two listener pauses: How often an allocation failure
 // right after an accept paused a listener, and how often
 // listener_pause_for_resource_pressure really paused one. The sweep clears the
 // pause flag about once a second, so a test reads the difference of a counter
 // over its own window instead of polling the flag.
 static _Atomic size_t g_listener_alloc_failure_pause_count_for_tests = 0;
-// Test hook: gives the number of pauses after an allocation failure so far.
+// Test hook: Gives the number of pauses after an allocation failure so far.
 size_t chttpsvr__listener_alloc_failure_pause_count_for_tests(void) {
   return atomic_load(&g_listener_alloc_failure_pause_count_for_tests);
 }
 
 static _Atomic size_t g_listener_resource_pause_count_for_tests = 0;
-// Test hook: gives the number of successful resource-pressure pauses so far.
+// Test hook: Gives the number of successful resource-pressure pauses so far.
 size_t chttpsvr__listener_resource_pause_count_for_tests(void) {
   return atomic_load(&g_listener_resource_pause_count_for_tests);
 }
@@ -8361,7 +8361,7 @@ static void listener_pause_for_resource_pressure(struct chttpserver *srv) {
 }
 
 // Handles a failed allocation right after a successful accept (conn_create or
-// ctls_conn_create_server gave NULL): it logs what failed, through the same
+// ctls_conn_create_server gave NULL): It logs what failed, through the same
 // rate-limit gate as the accept errors, and pauses the listener. Without the
 // pause a custom allocator that has run dry would make the loop accept, fail,
 // close and repeat for as long as clients keep connecting.
@@ -8415,7 +8415,7 @@ static void apply_accepted_socket_options(int fd, bool is_unix,
 
 #ifdef RUNNING_UNIT_TESTS
 // Test counter of listener dispatches in the whole process. A test that holds a
-// server at max_connections reads its difference over a window: a paused
+// server at max_connections reads its difference over a window: A paused
 // listener adds a few dispatches, a busy-looping one adds thousands.
 static _Atomic size_t g_listener_dispatch_count_for_tests = 0;
 size_t chttpsvr__listener_dispatch_count_for_tests(void) {
@@ -8451,7 +8451,7 @@ static void listener_note_accepts_for_tests(size_t n) {
 static _Atomic(struct chttpserver *) g_force_next_accept_errno_for_tests_srv =
     NULL;
 static _Atomic int g_force_next_accept_errno_for_tests_val = 0;
-// Test hook: arms the forced accept errno for the server behind h.
+// Test hook: Arms the forced accept errno for the server behind h.
 void chttpsvr__force_next_accept_errno_for_tests(chttpsvr h, int errno_val) {
   struct chttpserver *raw = chttpsvr__resolve_for_tests(h);
   atomic_store(&g_force_next_accept_errno_for_tests_val, errno_val);
@@ -8560,7 +8560,7 @@ static void listener_on_readable_impl(struct chttpserver *srv, int lfd) {
 // wait can go on. The pin and the read of srv->listen_fd happen under
 // srv->mutex, which orders them against the stop that clears listen_fd and
 // waits for the pins. A dispatch whose fd differs from listen_fd (the server
-// stopped, or restarted on a new fd) returns at once: it must not accept on a
+// stopped, or restarted on a new fd) returns at once: It must not accept on a
 // listener it wasn't registered for. srv's memory itself stays valid through
 // the lifetime_refs reference the registration holds.
 static void listener_on_readable(ceventloop loop, ceventloop_reg reg,
@@ -8625,7 +8625,7 @@ static void unix_bind_cleanup(chttpsvr_unix_bind *ub, ccol_memmgmt_procs *mp) {
 }
 
 // Decides, before the bind, what to do with a file that already exists at a
-// unix:// path. It returns true when the bind may go ahead: nothing is there,
+// unix:// path. It returns true when the bind may go ahead: Nothing is there,
 // or a stale socket that no one listens on was found and removed (only while
 // the name still points at the socket the probe saw). It returns false with
 // errno set when the start must fail and leave the file alone: EEXIST for
@@ -9030,7 +9030,7 @@ static void chttpsvr_router_shell_unregister_locked(chttpsvr_router *r) {
 }
 
 // Frees the shells of a destroyed server's routers that no caller can reach any
-// more: always the root router, which is never handed out, and every router
+// more: Always the root router, which is never handed out, and every router
 // once the exit-time destructor has run. A sub-router of a server destroyed
 // earlier keeps its shell, so a stale pointer to it stays safe to pass. Every
 // router has already gone through destroy_router. It takes the registry mutex.
@@ -9086,7 +9086,7 @@ __attribute__((destructor)) static void cleanup_chttpsvr_router_shells(void) {
 #if CCOL_FORK_SAFETY_REQUIRED
 // The fork prepare handler. fork() copies only the calling thread, so a lock
 // another thread holds would stay locked in the child for good; this takes
-// every lock of the module first: the slot table, servers_bundler then
+// every lock of the module first: The slot table, servers_bundler then
 // srv_engine_bundler (one fixed order, so a future change that nests them has
 // one order to follow), the router shell registry, the sweep's wake_mu leaf
 // lock, and for every in_use server its mutex, idle_mutex, diverted_mutex,
@@ -9132,7 +9132,7 @@ static void chttpsvr_atfork_prepare(void) {
 // In the child it also clears state that names threads which don't exist there.
 // Every server's pending_resolve_count, servers_bundler_pins and
 // listener_dispatch_pins go to 0, since destroy waits on them without a limit
-// (in_flight_requests stays: its wait is bounded, and a reset could free a
+// (in_flight_requests stays: Its wait is bounded, and a reset could free a
 // connection a worker really holds). A server caught in a teardown
 // (CHTTPSVR_QS_QUIESCING) is marked quiesced and unregistered with the locked
 // variant, as servers_bundler.mutex is held; retrying its half-done steps could
@@ -9213,12 +9213,12 @@ static void chttpsvr_atfork_release_impl(bool is_child) {
   ccol__mutex_unlock(chttpsvr_slot_table.mutex);
 }
 
-// The fork parent handler: releases the locks the prepare handler took.
+// The fork parent handler: Releases the locks the prepare handler took.
 static void chttpsvr_atfork_release(void) {
   chttpsvr_atfork_release_impl(false);
 }
 
-// The fork child handler: releases the locks and resets the inherited state of
+// The fork child handler: Releases the locks and resets the inherited state of
 // every server and thread. It runs as part of fork()'s return, before any
 // application code in the child can reach a server.
 static void chttpsvr_atfork_child_release(void) {
@@ -9564,7 +9564,7 @@ static chttpsvr_qparams *ensure_qparams(chttpsvr_req *req) {
 
 // Public API
 
-// Creates a stopped server: its copy of mprocs, a logger derived from cl (or a
+// Creates a stopped server: Its copy of mprocs, a logger derived from cl (or a
 // fatal-only logger on stderr when cl is CLOG_NULL), its mutexes, condition
 // variables and routes lock, the root router, and a slot in the handle table.
 // It gives the new handle, or CHTTPSVR_NULL with *err_str set; every failure
@@ -9906,7 +9906,7 @@ static void destroy_detached_pools(detached_pools pools) {
 // off a request of the previous run. The records form the list
 // srv->retired_pools. Each task of these pools references srv, so every
 // teardown of srv waits for all records through retired_pools_reap. Nothing
-// reaches these pools through srv after the detach: every submit reads the
+// reaches these pools through srv after the detach: Every submit reads the
 // current pool under srv->mutex, and a submit that read an old pool lands
 // before its drain or is refused like a full pool.
 typedef struct chttpsvr_retired_pools {
@@ -9936,7 +9936,7 @@ size_t chttpsvr__retired_drain_started_for_tests(void) {
 }
 #endif
 
-// The drain thread of a retired pool set: it drains and destroys the pools and
+// The drain thread of a retired pool set: It drains and destroys the pools and
 // then sets rec->done under srv->mutex, its last touch of srv. The creating
 // thread holds srv->mutex until it has stored this thread in rec, so a reaper
 // that sees done can always join it.
@@ -10005,7 +10005,7 @@ static void retired_pools_reap(struct chttpserver *srv, bool wait_all) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: the worker pool the latest retire_pools call took out of service,
+// Test hook: The worker pool the latest retire_pools call took out of service,
 // and a reader that tells whether that pool's shutdown has started (after which
 // submits to it are refused). A pool that doesn't resolve was destroyed, which
 // counts as started. The caller must hold a task of that pool so it can't be
@@ -10023,7 +10023,7 @@ bool chttpsvr__retired_worker_shutdown_started_for_tests(void) {
 }
 #endif
 
-// Takes pools out of service without waiting: it allocates a
+// Takes pools out of service without waiting: It allocates a
 // chttpsvr_retired_pools record, starts its drain thread and links it into
 // srv->retired_pools under srv->mutex. A set with no pool does nothing. When
 // the record can't be allocated, the pools drain on the calling thread, again
@@ -10067,7 +10067,7 @@ static void retire_current_pools(struct chttpserver *srv) {
   stream_token_start(srv);
 }
 
-// The drain step of a teardown: it gives every body-memory waiter and every
+// The drain step of a teardown: It gives every body-memory waiter and every
 // queued streaming request its answer, closes the idle keep-alive connections
 // (the server is draining, so they would get nothing more), waits for in-flight
 // requests through wait_in_flight_bounded, and detaches the pools, all in one
@@ -10122,7 +10122,7 @@ static detached_pools drain_and_close_all_connections(struct chttpserver *srv) {
   return out;
 }
 
-// The full teardown of a server, run exactly once: stop listening, drain
+// The full teardown of a server, run exactly once: Stop listening, drain
 // requests and connections, reap retired pools, drop the engine reference,
 // destroy the pools, unregister from servers_bundler.servers, and start the
 // engine reaper when that reference was the last. chttpsvr__destroy and the
@@ -10270,7 +10270,7 @@ void chttpsvr__destroy(chttpsvr srv) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hooks: a test names one server whose chttpsvr_finish_destroy it watches
+// Test hooks: A test names one server whose chttpsvr_finish_destroy it watches
 // and asks whether that ran. The second counter records route teardowns that
 // found a connection of the server allocated; it must stay 0, since such a
 // connection could read its matched route.
@@ -10358,7 +10358,7 @@ static bool chttpsvr_slot_live(const chttpsvr_slot *slot) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hooks: the first asks chttpsvr_slot_live about the slot of h, the second
+// Test hooks: The first asks chttpsvr_slot_live about the slot of h, the second
 // sets that slot's in_use flag, so a test can build the window between the two
 // fields without racing a real teardown.
 bool chttpsvr__slot_live_for_tests(chttpsvr h) {
@@ -10399,7 +10399,7 @@ static bool chttpsvr_any_slot_live_locked(void) {
 
 // Frees the slot table's arrays and sets their pointers to NULL, which every
 // resolve, acquire and fork handler tests, so a later stale handle resolves to
-// nothing and a create fails cleanly. It also deletes the worker key: with no
+// nothing and a create fails cleanly. It also deletes the worker key: With no
 // server left no worker thread of any server is left, so a dlclose() doesn't
 // leak the key. The caller holds the table's mutex, the table exists and no
 // slot is live.
@@ -10876,7 +10876,7 @@ ccol_retval chttpsvr_start(chttpsvr h, const chttpsvr_config *cfg) {
   }
 }
 
-// Stops a running server on an already resolved raw pointer: it closes the
+// Stops a running server on an already resolved raw pointer: It closes the
 // listener and goes back to the idle state, and it leaves open connections and
 // pools alone. chttpsvr_stop() calls it after resolving a handle, and
 // quiesce_server_once calls it on a pointer it got from the server registry.
@@ -11025,7 +11025,7 @@ ccol_retval chttpsvr_bound_address(chttpsvr h, char *buf, size_t buflen) {
 
 // Installs the logger that the shared engine logs through, or with CLOG_NULL
 // releases the installed one. A caller uses it to send engine diagnostics where
-// its own logs go. It works under srv_engine_bundler.mutex: a new logger is a
+// its own logs go. It works under srv_engine_bundler.mutex: A new logger is a
 // derived child of cl, stored in user_log, and a running engine switches to it
 // at once (the fallback logger it ran with is closed). A release is refused
 // with ccol_not_permitted while a reactor exists or a stop runs, because the
@@ -11106,7 +11106,7 @@ ccol_retval chttpsvr_set_engine_num_reactor_threads(size_t num_threads) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: the reactor thread count that was wired into the reactor created
+// Test hook: The reactor thread count that was wired into the reactor created
 // last, read under the engine mutex, so a test can check how a configured count
 // was resolved.
 size_t chttpsvr__engine_num_reactor_threads_for_tests(void) {
@@ -11119,7 +11119,7 @@ size_t chttpsvr__engine_num_reactor_threads_for_tests(void) {
 #endif
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: how many rejection responses ran on a reject pool thread in the
+// Test hook: How many rejection responses ran on a reject pool thread in the
 // whole process. A test compares it before and after its own window, since
 // other tests can cause rejections too.
 size_t chttpsvr__reject_pool_task_count_for_tests(void) {
@@ -11128,7 +11128,7 @@ size_t chttpsvr__reject_pool_task_count_for_tests(void) {
 #endif
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: resolves h to its server under the slot table mutex without a pin,
+// Test hook: Resolves h to its server under the slot table mutex without a pin,
 // so a test has no unpin to forget (a missed unpin would make every later
 // destroy of that server hang). It gives NULL in the same cases as
 // chttpsvr_resolve, a released table included.
@@ -11149,7 +11149,7 @@ struct chttpserver *chttpsvr__resolve_for_tests(chttpsvr h) {
   return raw;
 }
 
-// Test hook: how many slots the handle table holds, so a test can check that a
+// Test hook: How many slots the handle table holds, so a test can check that a
 // create and destroy loop reuses freed slots instead of growing the table.
 size_t chttpsvr__slot_table_capacity_for_tests(void) {
   ccol__call_once(chttpsvr_slot_table.once, chttpsvr_slot_table_init_globals);
@@ -11161,7 +11161,7 @@ size_t chttpsvr__slot_table_capacity_for_tests(void) {
   return n;
 }
 
-// Test hook: how many servers are registered with the engine, read under
+// Test hook: How many servers are registered with the engine, read under
 // servers_bundler.mutex, so a test can see that a teardown or a fork fixup
 // really unregistered a server.
 size_t chttpsvr__servers_bundler_count_for_tests(void) {
@@ -11172,7 +11172,7 @@ size_t chttpsvr__servers_bundler_count_for_tests(void) {
   return n;
 }
 
-// Test hook: the idle timeout in ms that chttpsvr_start() stored for h, so a
+// Test hook: The idle timeout in ms that chttpsvr_start() stored for h, so a
 // test can check the conversion from microseconds (a huge value must saturate
 // at UINT_MAX - 1, never wrap to 0, which means off) without waiting for it.
 // Gives 0 for an invalid handle.
@@ -11182,7 +11182,7 @@ unsigned chttpsvr__idle_timeout_ms_for_tests(chttpsvr h) {
   return atomic_load(&raw->idle_timeout_ms);
 }
 
-// Test hook: copies into out every duration chttpsvr_start() resolved for h, in
+// Test hook: Copies into out every duration chttpsvr_start() resolved for h, in
 // ms, in the order the header lists, so a test can pin the conversion from
 // microseconds, the defaults and the form of CHTTPSVR_NO_DEADLINE without
 // waiting. Gives false for an invalid handle.
@@ -11201,7 +11201,7 @@ bool chttpsvr__resolved_ms_for_tests(chttpsvr h, unsigned out[9]) {
   return true;
 }
 
-// Test hook: the in_flight_requests count of h, read under raw->mutex like
+// Test hook: The in_flight_requests count of h, read under raw->mutex like
 // everywhere else, so a test can wait until a request has really reached a
 // worker instead of sleeping. Gives -1 for an invalid handle.
 int chttpsvr__in_flight_requests_for_tests(chttpsvr h) {
@@ -11213,7 +11213,7 @@ int chttpsvr__in_flight_requests_for_tests(chttpsvr h) {
   return n;
 }
 
-// Test hook: marks the calling thread as a worker of h through the worker key,
+// Test hook: Marks the calling thread as a worker of h through the worker key,
 // so a test in a forked child can reach the self-call guard of
 // chttpsvr_destroy() without a live reactor (fork() copies none of its
 // threads). There is no unmark, since the child ends right after. Does nothing
@@ -11249,7 +11249,7 @@ size_t chttpsvr__mem_holders_for_tests(chttpsvr h, bool *exempt_out) {
   return n;
 }
 
-// Test hook: for the request a buffered handler holds, the body memory
+// Test hook: For the request a buffered handler holds, the body memory
 // reservation of its connection (read under wait_mutex) and the capacity of its
 // body buffer, so a test can check that the reservation covers the buffer.
 void chttpsvr__req_body_memory_for_tests(chttpsvr_req *req, size_t *charged,
@@ -11288,7 +11288,7 @@ bool chttpsvr__stream_pool_created_for_tests(chttpsvr h) {
   return created;
 }
 
-// Test hook: how many tasks the worker pool, or the streaming pool, of h runs
+// Test hook: How many tasks the worker pool, or the streaming pool, of h runs
 // right now, so a test can check that a parked connection holds no thread.
 size_t chttpsvr__pool_active_for_tests(chttpsvr h, bool streaming) {
   struct chttpserver *raw = chttpsvr__resolve_for_tests(h);
@@ -11299,7 +11299,7 @@ size_t chttpsvr__pool_active_for_tests(chttpsvr h, bool streaming) {
   return pool ? cthrpool_active_count(pool) : 0;
 }
 
-// Test hook: how many connections of h are parked on a body (kind 1) or on a
+// Test hook: How many connections of h are parked on a body (kind 1) or on a
 // response (kind 2), counted on the parked list under idle_mutex.
 size_t chttpsvr__parked_count_for_tests(chttpsvr h, int kind) {
   struct chttpserver *raw = chttpsvr__resolve_for_tests(h);
@@ -11312,7 +11312,7 @@ size_t chttpsvr__parked_count_for_tests(chttpsvr h, int kind) {
   return n;
 }
 
-// Test hook: a rough measure of what the connections parked on a response or
+// Test hook: A rough measure of what the connections parked on a response or
 // lingering still hold (body capacity, one per header field, one per target,
 // query and parameter array, plus the response for a lingering one), counted
 // under idle_mutex. A test expects 0, because that state must be dropped when a
@@ -11334,7 +11334,7 @@ size_t chttpsvr__parked_request_state_for_tests(chttpsvr h) {
   return n;
 }
 
-// Test hook: how many connections sit in the idle list of h, counted under
+// Test hook: How many connections sit in the idle list of h, counted under
 // idle_mutex.
 size_t chttpsvr__idle_count_for_tests(chttpsvr h) {
   struct chttpserver *raw = chttpsvr__resolve_for_tests(h);
@@ -11346,7 +11346,7 @@ size_t chttpsvr__idle_count_for_tests(chttpsvr h) {
   return n;
 }
 
-// Test hook: runs one sweep tick for h on the calling thread with the clock
+// Test hook: Runs one sweep tick for h on the calling thread with the clock
 // read ahead_ms later, and gives how many connections it looked at. A test uses
 // it to expire an idle limit without sleeping. The sweep thread keeps running;
 // the claims of the lists make the two safe together.
@@ -11361,7 +11361,7 @@ size_t chttpsvr__sweep_ahead_for_tests(chttpsvr h, unsigned ahead_ms) {
   return visited;
 }
 
-// Test hook: one sweep tick for h right away.
+// Test hook: One sweep tick for h right away.
 size_t chttpsvr__sweep_now_for_tests(chttpsvr h) {
   return chttpsvr__sweep_ahead_for_tests(h, 0);
 }
@@ -11373,7 +11373,7 @@ void chttpsvr_engine_stop(void) { engine_force_stop(); }
 
 // Blocks until the shared engine has stopped and its reaper is joined, so
 // main() can wait for a stop that a signal asked for. A call from a handler or
-// middleware of any server is fatal: the engine stop drains every worker pool
+// middleware of any server is fatal: The engine stop drains every worker pool
 // with no timeout, and this call would keep that drain from finishing.
 void chttpsvr_engine_wait(void) {
   if (chttpsvr_is_any_worker_call()) {
@@ -11614,7 +11614,7 @@ const char *chttpsvr_req_header(const chttpsvr_req *req, const char *name) {
 }
 
 // Gives the body of a buffered route and its length in *len_out, so a handler
-// can read it as one stable buffer. A streaming route gets NULL and 0: its
+// can read it as one stable buffer. A streaming route gets NULL and 0: Its
 // conn->body is a live read cursor that chttpsvr_req_read() drains, and its
 // pointer and length would mix delivered and undelivered bytes. conn and the
 // matched route are checked as a defence, though documented use never gives
@@ -11817,7 +11817,7 @@ void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code) {
   if (resp) resp->status_code = status_code;
 }
 
-// Tells whether value is a Content-Length a response may carry: one or more
+// Tells whether value is a Content-Length a response may carry: One or more
 // ASCII digits (RFC 9110 section 8.6) whose number fits a signed 64-bit
 // integer, the widest length that Go, curl and our own parser accept.
 static bool resp_content_length_valid(const char *value) {
@@ -12049,7 +12049,7 @@ ccol_retval chttpsvr_resp_write_json(chttpsvr_resp *resp, const char *json,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-// Test hook: runs the exit-time destructors of the module now (router shells,
+// Test hook: Runs the exit-time destructors of the module now (router shells,
 // slot table, stop watcher), in a forked child, so the test can then destroy a
 // server as a late application destructor would.
 void chttpsvr__run_exit_cleanup_for_tests(void) {
@@ -12058,7 +12058,7 @@ void chttpsvr__run_exit_cleanup_for_tests(void) {
   cleanup_engine_stop_watcher();
 }
 
-// Test hook: how many router shells the registry holds and whether its array is
+// Test hook: How many router shells the registry holds and whether its array is
 // allocated, read under the registry mutex, so a test can see what a destroy
 // and the exit cleanup free.
 void chttpsvr__router_shell_registry_state_for_tests(size_t *count,

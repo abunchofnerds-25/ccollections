@@ -27,7 +27,7 @@ task's reference goes when the task stops, the caller's goes with
 cthrpool_future_free, and whichever thread leaves the future last
 destroys it.
 
-Result ownership: the pool never allocates, copies or frees the void*
+Result ownership: The pool never allocates, copies or frees the void*
 that comes back, it only carries the pointer that the task function
 returned. cthrpool_future_free releases the future's handle, never the
 result. Once this function returns the caller owns the result, and

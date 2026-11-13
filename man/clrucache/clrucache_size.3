@@ -33,7 +33,7 @@ stale handle is an ordinary error here and not a fatal one; only
 ccache_destroy() treats a stale handle as fatal.
 The function adds up the sizes of the cache's segments, taking each
 segment's own lock in turn. So the result is a snapshot and not a
-value at one instant: a segment can gain or lose an entry after it has
+value at one instant: A segment can gain or lose an entry after it has
 been counted, and the total describes no single moment.
 The complexity is O(number of segments), a small fixed bound, not
 O(entries).

@@ -17,7 +17,7 @@ as the diagnostics logger of the shared reactor.  It closes the
 logger that an earlier call derived and, if a running engine has one,
 the fallback logger of that engine.
 
-The reactor logs to this handle in exactly three places: a failed TLS
+The reactor logs to this handle in exactly three places: A failed TLS
 handshake, a failed bind of the listen socket, and each pass of the
 idle-timeout sweep that closes one or more connections.  If no logger
 from this function is in place when the engine starts, the engine
@@ -28,7 +28,7 @@ so the min_level of the fallback logger filters every one of them out
 and in practice it writes nothing.  Install a more useful logger with
 this function.
 
-You can call it at any time: before the first chttpsvr_start, while
+You can call it at any time: Before the first chttpsvr_start, while
 the reactor runs, and after a full engine stop.  The child logger
 serves the reactor that is running now, if there is one, and every
 reactor that a later chttpsvr_start brings up after a full engine

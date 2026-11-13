@@ -167,7 +167,7 @@ static void _child_check_repaired(const char *path, const char *last,
   }
 }
 
-// What a forked scenario left: its wait status, the values it reported in
+// What a forked scenario left: Its wait status, the values it reported in
 // order, and whether the fork happened.
 typedef struct {
   int status;
@@ -213,7 +213,7 @@ static void _run_child(void (*fn)(void), child_outcome_t *out) {
   }
 }
 
-// Tells whether a child passed: its last report is 0 and no signal killed it.
+// Tells whether a child passed: Its last report is 0 and no signal killed it.
 // The exit status isn't used, because valgrind can replace a forked child's
 // status.
 static bool _child_passed(const child_outcome_t *o) {
@@ -239,7 +239,7 @@ static void _print_child(const char *name, const child_outcome_t *o) {
   fprintf(stderr, "\n");
 }
 
-// Scenario body: a synchronous file logger under AUTO, whose open sets SIGXFSZ
+// Scenario body: A synchronous file logger under AUTO, whose open sets SIGXFSZ
 // to SIG_IGN. The limit lies extra bytes past the first record: 0 makes the
 // next write start at the limit and fail at once, a few bytes make the kernel
 // take part of a record first. Once the limit is lifted the logger closes the
@@ -266,7 +266,7 @@ static void _sync_auto_body(off_t extra) {
   _child_pass();
 }
 
-// The two variants of the synchronous scenario: a short write, and a write that
+// The two variants of the synchronous scenario: A short write, and a write that
 // starts at the limit.
 static void _scenario_sync_short_write(void) { _sync_auto_body(10); }
 static void _scenario_sync_write_at_the_limit(void) { _sync_auto_body(0); }
@@ -285,7 +285,7 @@ TEST(sigxfsz, sync_file_logger_survives_a_write_that_starts_at_the_limit) {
   REQUIRE_TRUE(_child_passed(&o));
 }
 
-// Scenario: the same for an async logger, whose writer thread hits the limit.
+// Scenario: The same for an async logger, whose writer thread hits the limit.
 static void _scenario_async_auto(void) {
   char path[128];
   _log_path(path, sizeof(path), "async");
@@ -319,7 +319,7 @@ TEST(sigxfsz, async_file_logger_survives_the_limit) {
   REQUIRE_TRUE(_child_passed(&o));
 }
 
-// Scenario: the writer thread takes back the SIGXFSZ its own failed write left
+// Scenario: The writer thread takes back the SIGXFSZ its own failed write left
 // pending. The logger opens under UNTOUCHED (default disposition) and the main
 // thread blocks SIGXFSZ, so a process-wide signal (FreeBSD) can only reach the
 // writer. Phase 1 switches to AUTO, so the writer blocks SIGXFSZ before its
@@ -381,7 +381,7 @@ TEST(sigxfsz, writer_thread_consumes_its_sigxfsz_and_follows_a_policy_change) {
   REQUIRE_TRUE(ok);
 }
 
-// Scenario: under UNTOUCHED opening a regular file changes nothing, so a write
+// Scenario: Under UNTOUCHED opening a regular file changes nothing, so a write
 // at the limit kills the child with SIGXFSZ. The file is removed before the
 // limit, since the child dies there.
 static void _scenario_untouched(void) {
@@ -423,7 +423,7 @@ static void _count_sigxfsz(int sig) {
   _handler_calls = _handler_calls + 1;
 }
 
-// Scenario: a handler the application installed before the open stays, and it
+// Scenario: A handler the application installed before the open stays, and it
 // sees the SIGXFSZ of a write at the limit.
 static void _scenario_application_handler_stays(void) {
   char path[128];
@@ -458,7 +458,7 @@ TEST(sigxfsz, auto_policy_keeps_a_handler_of_the_application) {
   REQUIRE_TRUE(_child_passed(&o));
 }
 
-// Scenario: an application's ignore stays an ignore, and switching to UNTOUCHED
+// Scenario: An application's ignore stays an ignore, and switching to UNTOUCHED
 // doesn't undo the ignore that an open under AUTO set.
 static void _scenario_ignores_stay(void) {
   char path[128];

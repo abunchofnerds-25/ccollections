@@ -56,7 +56,7 @@ The pool structs themselves come from mmgmt_procs
 Each sub-pool calls the functions of mmgmt_procs for its dynamic
 fallback entries, and for its own bookkeeping of them, in the middle of
 an update of its own state and with its lock held when it has one.
-Those functions must not call back into the same ranged pool: with a
+Those functions must not call back into the same ranged pool: With a
 lock the call can deadlock, and without one it corrupts that state. An
 allocator built on a pool must draw from a different pool
 The buffer holds every sub-pool, in segments next to each other

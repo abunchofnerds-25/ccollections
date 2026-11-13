@@ -45,18 +45,18 @@ Example: smallest=4 (16 bytes), largest=6 (64 bytes), count=8 (256 elems)
   gives three pools: 16 bytes (256 elems), 32 bytes (128) and 64 bytes
   (64)
 Fallback policies:
-  - crmempool_fallback_disabled: tries each larger pool in turn, and returns
+  - crmempool_fallback_disabled: Tries each larger pool in turn, and returns
     NULL when all of them are empty too
-  - crmempool_fallback_at_first_exhaustion: when the pool that fits the
+  - crmempool_fallback_at_first_exhaustion: When the pool that fits the
     request has no free entry, that pool takes the memory from the
     heap, and the request never goes to a larger pool
-  - crmempool_fallback_at_last_exhaustion: tries each larger pool in turn,
+  - crmempool_fallback_at_last_exhaustion: Tries each larger pool in turn,
     and goes to the heap only when every pool that can serve the
     request is empty
 Each sub-pool calls the functions of mmgmt_procs for its dynamic
 fallback entries, and for its own bookkeeping of them, in the middle of
 an update of its own state and with its lock held when it has one.
-Those functions must not call back into the same ranged pool: with a
+Those functions must not call back into the same ranged pool: With a
 lock the call can deadlock, and without one it corrupts that state. An
 allocator built on a pool must draw from a different pool
 
@@ -83,7 +83,7 @@ pool is created and nothing grows at run time.
 crmempool_total_capacity() reports the nominal count of a tier,
 and once that count runs out the request moves up to a larger tier or
 falls back. The one exception is the one that
-cmempool_total_capacity(3) describes: an entry leaves a thread's
+cmempool_total_capacity(3) describes: An entry leaves a thread's
 cache with no lock held, so there is no count to consult, and
 concurrent callers can hold a few entries more than a tier's nominal
 count for a short time, but never more than that count plus the tier's

@@ -19,7 +19,7 @@ include platform.mk
 # the file and the next build starts from the defaults.
 #
 # The file has one conditional block per setting, which assigns the saved
-# value only while the setting has no value of its own: undefined, the value
+# value only while the setting has no value of its own: Undefined, the value
 # make predefines (CC is `cc`), or the default of platform.mk. Each value is
 # stored as text exactly as the build received it, so a reference like
 # $(PREFIX) reads back as it was written. The file has to be read after
@@ -52,7 +52,7 @@ SHORT_LIBRARY_NAME = ccollections
 # the SONAME of the shared library holds.
 #
 # VERSION names the release and ABI_VERSION names the binary interface. An
-# application depends on the ABI version and not on the release: when you
+# application depends on the ABI version and not on the release: When you
 # build against this library it gets DT_NEEDED
 # libccollections.so.$(ABI_VERSION), and the dynamic loader then accepts only
 # a library that promises the same interface. Keeping the two numbers apart
@@ -169,7 +169,7 @@ SOURCE_DIR = src
 INCLUDE_DIR = include
 # The HTTP/1.1 response parser of chttpclient (src/chttp1_parser.c) and the
 # rest of the HTTP stack (ctls, ceventloop, chttpserver, chttpclient) are
-# all our own code, so they need no third-party build rules: the SOURCE_FILES
+# all our own code, so they need no third-party build rules: The SOURCE_FILES
 # wildcard over $(SOURCE_DIR)/*.c below finds them like any other module.
 # The library holds no third-party source and builds only its own .c files.
 # The test directory of a module you turn off is skipped, and so is
@@ -243,13 +243,13 @@ EXTRA_CFLAGS ?=
 # keeps the dynamic symbol table equal to the documented public API, so an
 # internal helper can't slip into the ABI unnoticed and an application symbol
 # of the same name can never interpose one of our internal calls. It also
-# removes an indirection: a call from inside the library to an exported
+# removes an indirection: A call from inside the library to an exported
 # function can be interposed and so goes through the PLT, while a call to a
 # hidden function is direct.
 # -std=gnu11 pins the language mode of the public headers, which is C11 plus
 # the GNU extensions the macro layer needs (typeof, statement expressions and
 # __auto_type). Without it the build takes the compiler's default mode, and
-# those defaults change over time: a toolchain that defaults to gnu23 changes
+# those defaults change over time: A toolchain that defaults to gnu23 changes
 # the meaning of `bool`, of `static_assert` and of an empty parameter list. So
 # an unset mode lets the build machine decide which language the library is
 # compiled as, while a named mode keeps a build the same across compilers and
@@ -265,7 +265,7 @@ EXTRA_CFLAGS ?=
 #
 # The probe compiles an empty translation unit with the flag, -Werror and
 # EXTRA_CFLAGS, and keeps the flag only when that succeeds. EXTRA_CFLAGS has to
-# be in the probe because it can change the answer: with -fsanitize=address
+# be in the probe because it can change the answer: With -fsanitize=address
 # Apple clang predefines _FORTIFY_SOURCE as 0 (the sanitizer checks those
 # accesses itself), and -D_FORTIFY_SOURCE=3 then redefines the macro. This
 # beats dropping the flag on a hardcoded list of targets, which goes stale as
@@ -452,7 +452,7 @@ CCOL_SUITE_MAKE_VARS = $(foreach v,$(filter CC EXTRA_CFLAGS,$(CCOL_RESTORED_VARI
 # module and names it instead of running into the CI job's own timeout. It's
 # empty by default (no bound), and CI sets it. GNU timeout(1) runs the suite
 # in a process group of its own, so a Ctrl-C in the terminal never reaches the
-# suite, and make waits for it before it stops: nothing happens until the
+# suite, and make waits for it before it stops: Nothing happens until the
 # suite ends or its bound runs out. Kill the suite's process group (timeout
 # leads it) to get make back.
 SUITE_TIMEOUT ?=
@@ -466,7 +466,7 @@ memtest:
 
 # Each module runs in its own subshell and && joins the list, so the first
 # failure stops the sweep with a non-zero status. Don't join a
-# `cd $(folder) && ... && cd -` chain with `;` instead: that leaves the shell
+# `cd $(folder) && ... && cd -` chain with `;` instead: That leaves the shell
 # in the directory of the module that failed, the relative cd of every later
 # module fails too, and sixteen "can't cd" lines bury the one real error.
 generate_coverage_report:
@@ -478,7 +478,7 @@ generate_coverage_report:
 # The generate_coverage_report target of each module leaves its lcov
 # tracefiles in tests/<module>/coverage/, and this target merges all of them
 # into one report for the whole library. The merge is what makes the numbers
-# mean anything: a file like src/common.c is compiled into most of the module
+# mean anything: A file like src/common.c is compiled into most of the module
 # test binaries, and only the union of their runs shows how much of it the
 # suite reaches.
 #
@@ -533,7 +533,7 @@ check_reserved_identifiers:
 # from these basenames, and a `*`, `?` or `[` in one of them makes `rm -f`
 # delete, and `sed -i` rewrite, whatever it matches inside the installation
 # directory, which means other packages' files. The recipes run under `set -f`
-# so the shell expands nothing. This check is the other half of that guard: it
+# so the shell expands nothing. This check is the other half of that guard: It
 # keeps such a name out of the tree, so the property doesn't depend on one
 # `set -f` surviving every future edit. It also requires every man alias page
 # to be the single line ".so <module>/<symbol>.3" that the install rewrites,
@@ -592,7 +592,7 @@ PYTHON ?= python3
 man_html:
 	@$(PYTHON) ./ci_scripts/build_man_html.py $(MAN_HTML_DIR)
 
-# Puts the whole GitHub Pages site together under pages_site/: the front
+# Puts the whole GitHub Pages site together under pages_site/: The front
 # page, the man pages, the coverage report of the last `make coverage_site`
 # (the site goes without one when there is none), a 404 page and the sitemap
 # for Google Search Console. Open pages_site/index.html to look at it; the
@@ -619,7 +619,7 @@ check_dso_unload: $(SHARED_LIBRARY_NAME)
 	@./ci_scripts/check_dso_unload.sh $(SHARED_LIBRARY_REAL)
 
 # Proves on the built library that no other object in a process can take over
-# a call meant for it: every exported symbol carries the version node
+# a call meant for it: Every exported symbol carries the version node
 # CCOL_$(ABI_VERSION), no dependency defines one of its names, the library
 # binds its own calls itself (-Bsymbolic-functions), and an impostor library
 # preloaded ahead of it catches neither a call of the library nor, where the
@@ -666,7 +666,7 @@ endif
 # compiling the sources into its own binary, so it measures the code that
 # ships, with the flags it ships with, through the same dynamic call an
 # application makes. The baseline it compares against belongs to one machine
-# and we don't commit it: a nanoseconds-per-operation figure describes the
+# and we don't commit it: A nanoseconds-per-operation figure describes the
 # cache hierarchy and background load of one machine, so comparing against a
 # baseline from another machine reports a difference that has nothing to do
 # with the library. Record a baseline with bench_update, and bench then
@@ -928,7 +928,7 @@ clean:
 #
 # LIBDIR, INCLUDEDIR, MANDIR and PKGCONFIGDIR each move one part of the
 # install, for a distribution whose layout differs from PREFIX/lib and the
-# rest: a Fedora package passes LIBDIR=/usr/lib64 and a Debian package
+# rest: A Fedora package passes LIBDIR=/usr/lib64 and a Debian package
 # LIBDIR=/usr/lib/<triplet>. $(PKGCONFIG_FILE) records LIBDIR and INCLUDEDIR,
 # so a pkg-config consumer finds whatever this install chose.
 #
@@ -1006,7 +1006,7 @@ ALL_PUBLIC_HEADER_FILES = $(filter-out $(INCLUDE_DIR)/internal/%,\
 ALL_MAN3_SRC_FILES = $(wildcard man/*/*.3)
 ALL_MAN7_SRC_FILES = $(wildcard man/*/*.7)
 # The pages of a module you turn off leave the install along with its header,
-# for the same reason the header goes: they document functions that no
+# for the same reason the header goes: They document functions that no
 # installed header declares and the installed library doesn't hold. The
 # uninstall target uses the unfiltered lists above, for the reason given
 # there.
@@ -1031,7 +1031,7 @@ MAN7_SRC_FILES = $(filter-out $(DISABLED_MAN_FILES),$(ALL_MAN7_SRC_FILES))
 # does nothing once there's no slash left to remove, and without that stop a
 # relative DESTDIR or PREFIX would make it loop forever.
 # `make install DESTDIR=stage PREFIX=/usr` is an ordinary packaging command of
-# that kind. The two shapes don't end at the same fallback though: removing
+# that kind. The two shapes don't end at the same fallback though: Removing
 # the last component of an ABSOLUTE path with one component leaves nothing, so
 # the nearest existing ancestor there is / and not the working directory. So
 # `make install PREFIX=/newroot` has to see that / isn't writable and ask for
@@ -1060,7 +1060,7 @@ endif
 # ldconfig refreshes the dynamic linker's cache and mandb (makewhatis on
 # FreeBSD, see platform.mk) does the same for the man index. Both act on the
 # live system, so the install skips them when it stages files into a DESTDIR
-# for packaging: the live system is exactly what a staged install leaves
+# for packaging: The live system is exactly what a staged install leaves
 # alone, and running ldconfig there would give a misleading result as well.
 # The install succeeds even if either command fails.
 REFRESH_SYSTEM_CACHES = \

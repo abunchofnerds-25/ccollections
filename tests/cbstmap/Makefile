@@ -15,7 +15,7 @@ build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
 # compile_probe.sh checks a guarantee that comes from the type system, which no
-# run-time test can see: nobody can assign through an accessor the map hands
+# run-time test can see: Nobody can assign through an accessor the map hands
 # out (an iterator pair, the stored char* that cbmap_get_ptr() reaches), and
 # cbstmap_get_elem_ref() fills a cmap_pair that belongs to the caller. The probe
 # runs under gcc and under clang, since a diagnostic depends on the compiler.

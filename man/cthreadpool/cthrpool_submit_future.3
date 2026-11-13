@@ -18,7 +18,7 @@ Allocates a future object and submits a task to the pool. The task
 calls fn(arg) on a worker thread and stores the void* that fn returned
 in the future, where cthrpool_future_get can read it later.
 
-On success the future has a reference count of 2: the caller holds one
+On success the future has a reference count of 2: The caller holds one
 reference, and the queued task holds the other inside the library.
 Each cthrpool_future_get call that runs on the future adds one more. The
 caller must call cthrpool_future_free exactly once when it is done.
@@ -30,7 +30,7 @@ don't want it to block.
 A call from a task running on this same pool, or from the on_complete
 callback of that task, while a bounded queue is already at capacity,
 fails with ccol_container_full instead of waiting, for the reason
-cthrpool_submit(3) gives: only the workers of this pool can free a slot,
+cthrpool_submit(3) gives: Only the workers of this pool can free a slot,
 and the caller is one of them. An unbounded queue never gets into that
 case.
 

@@ -14,7 +14,7 @@ size_t ceventloop_reg_count(ceventloop loop);
 Returns the number of live registrations, meaning
 ceventloop_add() calls whose registration has not been removed
 yet. It does not count entries in the epoll interest list, so one fd
-registered for both directions counts as 2: two independent
+registered for both directions counts as 2: Two independent
 ceventloop_reg handles stand behind it, even though they share one
 entry.
 .fi

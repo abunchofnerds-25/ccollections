@@ -43,7 +43,7 @@ For such a pool the two ends of the count are not equally exact. A
 thread takes an entry from its own cache with no lock held, so there is
 no count to consult at that moment, and entries go into a cache before
 anybody knows whether they will be needed. That choice keeps the
-guarantee above: the pool never refuses a caller while another thread's
+guarantee above: The pool never refuses a caller while another thread's
 cache holds entries that the first caller was entitled to. The price is
 that concurrent callers can hold a few entries more than this count for
 a short time, but never more than the physical slot count. A pool with
@@ -54,7 +54,7 @@ past this count fails, or falls back to the system allocator.
 
 cmempool_create_mp(3) explains how the pool size affects performance.
 
-A NULL mp is a fatal error: the call prints a message and ends the
+A NULL mp is a fatal error: The call prints a message and ends the
 process with abort(), in every build.
 .fi
 .SH "THREAD SAFETY"

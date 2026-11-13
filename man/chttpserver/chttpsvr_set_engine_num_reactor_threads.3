@@ -63,12 +63,12 @@ for the common traffic:
   CPU-bound work that gains from being spread over several cores when
   there is enough of it.
 
-A larger num_threads is worth its cost in one case only: a steady
+A larger num_threads is worth its cost in one case only: A steady
 churn of TLS connections, where many separate clients open a
 connection for one request or a few and then close it, so that a
 large part of the traffic pays the CPU cost of a handshake instead of
 spreading it out.  Some
-deployments do look like that: a public API with many one-off
+deployments do look like that: A public API with many one-off
 anonymous clients, a gateway for IoT devices whose unreliable
 networks reconnect often, or a webhook receiver that many different
 external services call.  But it is the less common shape.  Most

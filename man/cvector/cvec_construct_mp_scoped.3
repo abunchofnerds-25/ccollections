@@ -14,7 +14,7 @@ cvec_construct_mp_scoped(v, type, mprocs);
 Declares a vector variable named v that holds elements of the given type,
 creates the vector through mprocs, and adds a cleanup handler that
 destroys the vector when control leaves the surrounding scope. It is
-cvec_construct_mp(3) plus that handler, with one more difference: the
+cvec_construct_mp(3) plus that handler, with one more difference: The
 companion type variables are initialized to NULL here, while
 cvec_construct_mp(3) leaves them indeterminate on purpose. Everything
 else cvec_construct_mp(3) documents holds here too, including the
@@ -24,7 +24,7 @@ the program through ccol__fatal_err() on a failed creation.
 The variable is set to NULL before the vector is created, which makes the
 handler safe on a path that leaves the block between the declaration and
 a successful creation. The vector is destroyed on every exit from the
-scope: the closing brace, a return, a break, a continue or a goto out of
+scope: The closing brace, a return, a break, a continue or a goto out of
 the block. The variable is set to NULL as the vector is destroyed, so an
 explicit cvec_destroy(3) earlier in the block doesn't lead to a double
 free.

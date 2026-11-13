@@ -24,7 +24,7 @@ SOFTWARE.
 
 // Every public destroy, free and release macro must evaluate its handle
 // argument once, call the destroy function once with the value the argument
-// held, and then clear the argument. This binary checks only the macros: the
+// held, and then clear the argument. This binary checks only the macros: The
 // destroy functions are stubs defined here that record their calls, so none
 // of the library is linked.
 //
@@ -57,7 +57,7 @@ TAU_MAIN()
 // repeated element.
 #define DM_N 3
 
-// What the stubs saw: the value of each call, in order, and the call count.
+// What the stubs saw: The value of each call, in order, and the call count.
 static uintptr_t dm_seen[16];
 static int dm_calls;
 
@@ -118,7 +118,7 @@ void crmempool__free_entry(crmempool *rmp, void *entry) {
 
 // Runs the destroy macro F over an array of DM_N handles of type T, last
 // element first, and checks the result with REQUIRE_* (it returns from the test
-// on a failure). It is the body of every macro case: exactly DM_N calls in
+// on a failure). It is the body of every macro case: Exactly DM_N calls in
 // order with each element's value, every element cleared to CLEARED, and k at 0
 // after DM_N calls. The array below dm_a holds live guard handles, so an index
 // driven below 0 stays in our storage. A second part nests one F call in the

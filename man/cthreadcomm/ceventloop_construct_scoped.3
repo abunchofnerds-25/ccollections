@@ -43,7 +43,7 @@ If you count on no callback being able to reach something that lives in
 this loop's scope, such as a mutex or a buffer that a callback's arg
 points at, that must stay true up to and including the join at the end
 of the scope. Holding up to an explicit ceventloop_remove(3) call
-before that point is not enough: a callback can outlive the return of
+before that point is not enough: A callback can outlive the return of
 that call, as the notes of ceventloop_remove(3) explain, and the
 implicit shutdown at the end of the scope behaves the same way.
 .fi

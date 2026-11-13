@@ -76,7 +76,7 @@ it never answers "/admin/a/b" while "/admin" is mounted.  A mount
 nested under another one, such as "/admin/deep" under "/admin", owns
 the paths under itself, and the middleware of "/admin" doesn't run
 for them, so give the nested mount a guard of its own when it needs
-one.  Two sub-routers on the identical prefix share it: the routes of
+one.  Two sub-routers on the identical prefix share it: The routes of
 both can answer, the earlier registration first, and the earlier one
 answers a 404 or a 405.  Which router wins depends only on the
 prefixes and patterns you register and never on the order of
@@ -97,7 +97,7 @@ as "//foo", as if the "/" sub-router did not exist.  Every route on a
 "/" sub-router can therefore be reached only from the exact path "/".
 
 That makes this prefix a trap for a sub-router with its own
-middleware: an authenticator or a rate limiter on a "/" sub-router
+middleware: An authenticator or a rate limiter on a "/" sub-router
 does not refuse everything outside "/".  A root-level route or
 another sub-router serves any other path normally, and the
 middleware of the "/" sub-router doesn't run for it.

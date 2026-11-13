@@ -28,7 +28,7 @@ a pool created without a fallback
 .SH NOTES
 .nf
 A non-zero result means the pool was too small for its workload at
-some point, and that elem_count should go up: every fallback
+some point, and that elem_count should go up: Every fallback
 allocation is a round trip to the system allocator, which is exactly
 the cost the pool is there to avoid.
 
@@ -39,7 +39,7 @@ cmempool_destroy() treats an outstanding fallback allocation as a
 leak and stops the process, so free every fallback entry of a pool
 before you destroy it.
 
-A NULL mp is a fatal error: the call prints a message and ends the
+A NULL mp is a fatal error: The call prints a message and ends the
 process with abort(), in every build.
 .fi
 .SH "THREAD SAFETY"

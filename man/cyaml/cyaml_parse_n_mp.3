@@ -28,7 +28,7 @@ gives the line and the column.  No byte past len is ever read.
 yaml_str   Input buffer, which doesn't need a null terminator.
 len        Number of bytes to parse.
 err_str    Out-parameter for the error string, or NULL to ignore it.
-           It has the same rules as in cyaml_parse_mp(): the library
+           It has the same rules as in cyaml_parse_mp(): The library
            owns the string, and the message is printable ASCII
            whatever the len bytes hold.
 mp         Custom allocator, or NULL for the default.

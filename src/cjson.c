@@ -232,7 +232,7 @@ typedef struct destroy_worklist {
 // Queues child on wl for destruction, so a teardown never recurses per level.
 // A NULL child is ignored. The worklist grows with the default allocator,
 // since it's scratch state unrelated to any node's m_procs. When it can't
-// grow, the child is destroyed at once by a recursive cjson__destroy(): stack
+// grow, the child is destroyed at once by a recursive cjson__destroy(): Stack
 // use then follows the depth of that one subtree, but only when the tree is
 // deep and memory has run out together.
 static void destroy_worklist_push(destroy_worklist *wl, cjson_node *child) {
@@ -289,7 +289,7 @@ static bool cycle_stack_push(cjson_node ***stack, cjson_node **inline_stack,
 
 // Tells whether needle is haystack or lies somewhere below it.
 // cjson_list_push() and cjson_dictionary_set() use it to refuse a child whose
-// subtree reaches the target: the attach would close a cycle, and the teardown
+// subtree reaches the target: The attach would close a cycle, and the teardown
 // would then free a node twice. A needle that was never attached has no parent,
 // so nothing can reach it; that answer costs O(1) and keeps a tree built bottom
 // up linear. The search uses an explicit stack, because the subtree can be
@@ -381,7 +381,7 @@ static __thread cjson_node *node_pool_head = NULL;
 static __thread unsigned node_pool_sz = 0;
 static __thread bool pool_key_armed = false;
 #endif
-// Test counters: arms of the pool key that took the lock, and the nodes that
+// Test counters: Arms of the pool key that took the lock, and the nodes that
 // the pools of all threads hold.
 #ifdef RUNNING_UNIT_TESTS
 atomic_ulong cjson__pool_key_lock_count_for_tests;
@@ -602,7 +602,7 @@ static void node_free(cjson_node *n) {
 // destructor of the pool key, so a thread's pool doesn't leak at thread exit,
 // and pool_key_fini() calls it for the unloading thread. With
 // CCOL__EMULATE_DARWIN_TLS it frees the block that arg names. Otherwise it
-// resets the __thread pool and clears pool_key_armed: the C library has already
+// resets the __thread pool and clears pool_key_armed: The C library has already
 // cleared the key's value, and if a later key destructor refills the pool, the
 // refill must set the value again so the C library runs this destructor once
 // more. Lowers cjson__pool_population_for_tests.
@@ -970,7 +970,7 @@ static cjson cjson_create_dictionary_interned(ccol_memmgmt_procs *mp) {
   return (cjson)node_alloc(CJSON_DICTIONARY, mp);
 }
 
-// The public factories: each creates one node with allocator mp (NULL for the
+// The public factories: Each creates one node with allocator mp (NULL for the
 // default) and gives it to the caller, or NULL. They intern mp first, because
 // nodes must never point at the caller's struct, and fail with NULL when the
 // intern table is full.
@@ -1011,7 +1011,7 @@ cjson cjson_create_dictionary_mp(ccol_memmgmt_procs *mp) {
 
 // Frees node and every descendant; it's the body of cjson_destroy(), and the
 // rest of the module uses it to drop subtrees. node itself is freed directly
-// and never pushed on the worklist: a push that can't grow falls back to
+// and never pushed on the worklist: A push that can't grow falls back to
 // cjson__destroy() on what it pushes, which would be this same node.
 void cjson__destroy(cjson node) {
   if (!node) return;
@@ -1032,7 +1032,7 @@ cjson_node_type cjson_type(cjson node) {
   return ((cjson_node *)node)->type;
 }
 
-// The typed getters: each gives the value of a leaf (or the length of a
+// The typed getters: Each gives the value of a leaf (or the length of a
 // container) for the caller. They call ccol__fatal_err() for a NULL node or
 // another type, because reading the wrong member of the value union is a bug.
 bool cjson_bool_val(cjson node) {
@@ -1363,7 +1363,7 @@ static cjson_node *clone_shallow(cjson_node *src) {
 // depth passes CJSON_CLONE_MAX_DEPTH. Each container is created empty, attached
 // to its parent and only then filled, which is what lets the walk be a loop
 // over an explicit stack. Children go straight into the store without the
-// checks of cjson_list_push() and cjson_dictionary_set(): the copy is new, and
+// checks of cjson_list_push() and cjson_dictionary_set(): The copy is new, and
 // each key comes from the source map, so it's unique and valid UTF-8. Members
 // keep their insertion order.
 static cjson_node *clone_tree(cjson_node *src) {
@@ -1472,7 +1472,7 @@ cjson cjson_clone(cjson node) {
   return (cjson)clone_tree((cjson_node *)node);
 }
 
-// The state every parse function receives: the input and the current offset,
+// The state every parse function receives: The input and the current offset,
 // the message that parse_err() fills (meaningful only after a failure), and
 // the allocator for every node and string. The parser reads src directly, with
 // no token stream.
@@ -2117,7 +2117,7 @@ static cjson_node *parse_scalar_value(parse_ctx *ctx, char c) {
 
 // Parses one complete value and everything inside it, for parse_common().
 // Gives the root, or NULL with ctx->error set and every node built so far
-// freed. It walks with an explicit stack in four steps: parse a value, hand a
+// freed. It walks with an explicit stack in four steps: Parse a value, hand a
 // complete value to the innermost open container, decide what comes next in
 // that container, and read a key. A container goes to its parent only after
 // its closing bracket, so on failure every frame still owns its container and
@@ -2766,9 +2766,9 @@ static bool parse_list_index_component(const char *digits, size_t *out) {
 
 // Walks a dot-separated path from root and gives the node at its end, or NULL;
 // cjson__get() and the parent walk of set and delete use it. path_copy must be
-// writable: each separator becomes a '\0' in turn and each component is
+// writable: Each separator becomes a '\0' in turn and each component is
 // unescaped in place. When invalid isn't NULL it is set for an error in the
-// path, at any position: an empty component, a component that isn't UTF-8, a
+// path, at any position: An empty component, a component that isn't UTF-8, a
 // malformed #N on a list, or a shape that can't apply (a scalar in the middle,
 // a name on a list). It stays false when a well-formed component is simply
 // absent, which lets the callers tell ccol_invalid_args from

@@ -230,7 +230,7 @@ TEST(basic, size_unchanged_on_overwrite) {
   ccache_destroy(cache);
 }
 
-// What record_eviction saw: the last evicted int key and value, and how many
+// What record_eviction saw: The last evicted int key and value, and how many
 // evictions there were.
 static int eviction_key_captured = -1;
 static int eviction_val_captured = -1;
@@ -244,7 +244,7 @@ static void record_eviction(const cmap_pair *key, const cmap_pair *val) {
   eviction_count++;
 }
 
-// What record_str_eviction saw: the last evicted string key and value, and how
+// What record_str_eviction saw: The last evicted string key and value, and how
 // many evictions there were.
 static char str_eviction_key[64];
 static char str_eviction_val[64];
@@ -825,7 +825,7 @@ TEST(remote_getter, char_ptr_returns_not_found_on_getter_failure) {
   ccache_destroy(cache);
 }
 
-// The char * value versions of the three tests above: a char * cache gets
+// The char * value versions of the three tests above: A char * cache gets
 // through clrucache_get_full, a separate code path.
 TEST(remote_getter,
      char_ptr_getter_returns_true_with_null_ptr_treated_as_miss) {
@@ -956,7 +956,7 @@ TEST(remote_getter, char_ptr_key_failing_getter_returns_not_found) {
   ccache_destroy(cache);
 }
 
-// What recording_remote_setter returns, and what it saw: its calls and the last
+// What recording_remote_setter returns, and what it saw: Its calls and the last
 // key and value.
 static bool remote_set_should_succeed = true;
 static int remote_set_call_count = 0;
@@ -1272,7 +1272,7 @@ static bool failset_await_waiters(ccache cache, int key, int want) {
   return clrucache__key_waiters_for_tests(cache, &kp) == want;
 }
 
-// gating_remote_setter: it records the key and value, sets setter_started,
+// gating_remote_setter: It records the key and value, sets setter_started,
 // waits for setter_may_finish and fails when setter_should_fail is set.
 static _Atomic bool setter_started = false;
 static _Atomic bool setter_may_finish = false;
@@ -1995,7 +1995,7 @@ TEST(concurrency, failed_setter_keeps_existing_entry_live) {
   REQUIRE_EQ(out, 50);
 }
 
-// A set of an existing key in flight while an insert needs room: the insert
+// A set of an existing key in flight while an insert needs room: The insert
 // must evict the real oldest key, even the one being set, and the segment never
 // exceeds its capacity. cap_overflow_setter holds and fails a set of 999.
 static _Atomic bool cap_overflow_gate_started = false;
@@ -2199,7 +2199,7 @@ TEST(concurrency, size_zero_while_fetch_in_progress) {
   REQUIRE_EQ(size_after, (size_t)1);
 }
 
-// Getters of one key must join one fetch even when it fails: one call, every
+// Getters of one key must join one fetch even when it fails: One call, every
 // getter gets ccol_key_not_found. slow_failing_getter holds until the test has
 // seen every thread join.
 static volatile int fail_getter_call_count = 0;
@@ -2511,7 +2511,7 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce_on_failed_fetch) {
 #undef N_FAIL_STR_THREADS
 }
 
-// phased_setter_fn: the first call sleeps 30 ms and fails, the second sleeps 30
+// phased_setter_fn: The first call sleeps 30 ms and fails, the second sleeps 30
 // ms and succeeds, later ones succeed at once. The sleeps let the other setters
 // reach the wait loop.
 static volatile int phased_set_count = 0;
@@ -3108,7 +3108,7 @@ static void *_lru_custom_realloc(void *p, size_t sz) {
   return realloc(p, sz);
 }
 
-// An allocator with a budget: below 0 no limit, at 0 every call fails, else
+// An allocator with a budget: Below 0 no limit, at 0 every call fails, else
 // each success takes one off. A test can then fail one particular later
 // allocation, such as the copy of a hit.
 static int _lru_fault_alloc_budget = -1;
@@ -3422,7 +3422,7 @@ TEST(segmented, a_key_always_lands_in_the_same_segment) {
   REQUIRE_EQ(misses, (size_t)0);
 }
 
-// A xorshift step: a deterministic key stream with no structure, next to the
+// A xorshift step: A deterministic key stream with no structure, next to the
 // sequential and scaled key sets.
 static uint32_t ccache_spread_next(uint32_t *state) {
   uint32_t x = *state;
@@ -4106,7 +4106,7 @@ TEST(clrucache_oom, a_cache_built_under_a_late_failure_still_stores_and_reads) {
   REQUIRE_TRUE(works);
 }
 
-// A remote store for keys 0 to 7: a value per key and whether the store holds
+// A remote store for keys 0 to 7: A value per key and whether the store holds
 // it.
 static int g_lru_remote_val[8];
 static bool g_lru_remote_has[8];
@@ -4380,7 +4380,7 @@ static bool failset_remote_getter(const cmap_pair *key, cmap_pair *val) {
   return true;
 }
 
-// failset_remote_setter: once armed, a set of failset_gated_key holds until
+// failset_remote_setter: Once armed, a set of failset_gated_key holds until
 // released and fails; every other set succeeds.
 static _Atomic bool failset_armed = false;
 static _Atomic int failset_gated_key = 0;
@@ -4496,7 +4496,7 @@ TEST(failed_set_waiter, getter_on_a_new_key_runs_the_remote_getter) {
   }
 }
 
-// The same for a key the cache held: an insert evicts it while the set runs,
+// The same for a key the cache held: An insert evicts it while the set runs,
 // then the set fails, and the waiter must ask the remote getter.
 TEST(failed_set_waiter,
      getter_on_a_key_evicted_during_the_set_runs_the_getter) {
@@ -4672,7 +4672,7 @@ TEST(ccache_macros, destroy_evaluates_its_argument_once) {
   REQUIRE_EQ(caches[1], CCACHE_NULL);
 }
 
-// Two allocators for the procs copy test: the first counts calls and live
+// Two allocators for the procs copy test: The first counts calls and live
 // blocks, the poison one counts the calls that reach it. The test writes the
 // poison procs over the caller's struct after the create, so any poison call
 // means the cache read the caller's struct later.

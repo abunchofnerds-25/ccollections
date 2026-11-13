@@ -127,7 +127,7 @@ static inline size_t ccol_utf8_first_ill_formed(const char *s, size_t n) {
 // defect into detail (detail_size bytes), each as 0xNN, so the message is
 // printable ASCII whatever the input holds. A lead byte whose maximal subpart
 // is 1 while the next byte is a continuation byte has a first continuation byte
-// outside its narrow range: a surrogate, a value above U+10FFFF, or an overlong
+// outside its narrow range: A surrogate, a value above U+10FFFF, or an overlong
 // form.
 static inline const char *ccol_utf8_describe_ill_formed(const unsigned char *p,
                                                         size_t len, size_t at,

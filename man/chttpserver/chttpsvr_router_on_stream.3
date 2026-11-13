@@ -26,7 +26,7 @@ chttpsvr_register_streaming_handler.
 
 The function first checks that the server that owns router has not
 been destroyed.  That check also holds against a destroy running on
-another thread at the same time: a call that races a chttpsvr_destroy
+another thread at the same time: A call that races a chttpsvr_destroy
 of the owning server returns ccol_invalid_args and touches no freed
 memory.
 .fi

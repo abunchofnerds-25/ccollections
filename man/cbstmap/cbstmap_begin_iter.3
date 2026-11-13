@@ -50,7 +50,7 @@ empty result from a failure, test *err rather than the return value.
 
 A NULL cbm iterates as an empty map, with no error reported. This is a
 contract shared across modules with chashmap_begin_iter(3) and
-cvector_begin_iter(3): a map field can be NULL because nothing has been
+cvector_begin_iter(3): A map field can be NULL because nothing has been
 put into it yet, and the caller can iterate such a field directly with no
 NULL guard of its own.
 

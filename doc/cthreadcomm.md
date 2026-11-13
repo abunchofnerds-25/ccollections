@@ -1,4 +1,4 @@
-# cthreadcomm: passing data between threads
+# cthreadcomm: Passing data between threads
 
 If two threads read and write the same variable without any coordination you
 get a data race, and that is undefined behaviour. `cthreadcomm` gives you
@@ -115,7 +115,7 @@ refused by every send with `ccol_invalid_args`, and it stays yours.
 | Callbacks that run each time a queue or socket is ready, for a long time | `ceventloop` |
 
 You can use any of the queues from many threads at the same time. When you
-aren't sure which queue to pick, start with the circular queue: its sender
+aren't sure which queue to pick, start with the circular queue: Its sender
 waits instead of piling up messages, so a consumer that falls behind can't
 make the program run out of memory.
 
@@ -150,12 +150,12 @@ queue to new sends. Senders that are waiting on a full queue then return
 the queue stays there for the consumer. A receive on an empty queue keeps
 waiting though, so the consumer needs a sentinel (or a timed receive) to find
 out that the stream is over. A producer that waits with `cselect` (or
-with an event loop write registration, see below) does find out: a queue
+with an event loop write registration, see below) does find out: A queue
 whose sends are off counts as ready for writing, the same way a pipe whose
 reader went away counts as ready for `POLLOUT`, so the wait returns and the
 producer's send then reports `ccol_not_permitted`.
 
-## Channels: an owner and its workers
+## Channels: An owner and its workers
 
 A `cchan` is two circular queues behind one handle, one for each
 direction. The thread that creates the channel is its **owner** and every
@@ -202,7 +202,7 @@ even if the queue never runs empty. Which of the ready selectables a single
 call reports is not specified, so if one of them must take priority, check
 it yourself before or after the call.
 
-Every file descriptor in the set has to be something the kernel can watch: a
+Every file descriptor in the set has to be something the kernel can watch: A
 socket, a pipe, a FIFO, a terminal or an eventfd. A regular file or a
 directory is refused.
 
@@ -299,7 +299,7 @@ another thread or to a [thread pool](cthreadpool.md).
 
 Readiness is level-triggered. A socket that stays readable keeps triggering
 calls until you read it, pause the registration or remove it, and the same
-goes for end of file: a handler that reads 0 bytes has to remove (or pause)
+goes for end of file: A handler that reads 0 bytes has to remove (or pause)
 its registration.
 
 A callback gets its own registration as `reg`, so it can remove or pause
@@ -371,7 +371,7 @@ a long time without holding up the others. Start with 1 and only go higher
 when your callbacks really are slow. Whatever the value, exactly one thread
 waits on the kernel, so there is no "thundering herd".
 
-## Example: a team of workers
+## Example: A team of workers
 
 Jobs go out on a bounded queue so the producer can't get far ahead of the
 workers, and results come back on an unbounded queue so a worker never waits
@@ -493,7 +493,7 @@ int main(void) {
 }
 ```
 
-## Example: a helper thread with a channel
+## Example: A helper thread with a channel
 
 The main thread creates the channel and is therefore its owner. It sends a
 request and receives the reply, while the helper thread receives requests and
@@ -564,7 +564,7 @@ int main(void) {
 }
 ```
 
-## Example: commands, a stop signal and an idle timer
+## Example: Commands, a stop signal and an idle timer
 
 One thread waits on a command queue and a pipe at the same time, and does
 some maintenance work whenever 100 ms pass without input. A pipe is a handy
@@ -656,7 +656,7 @@ int main(void) {
 }
 ```
 
-## Example: a TCP echo server on an event loop
+## Example: A TCP echo server on an event loop
 
 A listening socket is registered for reading, and its callback accepts every
 pending connection and registers it. The client callback echoes back what it

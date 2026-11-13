@@ -47,7 +47,7 @@ The library closes it when another call replaces it, and at process
 exit or library unload if no engine is running at that point.
 
 For a logger from clog_create_from_fd or clog_create_from_fd_mp, that
-destination is the logger's state and not the file descriptor: such a
+destination is the logger's state and not the file descriptor: Such a
 logger never owns its fd, and no clog_close closes it; see
 clog_create_from_fd(3). The engine keeps writing to that fd after you
 close cl, so the fd itself must stay open until another call to this

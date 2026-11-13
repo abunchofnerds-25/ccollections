@@ -1,7 +1,7 @@
 # Benchmarks
 
 `bench/` measures the modules whose run-time cost is worth keeping an eye
-on: the containers, the string, the sort, the memory pools, the LRU cache,
+on: The containers, the string, the sort, the memory pools, the LRU cache,
 the thread pool, the queues, the logger, both serializers and one HTTP
 round trip.
 
@@ -71,7 +71,7 @@ nanoseconds keeps all of them.
 
 ## Reproducibility
 
-Whether two runs can be compared at all comes down to three things: where
+Whether two runs can be compared at all comes down to three things: Where
 the threads run, how hot the hardware is, and which machine the baseline
 came from.
 
@@ -218,7 +218,7 @@ A row in brackets runs another library doing the nearest equivalent
 thing, which isn't always the identical thing. Where the two sides really
 differ, the list below names the difference instead of correcting for it,
 because a correction would measure something that neither library actually
-does. The differences go both ways: the first two cost this library time it
+does. The differences go both ways: The first two cost this library time it
 wouldn't spend otherwise, and the last two save it time that the other side
 spends. So before you quote a ratio from one of these rows, read its note
 below.
@@ -232,7 +232,7 @@ below.
   same number, so the two only differ by the copy. `GHashTable` is the one
   that allocates almost nothing per entry.
 - The uthash rows allocate their entry nodes once, in the untimed setup.
-  With an integer key that costs neither side anything per entry: over the
+  With an integer key that costs neither side anything per entry: Over the
   same 100000 inserts `chashmap` makes 14 allocations and uthash makes 13,
   all from table growth inside the timed loop and none from per-entry work.
   With a string key the difference is real. A string key selects the

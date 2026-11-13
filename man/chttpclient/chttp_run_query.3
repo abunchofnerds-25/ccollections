@@ -39,7 +39,7 @@ case-insensitive rules, such as "Host" and "host" together.
 chttp_request_set_header lowercases every key before storing it, so it
 can never create that situation, but a headers map you build yourself
 gives no such guarantee. Only one key of such a pair reaches the wire,
-never both: the key that went into headers last wins, the same as an
+never both: The key that went into headers last wins, the same as an
 update of one exact key. The client drops the other one instead of
 sending it as a second header line.
 
@@ -47,11 +47,11 @@ Because you pass headers directly, they skip the validation of
 chttp_request_set_header. Every key must be a token, and no value may
 hold a byte below 0x20 other than a horizontal tab (CR and LF among
 them), or 0x7F. Those are the rules of chttp_request_set_header, for
-the same reason: data with a CRLF in it could otherwise inject extra
+the same reason: Data with a CRLF in it could otherwise inject extra
 header lines or split the request in two. For such a headers map the
 function returns ccol_invalid_args before it opens any connection.
 headers must not hold a "Transfer-Encoding" key either, in any case,
-for the reason chttp_request_set_header rejects that name: this client
+for the reason chttp_request_set_header rejects that name: This client
 never applies a transfer coding to a request body, so it cannot honor
 such a header, and on the wire it would sit next to the module's
 automatic Content-Length over a body with no transfer coding, which is
@@ -64,12 +64,12 @@ leading '+' or '-' and no whitespace in it, and it must also match the
 real length of the body that the client sends. A bad value gives
 ccol_invalid_args once the request reaches the wire. chttpcli_do(3)
 and chttp_request_set_header(3) describe the same check, which exists
-for the same reason: the declared framing and the wire must not
+for the same reason: The declared framing and the wire must not
 disagree.
 .fi
 .SH PARAMETERS
 .nf
-method     The HTTP method: one of CHTTP_GET to CHTTP_OPTIONS.
+method     The HTTP method: One of CHTTP_GET to CHTTP_OPTIONS.
            CHTTP_ANY and values outside the enum are refused.
 url        The target URL. It must not be NULL.
 body       The request body, or NULL for a request with no body.

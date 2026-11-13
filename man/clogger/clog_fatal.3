@@ -32,7 +32,7 @@ of its own queue and batch ends by then, and so does every write of the
 record to an output that is not a regular file (a pipe, a FIFO, a
 socket, a terminal).  If such an output takes nothing more in that time,
 for example a full pipe whose reader stopped reading, the record is
-lost: one line on stderr says so, unless stderr is that same output, and
+lost: One line on stderr says so, unless stderr is that same output, and
 the process stops anyway.  A write to a regular file waits on the disk
 and not on a reader, and it has no bound.  The exit drain that follows
 shares the deadline, so one budget bounds the whole stop.  While a fatal
@@ -88,7 +88,7 @@ that path waits without a bound, and a drain request that the queue
 cannot accept is skipped instead of waited on.  The batch of the writer
 thread can hold bytes that an earlier write could not deliver (see
 clog_create_from_fd_mp(3)).  Those bytes get one bounded attempt, and
-after that the library gives up on them: it repairs the framing that a
+after that the library gives up on them: It repairs the framing that a
 split record left open and, ahead of the fatal record, writes a "log
 record truncated: undelivered batch dropped (records=<n> bytes=<m>):
 the process stopped" record for the whole records it gives up on.  A

@@ -87,7 +87,7 @@ uint64_t chashmap_siphash13_for_tests(const uint64_t sip_v[4],
 size_t chashmap_byte_hash_for_tests(const uint64_t sip_v[4],
                                     const void *key_ptr, size_t key_size);
 
-// Gives the secret a map hashes with: the four words of the SipHash state, then
+// Gives the secret a map hashes with: The four words of the SipHash state, then
 // int_seed, then byte_seed. An open-addressing map gives 0 for the SipHash
 // state and for byte_seed.
 void chashmap_hash_secret_for_tests(chmap chm, uint64_t out[6]);
@@ -142,7 +142,7 @@ size_t chashmap_sc_stored_hash_for_tests(chmap chm, const void *key_ptr,
 size_t chashmap_oa_home_slot_for_tests(chmap chm, const void *key_ptr,
                                        size_t key_size);
 
-// Checks the structure of an open-addressing map: every occupied slot is
+// Checks the structure of an open-addressing map: Every occupied slot is
 // reachable from its home slot through occupied slots only, and exactly count
 // slots are occupied. Gives true for a map of the other backend.
 bool chashmap_oa_check_invariants_for_tests(chmap chm);

@@ -121,7 +121,7 @@ static void log_write_async_run(void *state, size_t n) {
   bench_sink(&st->logger);
 }
 
-/* The caller half of the asynchronous path, with no flush: what the logging
+/* The caller half of the asynchronous path, with no flush: What the logging
  * thread itself pays to hand a record over. It's reported next to the case
  * above, which includes the flush, because the two answer different
  * questions. Taken alone, the case with the flush looks like asynchronous

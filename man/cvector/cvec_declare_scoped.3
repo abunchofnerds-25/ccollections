@@ -25,7 +25,7 @@ arbitrary value to the handler. Both companion type variables also start
 at NULL for the same reason, so nothing in the block reads an
 indeterminate object.
 
-The vector is destroyed on every path out of the block: the closing
+The vector is destroyed on every path out of the block: The closing
 brace, a return, a break, a continue or a goto out of the block. The
 variable is set to NULL as the vector is destroyed, so an explicit
 cvec_destroy(3) earlier in the block is safe and frees nothing twice.

@@ -403,7 +403,7 @@ void chttpsvr__mark_self_as_worker_for_tests(chttpsvr h);
 size_t chttpsvr__mem_in_use_for_tests(chttpsvr h);
 size_t chttpsvr__mem_holders_for_tests(chttpsvr h, bool *exempt_out);
 
-// For the request that a buffered route's handler holds: the body memory
+// For the request that a buffered route's handler holds: The body memory
 // reservation of its connection and the capacity of its body buffer.
 void chttpsvr__req_body_memory_for_tests(chttpsvr_req *req, size_t *charged,
                                          size_t *held);

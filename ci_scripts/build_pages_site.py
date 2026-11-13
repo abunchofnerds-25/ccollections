@@ -14,7 +14,7 @@
 # front page, the manual index and every man page that isn't a redirect. When
 # the checkout has the history, each entry carries the date of the last
 # commit that changed its source; a shallow clone gets no dates, because a
-# wrong date is worse than none. Every coverage page gets a noindex tag: the
+# wrong date is worse than none. Every coverage page gets a noindex tag: The
 # report is thousands of pages of annotated source that would compete in
 # search results with the man pages of the same functions.
 #
@@ -125,7 +125,7 @@ def front_page(readme, man_dir, has_coverage, version):
   <h1><img src="assets/logo.png" alt="" width="76" height="76">C
   Collections</h1>
   <p>The pieces that other languages put in their standard library and C
-  doesn't have: vectors, hash maps, ordered maps, strings, memory pools,
+  doesn't have: Vectors, hash maps, ordered maps, strings, memory pools,
   thread-safe queues, a thread pool, a structured logger, JSON, YAML and an
   HTTP client and server. The compiler deduces your element types, with no
   <code>void *</code> casts.</p>
@@ -212,7 +212,7 @@ and a guide with complete examples.</p>
          "version": version, "image": L.SITE_URL + L.LOGO,
          "runtimePlatform": ["Linux", "FreeBSD", "OpenBSD", "macOS"]},
     ]
-    return L.page("", 0, "C Collections: type-inferred containers and more "
+    return L.page("", 0, "C Collections: Type-inferred containers and more "
                   "for GNU C11", desc, body, ld=ld, version=version)
 
 

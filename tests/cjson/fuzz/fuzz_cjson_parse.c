@@ -35,7 +35,7 @@ SOFTWARE.
 // Re-parses text that the library just emitted and aborts when it doesn't parse
 // or doesn't give the same compact rendering (every member, key byte, value and
 // member order) as the first parse, compact. style names the rendering in the
-// report. A failure is always a library defect: the input was already accepted
+// report. A failure is always a library defect: The input was already accepted
 // and the text is our own rendering of it. A NULL text means an allocation
 // failed and is skipped.
 static void assert_reparses(const char *style, const char *text,
@@ -62,7 +62,7 @@ static void assert_reparses(const char *style, const char *text,
   cjson_destroy(again);
 }
 
-// The entry point libFuzzer calls with each input: parses it and round-trips
+// The entry point libFuzzer calls with each input: Parses it and round-trips
 // the compact, pretty and cloned forms through assert_reparses().
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   char *err = NULL;

@@ -13,7 +13,7 @@ void cthrpool_future_free(cthrpool_future *f);
 .nf
 Drops one reference to the future. When the reference count reaches
 zero, the future object is freed with the standard free(). Three kinds
-of holder release a reference: the caller, the worker, and every
+of holder release a reference: The caller, the worker, and every
 cthrpool_future_get call that is still in progress. For a detached
 future the producer holds one in place of the worker.
 
@@ -27,7 +27,7 @@ cthrpool_future_create_detached call, whether cthrpool_future_get was
 called or not.
 
 If you call it and never call cthrpool_future_get, you get
-fire-and-forget behavior: the task still runs, and the future is freed
+fire-and-forget behavior: The task still runs, and the future is freed
 automatically when the worker finishes, with the result thrown away.
 
 You can call it while other threads are inside cthrpool_future_get on

@@ -41,7 +41,7 @@ Remove every registration of an fd before you close it, as libevent and
 libuv require too. When the last one is removed, the loop has stopped
 watching the fd by the time this call returns, and the fd number is
 free. A new registration of the same fd, or of a new descriptor that
-reuses the number, is independent of the removed one: nothing the loop
+reuses the number, is independent of the removed one: Nothing the loop
 does later for the removed registration (a dispatch in flight, or the
 later release of its bookkeeping) changes how the new one is watched.
 A registration whose fd is closed first holds on to the number until it
@@ -51,7 +51,7 @@ stale registration holds, and can fail with ccol_unexpected_failure for
 the other direction.
 
 For a queue or a cchan selectable, the loop finishes its own
-bookkeeping for the queue before this call returns: it unlinks the
+bookkeeping for the queue before this call returns: It unlinks the
 registration's waiter from the queue and releases the registration.
 A dispatch already in flight is a different matter, because its
 callback holds the selectable the loop gave it and reaches the queue

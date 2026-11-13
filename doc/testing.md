@@ -176,12 +176,12 @@ The guides and `README.md` link to the HTML pages on the project's GitHub
 Pages site, because GitHub shows a troff file as raw source. `man_html`
 renders them with mandoc and needs `mandoc` and `python3`. It runs
 `mandoc -T lint` first and stops on any error, and an error there is a real
-fault of the installed page: a text line that starts with `'` or `.` is a
+fault of the installed page: A text line that starts with `'` or `.` is a
 request to troff, so `man` drops it, words and all. Put `\&` in front of
 such a line. Open `man_html/index.html` to read the result.
 
 `check_doc_links` needs only `python3`. GitHub doesn't check an absolute
-link, so this target does: a link to the site must name a page that exists
+link, so this target does: A link to the site must name a page that exists
 under `man/`, and a link to a troff file is refused with the URL to use
 instead. Both run in CI on every push, and the Coverage workflow publishes
 the pages from `main`.
@@ -274,7 +274,7 @@ argument:
 
 ## Benchmarks
 
-`bench/` measures the modules whose speed matters: the containers, the
+`bench/` measures the modules whose speed matters: The containers, the
 strings and the sort, the memory pools and the LRU cache, the thread pool
 and the queues, the logger and the two serializers, and an HTTP round trip.
 It links against the shared library that the root `make` builds, so it

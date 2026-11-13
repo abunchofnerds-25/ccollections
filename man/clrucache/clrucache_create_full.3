@@ -35,7 +35,7 @@ the ccache_construct() macro family instead.
 .nf
 capacity     The total number of live entries that the cache holds.
              From 128 up, each segment evicts when its own share is
-             full; see NOTES. A capacity of 0 is refused: the call
+             full; see NOTES. A capacity of 0 is refused: The call
              fails, and the string in *err contains
              "capacity must be > 0".
 key_type     The ccol_data_type of the keys, as
@@ -60,7 +60,7 @@ setter       Remote setter callback, or NULL. It is called
              The getter and the setter are called with no lock of the
              cache held, so either one can use the cache for any
              other key. Neither must call back into the same cache for
-             the key it serves: a get or a set of that key waits for
+             the key it serves: A get or a set of that key waits for
              the operation that runs the callback, and the thread
              deadlocks against itself. Neither must destroy the
              cache, because the destroy waits for that same call.
@@ -89,7 +89,7 @@ fails as well, because by then the library has released its table of
 cache handles for the end of the process.
 CCACHE_NULL is ((ccache)0), and it plays the same role for
 a ccache as NULL does for a pointer. Compare a handle directly
-against it, or use the handle as a condition: if (!cache) is a correct
+against it, or use the handle as a condition: If (!cache) is a correct
 test for an invalid handle.
 .fi
 .SH "KEYS WITH PADDING"
@@ -113,7 +113,7 @@ use the raw functions for a padded key.
 The handle that the function gives back is an opaque VALUE, not a
 pointer. Don't cast it to void*, don't cast a void* to it, and don't
 use it as an address.
-The cache is thread-safe: per-segment locks and per-entry condition
+The cache is thread-safe: Per-segment locks and per-entry condition
 variables protect every operation on the handle. Operations on the
 same key are still serialised against each other, and the coalescing
 of concurrent misses for one key depends on that.
@@ -130,7 +130,7 @@ that number, but the entry picked to make room is the oldest inside
 one segment and not the oldest of the whole cache. A hash spreads the
 keys, so at any instant some segments are fuller than others, and a
 cache that is full to exactly its capacity holds a little less than
-that number. The shortfall is a few percent: up to about ten below
+that number. The shortfall is a few percent: Up to about ten below
 roughly a thousand entries, around two at eight thousand entries and
 above, and less as the cache grows. It depends neither on the key type
 nor on the width of the build. The segment of a key comes from the
@@ -153,7 +153,7 @@ clrucache_get_full(), clrucache_set_full(), clrucache_size() or
 clrucache_capacity() call, so the caller doesn't have to prove on its
 own that no other thread is still using the cache. A destroy of a
 handle that a call already destroyed, whether in an earlier call or on
-another thread racing this one, is a FATAL ERROR: it calls abort() and
+another thread racing this one, is a FATAL ERROR: It calls abort() and
 raises SIGABRT, and it is never a silent double-free.
 .fi
 .SH "SEE ALSO"

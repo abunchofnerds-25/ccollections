@@ -22,7 +22,7 @@ build: tests_locale
 
 # The number_locale tests need a locale whose decimal point is ','. They use
 # an installed one if there is one and this private copy otherwise. The step is
-# best effort: without localedef (macOS has none) or the de_DE locale source
+# best effort: Without localedef (macOS has none) or the de_DE locale source
 # the directory stays empty, and those tests use an installed locale or print
 # that they skipped.
 tests_locale:

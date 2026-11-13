@@ -5,7 +5,7 @@
 [![Coverage](https://github.com/abunchofnerds-25/ccollections/actions/workflows/coverage.yml/badge.svg?branch=main)](https://abunchofnerds-25.github.io/ccollections/coverage/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**C Collections** is a C library with the pieces that other languages put in their standard library and C doesn't have: vectors, hash maps, ordered maps, strings, memory pools, thread-safe queues, a thread pool, a structured logger, JSON and YAML, and an HTTP client and server.
+**C Collections** is a C library with the pieces that other languages put in their standard library and C doesn't have: Vectors, hash maps, ordered maps, strings, memory pools, thread-safe queues, a thread pool, a structured logger, JSON and YAML, and an HTTP client and server.
 
 If you have used `vector` and `unordered_map` in C++, `ArrayList` and `HashMap` in Java or `list` and `dict` in Python, the containers will look familiar. They are C though, and the compiler deduces your element types in the relevant macros for you automatically. The library is for C programs only; its headers aren't meant to be included from C++.
 
@@ -232,7 +232,7 @@ This library started as a hobby project on Danis Ozdemir's PC and grew into its 
 - [**Danis Ozdemir**](https://www.linkedin.com/in/danis-o-4a0a8841/)
 - [**Fikri Kahraman**](https://www.linkedin.com/in/fikrikahraman/)
 
-Like most software engineers, the authors don't particularly enjoy writing documentation, so they used [**Claude**](https://claude.ai) to generate it and refine the code comments. They also began exploring its use as a contributor, particularly for security related bug-hunting and maintenance tasks following the library's initial release. Please notice that this is **not** an AI generated library. The authors recently started using AI for polishing it and trying to make it more maintainable along with security scanning.
+Like most software engineers, the authors don't particularly enjoy writing documentation, so they used [**Claude**](https://claude.ai) to generate it and refine the code comments. They also began exploring its use as a contributor, particularly for security related bug-hunting and maintenance tasks following the library's initial release. Please notice that this is **NOT** an AI-generated library. The authors recently started using AI for polishing it and trying to make it more maintainable along with security scanning.
 
 ---
 

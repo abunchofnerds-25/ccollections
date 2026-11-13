@@ -23,7 +23,7 @@ free its own originals as soon as this call returns.
 The request's method, expect_continue and
 prevent_tls_downgrade_on_redirect fields are public to read and to
 write. The url and body fields are public to read only, because the
-request owns the copies they point to: this function allocates them
+request owns the copies they point to: This function allocates them
 with mprocs and chttp_request_free frees them with mprocs. Do not
 assign to url or to any member of body after construction; build
 another request when you need another URL or another body.
@@ -78,7 +78,7 @@ request's method, body and headers directly.
 
 body->content_type is copied here as it is, without a check, because
 at this point the function cannot know whether that value will ever
-reach the wire: an explicit "content-type" header that you set later
+reach the wire: An explicit "content-type" header that you set later
 with chttp_request_set_header takes its place. If body->content_type
 holds a CR or an LF byte when the request is serialized, or any other
 byte below 0x20 except a horizontal tab, or 0x7F, the chttpcli_do,

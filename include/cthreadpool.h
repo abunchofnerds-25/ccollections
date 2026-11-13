@@ -40,7 +40,7 @@ SOFTWARE.
 // discards it.
 //
 // Every public function may run at the same time as any other on the same live
-// handle, shutdowns and destroy included. Both shutdowns are idempotent: a
+// handle, shutdowns and destroy included. Both shutdowns are idempotent: A
 // second call does no work of its own but blocks until no worker is alive. An
 // immediate shutdown that arrives during a drain escalates it and discards what
 // is left in the queue.
@@ -56,19 +56,20 @@ typedef struct cthread_pool cthread_pool;
 // stale handle is always detected and never dereferenced.
 typedef uint64_t cthrpool;
 
-// "No pool": the failure value of a create and the value a destroy leaves in
+// "No pool": The failure value of a create and the value a destroy leaves in
 // the handle, so a handle can be tested for validity.
 #define CTHRPOOL_NULL ((cthrpool)0)
 
 // A future holds the void * result of a task that may not have run yet.
 typedef struct cthrpool_future cthrpool_future;
 
-// Creates a pool of num_threads (at least 1) workers that allocates through
-// mprocs (NULL for malloc and free). It's the one constructor behind
-// cthrpool_create() and the construct macros. queue_capacity 0 means an
-// unbounded queue, N a bounded one; ccol_invalid_size is refused. Gives the
-// handle, or CTHRPOOL_NULL with an error string in *err_str when err_str isn't
-// NULL.
+// Creates a pool of num_threads (at least 1) worker threads that allocates
+// through mprocs, your allocator table, or NULL for malloc and free (a future
+// always uses malloc and free). queue_capacity 0 means an unbounded task
+// queue, N a bounded one whose submits wait or refuse while N tasks are queued;
+// ccol_invalid_size is refused. Gives the handle, or CTHRPOOL_NULL with an
+// error string in *err_str when err_str isn't NULL. Destroy it with
+// cthrpool_destroy().
 //
 // The pool keeps idle task nodes for reuse (up to max(num_threads * 4, 32768)),
 // so mprocs doesn't see an allocation and a free per submission. Workers mark
@@ -78,14 +79,18 @@ typedef struct cthrpool_future cthrpool_future;
 cthrpool cthrpool_create_mp(size_t num_threads, size_t queue_capacity,
                             ccol_memmgmt_procs *mprocs, char **err_str);
 
-// Creates a pool with the default allocator, for callers that don't need a
-// custom one; see cthrpool_create_mp().
+// Creates a pool of num_threads (at least 1) worker threads that allocates
+// with malloc and free. queue_capacity 0 means an unbounded task queue, N a
+// bounded one whose submits wait or refuse while N tasks are queued;
+// ccol_invalid_size is refused. Gives the handle, or CTHRPOOL_NULL with an
+// error string in *err_str when err_str isn't NULL. Destroy it with
+// cthrpool_destroy().
 static inline __attribute__((always_inline)) cthrpool
 cthrpool_create(size_t num_threads, size_t queue_capacity, char **err_str) {
   return cthrpool_create_mp(num_threads, queue_capacity, NULL, err_str);
 }
 
-// Internal: destroys a pool. It's the body of cthrpool_destroy(); use the
+// Internal: Destroys a pool. It's the body of cthrpool_destroy(); use the
 // macro, which also clears the handle.
 //
 // CTHRPOOL_NULL is a no-op. Any other handle that isn't live (already
@@ -96,7 +101,7 @@ cthrpool_create(size_t num_threads, size_t queue_capacity, char **err_str) {
 // before it frees anything.
 void cthrpool__destroy(cthrpool pool);
 
-// Internal: destroys *pp and clears it. The _scoped macros attach it with
+// Internal: Destroys *pp and clears it. The _scoped macros attach it with
 // ccol__destructor so a pool goes away with its scope.
 static inline __attribute__((always_inline)) void cthrpool__destroy_cleanup(
     cthrpool *pp) {
@@ -108,13 +113,17 @@ static inline __attribute__((always_inline)) void cthrpool__destroy_cleanup(
 
 // Destroys the pool and sets the handle to CTHRPOOL_NULL, so the variable can't
 // be used again by mistake. This is how a pool is destroyed. pool must be a
-// modifiable lvalue and is evaluated once. A stale handle, or a destroy from
-// one of the pool's own tasks or on_complete callbacks, is a fatal error.
+// modifiable lvalue and is evaluated once; CTHRPOOL_NULL does nothing. When no
+// shutdown ran, it first runs every queued task and joins the workers, as
+// cthrpool_shutdown_drain() does. Then it waits for every call that other
+// threads are making on the handle to return before it frees anything. A stale
+// handle, or a destroy from one of the pool's own tasks or on_complete
+// callbacks, is a fatal error.
 #define cthrpool_destroy(pool) \
   ccol__cthrpool_destroy_impl( \
       pool, ccol__uniq(ccol__cthrpool_destroy_slot, __COUNTER__))
 
-// Internal: the body of cthrpool_destroy(), destroying *&(pool) and clearing
+// Internal: The body of cthrpool_destroy(), destroying *&(pool) and clearing
 // it. slot comes from ccol__uniq(), so destroy macros can nest without -Wshadow
 // warnings.
 #define ccol__cthrpool_destroy_impl(pool, slot) \
@@ -124,18 +133,24 @@ static inline __attribute__((always_inline)) void cthrpool__destroy_cleanup(
     *slot = CTHRPOOL_NULL;                      \
   } while (0)
 
-// Declares a pool variable called name, for code that creates the pool later
-// with cthrpool_create*.
+// Declares an uninitialized pool handle variable called name, for code that
+// creates the pool later with cthrpool_create() or cthrpool_create_mp() and
+// destroys it with cthrpool_destroy().
 #define cthrpool_declare(name) cthrpool name
 
-// Declares a pool variable called name, set to CTHRPOOL_NULL, that is destroyed
-// when it goes out of scope, so no exit path can leak the pool.
+// Declares a pool handle variable called name, set to CTHRPOOL_NULL, whose
+// pool is destroyed when the variable goes out of scope, so no exit path can
+// leak it. Create the pool into it later with cthrpool_create() or
+// cthrpool_create_mp().
 #define cthrpool_declare_scoped(name) \
   cthrpool name ccol__destructor(cthrpool__destroy_cleanup) = CTHRPOOL_NULL
 
-// Declares a pool variable called name and creates the pool in one step, for
-// code that treats a failed create as fatal: it calls ccol__fatal_err when the
-// create fails.
+// Declares a pool handle variable called name and creates a pool of
+// num_threads (at least 1) workers in one step, with the default allocator, for
+// code that treats a failed create as fatal: A failed create stops the program
+// with a fatal error that names the variable and the reason. queue_capacity 0
+// means an unbounded task queue, N a bounded one. Destroy the pool with
+// cthrpool_destroy().
 //
 //   cthrpool_construct(pool, 4, 256);
 //   cthrpool_submit(pool, my_fn, my_arg, NULL);
@@ -152,8 +167,12 @@ static inline __attribute__((always_inline)) void cthrpool__destroy_cleanup(
     }                                                                          \
   } while (0)
 
-// cthrpool_construct() for a pool that is destroyed at the end of its scope, so
-// no exit path can leak it.
+// Declares a pool handle variable called name and creates a pool of
+// num_threads (at least 1) workers in one step, with the default allocator; a
+// failed create stops the program with a fatal error that names the variable
+// and the reason. queue_capacity 0 means an unbounded task queue, N a bounded
+// one. The pool is destroyed when name goes out of scope, so no exit path can
+// leak it.
 #define cthrpool_construct_scoped(name, num_threads, queue_capacity)           \
   cthrpool name ccol__destructor(cthrpool__destroy_cleanup) = CTHRPOOL_NULL;   \
   do {                                                                         \
@@ -168,81 +187,108 @@ static inline __attribute__((always_inline)) void cthrpool__destroy_cleanup(
 // Queues fn(arg) to run on a worker. It's the ordinary way to hand work to the
 // pool, and it waits for room on a full bounded queue, which gives a producer
 // backpressure. The exception is a caller that is a task or on_complete
-// callback of this same pool: only the workers can free a slot, so it gives
+// callback of this same pool: Only the workers can free a slot, so it gives
 // ccol_container_full at once. It gives ccol_success, ccol_invalid_args (bad
 // handle or NULL fn), ccol_not_permitted (shutdown started),
 // ccol_not_enough_memory or that ccol_container_full.
 //
-// on_complete (may be NULL) runs exactly once for every accepted task: on the
+// on_complete (may be NULL) runs exactly once for every accepted task: On the
 // worker with ran == true right after fn, or with ran == false when a shutdown
 // or the destroy of a pool inherited across fork() discards the task, so it can
 // always release arg. The ran == false calls run on the thread that discards,
 // before it returns, with no pool lock held. Such a call counts as a callback
-// of the pool: a wait or shutdown of the same pool from it is a no-op, a
+// of the pool: A wait or shutdown of the same pool from it is a no-op, a
 // destroy is fatal and a submit gives ccol_not_permitted (ccol_invalid_args
 // inside the destroy of an inherited pool). A failed submit accepts nothing and
 // never calls on_complete.
 ccol_retval cthrpool_submit(cthrpool pool, void (*fn)(void *), void *arg,
                             void (*on_complete)(void *arg, bool ran));
 
-// Queues fn(arg) like cthrpool_submit() but never waits, for a producer that
-// must not block: a full bounded queue gives ccol_container_full at once.
+// Queues fn(arg) to run on a worker without ever waiting, for a producer that
+// must not block. on_complete (may be NULL) runs exactly once for every
+// accepted task: With ran == true after fn on the worker, or with ran == false
+// when a shutdown discards the task, so it can always release arg. It gives
+// ccol_success, ccol_container_full when a bounded queue is full,
+// ccol_invalid_args (bad handle or NULL fn), ccol_not_permitted (shutdown
+// started) or ccol_not_enough_memory. A failed submit accepts nothing and never
+// calls on_complete.
 ccol_retval cthrpool_try_submit(cthrpool pool, void (*fn)(void *), void *arg,
                                 void (*on_complete)(void *arg, bool ran));
 
-// Queues fn(arg) like cthrpool_submit(), waiting at most timeout_us
-// microseconds for room, for a producer that can wait a little but not for
-// ever. The deadline is on CLOCK_MONOTONIC, so wall clock changes don't affect
-// it. 0 behaves like cthrpool_try_submit(), and a huge value such as
-// UINT64_MAX saturates and waits as long as the queue stays full. A call from
-// this pool's own task never waits. Besides the submit codes it can give
-// ccol_timed_out or ccol_unexpected_failure.
+// Queues fn(arg) to run on a worker, waiting at most timeout_us microseconds
+// for room in a full bounded queue, for a producer that can wait a little but
+// not for ever. The deadline is on CLOCK_MONOTONIC, so wall clock changes don't
+// affect it. 0 doesn't wait, and a huge value such as UINT64_MAX saturates and
+// waits as long as the queue stays full. A call from a task or on_complete
+// callback of this pool never waits. on_complete (may be NULL) runs exactly
+// once for every accepted task: With ran == true after fn, or ran == false when
+// a shutdown discards it. It gives ccol_success, ccol_timed_out,
+// ccol_container_full (full queue with timeout 0, or a call from this pool's
+// own task), ccol_invalid_args (bad handle or NULL fn), ccol_not_permitted
+// (shutdown started), ccol_not_enough_memory, or ccol_unexpected_failure when
+// the wait itself fails. A failed submit never calls on_complete.
 ccol_retval cthrpool_timed_submit(cthrpool pool, void (*fn)(void *), void *arg,
                                   void (*on_complete)(void *arg, bool ran),
                                   uint64_t timeout_us);
 
 // Queues fn(arg) and gives a future for its void * result, so the submitting
-// thread can collect what the task computed. NULL on failure. It waits for room
-// like cthrpool_submit(), with the same self-call exception. When rv_out isn't
-// NULL it gets the result code on every return, the same code
-// cthrpool_submit() gives for the same condition. Call cthrpool_future_free()
+// thread can collect what the task computed with cthrpool_future_get(). It
+// waits with no time limit for room in a full bounded queue, except when the
+// caller is a task or on_complete callback of this same pool. Gives NULL on
+// failure. When rv_out isn't NULL it gets a code on every return: ccol_success,
+// ccol_invalid_args (bad handle or NULL fn), ccol_not_permitted (shutdown
+// started), ccol_container_full (a full bounded queue and a caller from this
+// pool's own task), or ccol_not_enough_memory. Call cthrpool_future_free()
 // exactly once for every future you get.
 cthrpool_future *cthrpool_submit_future(cthrpool pool, void *(*fn)(void *),
                                         void *arg, ccol_retval *rv_out);
 
-// cthrpool_submit_future() for a caller that must not block: it never waits.
-// The future goes to *out, which is set to NULL on failure; out must not be
-// NULL.
+// Queues fn(arg) without ever waiting and puts a future for its void * result
+// in *out, for a caller that must not block; *out is set to NULL on failure,
+// and out must not be NULL. It gives ccol_success, ccol_container_full when a
+// bounded queue is full, ccol_invalid_args (bad handle, NULL fn or NULL out),
+// ccol_not_permitted (shutdown started) or ccol_not_enough_memory. Collect the
+// result with cthrpool_future_get(), and call cthrpool_future_free() exactly
+// once for every future you get.
 ccol_retval cthrpool_try_submit_future(cthrpool pool, void *(*fn)(void *),
                                        void *arg, cthrpool_future **out);
 
-// cthrpool_submit_future() that waits at most timeout_us microseconds for room,
-// with the rules of cthrpool_timed_submit(). The future goes to *out, which is
-// set to NULL on failure.
+// Queues fn(arg), waiting at most timeout_us microseconds on CLOCK_MONOTONIC
+// for room in a full bounded queue, and puts a future for its void * result in
+// *out; *out is set to NULL on failure, and out must not be NULL. 0 doesn't
+// wait, and a huge value such as UINT64_MAX waits as long as the queue stays
+// full. A call from a task or on_complete callback of this pool never waits.
+// It gives ccol_success, ccol_timed_out, ccol_container_full (full queue with
+// timeout 0, or a call from this pool's own task), ccol_invalid_args (bad
+// handle, NULL fn or NULL out), ccol_not_permitted (shutdown started),
+// ccol_not_enough_memory, or ccol_unexpected_failure when the wait itself
+// fails. Call cthrpool_future_free() exactly once for every future you get.
 ccol_retval cthrpool_timed_submit_future(cthrpool pool, void *(*fn)(void *),
                                          void *arg, uint64_t timeout_us,
                                          cthrpool_future **out);
 
 // Blocks until the future has a result and gives it, so the caller can collect
-// what the task computed; NULL when an immediate shutdown cancelled the task.
-// It doesn't free the future. Any number of threads may wait on one future;
-// each holds its own reference during the call, so the future outlives all of
-// them. From here on the caller owns the result.
+// what the task computed; NULL when an immediate shutdown cancelled the task,
+// and at once for a NULL f. It doesn't free the future. Any number of threads
+// may wait on one future; each holds its own reference during the call, so the
+// future outlives all of them. From here on the caller owns the result.
 void *cthrpool_future_get(cthrpool_future *f);
 
 // Tells, without blocking, whether the future has a result or was cancelled,
-// so a caller can poll instead of waiting in cthrpool_future_get().
+// so a caller can poll instead of waiting in cthrpool_future_get(). Gives
+// false for a NULL f.
 bool cthrpool_future_done(cthrpool_future *f);
 
 // Tells whether an immediate shutdown cancelled the future, which is how a
-// caller tells a cancelled task from one that returned NULL.
+// caller tells a cancelled task from one that returned NULL. Gives false for a
+// NULL f.
 bool cthrpool_future_cancelled(cthrpool_future *f);
 
 // Gives up the caller's reference, which is how a future is released. Call it
 // exactly once per successful future submit, whether or not you called
-// cthrpool_future_get(); without a get the result is thrown away. Threads
-// already inside cthrpool_future_get() keep the future alive. Don't use f after
-// this call.
+// cthrpool_future_get(); without a get the result is thrown away and not
+// freed. Threads already inside cthrpool_future_get() keep the future alive.
+// NULL does nothing. Don't use f after this call.
 void cthrpool_future_free(cthrpool_future *f);
 
 // Creates a future with no pool behind it, so a producer that isn't a cthrpool
@@ -268,7 +314,7 @@ ccol_retval cthrpool_future_fulfill(cthrpool_future *f, void *result);
 // would wait for itself).
 void cthrpool_wait(cthrpool pool);
 
-// Runs every queued task, then stops and joins the workers: the graceful way to
+// Runs every queued task, then stops and joins the workers: The graceful way to
 // end a pool. After it the pool refuses new tasks. Calling it before destroy is
 // optional. It's a no-op for a bad handle, and a no-op that doesn't block for a
 // call from one of this pool's own tasks or callbacks (a worker can't join

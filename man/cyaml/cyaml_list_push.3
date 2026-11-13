@@ -22,7 +22,7 @@ returns, so the caller must not destroy child after any of them.
 So the return code alone tells the caller what to do with child; a code
 that meant different things on different paths couldn't do that.
 
-These give ccol_invalid_args: a NULL child, a NULL seq, a seq that is
+These give ccol_invalid_args: A NULL child, a NULL seq, a seq that is
 not a CYAML_LIST, a child that is attached to a list or dictionary
 parent, and a child that is seq itself.  An attached child would end
 up with two owners if the function took it, and each owner frees the
@@ -36,7 +36,7 @@ function doesn't check this.  A cycle made that way turns a later
 cyaml_destroy(), cyaml_clone() or cyaml_serialize() call on the tree
 into undefined behaviour.  The attachment rule above already excludes
 the case for every node that has a parent, so the only ancestor left
-unchecked is the one with no parent: the root of the tree that seq
+unchecked is the one with no parent: The root of the tree that seq
 belongs to.
 .fi
 .SH PARAMETERS

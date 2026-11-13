@@ -98,7 +98,7 @@ SOFTWARE.
 // In a build with CCOL_FORK_SAFETY_REQUIRED=0 it ends the calling test with a
 // SKIP line on stderr; elsewhere it does nothing. Put it first in a test that
 // forks while other threads of the library run and then calls the library in
-// the child: without the fork handlers that child can inherit a held lock and
+// the child: Without the fork handlers that child can inherit a held lock and
 // wait for ever. It takes no arguments, is a statement and returns from the
 // test function.
 #if defined(CCOL_FORK_SAFETY_REQUIRED) && CCOL_FORK_SAFETY_REQUIRED == 0

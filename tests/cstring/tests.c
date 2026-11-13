@@ -1772,9 +1772,9 @@ DEFINE_NULL_ARG_FATAL_TEST(null_split_is_fatal,
 DEFINE_NULL_ARG_FATAL_TEST(null_get_mprocs_is_fatal,
                            (void)cstring_get_mprocs(NULL))
 
-// An allocator with a budget: the first g_cstr_oom_budget calls of malloc,
+// An allocator with a budget: The first g_cstr_oom_budget calls of malloc,
 // calloc and realloc go to the system heap and later ones give NULL, while free
-// always works. The out-of-memory tests use it with exact budgets: a create
+// always works. The out-of-memory tests use it with exact budgets: A create
 // costs 2 calls (block and buffer), a real growth 1 more, and the vector of a
 // split 2.
 static int g_cstr_oom_budget = 0;

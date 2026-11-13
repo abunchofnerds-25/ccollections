@@ -1,4 +1,4 @@
-# cyaml: read, change and write YAML
+# cyaml: Read, change and write YAML
 
 `cyaml` parses YAML 1.2 into a tree of nodes that you can read and change,
 and then writes the tree back as YAML. If you know [cjson](cjson.md) you
@@ -6,7 +6,7 @@ know most of `cyaml` already, since the node types, the path macros, the
 ownership rules and the dictionary cursor are the same with a `cyaml_`
 prefix.
 
-It's meant for files that people write by hand: service configuration,
+It's meant for files that people write by hand: Service configuration,
 deployment manifests, CI pipelines, test fixtures. The YAML features those
 files lean on are all there, block and flow style, comments, strings over
 several lines, anchors and aliases, merge keys (`<<`), tags and streams of
@@ -375,7 +375,7 @@ documents, and for a single document it returns that document's root.
 `cyaml_serialize_stream` writes such a list back with a `---` before each
 document. An anchor defined in one document isn't available in the next.
 
-## Example: edit Kubernetes manifests
+## Example: Edit Kubernetes manifests
 
 ```c
 /* Edit a stream of Kubernetes manifests: scale each Deployment, label
@@ -520,7 +520,7 @@ separate fixed limit caps the data that aliases and merge keys can copy, so
 a small hostile document (a "billion laughs") can't use up all the memory.
 All the rules and numbers are in [cyaml_parse(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_parse.3.html).
 
-## Example: change JSON into YAML
+## Example: Change JSON into YAML
 
 The two modules use the same shape of tree, so a converter is a short
 recursive walk. Look at how each attach handles the two kinds of failure;

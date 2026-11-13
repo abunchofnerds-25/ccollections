@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-// Internal: a derive of a clog handle that never ends the process. Not
+// Internal: A derive of a clog handle that never ends the process. Not
 // installed and not exported.
 #include <clogger.h>
 #include <common.h>

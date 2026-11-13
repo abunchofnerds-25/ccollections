@@ -26,7 +26,7 @@ A timeout_us of 0 makes the call the same as cthrpool_try_submit, which
 doesn't wait.
 
 A timeout too large to form a deadline, such as UINT64_MAX, waits as
-long as the queue stays full: the deadline saturates at the latest
+long as the queue stays full: The deadline saturates at the latest
 time that can be represented and never wraps into the past.
 
 A call from a task running on this same pool, or from the on_complete

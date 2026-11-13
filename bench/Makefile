@@ -22,7 +22,7 @@ ROOT = ..
 
 INCLUDE_DIR = include
 EXTRA_CFLAGS ?=
-# -O2 here and not the library's -O3, because this is harness code: the
+# -O2 here and not the library's -O3, because this is harness code: The
 # measured time has to come from the library, not from how hard the compiler
 # optimized the loop around it. The library itself is built at -O3 anyway.
 CFLAGS = -I$(ROOT)/$(INCLUDE_DIR) -I. -std=gnu11 -D_GNU_SOURCE \

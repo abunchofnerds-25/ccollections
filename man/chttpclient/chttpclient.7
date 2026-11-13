@@ -146,7 +146,7 @@ stop is complete; once it returns, the engine makes no call to its
 allocator or through its logger. The write_fn of
 chttpcli_do_async_streaming and chttpcli_do_pooled_streaming runs
 on an engine thread, so calling chttpcli_destroy on any client, or
-chttpcli_engine_wait, from there is fatal: each of them waits for work
+chttpcli_engine_wait, from there is fatal: Each of them waits for work
 that those threads run.
 
 All three tiers apply the same rules to URLs, redirects, headers, TLS,
@@ -179,7 +179,7 @@ connection, the client sends the request once more on a new connection,
 but only in these cases:
   - The connection did not take the whole request, so the server never
     received it as a whole.
-  - The request is idempotent: its method is GET, HEAD, OPTIONS, PUT or
+  - The request is idempotent: Its method is GET, HEAD, OPTIONS, PUT or
     DELETE (RFC 9110 section 9.2.2), or it carries an Idempotency-Key
     or an X-Idempotency-Key header.
 A POST or PATCH without either header that went out in full may have

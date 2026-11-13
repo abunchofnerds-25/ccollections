@@ -36,7 +36,7 @@ properties that a single thread gets for free, since it is the only
 caller. The callbacks of one registration never run at the same time
 as each other, and a read registration and a write registration on the
 same fd never run at the same time either. The second rule goes further
-than "no self-concurrency": two callbacks that share state across both
+than "no self-concurrency": Two callbacks that share state across both
 directions of one fd (one TLS connection object, for example) need no
 lock of their own.
 

@@ -3384,6 +3384,17 @@ typedef struct {
   ccol_memmgmt_procs *mp;
 } head_builder;
 
+#ifdef RUNNING_UNIT_TESTS
+// Test counter of failed allocations in head_builder_grow, across every server
+// of the process. It goes up before send_response returns, so before the
+// connection closes, and a test reads the difference over one request.
+static _Atomic size_t g_head_alloc_failure_count_for_tests = 0;
+// Test hook: Gives the number of response heads that couldn't grow so far.
+size_t chttpsvr__head_alloc_failure_count_for_tests(void) {
+  return atomic_load(&g_head_alloc_failure_count_for_tests);
+}
+#endif
+
 // Grows b so it has room for needed_extra more bytes, moving it to the heap;
 // the two append functions call it when a header doesn't fit. Returns false on
 // overflow or a failed allocation, and b is left as it was then.
@@ -3399,7 +3410,12 @@ static bool head_builder_grow(head_builder *b, size_t needed_extra) {
     new_cap *= 2;
   }
   char *nb = (char *)ccol__mem_alloc(b->mp, new_cap);
-  if (!nb) return false;
+  if (!nb) {
+#ifdef RUNNING_UNIT_TESTS
+    atomic_fetch_add(&g_head_alloc_failure_count_for_tests, 1);
+#endif
+    return false;
+  }
   memcpy(nb, b->buf, b->len);
   if (b->heap) ccol__mem_free(b->mp, b->buf);
   b->buf = nb;

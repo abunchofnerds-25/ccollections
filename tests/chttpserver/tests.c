@@ -17400,11 +17400,36 @@ static bool _rsw_response_agrees(const char *buf) {
          (strstr(buf, "X-Long:") != NULL) == (long_rv == (int)ccol_success);
 }
 
+// Waits up to timeout_ms for read() to give something other than before and
+// tells whether it did. The accept loop counts a failed connection allocation
+// only after it has closed the socket, so the client can see the close first.
+static bool _rsw_count_moved(size_t (*read)(void), size_t before,
+                             long timeout_ms) {
+  struct timespec start, now;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (;;) {
+    if (read() != before) return true;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long waited = (long)(now.tv_sec - start.tv_sec) * 1000L +
+                  (now.tv_nsec - start.tv_nsec) / 1000000L;
+    if (waited >= timeout_ms) return false;
+    struct timespec nap = {0, 1000000L};
+    nanosleep(&nap, NULL);
+  }
+}
+
 // Fails each allocation of one request in turn, from the accept to the close.
 // The query and header calls report ccol_not_enough_memory and change nothing,
-// the client gets a 500, the whole response, or a close when the connection or
-// the head can't be allocated, the server serves the next request, and the
-// destroy gives back every block.
+// the client gets a 500, the whole response, or a close, the server serves the
+// next request, and the destroy gives back every block.
+//
+// A close with nothing on the wire is allowed for exactly two causes, and each
+// one is checked on the request where it happens: The connection couldn't be
+// allocated (the listener's allocation-failure count moved, and the handler
+// never ran), or the response head couldn't grow (the head failure count moved,
+// after the handler ran). Which index hits which allocation is not fixed: A
+// task node that the worker hasn't given back yet makes the next submit
+// allocate, so a count of closes can't stand in for their cause.
 TEST(oom_sweep, every_failed_allocation_of_a_request_ends_in_a_whole_answer) {
   memset(g_long_printf_fill, 'p', LONG_PRINTF_FILL);
   g_long_printf_fill[LONG_PRINTF_FILL] = '\0';
@@ -17450,18 +17475,35 @@ TEST(oom_sweep, every_failed_allocation_of_a_request_ends_in_a_whole_answer) {
   }
   static char buf[16384];
   size_t server_500 = 0, handler_500 = 0, dropped = 0, closed = 0, other = 0;
-  size_t disagree = 0, next_failed = 0;
+  size_t disagree = 0, next_failed = 0, unexplained = 0;
   bool finished = false, whole = false;
   for (long n = 0; n < 4000 && !finished; n++) {
     atomic_store(&g_rsw_ran, 0);
     atomic_store(&g_sw_failed, 0);
     memset(buf, 0, sizeof(buf));
+    size_t heads_before = chttpsvr__head_alloc_failure_count_for_tests();
+    size_t conns_before =
+        chttpsvr__listener_alloc_failure_pause_count_for_tests();
     atomic_store(&g_sw_countdown, n);
     int status =
         _raw_request_on_port(port, "GET", target, extra, buf, sizeof(buf));
     atomic_store(&g_sw_countdown, -1);
     bool failed = atomic_load(&g_sw_failed) != 0;
     bool ran = atomic_load(&g_rsw_ran) != 0;
+    bool silent = status == -1 && buf[0] == '\0';
+    bool head_failed =
+        chttpsvr__head_alloc_failure_count_for_tests() != heads_before;
+    bool conn_failed =
+        _rsw_count_moved(chttpsvr__listener_alloc_failure_pause_count_for_tests,
+                         conns_before, silent && !ran ? 2000L : 0L);
+    if (head_failed != (silent && ran) || conn_failed != (silent && !ran)) {
+      fprintf(stderr,
+              "request sweep: index %ld gave status %d with ran=%d, but the "
+              "head failure count %s and the connection failure count %s\n",
+              n, status, ran, head_failed ? "moved" : "stayed",
+              conn_failed ? "moved" : "stayed");
+      unexplained++;
+    }
     if (!failed) {
       finished = true;
       char *body = strstr(buf, "\r\n\r\n");
@@ -17498,8 +17540,8 @@ TEST(oom_sweep, every_failed_allocation_of_a_request_ends_in_a_whole_answer) {
   REQUIRE_TRUE(finished);
   REQUIRE_TRUE(whole);
   REQUIRE_EQ(other, (size_t)0);
-  REQUIRE_LE(dropped, (size_t)1);
-  REQUIRE_LE(closed, (size_t)1);
+  REQUIRE_EQ(unexplained, (size_t)0);
+  REQUIRE_GT(dropped + closed, (size_t)0);
   REQUIRE_EQ(disagree, (size_t)0);
   REQUIRE_EQ(next_failed, (size_t)0);
   REQUIRE_GT(server_500, (size_t)0);

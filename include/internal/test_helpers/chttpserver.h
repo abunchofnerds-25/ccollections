@@ -321,6 +321,11 @@ bool chttpsvr__accept_errno_is_resource_exhaustion_for_tests(int e);
 size_t chttpsvr__listener_alloc_failure_pause_count_for_tests(void);
 size_t chttpsvr__listener_resource_pause_count_for_tests(void);
 
+// How many response heads of any server couldn't grow because an allocation
+// failed. The count goes up before the connection closes; a test reads the
+// difference over its own window.
+size_t chttpsvr__head_alloc_failure_count_for_tests(void);
+
 // How many accepted connections had their socket buffers raised.
 size_t chttpsvr__accepted_sockbuf_raise_count_for_tests(void);
 

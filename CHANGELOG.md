@@ -47,7 +47,7 @@ and enumerator keeps its behavior.
   Every exported internal symbol has a new name, which is why the ABI
   version changes.
 - The private members of the public structs follow the same rule. The
-  private fields of `cjson_dictionary_iter_t` and `cyaml_dictionary_iter_t`
+  private fields of `cjson_dictionary_iter` and `cyaml_dictionary_iter`
   begin with `cjson__` and `cyaml__`, those of `cmap_iterator` and the HTTP
   types with `ccol__`. Sizes, alignments and offsets are the same as in
   `1.0.0`.

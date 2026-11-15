@@ -9,7 +9,7 @@
 
 If you have used `vector` and `unordered_map` in C++, `ArrayList` and `HashMap` in Java or `list` and `dict` in Python, the containers will look familiar. They are C though, and the compiler deduces your element types in the relevant macros for you automatically. The library is for C programs only; its headers aren't meant to be included from C++.
 
-The `main` branch holds version 2.0.0, which is in development and not released yet, and this page describes it. The latest stable release is 1.0.0 (git tag `v1.0.0`). [CHANGELOG.md](CHANGELOG.md) lists what 2.0.0 changes.
+This page describes version 2.0.0 (git tag `v2.0.0`). [CHANGELOG.md](CHANGELOG.md) lists what changed since 1.0.0.
 
 ```c
 #include <ccollections/chashmap.h>
@@ -144,7 +144,7 @@ sudo make install                     # installs under /usr/local
 make install PREFIX="$HOME/.local"    # or into your own prefix, without sudo
 ```
 
-These steps build the version you have checked out. For the last release, run `git checkout v1.0.0` first, and follow the README of that tag, since 2.0.0 renames part of the interface.
+These steps build the version you have checked out. For the latest release, run `git checkout v2.0.0` first.
 
 Five modules are optional, and each one is a switch on the `make` command line: `WITH_CJSON`, `WITH_CYAML`, `WITH_CLOGGER`, `WITH_CHTTPCLIENT` and `WITH_CHTTPSERVER`, all `1` by default. Setting one to `0` leaves the module out together with what it needs, OpenSSL for the HTTP modules and zlib for the logger:
 
